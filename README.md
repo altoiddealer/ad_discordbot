@@ -37,7 +37,7 @@ This bot stands apart from many other ones due to a variety of features I coded 
 1. Install oobabooga's text-generation-webui
    
 2. Create a Discord bot account, invite it to your server, and note its authentication token.
-3. 
+   
    https://discordpy.readthedocs.io/en/stable/discord.html
 
 4. Move "/ad_discordbot/" and "bot.py" to the oobabooga directory /text-generation-webui/
