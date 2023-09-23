@@ -1,50 +1,28 @@
-# ChatLLaMA Discord Bot
+# altoiddealer's Discord Bot
 
-A Discord Bot for chatting with LLaMA, Vicuna, Alpaca, or any other LLaMA-based model. It's not as good as ChatGPT but LLaMA and its derivatives are pretty impressive on their own. Use `/reply` to talk to LLaMA. To clear chat history with LLaMA or change the initial prompt, use `/reset`. Sometimes LLaMA will get stuck or you will want to change the initial prompt to something more interesting so `/reset` is well used.
+A Discord Bot for chatting with LLMs using txt-generation-webui API.
 
-<div align="center">
-  <video src="https://user-images.githubusercontent.com/894305/223963813-18e58d3c-4f9b-479c-8cdb-a2ad0df935c3.mp4" width=400/>
-</div>
+This bot stands apart from many other ones due to a variety of features I coded in:
+-"Dynamic Context" activated by user configured trigger phrases to autmoatically swap character context, state settings, add instruct to prompt, alter history handling, with option to remove trigger phrase from user prompt
+-All settings can be modified on-the-fly in active_settings.yaml. Settings changed via commands are immediately reflected in active_settings.yaml.
+-Plenty of customization due to a variety of Settings commands paired with easy to manage .yaml dictionaries.
+-Continue and Regenerate responses with /cont and /regen commands - both work fluidly with very long messages exceeding Discords message size limitation.
+-Get image response from bot via user configured trigger phrases
+-Modify Stable Diffusion payload settings automatically via user configured phrases
+-Powerful /image command that includes support for ControlNet and Reactor (face swap)
+-Change image models and relavent payload settings via /imgmodel command
+-Simple Starboard feature, easy to set up.
+-Feature to include current settings in a dedicated channel
+-AND MORE.
 
 # Installation
 
-| Windows | Linux | macOS |
-|-------|--------|--------|
-| [ChatLLaMA_Windows.bat](https://github.com/xNul/chat-llama-discord-bot/releases/download/installers/ChatLLaMA_Windows.bat) | [ChatLLaMA_Linux.sh](https://github.com/xNul/chat-llama-discord-bot/releases/download/installers/ChatLLaMA_Linux.sh) |[ChatLLaMA_MacOS.sh](https://github.com/xNul/chat-llama-discord-bot/releases/download/installers/ChatLLaMA_MacOS.sh) |
+1. Move "/ad_discordbot/" and "bot.py" to the oobabooga directory /text-generation-webui/
+     /text-generation-webui/ad_discordbot/(included files)
+     /text-generation-webui/bot.py
+2. Run the cmd file in oobabooga directory (ex: cmd_windows.bat)
+3. cd text-generation-webui
+4. pip install discord
+5. pip install OpenCV-Python (required for /image command)
 
-Just run the script for your operating system, follow the instructions, and ChatLLaMA will be installed to the folder.
-
-On Windows, double click the `.bat` file.  
-On Linux/MacOS, use `bash <file name here>` from the Terminal.
-
-If there are any issues or installation questions, the [troubleshooting](https://github.com/xNul/chat-llama-discord-bot/wiki/Troubleshooting) page may be helpful.
-
-# Example Transcript
-
-```
-Your name is James and you love having conversations. You write long sentences and write very eloquently. Your responses are many sentences long. You enjoy talking with people and engaging them in interesting topics. My name is Robert and I like to have conversations with you James.
-
-Robert: Hi James, how are you doing today?
-James:  Hello Robert, I am doing fine today.
-
-Robert: I have heard you are an amazing person! I am so glad to finally meet you!
-James:  You are so kind! I am happy to finally meet you too.
-
-Robert: How is Sarah and the kids? Is the kid's new school turning out as good as you had hoped?
-James:  Sarah is doing great, and our children are growing up so quickly! The new school is a lot better than I had expected.
-
-Robert: Thank goodness! I remember in my day, we had 3 classrooms and only one chalkboard! Schools around here have really grown!
-James:  I remember those days. I think the world is getting better and better. I like that!
-
-Robert: Do you remember that time in astronomy when John saw a shooting star?! He cataloged it and it turned out to be a new comet! I saw a news story on it recently. Apparently, they're going to name it after him! They want to use his last name though, because his first name is too generic
-James:  I remember that. I am happy for John. That is awesome news.
-
-Robert: Quick question, what is the circumference of the Earth? It was a question on Lindsey's homework last night and for the life of me, I just can't remember the answer!
-James:  Hmm, I do not know that answer. I will look it up.
-
-Robert: Sounds good! What did you find?
-James:  The circumference of the Earth is 24,901 miles.
-
-Robert: Ahhh very good to know. These days, the world feels like it's getting smaller and smaller with the internet!
-James:  Indeed! It is crazy to think about how the world has grown to be so small in recent years.
-```
+See included example characters for reference.
