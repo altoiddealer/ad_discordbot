@@ -1168,13 +1168,12 @@ class CharacterDropdown(discord.ui.Select):
     async def callback(self, interaction: discord.Interaction):
         character = self.values[0]
         await change_profile(self.i, character)
-        await interaction.message.delete()
 
 @client.hybrid_command(description="Choose Character")
 async def character(i):
     view = discord.ui.View()
     view.add_item(CharacterDropdown(i))
-    await i.send('Choose Character:', view=view)
+    await i.send('Choose Character:', view=view, ephemeral=True)
 
 # Settings Commands
 async def update_active_settings(selected_item, active_settings_key):
@@ -1243,7 +1242,6 @@ class SettingsDropdown(discord.ui.Select):
             # If a new LLMContext is selected
             if self.active_settings_key == 'llmcontext':
                 reset_session_history # Reset conversation
-            await interaction.message.delete()
             await update_active_settings(selected_item, self.active_settings_key)
             # If a new ImgModel is selected
             if self.active_settings_key == 'imgmodel':
@@ -1279,27 +1277,27 @@ class SettingsDropdown(discord.ui.Select):
 async def llmcontext(i):
     view = discord.ui.View()
     view.add_item(SettingsDropdown('ad_discordbot/dict_llmcontexts.yaml', 'llmcontext_name', 'llmcontext'))
-    await i.send("Choose LLM context:", view=view)
+    await i.send("Choose LLM context:", view=view, ephemeral=True)
 @client.hybrid_command(description="Choose an llmstate")
 async def llmstate(i):
     view = discord.ui.View()
     view.add_item(SettingsDropdown('ad_discordbot/dict_llmstates.yaml', 'llmstate_name', 'llmstate'))
-    await i.send("Choose an llmstate:", view=view)
+    await i.send("Choose an llmstate:", view=view, ephemeral=True)
 @client.hybrid_command(description="Choose a behavior")
 async def behaviors(i):
     view = discord.ui.View()
     view.add_item(SettingsDropdown('ad_discordbot/dict_behaviors.yaml', 'behavior_name', 'behavior'))
-    await i.send("Choose a behavior:", view=view)
+    await i.send("Choose a behavior:", view=view, ephemeral=True)
 @client.hybrid_command(description="Choose an imgmodel")
 async def imgmodel(i):
     view = discord.ui.View()
     view.add_item(SettingsDropdown('ad_discordbot/dict_imgmodels.yaml', 'imgmodel_name', 'imgmodel'))
-    await i.send("Choose an imgmodel:", view=view)
+    await i.send("Choose an imgmodel:", view=view, ephemeral=True)
 @client.hybrid_command(description="Choose LORAs")
 async def imgloras(i):
     view = discord.ui.View()
     view.add_item(SettingsDropdown('ad_discordbot/dict_imgloras.yaml', 'imglora_name', 'imglora'))
-    await i.send("Choose LORAs:", view=view)
+    await i.send("Choose LORAs:", view=view, ephemeral=True)
 
 class LLMUserInputs():
     # Initialize default state settings
