@@ -2,6 +2,9 @@
 
 A Discord Bot for chatting with LLMs using txt-generation-webui API.
 
+<img width="561" alt="Screenshot 2023-09-22 214847" src="https://github.com/altoiddealer/ad_discordbot/assets/1613484/e5e60178-afd0-41af-aab9-911a11f12160">
+
+
 This bot stands apart from many other ones due to a variety of features I coded in:
 
 -"Dynamic Context" activated by user configured trigger phrases to autmoatically swap character context, state settings, add instruct to prompt, alter history handling, with option to remove trigger phrase from user prompt
@@ -25,6 +28,9 @@ This bot stands apart from many other ones due to a variety of features I coded 
 -Feature to include current settings in a dedicated channel
 
 -AND MORE.
+
+<img width="817" alt="Screenshot 2023-09-22 220802" src="https://github.com/altoiddealer/ad_discordbot/assets/1613484/b2f2bd96-ed12-4eed-b842-68171c62a8e5">
+
 
 # Installation
 
