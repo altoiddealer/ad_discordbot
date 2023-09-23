@@ -1,0 +1,112 @@
+# Options for /image command
+# You can add and adjust: ControlNet models, preset Size options, and Styles.
+# Valid ControlNet models listed here: (http://127.0.0.1:7860/docs#/default/model_list_controlnet_model_list_get)
+# Valid ControlNet modules listed here: (http://127.0.0.1:7860/docs#/default/module_list_controlnet_module_list_get)
+controlnet:
+- name: Canny
+  model: diffusers_xl_canny_full [2b69fca4]
+  module: canny
+  guidance_end: 1.0
+  weight: 1.0
+- name: Depth
+  model: diffusers_xl_depth_full [2f51180b]
+  module: depth
+  guidance_end: 1.0
+  weight: 1.0
+- name: Open Pose
+  model: thibaud_xl_openpose_256lora [14288071]
+  module: openpose_full
+  guidance_end: 1.0
+  weight: 1.0
+- name: Scribble
+  model: sai_xl_sketch_256lora [cd3389b1]
+  module: scribble_hed
+  guidance_end: 1.0
+  weight: 1.0
+- name: Softedge
+  model: sargezt_xl_softedge [b6f7415b]
+  module: hed
+  guidance_end: 1.0
+  weight: 1.0
+- name: Lineart
+  model: t2i-adapter_diffusers_xl_lineart [bae0efef]
+  module: lineart_standard
+  guidance_end: 0.5
+  weight: 0.8
+sizes:
+- name: 1344 x 768 (16:9 landscape)
+  width: 1344
+  height: 768
+- name: 1216 x 832 (3:2 landscape)
+  width: 1216
+  height: 832
+- name: 1152 x 896 (4:3 landscape)
+  width: 1152
+  height: 896
+- name: 1024 x 1024 (1:1 square)
+  width: 1024
+  height: 1024
+- name: 896 x 1152 (4:3 portrait)
+  width: 896
+  height: 1152
+- name: 832 x 1216 (3:2 portrait)
+  width: 832
+  height: 1216
+- name: 768 x 1344 (16:9 portrait)
+  width: 768
+  height: 1344
+styles:
+- name: Anime
+  positive: "anime artwork of {}, anime style, key visual, vibrant, studio anime, highly detailed, "
+  negative: "photo, deformed, black and white, realism, disfigured, low contrast, "
+- name: Photographic
+  positive: "cinematic photo of {}, 35mm photograph, film, bokeh, professional, 4k, highly detailed, "
+  negative: "drawing, painting, crayon, sketch, graphite, impressionist, noisy, blurry, soft, deformed, ugly, "
+- name: Digital Art
+  positive: "concept art of {}, digital artwork, illustrative, painterly, matte painting, highly detailed, "
+  negative: "photo, photorealistic, realism, ugly, "
+- name: Comic Book
+  positive: "comic book art of {}, comic art, graphic novel illustration, "
+  negative: "photograph, deformed, glitch, noisy, realistic, stock photo, "
+- name: Fantasy Art
+  positive: "ethereal fantasy concept art of {}, magnificent, celestial, ethereal, painterly, epic, majestic, magical, fantasy art, cover art, dreamy, "
+  negative: "photographic, realistic, realism, 35mm film, dslr, cropped, frame, text, deformed, glitch, noise, noisy, off-center, deformed, cross-eyed, closed eyes, bad anatomy, ugly, disfigured, sloppy, duplicate, mutated, black and white, "
+- name: Analog Film
+  positive: "analog film photo of {}, faded film, desaturated, 35mm photo, grainy, vignette, vintage, Kodachrome, lomography, stained, highly detailed, found footage, "
+  negative: "painting, drawing, illustration, glitch, deformed, mutated, cross-eyed, ugly, disfigured, "
+- name: Neon Punk
+  positive: "neonpunk style, {}, cyberpunk, vaporwave, neon, vibes, vibrant, stunningly beautiful, crisp, detailed, sleek, ultramodern, magenta highlights, dark purple shadows, high contrast, cinematic, ultra detailed, intricate, professional, "
+  negative: "painting, drawing, illustration, glitch, deformed, mutated, cross-eyed, ugly, disfigured, "
+- name: Isometric
+  positive: "isometric style, {}, vibrant, beautiful, crisp, detailed, ultra detailed, intricate, isometric style, "
+  negative: "deformed, mutated, ugly, disfigured, blur, blurry, noise, noisy, realistic, photographic, "
+- name: Low Poly
+  positive: "low-poly style, {}, low-poly game art, polygon mesh, jagged, blocky, wireframe edges, centered composition, "
+  negative: "noisy, sloppy, messy, grainy, highly detailed, ultra textured, photo, "
+- name: Origami
+  positive: "origami style, {}, paper art, pleated paper, folded, origami art, pleats, cut and fold, centered composition, "
+  negative: "noisy, sloppy, messy, grainy, highly detailed, ultra textured, photo, "
+- name: Line Art
+  positive: "line art drawing of {}, professional, sleek, modern, minimalist, graphic, line art, vector graphics, "
+  negative: "anime, photorealistic, 35mm film, deformed, glitch, blurry, noisy, off-center, deformed, cross-eyed, closed eyes, bad anatomy, ugly, disfigured, mutated, realism, realistic, impressionism, expressionism, oil, acrylic, "
+- name: Craft Clay
+  positive: "play-doh style sculpture of {}, sculpture, clay art, centered composition, claymation, "
+  negative: "sloppy, messy, grainy, highly detailed, ultra textured, photo, "
+- name: Cinematic
+  positive: "cinematic film still of {}, shallow depth of field, vignette, highly detailed, high budget, bokeh, cinemascope, moody, epic, gorgeous, film grain, grainy, "
+  negative: "anime, cartoon, graphic, text, painting, crayon, graphite, abstract, glitch, deformed, mutated, ugly, disfigured, "
+- name: 3D Model
+  positive: "professional 3D model of {}, octane render, highly detailed, volumetric, dramatic lighting, "
+  negative: "ugly, deformed, noisy, low poly, blurry, painting, "
+- name: Pixel Art
+  positive: "pixel-art of {}, low-res, blocky, pixel art style, 8-bit graphics, "
+  negative: "sloppy, messy, blurry, noisy, highly detailed, ultra textured, photo, realistic, "
+- name: Watercolor
+  positive: "Watercolor painting of {}, Vibrant, beautiful, painterly, detailed, textural, artistic, "
+  negative: "anime, photorealistic, 35mm film, deformed, glitch, low contrast, noisy, "
+- name: Tile Texture
+  positive: "tileable texture asset, seamless texture of {}, close-up, texture detail, "
+  negative: "ugly, deformed, noisy, blurry, "
+- name: Sticker
+  positive: "vector art Stickers of {}, professional vector art, sticker designs, sticker sheet, "
+  negative: "ugly, deformed, noisy, blurry, low contrast, "

@@ -1,0 +1,35 @@
+# Options for the /imgloras command.
+# Chances are, you'll just make one list and never switch it
+# ** You will have to use the /imgloras command to commit updates **
+- imglora_name: SDXL Loras
+  positive_prompt_prefix: ''              # positive_prompt_prefix: Inserted before every prompt
+  positive_prompt_suffix: ''              # positive_prompt_suffix: Inserted after every prompt
+  positive_prompt_suffix2: ''             # Overkill... you may have another suffix...
+  positive_prompt_suffix2_blacklist: ''   # ...which won't be added if a trigger word is found in the prompt
+  negative_prompt_prefix: ''              # negative_prompt_prefix: Inserted before every negative prompt
+  presets:
+  - trigger: 'grimace'
+    positive_prompt: ', <lora:PE_Grimace_v1.0:0.75>'
+    negative_prompt: ''
+    trumps: ''                            # If another matched preset has a trigger phrase in 'trumps', it will be ignored
+  - trigger: 'shocked face'
+    positive_prompt: |
+      , PEOPShockedFace, eyes popping out, mouth open, anime, cartoon, <lora:PE_OP_ShockedFaceMeme:0.7>
+    negative_prompt: ', photograph'
+    trumps: ''
+
+- imglora_name: SD15 Loras
+  positive_prompt_prefix: 'masterpiece, detailed,'
+  positive_prompt_suffix: ' <lora:more_details:0.5>, <lora:epiNoiseoffset_v2Pynoise:0.5>'
+  positive_prompt_suffix2_blacklist: ''
+  positive_prompt_suffix2: ''
+  negative_prompt_prefix: '<kkw-Extreme-Neg:0.5>, <negative_hand-neg:0.5>, by <bad-artist:0.5>'
+  presets:
+  - trigger: 'gta,gta4,grand theft auto,archer style'
+    positive_prompt: ', GtaSA2004 cartoon, <lora:GTA_Style:1.0>'
+    negative_prompt: ''
+    trumps: ''
+  - trigger: 'gigachad'
+    positive_prompt: ', <lora:Gigachadv1:0.8>'
+    negative_prompt: ''
+    trumps: ''
