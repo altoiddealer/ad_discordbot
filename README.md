@@ -29,11 +29,17 @@ This bot stands apart from many other ones due to a variety of features I coded 
 # Installation
 
 1. Move "/ad_discordbot/" and "bot.py" to the oobabooga directory /text-generation-webui/
+   
      /text-generation-webui/ad_discordbot/(included files)
+   
      /text-generation-webui/bot.py
-2. Run the cmd file in oobabooga directory (ex: cmd_windows.bat)
-3. cd text-generation-webui
-4. pip install discord
-5. pip install OpenCV-Python (required for /image command)
+   
+3. Run the cmd file in oobabooga directory (ex: cmd_windows.bat)
+   
+5. cd text-generation-webui
+   
+7. pip install discord
+   
+9. pip install OpenCV-Python (required for /image command)
 
 See included example characters for reference.
