@@ -34,18 +34,38 @@ This bot stands apart from many other ones due to a variety of features I coded 
 
 # Installation
 
-1. Move "/ad_discordbot/" and "bot.py" to the oobabooga directory /text-generation-webui/
+1. Install oobabooga's text-generation-webui
+   
+2. Create a Discord bot account, invite it to your server, and note its authentication token.
+3. 
+   https://discordpy.readthedocs.io/en/stable/discord.html
+
+4. Move "/ad_discordbot/" and "bot.py" to the oobabooga directory /text-generation-webui/
    
      /text-generation-webui/ad_discordbot/(included files)
    
      /text-generation-webui/bot.py
    
-3. Run the cmd file in oobabooga directory (ex: cmd_windows.bat)
+5. Run the cmd file in oobabooga directory (ex: cmd_windows.bat)
    
-5. cd text-generation-webui
+   cd text-generation-webui
    
-7. pip install discord
+   pip install discord
    
-9. pip install OpenCV-Python (required for /image command)
+   pip install OpenCV-Python (required for /image command)
+
+
+# Running the bot
+
+1. Run the cmd file in oobabooga directory (ex: cmd_windows.bat)
+
+   cd text-generation-webui
+   python bot.py (args)
+   
+   # Example
+   python bot.py --loader exllama --model airoboros-l2-13b-gpt4-2.0-GPTQ
+
+
+   
 
 See included example characters for reference.
