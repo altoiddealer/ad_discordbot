@@ -2,7 +2,7 @@
 
 A Discord Bot for chatting with LLMs using txt-generation-webui API.
 
-<img width="561" alt="Screenshot 2023-09-22 214847" src="https://github.com/altoiddealer/ad_discordbot/assets/1613484/e5e60178-afd0-41af-aab9-911a11f12160">
+<img width="560" alt="Screenshot 2023-09-22 224716" src="https://github.com/altoiddealer/ad_discordbot/assets/1613484/5ffb5037-29d2-4a2f-9966-3ef6bd35b1f9">
 
 
 This bot stands apart from many other ones due to a variety of custom features:
