@@ -75,7 +75,7 @@ warnings.filterwarnings("ignore", category=UserWarning, message="You have modifi
 
 import modules.extensions as extensions_module
 from modules.extensions import apply_extensions
-from modules.chat import chatbot_wrapper, clear_chat_log, load_character 
+from modules.chat import chatbot_wrapper, load_character 
 from modules import shared
 from modules import chat, utils
 shared.args.chat = True
