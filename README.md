@@ -60,9 +60,11 @@ This bot stands apart from many other ones due to a variety of features I coded 
 1. Run the cmd file in oobabooga directory (ex: cmd_windows.bat)
 
    cd text-generation-webui
-   python bot.py (args)
    
-   # Example
+   python bot.py (args)
+
+   EXAMPLE LAUNCH COMMAND:
+   
    python bot.py --loader exllama --model airoboros-l2-13b-gpt4-2.0-GPTQ
 
 
