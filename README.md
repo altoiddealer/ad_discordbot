@@ -16,7 +16,7 @@ This bot stands apart from many other ones due to a variety of features I coded 
 
 -Modify Stable Diffusion payload settings automatically via user configured phrases
 
--Powerful /image command that includes support for ControlNet and Reactor (face swap)
+-Send your image prompt directly to A1111 with powerful /image command that includes support for ControlNet and Reactor (face swap)
 
 -Change image models and relavent payload settings via /imgmodel command
 
