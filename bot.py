@@ -436,7 +436,7 @@ async def change_profile(i, character):
 
         # Save the updated activesettings to activesettings.yaml
         with open('ad_discordbot/activesettings.yaml', 'w') as activesettings_file:
-            yaml.dump(activesettings, activesettings_file, default_flow_style=False)
+            yaml.dump(activesettings, activesettings_file, default_flow_style=False, width=float("inf"))
 
         reset_session_history()
 
@@ -457,30 +457,61 @@ async def change_profile(i, character):
         pass
 
 async def send_long_message(channel, message_text):
-    """ Splits a longer message into parts, making sure code blocks are maintained """
+    """ Splits a longer message into parts while preserving sentence boundaries and code blocks """
     global last_bot_message
     bot_messages = []  # List to store message IDs to be deleted by cont or regen function
-    if len(message_text) <= 2000:
+    activelang = ''
+    # Helper function to ensure even pairs of code block markdown
+    def ensure_even_code_blocks(chunk_text, code_block_inserted):
+        nonlocal activelang  # Declare activelang as nonlocal to modify the global variable
+        code_block_languages = ["asciidoc", "autohotkey", "bash", "coffeescript", "cpp", "cs", "css", "diff", "fix", "glsl", "ini", "json", "md", "ml", "prolog", "ps", "py", "tex", "xl", "xml", "yaml"]
+        code_block_count = chunk_text.count("```")
+        if code_block_inserted:
+            # If a code block was inserted in the previous chunk, add a leading set of "```"
+            chunk_text = f"```{activelang}\n" + chunk_text
+            code_block_inserted = False  # Reset the code_block_inserted flag
+        code_block_count = chunk_text.count("```")
+        if code_block_count % 2 == 1:
+            # Check for code block syntax like "```yaml"
+            for lang in code_block_languages:
+                if f"```{lang}" in chunk_text:
+                    activelang = f"{lang}"
+            # If there is an odd number of code blocks, add a closing set of "```"
+            chunk_text += "```"
+            code_block_inserted = True
+        return chunk_text, code_block_inserted
+    if len(message_text) <= 1980:
         sent_message = await channel.send(message_text)
         bot_messages.append(sent_message.id)
     else:
+        code_block_inserted = False  # Initialize code_block_inserted to False
         while message_text:
-            # Find the index of the next code block ("```")
-            codeblock_index = message_text.find("```")
-            if codeblock_index == -1 or codeblock_index >= 2000:
-                # If there is no code block or the next code block is beyond 2000 characters,
-                # find the last space (". ") within the first 2000 characters
-                chunk_length = message_text.rfind(". ", 0, 2000) + 2
-                # If no space was found in the first 2000 characters, split at 2000 characters
-                if chunk_length <= 1:
-                    chunk_length = 2000
+            # Find the last occurrence of either a line break or the end of a sentence
+            last_line_break = message_text.rfind("\n", 0, 1980)
+            last_sentence_end = message_text.rfind(". ", 0, 1980)
+            # Determine the index to split the string
+            if last_line_break >= 0 and last_sentence_end >= 0:
+                # If both a line break and a sentence end were found, choose the one that occurred last
+                chunk_length = max(last_line_break, last_sentence_end) + 1
+            elif last_line_break >= 0:
+                # If only a line break was found, use it as the split point
+                chunk_length = last_line_break + 1
+            elif last_sentence_end >= 0:
+                # If only a sentence end was found, use it as the split point
+                chunk_length = last_sentence_end + 2  # Include the period and space
             else:
-                # If a code block exists and is within the first 2000 characters, use it as-is
-                chunk_length = codeblock_index + 3
+                chunk_length = 1980 # If neither was found, split at the maximum limit of 2000 characters
             chunk_text = message_text[:chunk_length]
+            chunk_text, code_block_inserted = ensure_even_code_blocks(chunk_text, code_block_inserted)
             sent_message = await channel.send(chunk_text)
             bot_messages.append(sent_message.id)
             message_text = message_text[chunk_length:]
+            if len(message_text) <= 1980:
+                # Send the remaining text as a single chunk if it's shorter than or equal to 2000 characters
+                chunk_text, code_block_inserted = ensure_even_code_blocks(message_text, code_block_inserted)
+                sent_message = await channel.send(chunk_text)
+                bot_messages.append(sent_message.id)
+                break
     # Store the list of message IDs in the global dictionary
     last_bot_message[channel.id] = bot_messages
 
@@ -1184,33 +1215,27 @@ async def update_active_settings(selected_item, active_settings_key):
         update_dict(active_settings.get(active_settings_key, {}), selected_item)
 
         with open('ad_discordbot/activesettings.yaml', 'w') as file:
-            yaml.dump(active_settings, file)
-
-        if config.discord['post_active_settings']['enabled']:
-            await post_active_settings(selected_item, active_settings_key)
+            yaml.dump(active_settings, file, default_flow_style=False, width=float("inf"))
 
     except Exception as e:
         print(f"Error updating ad_discordbot/activesettings.yaml ({active_settings_key}):", e)
 
 # Post settings to dedicated channel
-async def post_active_settings(selected_item, active_settings_key):
+async def post_active_settings():
     if config.discord['post_active_settings']['target_channel_id']:
         channel = await client.fetch_channel(config.discord['post_active_settings']['target_channel_id'])
         if channel:
             with open('ad_discordbot/activesettings.yaml', 'r') as settings_file:
                 active_settings = yaml.safe_load(settings_file)
-                specific_settings = active_settings.get(active_settings_key, {})
-                settings_content = yaml.dump(specific_settings, default_flow_style=False)
+                settings_content = yaml.dump(active_settings, default_flow_style=False)
             
-            # Check if a message with the prefix exists
+            # Fetch and delete all existing messages in the channel
             async for message in channel.history(limit=None):
-                if message.content.startswith(f"Current {active_settings_key} settings:"):
-                    # Edit the existing message with the updated settings
-                    await message.edit(content=f"Current {active_settings_key} settings:\n```yaml\n{settings_content}\n```")
-                    break
-            else:
-                # If the message doesn't exist, send a new one with the prefix
-                await channel.send(f"Current {active_settings_key} settings:\n```yaml\n{settings_content}\n```")
+                await message.delete()
+                await asyncio.sleep(0.2)  # minimum delay for discord limit
+            
+            # Send the entire settings content as a single message
+            await send_long_message(channel, f"Current settings:\n```yaml\n{settings_content}\n```")
         else:
             print(f"Target channel with ID {target_channel_id} not found.")
     else:
@@ -1270,6 +1295,8 @@ class SettingsDropdown(discord.ui.Select):
                     await interaction.response.send_message(f"Updated {self.active_settings_key} settings to: {selected_item_name}")
             else:
                 await interaction.response.send_message(f"Updated {self.active_settings_key} settings to: {selected_item_name}")
+            if config.discord['post_active_settings']['enabled']:
+                await post_active_settings()
         except Exception as e:
             print(f"Error updating ad_discordbot/activesettings.yaml ({self.active_settings_key}):", e)
 
