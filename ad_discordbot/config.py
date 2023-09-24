@@ -4,11 +4,11 @@ discord = {
     'change_username_with_character': True, # When changing username OR avatar, you will not be able
     'change_avatar_with_character': True,   # to use /character cmd for 10 minutes (Discord policy)
     'char_name': "M1nty",                 # default bot name (**Required if change_username_with_character = False**)
-    'post_active_ettings': {                        # when changing settings via commands (ei: /imgmodel),
-        'enabled': True,                            # a copy of the settings will be posted/updated in dedicated channel
+    'post_active_settings': {                        # when changing settings via commands (ei: /imgmodel),
+        'enabled': False,                            # a copy of the settings will be posted/updated in dedicated channel
         'target_channel_id': 11111111111111111111},  # **Bot will need permission to message this channel.**
     'starboard': {                          # bot will automatically send a copy of image to starboard channel.
-        'enabled': True,
+        'enabled': False,
         'min_reactions': 2,
         'emoji_specific': False,
         'react_emojis': ['✅', '👏'],
