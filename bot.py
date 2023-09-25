@@ -472,10 +472,13 @@ async def send_long_message(channel, message_text):
             code_block_inserted = False  # Reset the code_block_inserted flag
         code_block_count = chunk_text.count("```")
         if code_block_count % 2 == 1:
-            # Check for code block syntax like "```yaml"
+            # Check last code block for syntax like "```yaml"
+            last_code_block_index = chunk_text.rfind("```")
+            last_code_block = chunk_text[last_code_block_index + len("```"):].strip()
             for lang in code_block_languages:
-                if f"```{lang}" in chunk_text:
-                    activelang = f"{lang}"
+                if last_code_block.startswith(lang):
+                    activelang = lang
+                    break  # Stop checking if a match is found
             # If there is an odd number of code blocks, add a closing set of "```"
             chunk_text += "```"
             code_block_inserted = True
