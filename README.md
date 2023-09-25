@@ -46,9 +46,7 @@ This bot stands apart from many other ones due to a variety of custom features:
    
      /text-generation-webui/bot.py
    
-5. Run the cmd file in oobabooga directory (ex: cmd_windows.bat)
-   
-   cd text-generation-webui
+5. Run the cmd file in text-generation-webui directory (ex: cmd_windows.bat)
    
    pip install discord
    
