@@ -40,7 +40,7 @@ This bot stands apart from many other ones due to a variety of custom features:
    
    https://discordpy.readthedocs.io/en/stable/discord.html
 
-4. Move "/ad_discordbot/" and "bot.py" to the oobabooga directory /text-generation-webui/
+4. Move "/ad_discordbot/" and "bot.py" to the directory /text-generation-webui/
    
      /text-generation-webui/ad_discordbot/(included files)
    
@@ -57,9 +57,7 @@ This bot stands apart from many other ones due to a variety of custom features:
 
 # Running the bot
 
-1. Run the cmd file in oobabooga directory (ex: cmd_windows.bat)
-
-   cd text-generation-webui
+1. Run the cmd file in text-generation-webui directory (ex: cmd_windows.bat)
    
    python bot.py (args)
 
