@@ -16,7 +16,6 @@ discord = {
     }   # YOU CAN GET CHANNEL ID BY ENABLING DEVELOPER MODE IN YOUR DISCORD ACCOUNT
 }       # THEN SIMPLY RIGHT CLICK CHANNEL > GET CHANNEL ID
 
-
 sd = {'A1111': "http://127.0.0.1:7860"} # Default URL for A1111 API. Only adjust if you have issues connecting.
 
 tell_bot_time = {                   # slips in a message about the current time before your context.
@@ -42,6 +41,8 @@ announce_imgmodel = {
 
 imgprompt_settings = {
     'prune_truncated_tokens': False,    # Sacrifice tokens generated after the last comma to remove potential nonsense/cut off words.
+    'trigger_search_mode': 'userllm',   # What to compare triggers against. 'user' = user prompt only / 'llm' = bot reply only / 'userllm' = search all text
+    'insert_loras_in_prompt': True,     # For ImgLora handling (ad_discordbot/dict_imgloras.yaml). True = insert positive_prompt after matches found in prompt when applicable / False = append all to end of prompt.
     'trigger_img_gen_by_phrase': {      # Trigger an image response with words/phrases.
         'enabled': True,                # If you want phrases removed from your prompt, use dynamic_context configuration for that.
         'on_prefix_only': True,         # if True, image response only occurs when prompt begins with trigger phrase.
@@ -50,13 +51,19 @@ imgprompt_settings = {
     'trigger_img_params_by_phrase': {   # Modify payload settings if prompt includes trigger phrases
         'enabled': True,
         'presets': [
-            {'triggers': ['selfie', 'self portrait'],
+            {'triggers': ['vertical', 'selfie', 'self portrait'],
                 'width': 896,
                 'height': 1152
             },
             {'triggers': ['landscape'],
                 'width': 1152,
                 'height': 896
+            },
+            {'triggers': ['alfred neuman', 'mad magazine guy'],
+                'face_swap': 'neuman.png' # face_swap can be used for Reactor extension. Valid file types: .png, .jpg, .txt (containing base64 string)
+            },
+            {'triggers': ['donald trump'],
+                'face_swap': 'trump.txt'
             }
         ]
     }

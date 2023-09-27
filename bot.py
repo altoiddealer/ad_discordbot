@@ -813,7 +813,7 @@ async def on_message(i):
             async with i.channel.typing():
                 image_prompt = create_image_prompt(user_input, llm_prompt, current_time, save_history)
                 await picture_frame.delete()
-                await pic(i, text, prompt=image_prompt, neg_prompt=None, size=None, face_swap=None, controlnet=None)
+                await pic(i, text, image_prompt, neg_prompt=None, size=None, face_swap=None, controlnet=None)
                 await i.channel.send(image_prompt)
         return
     await create_prompt_for_llm(i, user_input, llm_prompt, current_time, save_history)
@@ -884,20 +884,37 @@ async def process_image_gen(payload, picture_frame, i):
         await i.send("Timeout error")
         await picture_frame.edit(delete_after=5)
 
-def update_payload(payload, activepayload, activeoverride, text):
-    payload.update(activepayload)
-    payload.update(activeoverride)
+def process_payload_mods(payload, text):
     trigger_params = config.imgprompt_settings['trigger_img_params_by_phrase']
-    matched_presets = []
     if trigger_params['enabled']:
+        matched_presets = []     
         for preset in trigger_params['presets']:
             triggers = preset['triggers']
             preset_payload = {}  # Create a dictionary to hold payload settings for each preset
             if any(trigger in text.lower() for trigger in triggers):
-                # Copy all key-value pairs from preset to preset_payload except for "triggers"
                 for key, value in preset.items():
-                    if key != 'triggers':
-                        preset_payload[key] = value
+                    # Process Reactor (face swap)
+                    if key == 'face_swap':
+                        face_file_path = f'ad_discordbot/swap_faces/{value}'
+                        if os.path.exists(face_file_path) and os.path.isfile(face_file_path):
+                            if face_file_path.endswith((".txt", ".png", ".jpg")):
+                                if face_file_path.endswith((".txt")):
+                                    with open(face_file_path, "r") as txt_file:
+                                        payload['alwayson_scripts']['reactor']['args'][0] = txt_file.read()
+                                else:
+                                    with open(face_file_path, "rb") as image_file:
+                                        image_data = image_file.read()
+                                        faceswapimg = base64.b64encode(image_data).decode('utf-8')
+                                        payload['alwayson_scripts']['reactor']['args'][0] = faceswapimg
+                                payload['alwayson_scripts']['reactor']['args'][1] = True
+                            else:
+                                print("Invalid file for face swap (must be .txt, .png, or .jpg).")
+                        else:
+                            print(f"File not found '{face_file_path}'.")
+                    # Process everything else
+                    else:
+                        if key != 'triggers': # All key-value pairs except "triggers"
+                            preset_payload[key] = value
                 matched_presets.append((preset, preset_payload))
         for preset, preset_payload in matched_presets:
             payload.update(preset_payload)  # Update the payload with each preset's settings
@@ -905,54 +922,70 @@ def update_payload(payload, activepayload, activeoverride, text):
 
 def apply_presets(payload, presets, i, text):
     if presets:
+        # Determine text to search
+        search_mode = config.imgprompt_settings['trigger_search_mode']
+        if search_mode == 'user':
+            search_text = text
+        elif search_mode == 'llm':
+            search_text = payload["prompt"]
+        elif search_mode == 'userllm':
+            search_text = text + " " + payload["prompt"]
+        else:
+            print("Invalid search mode")
+            return
         matched_presets = []
-        matched_triggers = set()
-
         for preset in presets:
             triggers = [t.strip() for t in preset['trigger'].split(',')]
             for trigger in triggers:
                 trigger_regex = r"\b{}\b".format(re.escape(trigger.lower()))
-                if re.search(trigger_regex, payload["prompt"].lower()) or re.search(trigger_regex, text.lower()):
+                if re.search(trigger_regex, search_text.lower()):
                     matched_presets.append(preset)
-                    matched_triggers.add(trigger.lower())
-
         if matched_presets:
-            grouped_presets = []
-
             # Collect 'trump' parameters for each matched preset
             trump_params = []
             for preset in matched_presets:
                 if 'trumps' in preset:
                     trump_params.extend([param.strip() for param in preset['trumps'].split(',')])
-
-            # Remove duplicates from the trump_params list
-            trump_params = list(set(trump_params))
-
+            trump_params = list(set(trump_params)) # Remove duplicates from the trump_params list
             # Compare each matched preset's trigger to the list of trump parameters
             # Ignore the preset if its trigger exactly matches any trump parameter
             matched_presets = [preset for preset in matched_presets if not any(trigger.lower() in trump_params for trigger in preset['trigger'].split(','))]
             if matched_presets:
+                # Weed out duplicates
+                grouped_presets = []
                 for preset in matched_presets:
                     triggers = [t.strip() for t in preset['trigger'].split(',')]
                     exact_matches = [
                         other_preset for other_preset in matched_presets
                         if other_preset != preset and all(
                             any(phrase in other_trigger for other_trigger in other_preset['trigger'].lower().split(','))
-                            for phrase in triggers
-                        )
-                    ]
+                            for phrase in triggers)]
                     if not any(preset in group for group in grouped_presets):
                         grouped_presets.append([preset] + exact_matches)
-
+                filtered_presets = []
                 for group in grouped_presets:
                     if len(group) == 1:
                         preset = group[0]
-                        payload['prompt'] += preset['positive_prompt']
-                        payload['negative_prompt'] += preset['negative_prompt']
+                        filtered_presets.append(preset)
                     else:
                         longest_preset = max(group, key=lambda p: len(p['trigger']))
-                        payload['prompt'] += longest_preset['positive_prompt']
-                        payload['negative_prompt'] += longest_preset['negative_prompt']
+                        filtered_presets.append(longest_preset)
+                # Apply the payload settings
+                for preset in reversed(filtered_presets):
+                    payload['negative_prompt'] += preset['negative_prompt']
+                    if config.imgprompt_settings['insert_loras_in_prompt'] and search_mode != 'user':
+                        matched_text = None
+                        for trigger in [t.strip() for t in preset['trigger'].split(',')]:
+                            if trigger.lower() in payload["prompt"].lower():
+                                matched_text = trigger
+                                break
+                        if matched_text:
+                            insert_index = payload["prompt"].lower().index(matched_text) + len(matched_text)
+                            insert_text = preset['positive_prompt']
+                            payload['prompt'] = payload['prompt'][:insert_index] + insert_text + payload['prompt'][insert_index:]
+                            filtered_presets.remove(preset)
+                for preset in filtered_presets:
+                    payload['prompt'] += preset['positive_prompt']
 
 def apply_suffix2(payload, positive_prompt_suffix2, positive_prompt_suffix2_blacklist):
     if positive_prompt_suffix2:
@@ -962,38 +995,31 @@ def apply_suffix2(payload, positive_prompt_suffix2, positive_prompt_suffix2_blac
         if not any(phrase.lower() in prompt_text for phrase in blacklist_phrases):
             payload['prompt'] += positive_prompt_suffix2
 
-async def pic(i, text, prompt=None, neg_prompt=None, size=None, face_swap=None, controlnet=None):
+async def pic(i, text, image_prompt, neg_prompt=None, size=None, face_swap=None, controlnet=None):
     if await a1111_online(i):
         info_embed.title = "Processing"
         info_embed.description = " ... "  # await check_a1111_progress()
         if client.fresh:
             info_embed.description = "First request tends to take a long time, please be patient"
         picture_frame = await i.channel.send(embed=info_embed)
-        if not prompt:
-            llm_prompt = """Describe the scene as if it were a picture to a blind person,
-            also describe yourself and refer to yourself in the third person if the picture is of you.
-            Include as much detail as you can."""
-            image_prompt = create_image_prompt(llm_prompt)
-        else:
-            image_prompt = prompt
-
         info_embed.title = "Sending prompt to A1111 ..."
-#        await picture_frame.edit(embed=info_embed)
-
-        payload = {"prompt": image_prompt, "negative_prompt": neg_prompt, "width": 512, "height": 512, "steps": 20}
-        if not neg_prompt:
-            payload.update({"negative_prompt": ''})
+        # Initialize payload settings
+        payload = {"prompt": image_prompt, "negative_prompt": '', "width": 512, "height": 512, "steps": 20}
+        if neg_prompt: payload.update({"negative_prompt": neg_prompt})
         activepayload = get_active_setting('imgmodel').get('payload')
+        payload.update(activepayload)
         activeoverride = get_active_setting('imgmodel').get('override_settings')
-        update_payload(payload, activepayload, activeoverride, text)
+        payload.update(activeoverride)
+        # Process payload triggers
+        process_payload_mods(payload, text)
         if size: payload.update(size)
+        # Process extensions
         if face_swap:
             payload['alwayson_scripts']['reactor']['args'][0] = face_swap # image in base64 format
             payload['alwayson_scripts']['reactor']['args'][1] = True # Enable
         if controlnet: payload['alwayson_scripts']['controlnet']['args'][0].update(controlnet)
-
+        # Process LORAs
         data = get_active_setting('imglora')
-
         positive_prompt_prefix = data.get("positive_prompt_prefix")
         positive_prompt_suffix = data.get("positive_prompt_suffix")
         positive_prompt_suffix2 = data.get("positive_prompt_suffix2")
@@ -1130,7 +1156,7 @@ async def image(
     await pic(
         i,
         text,
-        prompt=pos_style_prompt,
+        image_prompt=pos_style_prompt,
         neg_prompt=neg_style_prompt,
         size=size_dict if size_dict else None,
         face_swap=faceswapimg if face_swap else None,
