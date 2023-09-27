@@ -597,9 +597,13 @@ async def a1111_online(i):
 # Starboard feature
 try:
     with open('ad_discordbot/starboard_messages.yaml', "r") as file:
-        starboard_posted_messages = set(yaml.safe_load(file))
+        data = yaml.safe_load(file)
+        if data is None:
+            starboard_posted_messages = ""
+        else:
+            starboard_posted_messages = set(data)
 except FileNotFoundError:
-    starboard_posted_messages = set()
+    starboard_posted_messages = ""
 
 @client.event
 async def on_raw_reaction_add(endorsed_img):
@@ -1445,7 +1449,7 @@ class Behavior:
         c.execute('''SELECT channel_id FROM main_channels''')
         result = [int(row[0]) for row in c.fetchall()]
         conn.close()
-        return result if result else None
+        return result if result else []
 
     def update_user_dict(self, user_id):
         # Update the last conversation time for a user
