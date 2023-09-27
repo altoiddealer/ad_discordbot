@@ -874,11 +874,14 @@ async def process_image_gen(payload, picture_frame, i):
             await picture_frame.edit(delete_after=5)
         else:
             client.fresh = False
+            # Ensure the output directory exists
+            output_dir = 'ad_discordbot/sd_outputs/'
+            os.makedirs(output_dir, exist_ok=True)
             # Send all images to the channel
             image_files = [discord.File(f'temp_img_{idx}.png') for idx in range(len(images))]
             await i.channel.send(files=image_files)
             # Save the image at index 0 with the date/time naming convention
-            os.rename(f'temp_img_0.png', f'ad_discordbot/sd_outputs/{datetime.now().strftime("%Y-%m-%d_%H-%M-%S")}_0.png')
+            os.rename(f'temp_img_0.png', f'{output_dir}/{datetime.now().strftime("%Y-%m-%d_%H-%M-%S")}_0.png')
             # Delete temporary image files except for the one at index 0
             for idx in range(1, len(images)):
                 os.remove(f'temp_img_{idx}.png')
