@@ -896,16 +896,16 @@ async def process_image_gen(payload, picture_frame, i):
 
 def clean_payload(payload):
     # Prevents errors caused by misconfigured settings
-    if not config.extensions['controlnet_enabled']:
-        del payload['alwayson_scripts']['controlnet']
-    if not config.extensions['reactor_enabled']:
-        del payload['alwayson_scripts']['reactor']
+    if not config.sd['extensions']['controlnet_enabled']:
+        del payload['alwayson_scripts']['controlnet'] # Delete all 'controlnet' keys if disabled by config
+    if not config.sd['extensions']['reactor_enabled']:
+        del payload['alwayson_scripts']['reactor'] # Delete all 'reactor' keys if disabled by config
     keys_to_delete = []
     for key, value in payload.items():
         if value == "":
             keys_to_delete.append(key)
     for key in keys_to_delete:
-        del payload[key]
+        del payload[key] # Delete all empty keys (use A1111's API defaults)
     return payload
 
 def process_payload_mods(payload, text):
@@ -998,9 +998,11 @@ def apply_presets(payload, presets, i, text):
                 # Apply the payload settings
                 for preset in reversed(filtered_presets):
                     matched_text = None
+                    triggers = [t.strip() for t in preset['trigger'].split(',')]
                     # Iterate through the triggers for the current preset
                     for trigger in triggers:
                         pattern = re.escape(trigger.lower())
+                        #pattern = re.escape(trigger.lower())
                         match = re.search(pattern, payload['prompt'].lower())
                         if match:
                             matched_text = match.group(0)
@@ -1112,6 +1114,7 @@ async def image(
     pos_style_prompt = prompt
     neg_style_prompt = ""
     size_dict = {}
+    faceswapimg = ''
     controlnet_dict = {}
 
     message_content = f">>> **Prompt:** {pos_style_prompt}"
@@ -1135,7 +1138,7 @@ async def image(
             size_dict['height'] = selected_size_option.get('height')
         message_content += f" | **Size:** {size.value}"
 
-    if config.extensions['reactor_enabled']:
+    if config.sd['extensions']['reactor_enabled']:
         if face_swap:
             if face_swap.content_type and face_swap.content_type.startswith("image/"):
                 imgurl = face_swap.url
@@ -1145,10 +1148,8 @@ async def image(
             else:
                 await i.send("Please attach a valid image to use for Face Swap.",ephemeral=True)
                 return
-    else:
-        face_swap = ''
 
-    if config.extensions['controlnet_enabled']:
+    if config.sd['extensions']['controlnet_enabled']:
         if cnet_model:
             selected_cnet_option = next((option for option in controlnet_options if option['name'] == cnet_model.value), None)
             if selected_cnet_option:
@@ -1294,7 +1295,7 @@ async def post_active_settings():
             # Fetch and delete all existing messages in the channel
             async for message in channel.history(limit=None):
                 await message.delete()
-                await asyncio.sleep(0.2)  # minimum delay for discord limit
+                await asyncio.sleep(0.25)  # minimum delay for discord limit
             
             # Send the entire settings content as a single message
             await send_long_message(channel, f"Current settings:\n```yaml\n{settings_content}\n```")
