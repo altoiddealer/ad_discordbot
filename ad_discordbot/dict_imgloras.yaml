@@ -13,8 +13,7 @@
     negative_prompt: ''
     trumps: ''                            # If another matched preset has a trigger phrase in 'trumps', it will be ignored
   - trigger: 'shocked face'
-    positive_prompt: |
-      , PEOPShockedFace, eyes popping out, mouth open, anime, cartoon, <lora:PE_OP_ShockedFaceMeme:0.7>
+    positive_prompt: ', PEOPShockedFace, eyes popping out, mouth open, anime, cartoon, <lora:PE_OP_ShockedFaceMeme:0.7>'
     negative_prompt: ', photograph'
     trumps: ''
 
