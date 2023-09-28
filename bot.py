@@ -343,20 +343,23 @@ queues = []
 blocking = False
 reply_count = 0
 
-# Function to recursively update a dictionary
+# # Function to recursively update a dictionary
 def update_dict(d, u):
     for k, v in u.items():
         if isinstance(v, dict):
             d[k] = update_dict(d.get(k, {}), v)
         else:
             d[k] = v
-    return d
+    # Add missing keys from the source dictionary to the target dictionary
+    for k in d.keys() - u.keys():
+        u[k] = d[k]
+    return u
 
 # def update_dict(d, u):
 #     for k, v in u.items():
 #         if isinstance(v, dict):
 #             d[k] = update_dict(d.get(k, {}), v)
-#         elif k in d:
+#         else:
 #             d[k] = v
 #     return d
 
@@ -891,7 +894,22 @@ async def process_image_gen(payload, picture_frame, i):
         await i.send("Timeout error")
         await picture_frame.edit(delete_after=5)
 
+def clean_payload(payload):
+    # Prevents errors caused by misconfigured settings
+    if not config.extensions['controlnet_enabled']:
+        del payload['alwayson_scripts']['controlnet']
+    if not config.extensions['reactor_enabled']:
+        del payload['alwayson_scripts']['reactor']
+    keys_to_delete = []
+    for key, value in payload.items():
+        if value == "":
+            keys_to_delete.append(key)
+    for key in keys_to_delete:
+        del payload[key]
+    return payload
+
 def process_payload_mods(payload, text):
+    # Process triggered mods
     trigger_params = config.imgprompt_settings['trigger_img_params_by_phrase']
     if trigger_params['enabled']:
         matched_presets = []     
@@ -979,18 +997,21 @@ def apply_presets(payload, presets, i, text):
                         filtered_presets.append(longest_preset)
                 # Apply the payload settings
                 for preset in reversed(filtered_presets):
-                    payload['negative_prompt'] += preset['negative_prompt']
-                    if config.imgprompt_settings['insert_loras_in_prompt'] and search_mode != 'user':
-                        matched_text = None
-                        for trigger in [t.strip() for t in preset['trigger'].split(',')]:
-                            if trigger.lower() in payload["prompt"].lower():
-                                matched_text = trigger
-                                break
-                        if matched_text:
-                            insert_index = payload["prompt"].lower().index(matched_text) + len(matched_text)
-                            insert_text = preset['positive_prompt']
-                            payload['prompt'] = payload['prompt'][:insert_index] + insert_text + payload['prompt'][insert_index:]
-                            filtered_presets.remove(preset)
+                    matched_text = None
+                    # Iterate through the triggers for the current preset
+                    for trigger in triggers:
+                        pattern = re.escape(trigger.lower())
+                        match = re.search(pattern, payload['prompt'].lower())
+                        if match:
+                            matched_text = match.group(0)
+                            break
+                    if matched_text:
+                        # Find the index of the first occurrence of matched_text
+                        insert_index = payload['prompt'].lower().index(matched_text) + len(matched_text)
+                        insert_text = preset['positive_prompt']
+                        payload['prompt'] = payload['prompt'][:insert_index] + insert_text + payload['prompt'][insert_index:]
+                        filtered_presets.remove(preset)
+                # All remaining are appended to prompt
                 for preset in filtered_presets:
                     payload['prompt'] += preset['positive_prompt']
 
@@ -1043,7 +1064,7 @@ async def pic(i, text, image_prompt, neg_prompt=None, size=None, face_swap=None,
         
         apply_presets(payload, presets, i, text)
         apply_suffix2(payload, positive_prompt_suffix2, positive_prompt_suffix2_blacklist)
-        
+        clean_payload(payload)        
         await process_image_gen(payload, picture_frame, i)
 
 # begin /image command
@@ -1060,6 +1081,7 @@ size_choices = [
 style_choices = [
     app_commands.Choice(name=option['name'], value=option['name'])
     for option in style_options]
+
 cnet_model_choices = [
     app_commands.Choice(name=option['name'], value=option['name'])
     for option in controlnet_options]
@@ -1105,7 +1127,7 @@ async def image(
             pos_style_prompt = selected_style_option.get('positive').format(prompt)
             neg_style_prompt = selected_style_option.get('negative')
         message_content += f" | **Style:** {style.value}"
-        
+
     if size:
         selected_size_option = next((option for option in size_options if option['name'] == size.value), None)
         if selected_size_option:
@@ -1113,50 +1135,54 @@ async def image(
             size_dict['height'] = selected_size_option.get('height')
         message_content += f" | **Size:** {size.value}"
 
-    if face_swap:
-        if face_swap.content_type and face_swap.content_type.startswith("image/"):
-            imgurl = face_swap.url
-            attached_img = await face_swap.read()
-            faceswapimg = base64.b64encode(attached_img).decode('utf-8')
-            message_content += f" | **Face Swap:** Image Provided"
-        else:
-            await i.send("Please attach a valid image to use for Face Swap.",ephemeral=True)
-            return
+    if config.extensions['reactor_enabled']:
+        if face_swap:
+            if face_swap.content_type and face_swap.content_type.startswith("image/"):
+                imgurl = face_swap.url
+                attached_img = await face_swap.read()
+                faceswapimg = base64.b64encode(attached_img).decode('utf-8')
+                message_content += f" | **Face Swap:** Image Provided"
+            else:
+                await i.send("Please attach a valid image to use for Face Swap.",ephemeral=True)
+                return
+    else:
+        face_swap = ''
 
-    if cnet_model:
-        selected_cnet_option = next((option for option in controlnet_options if option['name'] == cnet_model.value), None)
-        if selected_cnet_option:
-            controlnet_dict['model'] = selected_cnet_option.get('model')
-            controlnet_dict['module'] = selected_cnet_option.get('module')
-            controlnet_dict['guidance_end'] = selected_cnet_option.get('guidance_end')
-            controlnet_dict['weight'] = selected_cnet_option.get('weight')
-            controlnet_dict['enabled'] = True
-        message_content += f" | **ControlNet:** Model: {cnet_model.value}"
-
-    if cnet_input:
-        if cnet_input.content_type and cnet_input.content_type.startswith("image/"):
-            imgurl = cnet_input.url
-            attached_img = await cnet_input.read()
-            cnetimage = base64.b64encode(attached_img).decode('utf-8')
-            controlnet_dict['input_image'] = cnetimage
-        else:
-            await i.send("Invalid image. Please attach a valid image.",ephemeral=True)
-            return
-        if cnet_map:
-            if cnet_map.value == "no_map":
+    if config.extensions['controlnet_enabled']:
+        if cnet_model:
+            selected_cnet_option = next((option for option in controlnet_options if option['name'] == cnet_model.value), None)
+            if selected_cnet_option:
+                controlnet_dict['model'] = selected_cnet_option.get('model')
                 controlnet_dict['module'] = selected_cnet_option.get('module')
-            if cnet_map.value == "map":
-                controlnet_dict['module'] = "none"
-            if cnet_map.value == "invert_map":
-                controlnet_dict['module'] = "invert (from white bg & black line)"
-            message_content += f", Module: {controlnet_dict['module']}"
-            message_content += f", Map Input: {cnet_map.value}"
-        else:
-            message_content += f", Module: {controlnet_dict['module']}"
+                controlnet_dict['guidance_end'] = selected_cnet_option.get('guidance_end')
+                controlnet_dict['weight'] = selected_cnet_option.get('weight')
+                controlnet_dict['enabled'] = True
+            message_content += f" | **ControlNet:** Model: {cnet_model.value}"
 
-        if (cnet_model and not cnet_input) or (cnet_input and not cnet_model):
-            await i.send("ControlNet feature requires **both** selecting a model (cnet_model) and attaching an image (cnet_input).",ephemeral=True)
-            return
+        if cnet_input:
+            if cnet_input.content_type and cnet_input.content_type.startswith("image/"):
+                imgurl = cnet_input.url
+                attached_img = await cnet_input.read()
+                cnetimage = base64.b64encode(attached_img).decode('utf-8')
+                controlnet_dict['input_image'] = cnetimage
+            else:
+                await i.send("Invalid image. Please attach a valid image.",ephemeral=True)
+                return
+            if cnet_map:
+                if cnet_map.value == "no_map":
+                    controlnet_dict['module'] = selected_cnet_option.get('module')
+                if cnet_map.value == "map":
+                    controlnet_dict['module'] = "none"
+                if cnet_map.value == "invert_map":
+                    controlnet_dict['module'] = "invert (from white bg & black line)"
+                message_content += f", Module: {controlnet_dict['module']}"
+                message_content += f", Map Input: {cnet_map.value}"
+            else:
+                message_content += f", Module: {controlnet_dict['module']}"
+
+            if (cnet_model and not cnet_input) or (cnet_input and not cnet_model):
+                await i.send("ControlNet feature requires **both** selecting a model (cnet_model) and attaching an image (cnet_input).",ephemeral=True)
+                return
 
     await i.send(message_content)
 

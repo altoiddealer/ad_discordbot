@@ -18,6 +18,11 @@ discord = {
 
 sd = {'A1111': "http://127.0.0.1:7860"} # Default URL for A1111 API. Only adjust if you have issues connecting.
 
+extensions = {
+    'controlnet_enabled': False,
+    'reactor_enabled': False,    
+}
+
 tell_bot_time = {                   # slips in a message about the current time before your context.
     'enabled': True,
     'mode': 0,                      # 0 = text requests only / 1 = image requests only / 2 = both
