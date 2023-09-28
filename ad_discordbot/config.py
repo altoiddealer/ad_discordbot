@@ -16,11 +16,12 @@ discord = {
     }   # YOU CAN GET CHANNEL ID BY ENABLING DEVELOPER MODE IN YOUR DISCORD ACCOUNT
 }       # THEN SIMPLY RIGHT CLICK CHANNEL > GET CHANNEL ID
 
-sd = {'A1111': "http://127.0.0.1:7860"} # Default URL for A1111 API. Only adjust if you have issues connecting.
-
-extensions = {
-    'controlnet_enabled': False,
-    'reactor_enabled': False,    
+sd = {
+    'A1111': "http://127.0.0.1:7860",   # Default URL for A1111 API. Adjust if you have issues connecting.
+    'extensions': {                     # Only set extensions as True if they are installed AND active in your A1111.
+        'controlnet_enabled': False,    # Requires: sd-webui-controlnet AND configuring ad_discordbot/dict_cmdoptions.yaml
+        'reactor_enabled': False        # Requires: sd-webui-reactor
+    }
 }
 
 tell_bot_time = {                   # slips in a message about the current time before your context.
