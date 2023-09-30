@@ -27,6 +27,7 @@ import aiohttp
 import math
 import time
 import cv2 # pip install OpenCV-Python
+from itertools import product
 
 session_history = {'internal': [], 'visible': []}
 last_user_message = {'text': [], 'llm_prompt': []}
@@ -945,8 +946,43 @@ def process_payload_mods(payload, text):
             payload.update(preset_payload)  # Update the payload with each preset's settings
     return payload
 
+def expand_dictionary(presets):
+    def expand_value(value):
+        # Split the value on commas
+        parts = value.split(',')
+        expanded_values = []
+
+        for part in parts:
+            # Check if the part contains curly brackets
+            if '{' in part and '}' in part:
+                # Use regular expression to find all curly bracket groups
+                matches = re.findall(r'\{([^}]+)\}', part)
+                permutations = list(product(*[match.split('|') for match in matches]))
+
+                # Replace each curly bracket group with permutations
+                for perm in permutations:
+                    expanded_part = part
+                    for match in matches:
+                        expanded_part = expanded_part.replace('{' + match + '}', perm[matches.index(match)], 1)
+                    expanded_values.append(expanded_part)
+            else:
+                expanded_values.append(part)
+
+        return ','.join(expanded_values)
+
+    expanded_presets = []
+
+    for preset in presets:
+        expanded_preset = {}
+        for key, value in preset.items():
+            expanded_preset[key] = expand_value(value)
+        expanded_presets.append(expanded_preset)
+
+    return expanded_presets
+
 def apply_presets(payload, presets, i, text):
     if presets:
+        presets = expand_dictionary(presets)
         # Determine text to search
         search_mode = config.imgprompt_settings['trigger_search_mode']
         if search_mode == 'user':
@@ -974,48 +1010,27 @@ def apply_presets(payload, presets, i, text):
             trump_params = list(set(trump_params)) # Remove duplicates from the trump_params list
             # Compare each matched preset's trigger to the list of trump parameters
             # Ignore the preset if its trigger exactly matches any trump parameter
-            matched_presets = [preset for preset in matched_presets if not any(trigger.lower() in trump_params for trigger in preset['trigger'].split(','))]
-            if matched_presets:
-                # Weed out duplicates
-                grouped_presets = []
-                for preset in matched_presets:
-                    triggers = [t.strip() for t in preset['trigger'].split(',')]
-                    exact_matches = [
-                        other_preset for other_preset in matched_presets
-                        if other_preset != preset and all(
-                            any(phrase in other_trigger for other_trigger in other_preset['trigger'].lower().split(','))
-                            for phrase in triggers)]
-                    if not any(preset in group for group in grouped_presets):
-                        grouped_presets.append([preset] + exact_matches)
-                filtered_presets = []
-                for group in grouped_presets:
-                    if len(group) == 1:
-                        preset = group[0]
-                        filtered_presets.append(preset)
-                    else:
-                        longest_preset = max(group, key=lambda p: len(p['trigger']))
-                        filtered_presets.append(longest_preset)
-                # Apply the payload settings
-                for preset in reversed(filtered_presets):
-                    matched_text = None
-                    triggers = [t.strip() for t in preset['trigger'].split(',')]
-                    # Iterate through the triggers for the current preset
-                    for trigger in triggers:
-                        pattern = re.escape(trigger.lower())
-                        #pattern = re.escape(trigger.lower())
-                        match = re.search(pattern, payload['prompt'].lower())
-                        if match:
-                            matched_text = match.group(0)
-                            break
-                    if matched_text:
-                        # Find the index of the first occurrence of matched_text
-                        insert_index = payload['prompt'].lower().index(matched_text) + len(matched_text)
-                        insert_text = preset['positive_prompt']
-                        payload['prompt'] = payload['prompt'][:insert_index] + insert_text + payload['prompt'][insert_index:]
-                        filtered_presets.remove(preset)
-                # All remaining are appended to prompt
-                for preset in filtered_presets:
-                    payload['prompt'] += preset['positive_prompt']
+            filtered_presets = [preset for preset in matched_presets if not any(trigger.lower() in trump_params for trigger in preset['trigger'].split(','))]
+            for preset in reversed(filtered_presets):
+                matched_text = None
+                triggers = [t.strip() for t in preset['trigger'].split(',')]
+                # Iterate through the triggers for the current preset
+                for trigger in triggers:
+                    pattern = re.escape(trigger.lower())
+                    #pattern = re.escape(trigger.lower())
+                    match = re.search(pattern, payload['prompt'].lower())
+                    if match:
+                        matched_text = match.group(0)
+                        break
+                if matched_text:
+                    # Find the index of the first occurrence of matched_text
+                    insert_index = payload['prompt'].lower().index(matched_text) + len(matched_text)
+                    insert_text = preset['positive_prompt']
+                    payload['prompt'] = payload['prompt'][:insert_index] + insert_text + payload['prompt'][insert_index:]
+                    filtered_presets.remove(preset)
+            # All remaining are appended to prompt
+            for preset in filtered_presets:
+                payload['prompt'] += preset['positive_prompt']
 
 def apply_suffix2(payload, positive_prompt_suffix2, positive_prompt_suffix2_blacklist):
     if positive_prompt_suffix2:

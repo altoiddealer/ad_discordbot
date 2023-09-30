@@ -8,10 +8,18 @@
   positive_prompt_suffix2_blacklist: ''   # ...which won't be added if a trigger word is found in the prompt
   negative_prompt_prefix: ''              # negative_prompt_prefix: Inserted before every negative prompt
   presets:
+  - trigger: '{ps1|playstation} {style|art|graphics},style of {ps1|playstation}'
+    positive_prompt: ', ps1 style <lora:ps1_style_SDXL_v1:1.0>'
+    negative_prompt: ', blurry'
+    trumps: ''
+  - trigger: 'low {poly|polygon}'         # You can simplify values by using 'a {boy|dog}' which will translate to 'a boy,a girl'
+    positive_prompt: ', <lora:LowpolySDXL_v1.0:1.0>'
+    negative_prompt: ', blurry'
+    trumps: 'ps1 style'                   # If another matched preset contains a trigger phrase in 'trumps', it will be ignored. This example will trump the ps1 preset.
   - trigger: 'grimace'
     positive_prompt: ', <lora:PE_Grimace_v1.0:0.75>'
     negative_prompt: ''
-    trumps: ''                            # If another matched preset has a trigger phrase in 'trumps', it will be ignored
+    trumps: ''
   - trigger: 'shocked face'
     positive_prompt: ', PEOPShockedFace, eyes popping out, mouth open, anime, cartoon, <lora:PE_OP_ShockedFaceMeme:0.7>'
     negative_prompt: ', photograph'
@@ -24,7 +32,7 @@
   positive_prompt_suffix2: ''
   negative_prompt_prefix: '<kkw-Extreme-Neg:0.5>, <negative_hand-neg:0.5>, by <bad-artist:0.5>'
   presets:
-  - trigger: 'gta,gta4,grand theft auto,archer style'
+  - trigger: '{gta|gta4|grand theft auto|archer} style'
     positive_prompt: ', GtaSA2004 cartoon, <lora:GTA_Style:1.0>'
     negative_prompt: ''
     trumps: ''
