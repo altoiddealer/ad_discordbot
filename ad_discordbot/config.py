@@ -18,6 +18,7 @@ discord = {
 
 sd = {
     'A1111': "http://127.0.0.1:7860",   # Default URL for A1111 API. Adjust if you have issues connecting.
+    'get_imgmodels_via_api': True,      # Handling for /imgmodel command. True = dynamically fetch models (simple, less customizing). False = uses ad_discordbot/dict_imgmodels.yaml
     'extensions': {                     # Only set extensions as True if they are installed AND active in your A1111.
         'controlnet_enabled': False,    # Requires: sd-webui-controlnet AND configuring ad_discordbot/dict_cmdoptions.yaml
         'reactor_enabled': False        # Requires: sd-webui-reactor
@@ -35,13 +36,13 @@ announce_imgmodel = {
     'update_topic': {
         'enabled': True,
         'topic_prefix': "**Current Image Model:** ",
-        'include_url': True
+        'include_url': True         # URL only applies if 'get_imgmodels_via_api': False
     },
     'announce_in_chat': {
         'enabled': True,
         'reply_prefix': "**Model Loaded:** ",
-        'include_url': True,
-        'include_params': False
+        'include_url': True,        # URL only applies if 'get_imgmodels_via_api': False
+        'include_params': False     # If True, lists all the current A1111 parameters
     }
 }
 

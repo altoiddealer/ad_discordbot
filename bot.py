@@ -1393,16 +1393,70 @@ async def behaviors(i):
     view = discord.ui.View()
     view.add_item(SettingsDropdown('ad_discordbot/dict_behaviors.yaml', 'behavior_name', 'behavior'))
     await i.send("Choose a behavior:", view=view, ephemeral=True)
-@client.hybrid_command(description="Choose an imgmodel")
-async def imgmodel(i):
-    view = discord.ui.View()
-    view.add_item(SettingsDropdown('ad_discordbot/dict_imgmodels.yaml', 'imgmodel_name', 'imgmodel'))
-    await i.send("Choose an imgmodel:", view=view, ephemeral=True)
 @client.hybrid_command(description="Choose LORAs")
 async def imgloras(i):
     view = discord.ui.View()
     view.add_item(SettingsDropdown('ad_discordbot/dict_imgloras.yaml', 'imglora_name', 'imglora'))
     await i.send("Choose LORAs:", view=view, ephemeral=True)
+
+class ImgModelDropdown(discord.ui.Select):
+    def __init__(self, imgmodel_data):
+        options = [
+            discord.SelectOption(label=imgmodel["model_name"], value=imgmodel["title"])
+            for imgmodel in imgmodel_data[:25]
+        ]
+        super().__init__(placeholder='Choose an Image Model', options=options)
+        self.imgmodel_data = imgmodel_data
+    async def callback(self, interaction: discord.Interaction):
+        selected_item = self.values[0]
+        with open('ad_discordbot/activesettings.yaml', 'r') as activesettings_file:
+            activesettings = yaml.safe_load(activesettings_file)
+        activesettings['imgmodel']['override_settings']['sd_model_checkpoint'] = selected_item
+        with open('ad_discordbot/activesettings.yaml', 'w') as activesettings_file:
+            yaml.dump(activesettings, activesettings_file, default_flow_style=False, width=float("inf"))
+        # Set the topic of the channel if enabled in config
+        if config.announce_imgmodel['update_topic']['enabled']:
+            channel = interaction.channel
+            topic_prefix = config.announce_imgmodel['update_topic']['topic_prefix']
+            new_topic = f"{topic_prefix}{selected_item}"
+            await channel.edit(topic=new_topic)
+        # Reply with image model name if enabled in config
+        if config.announce_imgmodel['announce_in_chat']['enabled']:
+            reply_prefix = config.announce_imgmodel['announce_in_chat']['reply_prefix']
+            reply = f"{reply_prefix}{selected_item}"
+            await interaction.response.send_message(reply)
+        else:
+            await interaction.response.send_message(f"Updated sd_model_checkpoint to: {selected_item}", ephemeral=True)
+        if config.discord['post_active_settings']['enabled']:
+            await post_active_settings()
+
+@client.hybrid_command(description="Choose an imgmodel")
+async def imgmodel(i):
+    if not config.sd['get_imgmodels_via_api']:
+        # Uses ad_discordbot/dict_imgmodel.yaml
+        view = discord.ui.View()
+        view.add_item(SettingsDropdown('ad_discordbot/dict_imgmodels.yaml', 'imgmodel_name', 'imgmodel'))
+        await i.send("Choose an imgmodel:", view=view, ephemeral=True)
+    else:
+        # Or, fetch imgmodel list from A1111 API
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url=f'{A1111}/sdapi/v1/sd-models') as response:
+                    if response.status == 200:
+                        imgmodel_data = await response.json()
+                        total_models = len(imgmodel_data)
+                        if total_models > 25:
+                            omitted_models = total_models - 25
+                            await i.send(f"Due to Discord limitations, only the first 25 models can be listed ({omitted_models} omitted).", ephemeral=True)
+                            imgmodel_data = imgmodel_data[:25]
+                        view = discord.ui.View()
+                        view.add_item(ImgModelDropdown(imgmodel_data))
+                        await i.send('Choose Image Model:', view=view)
+                    else:
+                        await i.send("Failed to fetch Image Models from the API.", ephemeral=True)
+        except Exception as e:
+            print(f"Error fetching Image Models: {e}")
+            await i.send("An error occurred while fetching Image Models.", ephemeral=True)
 
 class LLMUserInputs():
     # Initialize default state settings
