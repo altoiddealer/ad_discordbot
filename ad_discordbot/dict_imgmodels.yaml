@@ -21,9 +21,6 @@
     denoising_strength: 0.5
     hr_scale: 2
     hr_second_pass_steps: 0
-    alwayson_scripts:
-      refiner:  # If you have Refiner extension, this will work... will soon be updating refiner handling for A1111's native refiner support.
-        args:
-          - False
-          - "sdxl\\sd_xl_refiner_1.0_0.9vae.safetensors [8d0ce6c016]"
-          - 20
+    # Refinder is disabled if refiner_switch_at: 0.0 or refiner_checkpoint: ''
+    refiner_checkpoint: '' # 'sd_xl_refiner_1.0_0.9vae.safetensors [8d0ce6c016]'
+    refiner_switch_at: 0.8

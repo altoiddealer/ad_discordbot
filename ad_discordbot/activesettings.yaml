@@ -66,6 +66,8 @@ imgmodel:
     denoising_strength: 0.5
     hr_scale: 2
     hr_second_pass_steps: 0
+    refiner_checkpoint: ''
+    refiner_switch_at: 0.0
 llmcontext:
   bot_description: Friendly AI assistant
   bot_emoji: "\xF0\u0178\u0178\xA3"
