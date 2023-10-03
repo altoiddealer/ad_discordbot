@@ -528,10 +528,6 @@ def chatbot_wrapper_wrapper(user_input, save_history):
         if len(i_resp) > 0:
             resp_clean = i_resp[len(i_resp) - 1][1]
             last_resp = resp_clean
-    if config.imgprompt_settings['prune_truncated_tokens']:
-        last_comma_index = last_resp.rfind(",")
-        if last_comma_index != -1:
-            last_resp = last_resp[:last_comma_index]
     # Retain chat history
     if not get_active_setting('behavior').get('ignore_history') and save_history:
         global session_history
@@ -907,6 +903,17 @@ def clean_payload(payload):
             keys_to_delete.append(key)
     for key in keys_to_delete:
         del payload[key] # Delete all empty keys (use A1111's API defaults)
+    # remove duplicate negative prompts
+    negative_prompt_list = payload['negative_prompt'].split(', ')
+    unique_values_set = set()
+    unique_values_list = []
+    for value in negative_prompt_list:
+        if value not in unique_values_set:
+            unique_values_set.add(value)
+            unique_values_list.append(value)
+    processed_negative_prompt = ', '.join(unique_values_list)
+    payload['negative_prompt'] = processed_negative_prompt
+    print(payload)
     return payload
 
 def process_payload_mods(payload, text):
@@ -1001,6 +1008,7 @@ def apply_presets(payload, presets, i, text):
                 trigger_regex = r"\b{}\b".format(re.escape(trigger.lower()))
                 if re.search(trigger_regex, search_text.lower()):
                     matched_presets.append(preset)
+                    break
         if matched_presets:
             # Collect 'trump' parameters for each matched preset
             trump_params = []
@@ -1012,6 +1020,7 @@ def apply_presets(payload, presets, i, text):
             # Ignore the preset if its trigger exactly matches any trump parameter
             filtered_presets = [preset for preset in matched_presets if not any(trigger.lower() in trump_params for trigger in preset['trigger'].split(','))]
             for preset in reversed(filtered_presets):
+                payload['negative_prompt'] += preset['negative_prompt']
                 matched_text = None
                 triggers = [t.strip() for t in preset['trigger'].split(',')]
                 # Iterate through the triggers for the current preset
@@ -1081,7 +1090,7 @@ async def pic(i, text, image_prompt, neg_prompt=None, size=None, face_swap=None,
         
         apply_presets(payload, presets, i, text)
         apply_suffix2(payload, positive_prompt_suffix2, positive_prompt_suffix2_blacklist)
-        clean_payload(payload)        
+        clean_payload(payload)     
         await process_image_gen(payload, picture_frame, i)
 
 # begin /image command

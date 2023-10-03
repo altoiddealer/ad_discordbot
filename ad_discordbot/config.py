@@ -47,7 +47,6 @@ announce_imgmodel = {
 }
 
 imgprompt_settings = {
-    'prune_truncated_tokens': False,    # Sacrifice tokens generated after the last comma to remove potential nonsense/cut off words.
     'trigger_search_mode': 'userllm',   # What to compare triggers against. 'user' = user prompt only / 'llm' = bot reply only / 'userllm' = search all text
     'insert_loras_in_prompt': True,     # For ImgLora handling (ad_discordbot/dict_imgloras.yaml). True = insert positive_prompt after matches found in prompt when applicable / False = append all to end of prompt.
     'trigger_img_gen_by_phrase': {      # Trigger an image response with words/phrases.
