@@ -15,7 +15,7 @@ controlnet:
   weight: 1.0
 - name: Open Pose
   model: thibaud_xl_openpose_256lora [14288071]
-  module: openpose_full
+  module: dw_openpose_full
   guidance_end: 1.0
   weight: 1.0
 - name: Scribble
