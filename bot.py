@@ -1157,7 +1157,7 @@ async def pic(i, text, image_prompt, neg_prompt=None, size=None, face_swap=None,
         activepayload = get_active_setting('imgmodel').get('payload')
         payload.update(activepayload)
         activeoverride = get_active_setting('imgmodel').get('override_settings')
-        payload.update(activeoverride)
+        payload['override_settings'] = activeoverride
         # Process payload triggers
         process_payload_mods(payload, text)
         if size: payload.update(size)
@@ -1184,7 +1184,7 @@ async def pic(i, text, image_prompt, neg_prompt=None, size=None, face_swap=None,
         
         apply_presets(payload, presets, i, text)
         apply_suffix2(payload, positive_prompt_suffix2, positive_prompt_suffix2_blacklist)
-        clean_payload(payload)     
+        clean_payload(payload)
         await process_image_gen(payload, picture_frame, i)
 
 # begin /image command
