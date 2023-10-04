@@ -32,7 +32,7 @@ tell_bot_time = {                   # slips in a message about the current time 
     'time_offset': 0.0 # 0 = today's date (system time). -0.5 shifts the current date to be 12 hours ago. 100000 sets the date to be 100000 days in the future.
 }
 
-imgmodel = {
+imgmodels = {
     'auto_change_models': { # Feature to periodically switch imgmodels. Behavior is affected by setting for 'get_imgmodels_via_api'
         'enabled': False,
         'mode': 'random',   # 'random' = picks model at random / 'cycle' = sequential order
