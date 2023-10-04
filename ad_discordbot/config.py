@@ -32,7 +32,13 @@ tell_bot_time = {                   # slips in a message about the current time 
     'time_offset': 0.0 # 0 = today's date (system time). -0.5 shifts the current date to be 12 hours ago. 100000 sets the date to be 100000 days in the future.
 }
 
-announce_imgmodel = {
+imgmodel = {
+    'auto_change_models': { # Feature to periodically switch imgmodels. Behavior is affected by setting for 'get_imgmodels_via_api'
+        'enabled': False,
+        'mode': 'random',   # 'random' = picks model at random / 'cycle' = sequential order
+        'frequency': 1.0,  # How often to change models, in hours. 0.5 = 30 minutes
+        'channel_announce': ''  # If a channel is specified, it will announce/update as configured below. '' = Don't announce/update topic.
+    },
     'update_topic': {
         'enabled': True,
         'topic_prefix': "**Current Image Model:** ",
