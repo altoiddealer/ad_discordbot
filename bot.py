@@ -641,8 +641,8 @@ async def update_image_model_task(mode='random'):
     while True:
         frequency = config.imgmodels['auto_change_models']['frequency']
         duration = frequency*3600 # 3600 = 1 hour
-        await auto_update_image_model(mode)
         await asyncio.sleep(duration)
+        await auto_update_image_model(mode)
 
 @client.event
 async def on_ready():
