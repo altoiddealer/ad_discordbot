@@ -1008,7 +1008,6 @@ def clean_payload(payload):
     for key in keys_to_delete:
         del payload[key] # Delete all empty keys (use A1111's API defaults)
     # remove duplicate negative prompts
-    print(payload)
     return payload
 
 def process_payload_mods(payload, text):
