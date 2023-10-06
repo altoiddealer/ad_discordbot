@@ -563,14 +563,12 @@ async def auto_update_image_model(mode='random'):
             if not config.sd['get_imgmodels_via_api']:
                 with open('ad_discordbot/dict_imgmodels.yaml', 'r') as file: # populate options from dict_imgmodels.yaml
                     items = yaml.safe_load(file)
-                    # item_names = [item['imgmodel_name'] for item in items]
             else:
                 async with aiohttp.ClientSession() as session: # populate options from A1111 API
                     async with session.get(url=f'{A1111}/sdapi/v1/sd-models') as response:
                         imgmodel_data = await response.json()
                         total_models = len(imgmodel_data)
                         items = imgmodel_data[:25]
-                        # item_names = [item['title'] for item in items]
             item_names = [item.get('imgmodel_name', item.get('title', None)) for item in items]  # Use a fallback key
         except Exception as e:
             print("Error loading image model data:", e)
@@ -610,26 +608,8 @@ async def auto_update_image_model(mode='random'):
         # Process announcements
         if config.imgmodels['auto_change_models']['channel_announce']:
             channel = client.get_channel(config.imgmodels['auto_change_models']['channel_announce'])
-            if config.imgmodels['update_topic']['enabled']:
-                topic_prefix = config.imgmodels['update_topic']['topic_prefix']
-                new_topic = f"{topic_prefix}{selected_imgmodel_name}"
-                if not config.sd['get_imgmodels_via_api']:
-                    if config.imgmodels['update_topic']['include_url']:
-                        new_topic += " " + selected_item.get('imgmodel_url', {})
-                await channel.edit(topic=new_topic)
-            # Reply with image model name if enabled in config
-            if config.imgmodels['announce_in_chat']['enabled']:
-                reply_prefix = config.imgmodels['announce_in_chat']['reply_prefix']
-                reply = f"{reply_prefix}{selected_imgmodel_name}"
-                if not config.sd['get_imgmodels_via_api']:
-                    if config.imgmodels['announce_in_chat']['include_url']:
-                        reply += " <" + selected_item.get('imgmodel_url', {}) + ">"
-                    if config.imgmodels['announce_in_chat']['include_params']:
-                        selected_imgmodel_override_settings_info = ", ".join(
-                            f"{key}: {value}" for key, value in selected_imgmodel_override_settings.items())
-                        selected_imgmodel_payload_info = ", ".join(
-                            f"{key}: {value}" for key, value in selected_imgmodel_payload.items())
-                        reply += f"\n```{selected_imgmodel_override_settings_info}, {selected_imgmodel_payload_info}```"
+            reply = await process_imgmodel_announce(channel, selected_item)
+            if reply:
                 await channel.send(reply)
             else:
                 await channel.send(f"Updated imgmodel settings to: {selected_imgmodel_name}")
@@ -1412,26 +1392,6 @@ async def update_active_settings(selected_item, active_settings_key):
     except Exception as e:
         print(f"Error updating ad_discordbot/activesettings.yaml ({active_settings_key}):", e)
 
-async def delete_all_messages(channel):
-    async for message in channel.history(limit=None):
-        await message.delete()
-
-async def clear(ctx):
-    # Check the rate limit headers for the 'message delete' endpoint
-    response = await ctx.channel.history(limit=1).flatten()  # Use a small limit just to make the request
-    headers = response[0].headers
-
-    if 'X-RateLimit-Remaining' in headers:
-        remaining_requests = int(headers['X-RateLimit-Remaining'])
-        reset_timestamp = int(headers['X-RateLimit-Reset'])
-        reset_after = float(headers['X-RateLimit-Reset-After'])
-        
-        if remaining_requests <= 0:
-            # We've hit the rate limit, wait until it resets
-            await asyncio.sleep(reset_after)
-
-    await delete_all_messages(ctx.channel)
-
 # Post settings to dedicated channel
 async def post_active_settings():
     if config.discord['post_active_settings']['target_channel_id']:
@@ -1474,14 +1434,20 @@ class SettingsDropdown(discord.ui.Select):
             with open(self.data_file, 'r') as file:
                 items = yaml.safe_load(file)
             selected_item = next(item for item in items if item[self.label_key] == selected_item_name)
+            await update_active_settings(selected_item, self.active_settings_key)
+            print(f"Updated {self.active_settings_key} settings to: {selected_item_name}")
             # If a new LLMContext is selected
             if self.active_settings_key == 'llmcontext':
                 reset_session_history # Reset conversation
-            await update_active_settings(selected_item, self.active_settings_key)
-            await interaction.response.send_message(f"Updated {self.active_settings_key} settings to: {selected_item_name}")
+            if self.active_settings_key == 'imgmodel':
+                channel = interaction.channel
+                reply = await process_imgmodel_announce(channel, selected_item)
+                if reply:
+                    await interaction.response.send_message(reply)
+                else:
+                    await interaction.response.send_message(f"Updated {self.active_settings_key} settings to: {selected_item_name}")
             if config.discord['post_active_settings']['enabled']:
                 await post_active_settings()
-            print(f"Updated {self.active_settings_key} settings to: {selected_item_name}")
         except Exception as e:
             print(f"Error updating ad_discordbot/activesettings.yaml ({self.active_settings_key}):", e)
 
@@ -1506,10 +1472,9 @@ async def imgloras(i):
     view.add_item(SettingsDropdown('ad_discordbot/dict_imgloras.yaml', 'imglora_name', 'imglora'))
     await i.send("Choose LORAs:", view=view, ephemeral=True)
 
-async def process_imgmodel(interaction, selected_item):
+async def process_imgmodel_announce(channel, selected_item):
     # Set the topic of the channel if enabled in config
     if config.imgmodels['update_topic']['enabled']:
-        channel = interaction.channel
         topic_prefix = config.imgmodels['update_topic']['topic_prefix']
         if not config.sd['get_imgmodels_via_api']:
             new_topic = f"{topic_prefix}{selected_item['imgmodel_name']}"
@@ -1560,7 +1525,8 @@ class ImgModelDropdown(discord.ui.Select):
             with open('ad_discordbot/activesettings.yaml', 'w') as active_settings_file:
                 yaml.dump(active_settings, active_settings_file, default_flow_style=False, width=float("inf"))
             # Set the topic of the channel if enabled in config
-            reply = await process_imgmodel(interaction, selected_item)
+            channel = interaction.channel
+            reply = await process_imgmodel_announce(channel, selected_item)
             if reply:
                 await interaction.response.send_message(reply)
             print(f"Updated imgmodel settings to: {selected_item_name}")
