@@ -34,36 +34,47 @@ This bot stands apart from many other ones due to a variety of custom features:
 
 # Installation
 
-1. Install oobabooga's text-generation-webui
-   
-2. Create a Discord bot account, invite it to your server, and note its authentication token.
-   
-   https://discordpy.readthedocs.io/en/stable/discord.html
+1. **Install oobabooga's [text-generation-webui](https://github.com/oobabooga/text-generation-webui)**
 
-4. Move "/ad_discordbot/" and "bot.py" to the directory /text-generation-webui/
-   
+2. **[Create a Discord bot account](https://discordpy.readthedocs.io/en/stable/discord.html), invite it to your server, and note its authentication toke**n.   
+
+4. Move **/ad_discordbot/** and **bot.py** into the directory **/text-generation-webui/**
+   ```
      /text-generation-webui/ad_discordbot/(included files)
    
      /text-generation-webui/bot.py
-   
-5. Run the cmd file in text-generation-webui directory (ex: cmd_windows.bat)
-   
+ 
+5. **Run the .cmd file** in text-generation-webui directory (**ex: cmd_windows.bat**)
+   ```
    pip install discord
-   
+   ```
+   ```
    pip install OpenCV-Python (required for /image command)
-
+   ```
 
 # Running the bot
 
-1. Run the cmd file in text-generation-webui directory (ex: cmd_windows.bat)
-   
+1. **Run the .cmd file** in text-generation-webui directory (**ex: cmd_windows.bat**)
+   ```
    python bot.py (args)
+   ```
 
-   EXAMPLE LAUNCH COMMAND:
-   
+   **EXAMPLE LAUNCH COMMAND:**
+   ```
    python bot.py --loader exllama --model airoboros-l2-13b-gpt4-2.0-GPTQ
+   ```
+2. Use [command](https://github.com/altoiddealer/ad_discordbot/wiki/commands) **/character** to choose a character.
 
+# Getting responses from the bot
 
-   
+* @ mention the bot
 
-See included example characters for reference.
+* Use [command](https://github.com/altoiddealer/ad_discordbot/wiki/commands) **/main** to set a main channel. **The bot won't need to be @ mentioned in main channels.**
+
+* If you enclose your text in parenthesis (like this), the bot will not respond.
+
+# Getting image responses from the bot
+
+* @ mention it including a trigger phrase defined in config.py, and the bot will reply with a Stable Diffusion prompt and image based on your prompt.
+
+* Use **/image** command to use your own prompt with advanced options
