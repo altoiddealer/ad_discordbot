@@ -364,6 +364,24 @@ def update_dict(d, u):
 #             d[k] = v
 #     return d
 
+def load_yaml_file(file_path):
+    try:
+        with open(file_path, 'r') as file:
+            data = yaml.safe_load(file)
+        return data
+    except FileNotFoundError:
+        return None
+    except Exception as e:
+        print(f"An error occurred while reading {file_path}: {str(e)}")
+        return None
+
+def save_yaml_file(file_path, data):
+    try:
+        with open(file_path, 'w') as file:
+            yaml.dump(data, file, default_flow_style=False, width=float("inf"))
+    except Exception as e:
+        print(f"An error occurred while saving {file_path}: {str(e)}")
+
 # Reset session_history
 def reset_session_history():
     global session_history
@@ -416,13 +434,10 @@ async def change_profile(i, character):
                 with open(picture_path, 'rb') as f:
                     picture = f.read()
                 await i.bot.user.edit(avatar=picture)
-        
-        character_path = os.path.join("characters", f"{character}.yaml")
-        with open(character_path, 'r') as char_file:
-            char_data = yaml.safe_load(char_file)
 
-        with open('ad_discordbot/activesettings.yaml', 'r') as active_settings_file:
-            active_settings = yaml.safe_load(active_settings_file)
+        character_path = os.path.join("characters", f"{character}.yaml")
+        char_data = load_yaml_file(character_path)
+        active_settings = load_yaml_file('ad_discordbot/activesettings.yaml')
 
         # Update 'llmcontext' dictionary in the active settings directly from character file
         llmcontext_dict = {}
@@ -439,8 +454,7 @@ async def change_profile(i, character):
             update_dict(active_settings['llmstate']['state'], char_data['state'])
 
         # Save the updated active_settings to activesettings.yaml
-        with open('ad_discordbot/activesettings.yaml', 'w') as active_settings_file:
-            yaml.dump(active_settings, active_settings_file, default_flow_style=False, width=float("inf"))
+        save_yaml_file('ad_discordbot/activesettings.yaml', active_settings)
 
         reset_session_history()
 
@@ -556,13 +570,11 @@ async def llm_gen(i, queues, save_history):
 # Function to automatically change image models
 async def auto_update_image_model(mode='random'):
     try:
-        with open('ad_discordbot/activesettings.yaml', 'r') as active_settings_file:
-            active_settings = yaml.safe_load(active_settings_file)
-            current_imgmodel_name = active_settings.get('imgmodel', {}).get('imgmodel_name', None)
+        active_settings = load_yaml_file('ad_discordbot/activesettings.yaml')
+        current_imgmodel_name = active_settings.get('imgmodel', {}).get('imgmodel_name', None)
         try:
             if not config.sd['get_imgmodels_via_api']:
-                with open('ad_discordbot/dict_imgmodels.yaml', 'r') as file: # populate options from dict_imgmodels.yaml
-                    items = yaml.safe_load(file)
+                items = load_yaml_file('ad_discordbot/dict_imgmodels.yaml')
             else:
                 async with aiohttp.ClientSession() as session: # populate options from A1111 API
                     async with session.get(url=f'{A1111}/sdapi/v1/sd-models') as response:
@@ -600,8 +612,9 @@ async def auto_update_image_model(mode='random'):
                 active_settings['imgmodel']['imgmodel_name'] = selected_imgmodel_name
                 active_settings['imgmodel']['imgmodel_url'] = ''
                 active_settings['imgmodel']['override_settings']['sd_model_checkpoint'] = selected_item['title']
-                with open('ad_discordbot/activesettings.yaml', 'w') as active_settings_file:
-                    yaml.dump(active_settings, active_settings_file, default_flow_style=False, width=float("inf"))   
+                save_yaml_file('ad_discordbot/activesettings.yaml', active_settings)
+            # Update size options for /image command
+            await update_size_options(active_settings.get('imgmodel').get('payload').get('width'),active_settings.get('imgmodel').get('payload').get('height'))
             print(f"Updated imgmodel settings to: {selected_imgmodel_name}")
         except Exception as e:
             print("Error updating image model:", e)
@@ -671,12 +684,11 @@ async def a1111_online(i):
 
 # Starboard feature
 try:
-    with open('ad_discordbot/starboard_messages.yaml', "r") as file:
-        data = yaml.safe_load(file)
-        if data is None:
-            starboard_posted_messages = ""
-        else:
-            starboard_posted_messages = set(data)
+    data = load_yaml_file('ad_discordbot/starboard_messages.yaml')
+    if data is None:
+        starboard_posted_messages = ""
+    else:
+        starboard_posted_messages = set(data)
 except FileNotFoundError:
     starboard_posted_messages = ""
 
@@ -711,8 +723,7 @@ async def on_raw_reaction_add(endorsed_img):
                 await target_channel.send(image_url)
             # Add the message ID to the set and update the file
             starboard_posted_messages.add(message.id)
-            with open('ad_discordbot/starboard_messages.yaml', "w") as file:
-                yaml.dump(list(starboard_posted_messages), file)
+            save_yaml_file('ad_discordbot/starboard_messages.yaml', list(starboard_posted_messages))
 
 # Dynamic Context feature
 def process_dynamic_context(user_input, text, llm_prompt):
@@ -743,8 +754,7 @@ def process_dynamic_context(user_input, text, llm_prompt):
                 try:
                     character_path = os.path.join("characters", f"{swap_character_name}.yaml")
                     if character_path:
-                        with open(character_path, 'r') as char_file:
-                            char_data = yaml.safe_load(char_file)
+                        char_data = load_yaml_file(character_path)
                         if char_data['name']: user_input['state']['name2'] = char_data['name']
                         if char_data['context']: user_input['state']['context'] = char_data['context']
                         if char_data['state']:
@@ -1167,11 +1177,73 @@ async def pic(i, text, image_prompt, neg_prompt=None, size=None, face_swap=None,
         clean_payload(payload)
         await process_image_gen(payload, picture_frame, i)
 
-# begin /image command
-with open('ad_discordbot/dict_cmdoptions.yaml', 'r') as file:
-    options = yaml.safe_load(file)
+@client.hybrid_command()
+async def sync(interaction: discord.Interaction):
+    await client.tree.sync()
 
-size_options = options.get('sizes', {})
+## Code pertaining to /image command
+# Function to update size options
+async def update_size_options(new_width, new_height):
+    global size_choices
+    options = load_yaml_file('ad_discordbot/dict_cmdoptions.yaml')
+    sizes = options.get('sizes', [])
+    aspect_ratios = [size.get("ratio") for size in sizes]
+    average = average_width_height(new_width, new_height)
+    size_choices.clear()  # Clear the existing list
+    size_options = calculate_aspect_ratio_sizes(average, aspect_ratios)
+    size_choices.extend(
+        app_commands.Choice(name=option['name'], value=option['name'])
+        for option in size_options)
+    await client.tree.sync()
+
+def round_to_precision(val, prec):
+    return round(val / prec) * prec
+
+def res_to_model_fit(width, height, mp_target):
+    mp = width * height
+    scale = math.sqrt(mp_target / mp)
+    new_wid = int(round_to_precision(width * scale, 64))
+    new_hei = int(round_to_precision(height * scale, 64))
+    return new_wid, new_hei
+
+def calculate_aspect_ratio_sizes(avg, aspect_ratios):
+    size_options = []
+    mp_target = avg*avg
+    doubleavg = avg*2
+    for ratio in aspect_ratios:
+        ratio_parts = tuple(map(int, ratio.replace(':', '/').split('/')))
+        ratio_sum = ratio_parts[0]+ratio_parts[1]
+        # Approximate the width and height based on the average and aspect ratio
+        width = round((ratio_parts[0]/ratio_sum)*doubleavg)
+        height = round((ratio_parts[1]/ratio_sum)*doubleavg)
+        # Round to correct megapixel precision
+        width, height = res_to_model_fit(width, height, mp_target)
+        if width > height: aspect_type = "landscape"
+        elif width < height: aspect_type = "portrait"
+        else: aspect_type = "square"
+        # Format the result
+        size_name = f"{width} x {height} ({ratio} {aspect_type})"
+        size_options.append({'name': size_name, 'width': width, 'height': height})
+    return size_options
+
+def average_width_height(width, height):
+    avg = (width + height) // 2
+    if (width + height) % 2 != 0: avg += 1
+    return avg
+
+options = load_yaml_file('ad_discordbot/dict_cmdoptions.yaml')
+active_settings = load_yaml_file('ad_discordbot/activesettings.yaml')
+
+sizes = options.get('sizes', [])
+aspect_ratios = [size.get("ratio") for size in sizes]
+
+# Calculate the average and aspect ratio sizes
+width = active_settings.get('imgmodel').get('payload').get('width')
+height = active_settings.get('imgmodel').get('payload').get('height')
+average = average_width_height(width, height)
+size_options = calculate_aspect_ratio_sizes(average, aspect_ratios)
+
+# size_options = options.get('sizes', {})
 style_options = options.get('styles', {})
 controlnet_options = options.get('controlnet', {})
 
@@ -1181,7 +1253,6 @@ size_choices = [
 style_choices = [
     app_commands.Choice(name=option['name'], value=option['name'])
     for option in style_options]
-
 cnet_model_choices = [
     app_commands.Choice(name=option['name'], value=option['name'])
     for option in controlnet_options]
@@ -1326,8 +1397,7 @@ async def status(i):
 
 def get_active_setting(key):
     try:
-        with open('ad_discordbot/activesettings.yaml', 'r') as file:
-            active_settings = yaml.safe_load(file)
+        active_settings = load_yaml_file('ad_discordbot/activesettings.yaml')
         if key in active_settings:
             return active_settings[key]
         else:
@@ -1370,14 +1440,14 @@ async def character(i):
 # Settings Commands
 async def update_active_settings(selected_item, active_settings_key):
     try:
-        with open('ad_discordbot/activesettings.yaml', 'r') as file:
-            active_settings = yaml.safe_load(file)
+        active_settings = load_yaml_file('ad_discordbot/activesettings.yaml')
         update_dict(active_settings.get(active_settings_key, {}), selected_item)
         if active_settings_key == 'imgmodel':
-            try:
+             # Update size options for /image command
+            await update_size_options(active_settings.get('imgmodel').get('payload').get('width'),active_settings.get('imgmodel').get('payload').get('height'))
+            try: # Update ImgLORAs
                 if selected_item['imgmodel_loras']:
-                    with open('ad_discordbot/dict_imgloras.yaml', 'r') as file:
-                        imgloras_data = yaml.safe_load(file)
+                    imgloras_data = load_yaml_file('ad_discordbot/dict_imgloras.yaml')
                     selected_imgmodel_loras = None
                     for imgloras in imgloras_data:
                         if imgloras.get('imglora_name') == selected_item['imgmodel_loras']:
@@ -1387,8 +1457,7 @@ async def update_active_settings(selected_item, active_settings_key):
                         update_dict(active_settings.get('imglora', {}), selected_imgmodel_loras)
             except Exception as e:
                 print("Error updating imgloras for selected imgmodel in ad_discordbot/activesettings.yaml:", e)
-        with open('ad_discordbot/activesettings.yaml', 'w') as file:
-            yaml.dump(active_settings, file, default_flow_style=False, width=float("inf"))
+        save_yaml_file('ad_discordbot/activesettings.yaml', active_settings)
     except Exception as e:
         print(f"Error updating ad_discordbot/activesettings.yaml ({active_settings_key}):", e)
 
@@ -1397,9 +1466,8 @@ async def post_active_settings():
     if config.discord['post_active_settings']['target_channel_id']:
         channel = await client.fetch_channel(config.discord['post_active_settings']['target_channel_id'])
         if channel:
-            with open('ad_discordbot/activesettings.yaml', 'r') as settings_file:
-                active_settings = yaml.safe_load(settings_file)
-                settings_content = yaml.dump(active_settings, default_flow_style=False)
+            active_settings = load_yaml_file('ad_discordbot/activesettings.yaml')
+            settings_content = yaml.dump(active_settings, default_flow_style=False)
             # Fetch and delete all existing messages in the channel
             async for message in channel.history(limit=None):
                 await message.delete()
@@ -1414,8 +1482,7 @@ async def post_active_settings():
 class SettingsDropdown(discord.ui.Select):
     def __init__(self, data_file, label_key, active_settings_key):
         try:
-            with open(data_file, 'r') as file:
-                items = yaml.safe_load(file)
+            items = load_yaml_file(data_file)
             options = [
                 discord.SelectOption(label=item[label_key], value=item[label_key])
                 for item in items
@@ -1431,8 +1498,7 @@ class SettingsDropdown(discord.ui.Select):
     async def callback(self, interaction: discord.Interaction):
         selected_item_name = self.values[0]
         try:
-            with open(self.data_file, 'r') as file:
-                items = yaml.safe_load(file)
+            items = load_yaml_file(self.data_file)
             selected_item = next(item for item in items if item[self.label_key] == selected_item_name)
             await update_active_settings(selected_item, self.active_settings_key)
             print(f"Updated {self.active_settings_key} settings to: {selected_item_name}")
@@ -1517,13 +1583,13 @@ class ImgModelDropdown(discord.ui.Select):
                 if option.value == selected_item:
                     selected_item_name = option.label
                     break
-            with open('ad_discordbot/activesettings.yaml', 'r') as active_settings_file:
-                active_settings = yaml.safe_load(active_settings_file)
+            active_settings = load_yaml_file('ad_discordbot/activesettings.yaml')
             active_settings['imgmodel']['override_settings']['sd_model_checkpoint'] = selected_item
             active_settings['imgmodel']['imgmodel_name'] = selected_item_name
             active_settings['imgmodel']['imgmodel_url'] = ''
-            with open('ad_discordbot/activesettings.yaml', 'w') as active_settings_file:
-                yaml.dump(active_settings, active_settings_file, default_flow_style=False, width=float("inf"))
+            save_yaml_file('ad_discordbot/activesettings.yaml', active_settings)
+            # Update size options for /image command
+            await update_size_options(active_settings.get('imgmodel').get('payload').get('width'),active_settings.get('imgmodel').get('payload').get('height'))
             # Set the topic of the channel if enabled in config
             channel = interaction.channel
             reply = await process_imgmodel_announce(channel, selected_item)
