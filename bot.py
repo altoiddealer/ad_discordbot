@@ -977,11 +977,7 @@ async def process_image_gen(payload, picture_frame, i):
         await picture_frame.edit(delete_after=5)
 
 def clean_payload(payload):
-    # Prevents errors caused by misconfigured settings
-    if not config.sd['extensions']['controlnet_enabled']:
-        del payload['alwayson_scripts']['controlnet'] # Delete all 'controlnet' keys if disabled by config
-    if not config.sd['extensions']['reactor_enabled']:
-        del payload['alwayson_scripts']['reactor'] # Delete all 'reactor' keys if disabled by config
+    # Remove duplicate negative prompts
     negative_prompt_list = payload['negative_prompt'].split(', ')
     unique_values_set = set()
     unique_values_list = []
@@ -991,13 +987,25 @@ def clean_payload(payload):
             unique_values_list.append(value)
     processed_negative_prompt = ', '.join(unique_values_list)
     payload['negative_prompt'] = processed_negative_prompt
+    # Delete unwanted keys
+    if not config.sd['extensions']['controlnet_enabled']:
+        del payload['alwayson_scripts']['controlnet'] # Delete all 'controlnet' keys if disabled by config
+    if not config.sd['extensions']['reactor_enabled']:
+        del payload['alwayson_scripts']['reactor'] # Delete all 'reactor' keys if disabled by config
     keys_to_delete = []
+    # Delete HR keys when HR disabled
+    if not payload.get('enable_hr'):
+        payload['denoising_strength'] = None
+        for key in payload.keys():
+            if key.startswith("hr_"):
+                keys_to_delete.append(key)
+        del payload['enable_hr']
+    # Delete all empty keys
     for key, value in payload.items():
         if value == "":
             keys_to_delete.append(key)
     for key in keys_to_delete:
-        del payload[key] # Delete all empty keys (use A1111's API defaults)
-    # remove duplicate negative prompts
+        del payload[key]
     return payload
 
 def process_payload_mods(payload, text):
