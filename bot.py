@@ -629,13 +629,25 @@ async def auto_update_image_model(mode='random'):
     except Exception as e:
         print(f"Error automatically updating Image Models: {e}")
 
+# Using global variable allows this to be easily cancelled and restarted (reset sleep timer)
+imgmodel_update_task = None
+
 # Task to update image model settings every hour
 async def update_image_model_task(mode='random'):
     while True:
         frequency = config.imgmodels['auto_change_models']['frequency']
         duration = frequency*3600 # 3600 = 1 hour
-        await asyncio.sleep(duration)
         await auto_update_image_model(mode)
+        await asyncio.sleep(duration)
+
+# Helper function to start image model auto-selector
+async def start_update_image_model_task():
+    global imgmodel_update_task
+    if imgmodel_update_task:
+        imgmodel_update_task.cancel()
+    if config.imgmodels['auto_change_models']['enabled']:
+        mode = config.imgmodels['auto_change_models']['mode']
+        imgmodel_update_task = client.loop.create_task(update_image_model_task(mode))
 
 @client.event
 async def on_ready():
@@ -665,9 +677,7 @@ async def on_ready():
     logging.info("Bot is ready")
     await client.tree.sync()
     # task to change image models automatically
-    if config.imgmodels['auto_change_models']['enabled']:
-        mode = config.imgmodels['auto_change_models']['mode']
-        client.loop.create_task(update_image_model_task(mode))
+    await start_update_image_model_task()
 
 async def a1111_online(i):
     try:
@@ -1518,6 +1528,8 @@ class SettingsDropdown(discord.ui.Select):
             if self.active_settings_key == 'llmcontext':
                 reset_session_history # Reset conversation
             if self.active_settings_key == 'imgmodel':
+                # task to change image models automatically
+                await start_update_image_model_task()
                 channel = interaction.channel
                 reply = await process_imgmodel_announce(channel, selected_item)
                 if reply:
@@ -1602,6 +1614,8 @@ class ImgModelDropdown(discord.ui.Select):
             save_yaml_file('ad_discordbot/activesettings.yaml', active_settings)
             # Update size options for /image command
             await update_size_options(active_settings.get('imgmodel').get('payload').get('width'),active_settings.get('imgmodel').get('payload').get('height'))
+            # task to change image models automatically
+            await start_update_image_model_task()
             # Set the topic of the channel if enabled in config
             channel = interaction.channel
             reply = await process_imgmodel_announce(channel, selected_item)
