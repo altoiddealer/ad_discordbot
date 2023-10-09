@@ -1195,10 +1195,12 @@ async def update_size_options(new_width, new_height):
     global size_choices
     options = load_yaml_file('ad_discordbot/dict_cmdoptions.yaml')
     sizes = options.get('sizes', [])
-    aspect_ratios = [size.get("ratio") for size in sizes]
+    aspect_ratios = [size.get("ratio") for size in sizes.get('ratios', [])]
     average = average_width_height(new_width, new_height)
     size_choices.clear()  # Clear the existing list
-    size_options = calculate_aspect_ratio_sizes(average, aspect_ratios)
+    ratio_options = calculate_aspect_ratio_sizes(average, aspect_ratios)
+    static_options = sizes.get('static_sizes', [])
+    size_options = (ratio_options or []) + (static_options or [])
     size_choices.extend(
         app_commands.Choice(name=option['name'], value=option['name'])
         for option in size_options)
@@ -1215,7 +1217,7 @@ def res_to_model_fit(width, height, mp_target):
     return new_wid, new_hei
 
 def calculate_aspect_ratio_sizes(avg, aspect_ratios):
-    size_options = []
+    ratio_options = []
     mp_target = avg*avg
     doubleavg = avg*2
     for ratio in aspect_ratios:
@@ -1231,8 +1233,8 @@ def calculate_aspect_ratio_sizes(avg, aspect_ratios):
         else: aspect_type = "square"
         # Format the result
         size_name = f"{width} x {height} ({ratio} {aspect_type})"
-        size_options.append({'name': size_name, 'width': width, 'height': height})
-    return size_options
+        ratio_options.append({'name': size_name, 'width': width, 'height': height})
+    return ratio_options
 
 def average_width_height(width, height):
     avg = (width + height) // 2
@@ -1242,16 +1244,18 @@ def average_width_height(width, height):
 options = load_yaml_file('ad_discordbot/dict_cmdoptions.yaml')
 active_settings = load_yaml_file('ad_discordbot/activesettings.yaml')
 
-sizes = options.get('sizes', [])
-aspect_ratios = [size.get("ratio") for size in sizes]
+sizes = options.get('sizes', {})
+aspect_ratios = [size.get("ratio") for size in sizes.get('ratios', [])]
 
 # Calculate the average and aspect ratio sizes
 width = active_settings.get('imgmodel').get('payload').get('width')
 height = active_settings.get('imgmodel').get('payload').get('height')
 average = average_width_height(width, height)
-size_options = calculate_aspect_ratio_sizes(average, aspect_ratios)
-
-# size_options = options.get('sizes', {})
+ratio_options = calculate_aspect_ratio_sizes(average, aspect_ratios)
+# Collect any defined static sizes
+static_options = sizes.get('static_sizes', [])
+# Merge dynamic and static sizes
+size_options = (ratio_options or []) + (static_options or [])
 style_options = options.get('styles', {})
 controlnet_options = options.get('controlnet', {})
 
