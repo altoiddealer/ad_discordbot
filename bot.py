@@ -1542,6 +1542,8 @@ class SettingsDropdown(discord.ui.Select):
                     await interaction.response.send_message(reply)
                 else:
                     await interaction.response.send_message(f"Updated {self.active_settings_key} settings to: {selected_item_name}")
+            else:
+                await interaction.response.send_message(f"Updated {self.active_settings_key} settings to: {selected_item_name}")
             if config.discord['post_active_settings']['enabled']:
                 await post_active_settings()
         except Exception as e:
@@ -1627,6 +1629,8 @@ class ImgModelDropdown(discord.ui.Select):
             reply = await process_imgmodel_announce(channel, selected_item)
             if reply:
                 await interaction.response.send_message(reply)
+            else:
+                await interaction.response.send_message(f"Updated {self.active_settings_key} settings to: {selected_item_name}")
             print(f"Updated imgmodel settings to: {selected_item_name}")
         except Exception as e:
             print("Error updating image model:", e)
