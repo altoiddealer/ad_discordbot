@@ -579,9 +579,16 @@ async def auto_update_image_model(mode='random'):
                 async with aiohttp.ClientSession() as session: # populate options from A1111 API
                     async with session.get(url=f'{A1111}/sdapi/v1/sd-models') as response:
                         imgmodel_data = await response.json()
-                        total_models = len(imgmodel_data)
-                        items = imgmodel_data[:25]
-            item_names = [item.get('imgmodel_name', item.get('title', None)) for item in items]  # Use a fallback key
+                        items = imgmodel_data
+                        # Update 'title' keys to 'sd_model_checkpoint' to be uniform with .yaml method
+                        for item in items:
+                            if 'title' in item:
+                                item['sd_model_checkpoint'] = item.pop('title')
+            if config.imgmodels['auto_change_models']['filter']:
+                filter_text = config.imgmodels['auto_change_models']['filter']
+                items = [item for item in items if re.search(re.escape(filter_text), item['sd_model_checkpoint'], re.IGNORECASE)]
+            items = items[:25]
+            item_names = [item.get('imgmodel_name', item.get('sd_model_checkpoint', None)) for item in items]  # Use a fallback key
         except Exception as e:
             print("Error loading image model data:", e)
         if mode == 'random':
@@ -611,7 +618,7 @@ async def auto_update_image_model(mode='random'):
                 # update only the values accessible via A1111 API
                 active_settings['imgmodel']['imgmodel_name'] = selected_imgmodel_name
                 active_settings['imgmodel']['imgmodel_url'] = ''
-                active_settings['imgmodel']['override_settings']['sd_model_checkpoint'] = selected_item['title']
+                active_settings['imgmodel']['override_settings']['sd_model_checkpoint'] = selected_item['sd_model_checkpoint']
                 save_yaml_file('ad_discordbot/activesettings.yaml', active_settings)
             # Update size options for /image command
             await update_size_options(active_settings.get('imgmodel').get('payload').get('width'),active_settings.get('imgmodel').get('payload').get('height'))
@@ -794,7 +801,6 @@ def process_dynamic_context(user_input, text, llm_prompt):
                 if load_history_value > 0:
                     # Calculate the number of items to retain (up to the length of session_history)
                     num_to_retain = min(load_history_value, len(session_history["internal"]))
-                    print(num_to_retain)
                     user_input['state']['history']['internal'] = session_history['internal'][-num_to_retain:]
                     user_input['state']['history']['visible'] = session_history['visible'][-num_to_retain:]
                 print_content += f" | History: {user_input['state']['history']['visible']}"
