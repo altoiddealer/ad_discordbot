@@ -1014,16 +1014,9 @@ def clean_payload(payload):
         del payload['alwayson_scripts']['controlnet'] # Delete all 'controlnet' keys if disabled by config
     if not config.sd['extensions']['reactor_enabled']:
         del payload['alwayson_scripts']['reactor'] # Delete all 'reactor' keys if disabled by config
-    # Delete HR keys when HR disabled
-    keys_to_delete = []
+    # Workaround for denoising strength A1111 bug (will be fixed in next A1111 version)
     if not payload.get('enable_hr'):
         payload['denoising_strength'] = None
-        for key in payload.keys():
-            if key.startswith("hr_"):
-                keys_to_delete.append(key)
-        del payload['enable_hr']
-    for key in keys_to_delete:
-        del payload[key]
     # Delete all empty keys
     keys_to_delete = []
     for key, value in payload.items():
