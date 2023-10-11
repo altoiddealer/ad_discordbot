@@ -82,7 +82,9 @@ This bot stands apart from many other ones due to a variety of custom features:
    git pull
    ```
 
-2. Move **bot.py** out of subdirectory **/ad_discordbot/** -> into the directory **/text-generation-webui/**
+2. **IF bot.py has changed:**
+  
+   Move **bot.py** out of subdirectory **/ad_discordbot/** -> into the directory **/text-generation-webui/** (*overwriting old version*)
 
    ```
    /text-generation-webui/bot.py
@@ -90,7 +92,9 @@ This bot stands apart from many other ones due to a variety of custom features:
    /text-generation-webui/ad_discordbot/(remaining files)
    ```
 
-3. **You may need to backup existing files, and modify them to match new structure**
+3. **IF files have changed that you modified:**
+  
+   You will need to backup files you modified, and update them to match new changes**
 
    **Example**: config.py gets updated with a new feature.
    
