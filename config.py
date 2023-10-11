@@ -18,7 +18,6 @@ discord = {
 
 sd = {
     'A1111': "http://127.0.0.1:7860",   # Default URL for A1111 API. Adjust if you have issues connecting.
-    'get_imgmodels_via_api': True,      # Handling for /imgmodel command. True = dynamically fetch models (simple, less customizing). False = uses ad_discordbot/dict_imgmodels.yaml
     'extensions': {                     # Only set extensions as True if they are installed AND active in your A1111.
         'controlnet_enabled': False,    # Requires: sd-webui-controlnet AND configuring ad_discordbot/dict_cmdoptions.yaml
         'reactor_enabled': False        # Requires: sd-webui-reactor
@@ -33,11 +32,13 @@ tell_bot_time = {                   # slips in a message about the current time 
 }
 
 imgmodels = {
-    'auto_change_models': { # Feature to periodically switch imgmodels. Behavior is affected by setting for 'get_imgmodels_via_api'
+    'get_imgmodels_via_api': True,      # Handling for /imgmodel command. True = dynamically fetch models (simple, less customizing). False = uses ad_discordbot/dict_imgmodels.yaml
+    'exclude': ['inpaint', 'refiner'],  # Do not auto-change or load models into lists which include matching text.
+    'auto_change_models': {     # Feature to periodically switch imgmodels. Behavior is affected by setting for 'get_imgmodels_via_api'
         'enabled': False,
-        'mode': 'random',   # 'random' = picks model at random / 'cycle' = sequential order
-        'frequency': 1.0,   # How often to change models, in hours. 0.5 = 30 minutes
-        'filter': '',       # Only auto-change models containing filter. 'xl' = likely just your SDXL models.
+        'mode': 'random',       # 'random' = picks model at random / 'cycle' = sequential order
+        'frequency': 1.0,       # How often to change models, in hours. 0.5 = 30 minutes
+        'filter': [''],         # Only auto-change models containing filter. ['xl'] = likely just your SDXL models. Can match multiple such as ['xl', '15']
         'channel_announce': ''  # If a channel is specified, it will announce/update as configured below. '' = Don't announce/update topic.
     },
     'update_topic': {

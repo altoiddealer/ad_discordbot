@@ -573,22 +573,28 @@ async def auto_update_image_model(mode='random'):
         active_settings = load_yaml_file('ad_discordbot/activesettings.yaml')
         current_imgmodel_name = active_settings.get('imgmodel', {}).get('imgmodel_name', None)
         try:
-            if not config.sd['get_imgmodels_via_api']:
+            if not config.imgmodels['get_imgmodels_via_api']:
                 items = load_yaml_file('ad_discordbot/dict_imgmodels.yaml')
             else:
                 async with aiohttp.ClientSession() as session: # populate options from A1111 API
                     async with session.get(url=f'{A1111}/sdapi/v1/sd-models') as response:
-                        imgmodel_data = await response.json()
-                        items = imgmodel_data
+                        items = await response.json()
                         # Update 'title' keys to 'sd_model_checkpoint' to be uniform with .yaml method
                         for item in items:
                             if 'title' in item:
                                 item['sd_model_checkpoint'] = item.pop('title')
-            if config.imgmodels['auto_change_models']['filter']:
-                filter_text = config.imgmodels['auto_change_models']['filter']
-                items = [item for item in items if re.search(re.escape(filter_text), item['sd_model_checkpoint'], re.IGNORECASE)]
+            if config.imgmodels['auto_change_models']['filter'] or config.imgmodels['exclude']:
+                filter_list = config.imgmodels['auto_change_models']['filter']
+                exclude_list = config.imgmodels['exclude']
+                items = [
+                    item for item in items
+                    if (
+                        (not filter_list or any(re.search(re.escape(filter_text), item['sd_model_checkpoint'], re.IGNORECASE) for filter_text in filter_list))
+                        and (not exclude_list or not any(re.search(re.escape(exclude_text), item['sd_model_checkpoint'], re.IGNORECASE) for exclude_text in exclude_list))
+                    )
+                ]
             items = items[:25]
-            item_names = [item.get('imgmodel_name', item.get('sd_model_checkpoint', None)) for item in items]  # Use a fallback key
+            item_names = [item.get('imgmodel_name', item.get('sd_model_checkpoint', None)) for item in items]
         except Exception as e:
             print("Error loading image model data:", e)
         if mode == 'random':
@@ -609,30 +615,30 @@ async def auto_update_image_model(mode='random'):
             else:
                 selected_item = random.choice(items) # If no image model set yet, select randomly 
         try:
-            if not config.sd['get_imgmodels_via_api']:
-                selected_imgmodel_name = selected_item['imgmodel_name']
+            if not config.imgmodels['get_imgmodels_via_api']:
+                selected_item_name = selected_item['imgmodel_name']
                 # update the entire imgmodel dict in activesettings.yaml
                 await update_active_settings(selected_item, 'imgmodel')
             else:
-                selected_imgmodel_name = selected_item['model_name']
+                selected_item_name = selected_item['model_name']
                 # update only the values accessible via A1111 API
-                active_settings['imgmodel']['imgmodel_name'] = selected_imgmodel_name
+                active_settings['imgmodel']['imgmodel_name'] = selected_item_name
                 active_settings['imgmodel']['imgmodel_url'] = ''
                 active_settings['imgmodel']['override_settings']['sd_model_checkpoint'] = selected_item['sd_model_checkpoint']
                 save_yaml_file('ad_discordbot/activesettings.yaml', active_settings)
             # Update size options for /image command
             await update_size_options(active_settings.get('imgmodel').get('payload').get('width'),active_settings.get('imgmodel').get('payload').get('height'))
-            print(f"Updated imgmodel settings to: {selected_imgmodel_name}")
+            print(f"Updated imgmodel settings to: {selected_item_name}")
         except Exception as e:
             print("Error updating image model:", e)
         # Process announcements
         if config.imgmodels['auto_change_models']['channel_announce']:
             channel = client.get_channel(config.imgmodels['auto_change_models']['channel_announce'])
-            reply = await process_imgmodel_announce(channel, selected_item)
+            reply = await process_imgmodel_announce(channel, selected_item, selected_item_name)
             if reply:
                 await channel.send(reply)
             else:
-                await channel.send(f"Updated imgmodel settings to: {selected_imgmodel_name}")
+                await channel.send(f"Updated imgmodel settings to: {selected_item_name}")
     except Exception as e:
         print(f"Error automatically updating Image Models: {e}")
 
@@ -1537,7 +1543,7 @@ class SettingsDropdown(discord.ui.Select):
                 # task to change image models automatically
                 await start_update_image_model_task()
                 channel = interaction.channel
-                reply = await process_imgmodel_announce(channel, selected_item)
+                reply = await process_imgmodel_announce(channel, selected_item, selected_item_name)
                 if reply:
                     await interaction.response.send_message(reply)
                 else:
@@ -1570,11 +1576,11 @@ async def imgloras(i):
     view.add_item(SettingsDropdown('ad_discordbot/dict_imgloras.yaml', 'imglora_name', 'imglora'))
     await i.send("Choose LORAs:", view=view, ephemeral=True)
 
-async def process_imgmodel_announce(channel, selected_item):
+async def process_imgmodel_announce(channel, selected_item, selected_item_name):
     # Set the topic of the channel if enabled in config
     if config.imgmodels['update_topic']['enabled']:
         topic_prefix = config.imgmodels['update_topic']['topic_prefix']
-        if not config.sd['get_imgmodels_via_api']:
+        if not config.imgmodels['get_imgmodels_via_api']:
             new_topic = f"{topic_prefix}{selected_item['imgmodel_name']}"
             if config.imgmodels['update_topic']['include_url']:
                 new_topic += " " + selected_item.get('imgmodel_url', {})
@@ -1585,7 +1591,7 @@ async def process_imgmodel_announce(channel, selected_item):
     reply = ''
     if config.imgmodels['announce_in_chat']['enabled']:
         reply_prefix = config.imgmodels['announce_in_chat']['reply_prefix']
-        if not config.sd['get_imgmodels_via_api']:
+        if not config.imgmodels['get_imgmodels_via_api']:
             reply = f"{reply_prefix}{selected_item['imgmodel_name']}"
             if config.imgmodels['announce_in_chat']['include_url']:
                 reply += " <" + selected_item.get('imgmodel_url', {}) + ">"
@@ -1622,11 +1628,11 @@ class ImgModelDropdown(discord.ui.Select):
             save_yaml_file('ad_discordbot/activesettings.yaml', active_settings)
             # Update size options for /image command
             await update_size_options(active_settings.get('imgmodel').get('payload').get('width'),active_settings.get('imgmodel').get('payload').get('height'))
-            # task to change image models automatically
+            # Task to change image models automatically
             await start_update_image_model_task()
             # Set the topic of the channel if enabled in config
             channel = interaction.channel
-            reply = await process_imgmodel_announce(channel, selected_item)
+            reply = await process_imgmodel_announce(channel, selected_item, selected_item_name)
             if reply:
                 await interaction.response.send_message(reply)
             else:
@@ -1639,7 +1645,7 @@ class ImgModelDropdown(discord.ui.Select):
 
 @client.hybrid_command(description="Choose an imgmodel")
 async def imgmodel(i):
-    if not config.sd['get_imgmodels_via_api']:
+    if not config.imgmodels['get_imgmodels_via_api']:
         # Uses ad_discordbot/dict_imgmodel.yaml
         view = discord.ui.View()
         view.add_item(SettingsDropdown('ad_discordbot/dict_imgmodels.yaml', 'imgmodel_name', 'imgmodel'))
@@ -1651,6 +1657,12 @@ async def imgmodel(i):
                 async with session.get(url=f'{A1111}/sdapi/v1/sd-models') as response:
                     if response.status == 200:
                         imgmodel_data = await response.json()
+                        if config.imgmodels['exclude']:
+                            exclude_list = config.imgmodels['exclude']
+                            imgmodel_data = [
+                                imgmodel for imgmodel in imgmodel_data
+                                if not exclude_list or not any(re.search(re.escape(exclude_text), imgmodel['title'], re.IGNORECASE) for exclude_text in exclude_list)
+                            ]
                         total_models = len(imgmodel_data)
                         if total_models > 25:
                             omitted_models = total_models - 25
