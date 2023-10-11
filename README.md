@@ -1,3 +1,6 @@
+### 10/10/2023 ANNOUNCEMENT:
+### I appologize for any invoncenience, but I realized it makes much more sense to not have everything in a subdirectory for this repository.  See updated installation instructions below.
+
 # altoiddealer's Discord Bot
 
 A Discord Bot for chatting with LLMs using txt-generation-webui API.
@@ -38,13 +41,20 @@ This bot stands apart from many other ones due to a variety of custom features:
 
 2. **[Create a Discord bot account](https://discordpy.readthedocs.io/en/stable/discord.html), invite it to your server, and note its authentication toke**n.   
 
-4. Move **/ad_discordbot/** and **bot.py** into the directory **/text-generation-webui/**
+3. Clone this repository into **/text-generation-webui/**
    ```
-     /text-generation-webui/ad_discordbot/(included files)
+   git clone https://github.com/altoiddealer/ad_discordbot
+   ```
+
+4. Move **bot.py** out of subdirectory **/ad_discordbot/** -> into the directory **/text-generation-webui/**
+
+   ```
+   /text-generation-webui/bot.py
    
-     /text-generation-webui/bot.py
+   /text-generation-webui/ad_discordbot/(remaining files)
+   ```
  
-5. **Run the .cmd file** in text-generation-webui directory (**ex: cmd_windows.bat**)
+5. **Run the .cmd file** in text-generation-webui directory (**ex: cmd_windows.bat**), and performing the following commands:
    ```
    pip install discord
    ```
@@ -64,6 +74,22 @@ This bot stands apart from many other ones due to a variety of custom features:
    python bot.py --loader exllama --model airoboros-l2-13b-gpt4-2.0-GPTQ
    ```
 2. Use [command](https://github.com/altoiddealer/ad_discordbot/wiki/commands) **/character** to choose a character.
+
+# Updating the bot
+
+1. **Open a cmd window** in **/ad_discordbot/** and **git pull**
+   ```
+   git pull
+   ```
+2. **You may need to backup existing files, and modify them to match new structure**
+
+   **Example**: config.py gets updated with a new feature.
+   
+   Solution is to either:
+
+   * Update your existing config.py with the new feature, OR
+     
+   * Update the new config.py with your settings.
 
 # Getting responses from the bot
 
