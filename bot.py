@@ -1579,7 +1579,7 @@ async def process_imgmodel_announce(channel, selected_item):
             if config.imgmodels['update_topic']['include_url']:
                 new_topic += " " + selected_item.get('imgmodel_url', {})
         else:
-            new_topic = f"{topic_prefix}{selected_item}"
+            new_topic = f"{topic_prefix}{selected_item_name}"
         await channel.edit(topic=new_topic)
     # Reply with image model name if enabled in config
     reply = ''
@@ -1596,7 +1596,7 @@ async def process_imgmodel_announce(channel, selected_item):
                     f"{key}: {value}" for key, value in selected_imgmodel_payload.items())
                 reply += f"\n```{selected_imgmodel_override_settings_info}, {selected_imgmodel_payload_info}```"
         else:
-            reply = f"{reply_prefix}{selected_item}"
+            reply = f"{reply_prefix}{selected_item_name}"
     return reply
 
 class ImgModelDropdown(discord.ui.Select):
