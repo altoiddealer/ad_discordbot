@@ -1014,8 +1014,8 @@ def clean_payload(payload):
         del payload['alwayson_scripts']['controlnet'] # Delete all 'controlnet' keys if disabled by config
     if not config.sd['extensions']['reactor_enabled']:
         del payload['alwayson_scripts']['reactor'] # Delete all 'reactor' keys if disabled by config
-    keys_to_delete = []
     # Delete HR keys when HR disabled
+    keys_to_delete = []
     if not payload.get('enable_hr'):
         payload['denoising_strength'] = None
         for key in payload.keys():
@@ -1025,6 +1025,7 @@ def clean_payload(payload):
     for key in keys_to_delete:
         del payload[key]
     # Delete all empty keys
+    keys_to_delete = []
     for key, value in payload.items():
         if value == "":
             keys_to_delete.append(key)
