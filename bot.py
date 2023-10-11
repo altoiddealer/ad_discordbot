@@ -1022,6 +1022,8 @@ def clean_payload(payload):
             if key.startswith("hr_"):
                 keys_to_delete.append(key)
         del payload['enable_hr']
+    for key in keys_to_delete:
+        del payload[key]
     # Delete all empty keys
     for key, value in payload.items():
         if value == "":
