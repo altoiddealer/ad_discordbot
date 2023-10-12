@@ -1026,17 +1026,16 @@ def clean_payload(payload):
         del payload[key]
     return payload
 
-def process_payload_mods(payload, text):
-    # Process triggered mods
-    trigger_params = config.imgprompt_settings['trigger_img_params_by_phrase']
+def process_faces(payload, text):
+    # Process Reactor (face swap)
+    trigger_params = config.imgprompt_settings['trigger_faces_by_phrase']
     if trigger_params['enabled']:
         matched_presets = []     
         for preset in trigger_params['presets']:
             triggers = preset['triggers']
-            preset_payload = {}  # Create a dictionary to hold payload settings for each preset
+            preset_payload = {}  # Create a dictionary to hold faces for each preset
             if any(trigger in text.lower() for trigger in triggers):
                 for key, value in preset.items():
-                    # Process Reactor (face swap)
                     if key == 'face_swap':
                         face_file_path = f'ad_discordbot/swap_faces/{value}'
                         if os.path.exists(face_file_path) and os.path.isfile(face_file_path):
@@ -1054,10 +1053,23 @@ def process_payload_mods(payload, text):
                                 print("Invalid file for face swap (must be .txt, .png, or .jpg).")
                         else:
                             print(f"File not found '{face_file_path}'.")
-                    # Process everything else
-                    else:
-                        if key != 'triggers': # All key-value pairs except "triggers"
-                            preset_payload[key] = value
+                matched_presets.append((preset, preset_payload))
+        for preset, preset_payload in matched_presets:
+            payload.update(preset_payload)  # Update the payload with each preset's settings
+    return payload
+
+def process_payload_mods(payload, text):
+    # Process triggered mods
+    trigger_params = config.imgprompt_settings['trigger_img_params_by_phrase']
+    if trigger_params['enabled']:
+        matched_presets = []     
+        for preset in trigger_params['presets']:
+            triggers = preset['triggers']
+            preset_payload = {}  # Create a dictionary to hold payload settings for each preset
+            if any(trigger in text.lower() for trigger in triggers):
+                for key, value in preset.items():
+                    if key != 'triggers': # All key-value pairs except "triggers"
+                        preset_payload[key] = value
                 matched_presets.append((preset, preset_payload))
         for preset, preset_payload in matched_presets:
             payload.update(preset_payload)  # Update the payload with each preset's settings
@@ -1176,6 +1188,8 @@ async def pic(i, text, image_prompt, neg_prompt=None, size=None, face_swap=None,
         payload['override_settings'] = activeoverride
         # Process payload triggers
         process_payload_mods(payload, text)
+        # Process face swap triggers
+        process_faces(payload, text)
         if size: payload.update(size)
         # Process extensions
         if face_swap:

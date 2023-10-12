@@ -72,7 +72,12 @@ imgprompt_settings = {
             {'triggers': ['landscape'],
                 'width': 1152,
                 'height': 896
-            },
+            }
+        ]
+    },
+    'trigger_faces_by_phrase': {   # Modify payload settings if prompt includes trigger phrases
+        'enabled': True,
+        'presets': [
             {'triggers': ['alfred neuman', 'mad magazine guy'],
                 'face_swap': 'neuman.png' # face_swap can be used for Reactor extension. Valid file types: .png, .jpg, .txt (containing base64 string)
             },
