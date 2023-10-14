@@ -1523,17 +1523,17 @@ async def update_active_settings(selected_item, active_settings_key):
              # Update size options for /image command
             await update_size_options(active_settings.get('imgmodel').get('payload').get('width'),active_settings.get('imgmodel').get('payload').get('height'))
             try: # Update ImgLORAs
-                if selected_item['imgmodel_loras']:
+                if selected_item.get('imgmodel_loras') is not None:
                     imgloras_data = load_yaml_file('ad_discordbot/dict_imgloras.yaml')
                     selected_imgmodel_loras = None
                     for imgloras in imgloras_data:
-                        if imgloras.get('imglora_name') == selected_item['imgmodel_loras']:
+                        if imgloras.get('imglora_name') == selected_item.get('imgmodel_loras'):
                             selected_imgmodel_loras = imgloras
                             break
                     if selected_imgmodel_loras is not None:
                         update_dict(active_settings.get('imglora', {}), selected_imgmodel_loras)
             except Exception as e:
-                print("Error updating imgloras for selected imgmodel in ad_discordbot/activesettings.yaml:", e)
+                print(f"Error updating imgloras for {selected_item} in ad_discordbot/activesettings.yaml:", e)
         save_yaml_file('ad_discordbot/activesettings.yaml', active_settings)
     except Exception as e:
         print(f"Error updating ad_discordbot/activesettings.yaml ({active_settings_key}):", e)
