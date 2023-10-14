@@ -584,7 +584,7 @@ async def auto_fetch_imgmodels():
     try:
         active_settings = load_yaml_file('ad_discordbot/activesettings.yaml')
         current_imgmodel_name = active_settings.get('imgmodel', {}).get('imgmodel_name', '')
-        if not config.imgmodels['get_imgmodels_via_api']:
+        if not config.imgmodels['get_imgmodels_via_api']['enabled']:
             items = load_yaml_file('ad_discordbot/dict_imgmodels.yaml')
         else:
             async with aiohttp.ClientSession() as session: # populate options from A1111 API
@@ -644,7 +644,7 @@ async def auto_select_imgmodel(current_imgmodel_name, items, item_names, mode='r
 # Update activesettings.yaml with selected imgmodel data
 async def auto_change_imgmodel(selected_item, active_settings):
     try:
-        if not config.imgmodels['get_imgmodels_via_api']:
+        if not config.imgmodels['get_imgmodels_via_api']['enabled']:
             selected_item_name = selected_item['imgmodel_name']
             # update the entire imgmodel dict in activesettings.yaml
             await update_active_settings(selected_item, 'imgmodel')
@@ -722,9 +722,10 @@ async def on_ready():
     except Exception as e:
         logging.error("Error updating behavior:", e)
     logging.info("Bot is ready")
-    await client.tree.sync()
+    client.loop.create_task(process_tasks_in_background())
+    await task_queue.put(client.tree.sync()) # Process this in the background
     # task to change image models automatically
-    await start_auto_update_imgmodel_task()
+    await task_queue.put(start_auto_update_imgmodel_task()) # Process this in the background
 
 async def a1111_online(i):
     try:
@@ -1095,7 +1096,7 @@ def process_payload_mods(payload, text):
     # Process triggered mods
     trigger_params = config.imgprompt_settings['trigger_img_params_by_phrase']
     if trigger_params['enabled']:
-        matched_presets = []     
+        matched_presets = []
         for preset in trigger_params['presets']:
             triggers = preset['triggers']
             preset_payload = {}  # Create a dictionary to hold payload settings for each preset
@@ -1252,7 +1253,15 @@ async def pic(i, text, image_prompt, neg_prompt=None, size=None, face_swap=None,
 
 @client.hybrid_command()
 async def sync(interaction: discord.Interaction):
-    await client.tree.sync()
+    await task_queue.put(client.tree.sync()) # Process this in the background
+
+# Start a task processing loop
+task_queue = asyncio.Queue()
+
+async def process_tasks_in_background():
+    while True:
+        task = await task_queue.get()
+        await task
 
 ## Code pertaining to /image command
 # Function to update size options
@@ -1269,7 +1278,7 @@ async def update_size_options(new_width, new_height):
     size_choices.extend(
         app_commands.Choice(name=option['name'], value=option['name'])
         for option in size_options)
-    await client.tree.sync()
+    await task_queue.put(client.tree.sync()) # Process this in the background
 
 def round_to_precision(val, prec):
     return round(val / prec) * prec
@@ -1584,7 +1593,7 @@ class SettingsDropdown(discord.ui.Select):
                 reset_session_history # Reset conversation
             if self.active_settings_key == 'imgmodel':
                 # task to change image models automatically
-                await start_update_image_model_task()
+                await task_queue.put(start_auto_update_imgmodel_task()) # Process this in the background
                 channel = interaction.channel
                 reply = await process_imgmodel_announce(channel, selected_item, selected_item_name)
                 if reply:
@@ -1594,7 +1603,7 @@ class SettingsDropdown(discord.ui.Select):
             else:
                 await interaction.response.send_message(f"Updated {self.active_settings_key} settings to: {selected_item_name}")
             if config.discord['post_active_settings']['enabled']:
-                await post_active_settings()
+                await task_queue.put(post_active_settings())
         except Exception as e:
             print(f"Error updating ad_discordbot/activesettings.yaml ({self.active_settings_key}):", e)
 
@@ -1623,7 +1632,7 @@ async def process_imgmodel_announce(channel, selected_item, selected_item_name):
     # Set the topic of the channel if enabled in config
     if config.imgmodels['update_topic']['enabled']:
         topic_prefix = config.imgmodels['update_topic']['topic_prefix']
-        if not config.imgmodels['get_imgmodels_via_api']:
+        if not config.imgmodels['get_imgmodels_via_api']['enabled']:
             new_topic = f"{topic_prefix}{selected_item['imgmodel_name']}"
             if config.imgmodels['update_topic']['include_url']:
                 new_topic += " " + selected_item.get('imgmodel_url', {})
@@ -1634,7 +1643,7 @@ async def process_imgmodel_announce(channel, selected_item, selected_item_name):
     reply = ''
     if config.imgmodels['announce_in_chat']['enabled']:
         reply_prefix = config.imgmodels['announce_in_chat']['reply_prefix']
-        if not config.imgmodels['get_imgmodels_via_api']:
+        if not config.imgmodels['get_imgmodels_via_api']['enabled']:
             reply = f"{reply_prefix}{selected_item['imgmodel_name']}"
             if config.imgmodels['announce_in_chat']['include_url']:
                 reply += " <" + selected_item.get('imgmodel_url', {}) + ">"
@@ -1658,21 +1667,37 @@ class ImgModelDropdown(discord.ui.Select):
         self.imgmodel_data = imgmodel_data
     async def callback(self, interaction: discord.Interaction):
         try:
+            active_settings = load_yaml_file('ad_discordbot/activesettings.yaml')  
             selected_item = self.values[0]
             selected_item_name = None
-            for option in self.options:
-                if option.value == selected_item:
-                    selected_item_name = option.label
+            selected_item_filename = None
+            for imgmodel in self.imgmodel_data:
+                if imgmodel["title"] == selected_item:
+                    selected_item_name = imgmodel["model_name"]
+                    selected_item_filename = imgmodel["filename"]
                     break
-            active_settings = load_yaml_file('ad_discordbot/activesettings.yaml')
+            # Check filesize to assume resolution of imgmodel
+            if config.imgmodels['get_imgmodels_via_api']['guess_model_res']:
+                file_size_bytes = os.path.getsize(selected_item_filename)
+                file_size_gb = file_size_bytes / (1024 ** 3)  # 1 GB = 1024^3 bytes
+                presets = config.imgmodels['get_imgmodels_via_api']['presets']
+                matched_preset = None
+                for preset in presets:
+                    if preset['max_filesize'] > file_size_gb:
+                        matched_preset = preset
+                        break
+                if matched_preset:
+                    new_width, new_height = matched_preset['width'], matched_preset['height']
+                # Update size options for /image command, activesettings payload
+                await update_size_options(new_width,new_height)
+                active_settings['imgmodel']['payload']['width'] = new_width
+                active_settings['imgmodel']['payload']['height'] = new_height
             active_settings['imgmodel']['override_settings']['sd_model_checkpoint'] = selected_item
             active_settings['imgmodel']['imgmodel_name'] = selected_item_name
             active_settings['imgmodel']['imgmodel_url'] = ''
             save_yaml_file('ad_discordbot/activesettings.yaml', active_settings)
-            # Update size options for /image command
-            await update_size_options(active_settings.get('imgmodel').get('payload').get('width'),active_settings.get('imgmodel').get('payload').get('height'))
             # Task to change image models automatically
-            await start_update_image_model_task()
+            await task_queue.put(start_auto_update_imgmodel_task()) # Process this in the background
             # Set the topic of the channel if enabled in config
             channel = interaction.channel
             reply = await process_imgmodel_announce(channel, selected_item, selected_item_name)
@@ -1684,11 +1709,11 @@ class ImgModelDropdown(discord.ui.Select):
         except Exception as e:
             print("Error updating image model:", e)
         if config.discord['post_active_settings']['enabled']:
-            await post_active_settings()
+            await task_queue.put(post_active_settings())
 
 @client.hybrid_command(description="Choose an imgmodel")
 async def imgmodel(i):
-    if not config.imgmodels['get_imgmodels_via_api']:
+    if not config.imgmodels['get_imgmodels_via_api']['enabled']:
         # Uses ad_discordbot/dict_imgmodel.yaml
         view = discord.ui.View()
         view.add_item(SettingsDropdown('ad_discordbot/dict_imgmodels.yaml', 'imgmodel_name', 'imgmodel'))

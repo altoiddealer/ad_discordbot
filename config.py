@@ -32,7 +32,14 @@ tell_bot_time = {                   # slips in a message about the current time 
 }
 
 imgmodels = {
-    'get_imgmodels_via_api': True,      # Handling for /imgmodel command. True = dynamically fetch models (simple, less customizing). False = uses ad_discordbot/dict_imgmodels.yaml
+    'get_imgmodels_via_api': {      # Handling for /imgmodel command and 'auto_change_models'
+        'enabled': True,            # True = get models via A1111 API (simple, less customization). False = use 'dict_imgmodels.yaml' (high customization).
+        'guess_model_res': True,    # Option to update payload size based on selected imgmodel filesize.
+        'presets': [                # Defininitions for if 'guess_model_res' = True
+            {'max_filesize': 6.0, 'width': 512, 'height': 512}, # 'max_filesize' expressed in GB. Add presets as desired, sorted in ascending order.
+            {'max_filesize': 100.0, 'width': 1024, 'height': 1024}
+        ]
+    },
     'exclude': ['inpaint', 'refiner'],  # Do not auto-change or load models into lists which include matching text.
     'auto_change_models': {     # Feature to periodically switch imgmodels. Behavior is affected by setting for 'get_imgmodels_via_api'
         'enabled': False,
