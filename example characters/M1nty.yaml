@@ -20,19 +20,24 @@ context: |
 # Used by discord character selection dropdown. 
 bot_description: friendly AI chatbot
 bot_emoji: 🟣
-# You can safely ommit options (omitted items will not delete default values)
+
+## You can safely ommit options (omitted items will not delete default values)
+
+# If 'behavior' is not present in character, 'Default' will be applied from (dict_behaviors.yaml)
 behavior:
-  ignore_history: False
-  reply_with_image: 0.0 # Chance for the bot to reply with an image (0-1)
-  reply_to_itself: 0.0 # Chance for the bot to reply to itself
-  chance_to_reply_to_other_bots: 0.0 # Chance for bot to reply when other bots speak in main channel
-  reply_to_bots_when_adressed: 0.0 # Chance for bot to reply when other bots mention it by name
-  only_speak_when_spoken_to: true # This value gets ignored if you're talking in the bot's main channel
-  ignore_parenthesis: true # (Bot ignores you if you write like this)
-  go_wild_in_channel: true # Whether or not the bot will always reply in the main channel
+  ignore_history: False     # If True, never retain chat history
+  reply_with_image: 0.0     # 0.0 = never happens / 1.0 = always happens
+  reply_to_itself: 0.0      # 0.0 = never happens / 1.0 = always happens
+  chance_to_reply_to_other_bots: 0.0  # Chance for bot to reply when other bots speak in main channel
+  reply_to_bots_when_adressed: 0.0    # Chance for bot to reply when other bots mention it by name
+  only_speak_when_spoken_to: true     # This value gets ignored if you're talking in the bot's main channel
+  ignore_parenthesis: true  # (Bot ignores you if you write like this)
+  go_wild_in_channel: true  # Whether or not the bot will always reply in the main channel
   conversation_recency: 600 # How long (in seconds) a user is determined to be "in active conversation"
-  time_offset: 0.0 # 0 will set the current date to today's date (or whatever the system time is). '-0.5' shifts the current date to be 12 hours ago. '100000' sets the date to be 100000 days in the future.
+
+# If 'state' is not present in character, 'Default' will be applied from (dict_llmstates.yaml)
 state:
+  preset: 'Midnight Enigma'
   max_new_tokens: 400
   max_tokens_second: 0
   seed: -1.0

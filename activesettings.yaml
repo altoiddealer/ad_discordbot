@@ -1,5 +1,5 @@
 behavior:
-  behavior_name: Chat Mode
+  behavior_name: Default
   chance_to_reply_to_other_bots: 0.0
   conversation_recency: 600
   go_wild_in_channel: true
@@ -131,7 +131,7 @@ llmcontext:
   name: M1nty
 llmstate:
   _continue: false
-  llmstate_name: Chat Mode
+  llmstate_name: Default
   regenerate: false
   state:
     add_bos_token: true
@@ -148,12 +148,14 @@ llmstate:
     end_of_turn: ''
     epsilon_cutoff: 0
     eta_cutoff: 0
+    grammar_string: ''
     greeting: ''
     guidance_scale: 1
     history:
       internal: []
       visible: []
     length_penalty: 1
+    llmstate_name: Default
     max_new_tokens: 400
     max_tokens_second: 0
     min_length: 50
@@ -169,6 +171,7 @@ llmstate:
     no_repeat_ngram_size: 0
     num_beams: 1
     penalty_alpha: 0
+    preset: 'Midnight Enigma'
     repetition_penalty: 1.18
     repetition_penalty_range: 0
     seed: -1.0

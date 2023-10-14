@@ -447,12 +447,23 @@ async def change_profile(i, character):
         if llmcontext_dict:
             active_settings['llmcontext'].update(llmcontext_dict)
         # Update behavior in active settings
-        if char_data['behavior']:
+        char_behavior = char_data.get('behavior')
+        if char_behavior is not None:
             update_dict(active_settings['behavior'], char_data['behavior'])
+        else:
+            behaviors = load_yaml_file('ad_discordbot/dict_behaviors.yaml')
+            default_behavior = next((behavior for behavior in behaviors if behavior['behavior_name'] == 'Default'), None)
+            if default_behavior: update_dict(active_settings['behavior'], default_behavior)
+            else: print("behavior settings 'Default' missing from 'ad_discordbot/dict_behaviors.yaml'")
         # Update state in active settings
-        if char_data['state']:
+        char_llmstate = char_data.get('llmstate')
+        if char_llmstate is not None:
             update_dict(active_settings['llmstate']['state'], char_data['state'])
-
+        else:
+            llmstates = load_yaml_file('ad_discordbot/dict_llmstates.yaml')
+            default_llmstate = next((llmstate for llmstate in llmstates if llmstate['llmstate_name'] == 'Default'), None)
+            if default_llmstate: update_dict(active_settings['llmstate'], default_llmstate)
+            else: print("llmstate settings 'Default' missing from 'ad_discordbot/dict_llmstates.yaml'")
         # Save the updated active_settings to activesettings.yaml
         save_yaml_file('ad_discordbot/activesettings.yaml', active_settings)
 
@@ -844,8 +855,7 @@ def process_dynamic_context(user_input, text, llm_prompt):
 def determine_date():
     current_time = ''
     if config.tell_bot_time['enabled']:
-        if config.tell_bot_time['time_offset']: current_time = config.tell_bot_time['time_offset']
-        else: current_time = 0.0
+        current_time = 0.0
         if current_time == 0.0:
             current_time = datetime.now()
         elif isinstance(current_time, int):
@@ -1717,6 +1727,7 @@ class LLMUserInputs():
         "text": "",
         "state": {
             "history": {'internal': [], 'visible': []},
+            "preset": 'None',
             "max_new_tokens": 400,
             "max_tokens_second": 0,
             "seed": -1.0,
@@ -1724,7 +1735,7 @@ class LLMUserInputs():
             "top_p": 0.1,
             "top_k": 40,
             "tfs": 0,
-            'top_a': 0,
+            "top_a": 0,
             "typical_p": 1,
             "epsilon_cutoff": 0,
             "eta_cutoff": 0,
@@ -1760,8 +1771,9 @@ class LLMUserInputs():
             "mirostat_mode": 0,
             "mirostat_tau": 5.00,
             "mirostat_eta": 0.10,
-            'guidance_scale': 1,
-            'negative_prompt': ''
+            "grammar_string": '',
+            "guidance_scale": 1,
+            "negative_prompt": ''
             },
         "regenerate": False,
         "_continue": False, 

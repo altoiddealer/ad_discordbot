@@ -122,15 +122,3 @@ dynamic_context = {
         }
     ]
 }
-
-behavior = { # Default behavior settings will be overridden by ones defined in your character files.
-    'reply_with_image': 0.0,                # 0.0 = never happens / 1.0 = always happens
-    'reply_to_itself': 0.0,                 # 0.0 = never happens / 1.0 = always happens
-    'chance_to_reply_to_other_bots': 0.3,   #Reduce this if bot is too chatty with other bots
-    'reply_to_bots_when_adressed': 0.5,     # If set to 1, bots can be stuck in an infinite conversation
-    'ignore_history': False,                # Always ignores history
-    'only_speak_when_spoken_to': True,      # Replies when @ mentioned or to its name
-    'ignore_parenthesis': True,             # Does not reply when text is nested in parenthesis
-    'go_wild_in_channel': True,             # Replies to everything in Main channel
-    'conversation_recency': 600,            # How long (in seconds) a user is determined to be "in active conversation"
-}
