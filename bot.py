@@ -26,7 +26,6 @@ import pprint
 import aiohttp
 import math
 import time
-import cv2 # pip install OpenCV-Python
 from itertools import product
 
 session_history = {'internal': [], 'visible': []}
