@@ -1,5 +1,6 @@
-### 10/10/2023 ANNOUNCEMENT:
-### I appologize for any invoncenience, but I realized it makes much more sense to not have everything in a subdirectory for this repository.  See updated installation instructions below.
+**10/10/2023: Important update to Installation instructions.**
+
+**10/15/2023: OpenCV-Python no longer required.** For existing installs you may `pip uninstall opencv-python`
 
 # altoiddealer's Discord Bot
 
@@ -57,9 +58,6 @@ This bot stands apart from many other ones due to a variety of custom features:
 5. **Run the .cmd file** in text-generation-webui directory (**ex: cmd_windows.bat**), and performing the following commands:
    ```
    pip install discord
-   ```
-   ```
-   pip install OpenCV-Python (required for /image command)
    ```
 
 # Running the bot
