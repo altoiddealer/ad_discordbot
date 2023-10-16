@@ -40,13 +40,12 @@ This bot stands apart from many other ones due to a variety of custom features:
 
 1. **Install oobabooga's [text-generation-webui](https://github.com/oobabooga/text-generation-webui)**
 
-2. **[Create a Discord bot account](https://discordpy.readthedocs.io/en/stable/discord.html), invite it to your server, and note its authentication toke**n.   
+2. **[Create a Discord bot account](https://discordpy.readthedocs.io/en/stable/discord.html), invite it to your server, and note its authentication token**.
 
 3. Clone this repository into **/text-generation-webui/**
    ```
    git clone https://github.com/altoiddealer/ad_discordbot
    ```
-
 4. Move **bot.py** out of subdirectory **/ad_discordbot/** -> into the directory **/text-generation-webui/**
 
    ```
@@ -54,8 +53,9 @@ This bot stands apart from many other ones due to a variety of custom features:
    
    /text-generation-webui/ad_discordbot/(remaining files)
    ```
- 
-5. **Run the .cmd file** in text-generation-webui directory (**ex: cmd_windows.bat**), and performing the following commands:
+5. **Add the bot token (from Step 2) into **/ad_discordbot/config.py**
+   
+6. **Run the .cmd file** in text-generation-webui directory (**ex: cmd_windows.bat**), and performing the following commands:
    ```
    pip install discord
    ```
