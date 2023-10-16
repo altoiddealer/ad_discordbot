@@ -649,13 +649,28 @@ async def auto_change_imgmodel(selected_item, active_settings):
             await update_active_settings(selected_item, 'imgmodel')
         else:
             selected_item_name = selected_item['model_name']
+            selected_item_filename = selected_item['filename']
+            # Check filesize to assume resolution of imgmodel
+            if config.imgmodels['get_imgmodels_via_api']['guess_model_res']:
+                file_size_bytes = os.path.getsize(selected_item_filename)
+                file_size_gb = file_size_bytes / (1024 ** 3)  # 1 GB = 1024^3 bytes
+                presets = config.imgmodels['get_imgmodels_via_api']['presets']
+                matched_preset = None
+                for preset in presets:
+                    if preset['max_filesize'] > file_size_gb:
+                        matched_preset = preset
+                        break
+                if matched_preset:
+                    new_width, new_height = matched_preset['width'], matched_preset['height']
+                    active_settings['imgmodel']['payload']['width'] = new_width
+                    active_settings['imgmodel']['payload']['height'] = new_height  
+                    # Update size options for /image command
+                    await update_size_options(new_width, new_height)         
             # update only the values accessible via A1111 API
+            active_settings['imgmodel']['override_settings']['sd_model_checkpoint'] = selected_item['sd_model_checkpoint']
             active_settings['imgmodel']['imgmodel_name'] = selected_item_name
             active_settings['imgmodel']['imgmodel_url'] = ''
-            active_settings['imgmodel']['override_settings']['sd_model_checkpoint'] = selected_item['sd_model_checkpoint']
             save_yaml_file('ad_discordbot/activesettings.yaml', active_settings)
-        # Update size options for /image command
-        await update_size_options(active_settings.get('imgmodel').get('payload').get('width'),active_settings.get('imgmodel').get('payload').get('height'))
         print(f"Updated imgmodel settings to: {selected_item_name}")
         return selected_item_name
     except Exception as e:
