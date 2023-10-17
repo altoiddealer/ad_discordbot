@@ -36,8 +36,10 @@ imgmodels = {
         'enabled': True,            # True = get models via A1111 API (simple, less customization). False = use 'dict_imgmodels.yaml' (high customization).
         'guess_model_res': True,    # Option to update payload size based on selected imgmodel filesize.
         'presets': [                # Defininitions for if 'guess_model_res' = True
-            {'max_filesize': 6.0, 'width': 512, 'height': 512}, # 'max_filesize' expressed in GB. Add presets as desired, sorted in ascending order.
-            {'max_filesize': 100.0, 'width': 1024, 'height': 1024}
+            {'max_filesize': 6.0,   # 'max_filesize' expressed in GB. Add presets as desired, sorted in ascending order.
+                'width': 512, 'height': 512, 'imglora_name': 'SD15 Loras'},     # If you specify an imglora_name from 'dict_imgloras.yaml', those will also be swapped in.
+            {'max_filesize': 100.0,
+                'width': 1024, 'height': 1024, 'imglora_name': 'SDXL Loras'}    # You may set imglora_name = '' to ignore this feature
         ]
     },
     'exclude': ['inpaint', 'refiner'],  # Do not auto-change or load models into lists which include matching text.
