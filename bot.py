@@ -743,7 +743,7 @@ async def on_raw_reaction_add(endorsed_img):
             save_yaml_file('ad_discordbot/starboard_messages.yaml', list(starboard_posted_messages))
 
 ## Dynamic Context feature
-def process_dynamic_context(user_input, text, llm_prompt):
+def process_dynamic_context(user_input, text, llm_prompt, save_history):
     dynamic_context = config.dynamic_context
     matched_presets = []
     if dynamic_context['enabled']:
@@ -810,7 +810,7 @@ def process_dynamic_context(user_input, text, llm_prompt):
             # Print results
             if dynamic_context['print_results']:
                 print(print_content)
-    return user_input, llm_prompt, save_history
+    return user_input, llm_prompt
 
 def determine_date():
     current_time = ''
