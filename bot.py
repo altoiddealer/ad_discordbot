@@ -1677,6 +1677,7 @@ async def imgmodel_announce(selected_imgmodel, selected_imgmodel_name):
     try:
         reply = ''
         reply_prefix = config.imgmodels['announce_in_chat']['reply_prefix']
+        # Process .yaml method
         if not config.imgmodels['get_imgmodels_via_api']['enabled']:
             reply = f"{reply_prefix}{selected_imgmodel.get('imgmodel_name')}"
             if config.imgmodels['announce_in_chat']['include_url']:
@@ -1687,8 +1688,9 @@ async def imgmodel_announce(selected_imgmodel, selected_imgmodel_name):
                 selected_imgmodel_payload_info = ", ".join(
                     f"{key}: {value}" for key, value in selected_imgmodel_payload.imgmodels())
                 reply += f"\n```{selected_imgmodel_override_settings_info}, {selected_imgmodel_payload_info}```"
-        else:
+        else: # Process A1111 API method
             reply = f"{reply_prefix}{selected_imgmodel_name}"
+        return reply
     except Exception as e:
         print("Error announcing imgmodel:", e)
 
@@ -1696,11 +1698,12 @@ async def imgmodel_announce(selected_imgmodel, selected_imgmodel_name):
 async def imgmodel_update_topic(channel, selected_imgmodel, selected_imgmodel_name):
     try:
         topic_prefix = config.imgmodels['update_topic']['topic_prefix']
+        # Process .yaml method
         if not config.imgmodels['get_imgmodels_via_api']['enabled']:
             new_topic = f"{topic_prefix}{selected_imgmodel.get('imgmodel_name')}"
             if config.imgmodels['update_topic']['include_url']:
                 new_topic += " " + selected_imgmodel.get('imgmodel_url', {})
-        else:
+        else: # Process A1111 API method
             new_topic = f"{topic_prefix}{selected_imgmodel_name}"
         await channel.edit(topic=new_topic)
     except Exception as e:
@@ -1750,8 +1753,8 @@ class ImgModelDropdown(discord.ui.Select):
             # Restart task to change image models automatically
             await task_queue.put(start_auto_update_imgmodel_task()) # Process this in the background
             # Set the topic of the channel and announce imgmodel as configured
-            channel = interaction.channel
             if config.imgmodels['update_topic']['enabled']:
+                channel = interaction.channel
                 await imgmodel_update_topic(channel, selected_imgmodel, selected_imgmodel_name)
             if config.imgmodels['announce_in_chat']['enabled']:
                 reply = await imgmodel_announce(selected_imgmodel, selected_imgmodel_name)
