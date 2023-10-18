@@ -624,6 +624,8 @@ async def auto_update_imgmodel_task(mode='random'):
             else: # Process A1111 API method
                 await change_imgmodel_api(active_settings, selected_imgmodel, selected_imgmodel_name)
             save_yaml_file('ad_discordbot/activesettings.yaml', active_settings)
+            # Load the imgmodel and VAE via A1111 API
+            await task_queue.put(a1111_load_imgmodel(active_settings['imgmodel']['override_settings'])) # Process this in the background
             # Update size options for /image command
             await update_size_options(active_settings.get('imgmodel').get('payload').get('width'),active_settings.get('imgmodel').get('payload').get('height'))
             # Set the topic of the channel and announce imgmodel as configured
@@ -640,6 +642,7 @@ async def auto_update_imgmodel_task(mode='random'):
                 print(f"Updated imgmodel settings to: {selected_imgmodel_name}")
         except Exception as e:
             print(f"Error automatically updating image model: {e}")
+      #  await asyncio.sleep(duration)
 
 imgmodel_update_task = None # Global variable allows process to be cancelled and restarted (reset sleep timer)
 
@@ -901,7 +904,8 @@ async def on_message(i):
     # build user_input with defaults
     user_input = initialize_user_input(i, data, text)
     # apply dynamic_context settings
-    user_input, llm_prompt, save_history = process_dynamic_context(user_input, text, llm_prompt)
+    save_history=True
+    user_input, llm_prompt = process_dynamic_context(user_input, text, llm_prompt, save_history)
     # apply datetime to prompt
     current_time = determine_date
     # save a global copy of text/llm_prompt for /regen cmd
@@ -1657,6 +1661,17 @@ async def change_imgmodel_api(active_settings, selected_imgmodel, selected_imgmo
     except Exception as e:
         print("Error updating image model:", e)
 
+async def a1111_load_imgmodel(options):
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url=f'{A1111}/sdapi/v1/options', json=options) as response:
+                if response.status == 200:
+                    await response.json()
+                else:
+                    print(f"Error loading image model in A1111 API (response: '{response.status}')")
+    except Exception as e:
+        print("Error loading image model in A1111:", e) 
+
 # Announce imgmodel change as configured
 async def imgmodel_announce(selected_imgmodel, selected_imgmodel_name):
     try:
@@ -1728,6 +1743,8 @@ class ImgModelDropdown(discord.ui.Select):
             else: # Process A1111 API method
                 await change_imgmodel_api(active_settings, selected_imgmodel, selected_imgmodel_name)  
             save_yaml_file('ad_discordbot/activesettings.yaml', active_settings)
+            # Load the imgmodel and VAE via A1111 API
+            await task_queue.put(a1111_load_imgmodel(active_settings['imgmodel']['override_settings'])) # Process this in the background
             # Update size options for /image command
             await update_size_options(active_settings.get('imgmodel').get('payload').get('width'),active_settings.get('imgmodel').get('payload').get('height'))
             # Restart task to change image models automatically
