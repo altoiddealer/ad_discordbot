@@ -24,32 +24,43 @@ sd = {
     }
 }
 
-tell_bot_time = {                   # slips in a message about the current time before your context.
+# Slips in a message about the current time before your context.
+tell_bot_time = {
     'enabled': True,
     'mode': 0,                      # 0 = text requests only / 1 = image requests only / 2 = both
     'message': "It is now {}\n",    # datetime is inserted at {}
     'time_offset': 0.0 # 0 = today's date (system time). -0.5 shifts the current date to be 12 hours ago. 100000 sets the date to be 100000 days in the future.
 }
 
+# Imgmodels can be switched by using /imgmodels command, or enabling 'auto_change_models' (or manually updating activesettings.yaml)
 imgmodels = {
-    'get_imgmodels_via_api': {      # Handling for /imgmodel command and 'auto_change_models'
+    # There are 2 methods: A1111 API (simple, less customization), or 'dict_imgmodels.yaml' (high customization)
+    'get_imgmodels_via_api': {      # Settings for A1111 API method
         'enabled': True,            # True = get models via A1111 API (simple, less customization). False = use 'dict_imgmodels.yaml' (high customization).
         'guess_model_res': True,    # Option to update payload size based on selected imgmodel filesize.
-        'presets': [                # Defininitions for if 'guess_model_res' = True
-            {'max_filesize': 6.0,   # 'max_filesize' expressed in GB. Add presets as desired, sorted in ascending order.
-                'width': 512, 'height': 512, 'imglora_name': 'SD15 Loras'},     # If you specify an imglora_name from 'dict_imgloras.yaml', those will also be swapped in.
+        'presets': [                # Defininitions for if 'guess_model_res' = True.  Add presets as desired, sorted in ascending order.
+            {'max_filesize': 6.0,                               # 'max_filesize' expressed in GB.
+                'width': 512, 'height': 512, 'enable_hr': True, # Any defined 'payload' options will be updated.
+                'imglora_name': 'SD15 Loras'},                  # If you specify an imglora_name from 'dict_imgloras.yaml', those will also be swapped in.
             {'max_filesize': 100.0,
-                'width': 1024, 'height': 1024, 'imglora_name': 'SDXL Loras'}    # You may set imglora_name = '' to ignore this feature
+                'width': 1024, 'height': 1024, 'enable_hr': False, 
+                'imglora_name': 'SDXL Loras'}
         ]
     },
-    'exclude': ['inpaint', 'refiner'],  # Do not auto-change or load models into lists which include matching text.
-    'auto_change_models': {     # Feature to periodically switch imgmodels. Behavior is affected by setting for 'get_imgmodels_via_api'
+
+    # Do not consider models which include matching text.
+    'exclude': ['inpaint', 'refiner'],
+
+    # Feature to periodically switch imgmodels. Behavior is affected by setting for 'get_imgmodels_via_api'
+    'auto_change_models': {
         'enabled': False,
         'mode': 'random',       # 'random' = picks model at random / 'cycle' = sequential order
         'frequency': 1.0,       # How often to change models, in hours. 0.5 = 30 minutes
         'filter': [''],         # Only auto-change models containing filter. ['xl'] = likely just your SDXL models. Can match multiple such as ['xl', '15']
         'channel_announce': ''  # If a channel is specified, it will announce/update as configured below. '' = Don't announce/update topic.
     },
+
+    # Options to update topic / announce new img model. When using /imgmodel, it will use the channel where the command was executed.
     'update_topic': {
         'enabled': True,
         'topic_prefix': "**Current Image Model:** ",
@@ -63,41 +74,42 @@ imgmodels = {
     }
 }
 
+# Feature to modify settings / prompts from trigger phrases
 imgprompt_settings = {
     'trigger_search_mode': 'userllm',   # What to compare triggers against. 'user' = user prompt only / 'llm' = bot reply only / 'userllm' = search all text
     'insert_loras_in_prompt': True,     # ImgLora handling. True = insert positive_prompt after matches found in prompt / False = append all to end of prompt.
-    'trigger_img_gen_by_phrase': {      # Trigger an image response with words/phrases.
-        'enabled': True,                # If you want phrases removed from your prompt, use dynamic_context configuration for that.
-        'on_prefix_only': True,         # if True, image response only occurs when prompt begins with trigger phrase.
+
+    # Trigger an image response with words/phrases.
+    'trigger_img_gen_by_phrase': {
+        'enabled': True,        # If you want phrases removed from your prompt, use dynamic_context configuration for that.
+        'on_prefix_only': True, # if True, image response only occurs when prompt begins with trigger phrase.
         'triggers': ['draw', 'generate an image', 'generate a picture', 'generate a photo', 'take a photo', 'take a picture', 'take another picture', 'take a selfie', 'take another selfie', 'take a self portrait']
     },
-    'trigger_img_params_by_phrase': {   # Modify payload settings if prompt includes trigger phrases
+
+    # Modifies payload settings if prompt includes trigger phrases
+    'trigger_img_params_by_phrase': {
         'enabled': True,
         'presets': [
             {'triggers': ['vertical', 'selfie', 'self portrait'],
-                'width': 896,
-                'height': 1152
-            },
+                'width': 896, 'height': 1152},
             {'triggers': ['landscape'],
-                'width': 1152,
-                'height': 896
-            }
+                'width': 1152, 'height': 896}
         ]
     },
-    'trigger_faces_by_phrase': {   # Modify payload settings if prompt includes trigger phrases
+
+    # Modifies payload settings if prompt includes trigger phrases
+    'trigger_faces_by_phrase': {
         'enabled': True,
         'presets': [
             {'triggers': ['alfred neuman', 'mad magazine guy'],
-                'face_swap': 'neuman.png' # face_swap can be used for Reactor extension. Valid file types: .png, .jpg, .txt (containing base64 string)
-            },
+                'face_swap': 'neuman.png'}, # face_swap can be used for Reactor extension. Valid file types: .png, .jpg, .txt (containing base64 string)
             {'triggers': ['donald trump'],
-                'face_swap': 'trump.txt'
-            }
+                'face_swap': 'trump.txt'}
         ]
     }
 }
 
-# Swaps in custom character/settings when your prompt includes pre-defined trigger phrases
+# Feature to swap in custom character/settings when your prompt includes pre-defined trigger phrases
 dynamic_context = {
     'enabled': True,
     'print_results': True, # Whether to print results to console

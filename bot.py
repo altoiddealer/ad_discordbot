@@ -1502,7 +1502,7 @@ async def post_active_settings():
             # Fetch and delete all existing messages in the channel
             async for message in channel.history(limit=None):
                 await message.delete()
-                await asyncio.sleep(0.3)  # minimum delay for discord limit
+                await asyncio.sleep(0.5)  # minimum delay for discord limit
             # Send the entire settings content as a single message
             await send_long_message(channel, f"Current settings:\n```yaml\n{settings_content}\n```")
         else:
@@ -1637,13 +1637,17 @@ async def guess_imgmodel_res(active_settings, selected_imgmodel_filename):
         for preset in presets:
             if preset['max_filesize'] > file_size_gb:
                 matched_preset = preset
+                del preset['max_filesize']
                 break
         if matched_preset:
             if matched_preset.get('imglora_name') is not None:
                 # Update ImgLoras
                 await change_imgloras(active_settings, matched_preset.get('imglora_name'))
-            active_settings['imgmodel']['payload']['width'] = matched_preset['width']
-            active_settings['imgmodel']['payload']['height'] = matched_preset['height']
+                del matched_preset['imglora_name']
+            print("matched_preset", matched_preset)
+            update_dict(active_settings.get('imgmodel').get('payload'), matched_preset)
+            #active_settings['imgmodel']['payload']['width'] = matched_preset['width']
+            #active_settings['imgmodel']['payload']['height'] = matched_preset['height']
     except Exception as e:
         print("Error guessing imgmodel resolution:", e)
 
