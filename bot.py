@@ -627,7 +627,7 @@ async def auto_update_imgmodel_task(mode='random'):
             # Load the imgmodel and VAE via A1111 API
             await task_queue.put(a1111_load_imgmodel(active_settings['imgmodel']['override_settings'])) # Process this in the background
             # Update size options for /image command
-            await update_size_options(active_settings.get('imgmodel').get('payload').get('width'),active_settings.get('imgmodel').get('payload').get('height'))
+            await task_queue.put(update_size_options(active_settings.get('imgmodel').get('payload').get('width'),active_settings.get('imgmodel').get('payload').get('height')))
             # Set the topic of the channel and announce imgmodel as configured
             if config.imgmodels['auto_change_models']['channel_announce']:
                 channel = client.get_channel(config.imgmodels['auto_change_models']['channel_announce'])
@@ -1238,7 +1238,7 @@ async def update_size_options(new_width, new_height):
     size_choices.extend(
         app_commands.Choice(name=option['name'], value=option['name'])
         for option in size_options)
-    await task_queue.put(client.tree.sync()) # Process this in the background
+    await client.tree.sync() # Process this in the background
 
 def round_to_precision(val, prec):
     return round(val / prec) * prec
@@ -1644,7 +1644,6 @@ async def guess_imgmodel_res(active_settings, selected_imgmodel_filename):
                 # Update ImgLoras
                 await change_imgloras(active_settings, matched_preset.get('imglora_name'))
                 del matched_preset['imglora_name']
-            print("matched_preset", matched_preset)
             update_dict(active_settings.get('imgmodel').get('payload'), matched_preset)
             #active_settings['imgmodel']['payload']['width'] = matched_preset['width']
             #active_settings['imgmodel']['payload']['height'] = matched_preset['height']
@@ -1753,7 +1752,7 @@ class ImgModelDropdown(discord.ui.Select):
             # Load the imgmodel and VAE via A1111 API
             await task_queue.put(a1111_load_imgmodel(active_settings['imgmodel']['override_settings'])) # Process this in the background
             # Update size options for /image command
-            await update_size_options(active_settings.get('imgmodel').get('payload').get('width'),active_settings.get('imgmodel').get('payload').get('height'))
+            await task_queue.put(update_size_options(active_settings.get('imgmodel').get('payload').get('width'),active_settings.get('imgmodel').get('payload').get('height')))
             # Restart task to change image models automatically
             await task_queue.put(start_auto_update_imgmodel_task()) # Process this in the background
             # Set the topic of the channel and announce imgmodel as configured
