@@ -1254,7 +1254,7 @@ async def update_size_options(new_width, new_height):
     size_choices.extend(
         app_commands.Choice(name=option['name'], value=option['name'])
         for option in size_options)
-    await client.tree.sync() # Process this in the background
+    await client.tree.sync()
 
 def round_to_precision(val, prec):
     return round(val / prec) * prec
@@ -1613,8 +1613,8 @@ async def fetch_imgmodels():
 # Apply user defined filters to imgmodel list
 async def filter_imgmodels(imgmodels):
     try:
-        if config.imgmodels['auto_change_models']['filter'] or config.imgmodels['exclude']:
-            filter_list = config.imgmodels['auto_change_models']['filter']
+        if config.imgmodels['filter'] or config.imgmodels['exclude']:
+            filter_list = config.imgmodels['filter']
             exclude_list = config.imgmodels['exclude']
             imgmodels = [
                 imgmodel for imgmodel in imgmodels
@@ -1662,7 +1662,7 @@ async def guess_imgmodel_res(active_settings, selected_imgmodel_filename):
         for preset in presets:
             if preset['max_filesize'] > file_size_gb:
                 matched_preset = preset
-                del preset['max_filesize']
+                del matched_preset['max_filesize']
                 break
         if matched_preset:
             if matched_preset.get('imglora_name') is not None:
