@@ -48,15 +48,16 @@ imgmodels = {
         ]
     },
 
-    # Do not consider models which include matching text.
+    # Omit models which include matching text.
     'exclude': ['inpaint', 'refiner'],
+    # Only consider models which include matching text. '' = No filtering (loads all models)
+    'filter': [''], # Example: 'xl' = likely just SDXL models. Can match multiple such as ['xl', '15']
 
     # Feature to periodically switch imgmodels. Behavior is affected by setting for 'get_imgmodels_via_api'
     'auto_change_models': {
         'enabled': False,
         'mode': 'random',       # 'random' = picks model at random / 'cycle' = sequential order
         'frequency': 1.0,       # How often to change models, in hours. 0.5 = 30 minutes
-        'filter': [''],         # Only auto-change models containing filter. ['xl'] = likely just your SDXL models. Can match multiple such as ['xl', '15']
         'channel_announce': ''  # If a channel is specified, it will announce/update as configured below. '' = Don't announce/update topic.
     },
 
