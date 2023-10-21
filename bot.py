@@ -341,6 +341,7 @@ client = commands.Bot(command_prefix=".", intents=intents)
 
 queues = []
 blocking = False
+busy_drawing = False
 reply_count = 0
 
 # # Function to recursively update a dictionary
@@ -891,6 +892,10 @@ async def on_message(i):
     text = await commands.clean_content().convert(ctx, i.content)
     if client.behavior.bot_should_reply(i, text): pass # Bot replies
     else: return # Bot does not reply to this message.
+    global busy_drawing
+    if busy_drawing:
+        await i.channel.send("(busy generating an image, please try again after image generation is completed)")
+        return
     if client.behavior.main_channels == None and client.user.mentioned_in(i): main(i) # if None, set channel as main
     data = get_active_setting('llmcontext')
     # if @ mentioning bot, remove the @ mention from user prompt
@@ -911,17 +916,22 @@ async def on_message(i):
     # save a global copy of text/llm_prompt for /regen cmd
     retain_last_user_message(text, llm_prompt)
     if user_asks_for_image(i, text):
-        if await a1111_online(i):
-            info_embed.title = "Prompting ..."
-            info_embed.description = " "
-            picture_frame = await i.reply(embed=info_embed)
-            async with i.channel.typing():
-                image_prompt = create_image_prompt(user_input, llm_prompt, current_time, save_history)
-                await picture_frame.delete()
-                await pic(i, text, image_prompt, neg_prompt=None, size=None, face_swap=None, controlnet=None)
-                await i.channel.send(image_prompt)
-        return
-    await create_prompt_for_llm(i, user_input, llm_prompt, current_time, save_history)
+        busy_drawing = True
+        try:
+            if await a1111_online(i):
+                info_embed.title = "Prompting ..."
+                info_embed.description = " "
+                picture_frame = await i.reply(embed=info_embed)
+                async with i.channel.typing():
+                    image_prompt = create_image_prompt(user_input, llm_prompt, current_time, save_history)
+                    await picture_frame.delete()
+                    await pic(i, text, image_prompt, neg_prompt=None, size=None, face_swap=None, controlnet=None)
+                    await i.channel.send(image_prompt)
+        except Exception as e:
+            print(f"An error occurred: {e}")
+        busy_drawing = False
+    else:
+        await create_prompt_for_llm(i, user_input, llm_prompt, current_time, save_history)
     return
 
 @client.hybrid_command(description="Set current channel as main channel for bot to auto reply in without needing to be called")
@@ -1166,50 +1176,56 @@ def apply_suffix2(payload, positive_prompt_suffix2, positive_prompt_suffix2_blac
             payload['prompt'] += positive_prompt_suffix2
 
 async def pic(i, text, image_prompt, neg_prompt=None, size=None, face_swap=None, controlnet=None):
-    if await a1111_online(i):
-        info_embed.title = "Processing"
-        info_embed.description = " ... "  # await check_a1111_progress()
-        if client.fresh:
-            info_embed.description = "First request tends to take a long time, please be patient"
-        picture_frame = await i.channel.send(embed=info_embed)
-        info_embed.title = "Sending prompt to A1111 ..."
-        # Initialize payload settings
-        payload = {"prompt": image_prompt, "negative_prompt": '', "width": 512, "height": 512, "steps": 20}
-        if neg_prompt: payload.update({"negative_prompt": neg_prompt})
-        activepayload = get_active_setting('imgmodel').get('payload')
-        payload.update(activepayload)
-        activeoverride = get_active_setting('imgmodel').get('override_settings')
-        payload['override_settings'] = activeoverride
-        # Process payload triggers
-        process_payload_mods(payload, text)
-        # Process face swap triggers
-        process_faces(payload, text)
-        if size: payload.update(size)
-        # Process extensions
-        if face_swap:
-            payload['alwayson_scripts']['reactor']['args'][0] = face_swap # image in base64 format
-            payload['alwayson_scripts']['reactor']['args'][1] = True # Enable
-        if controlnet: payload['alwayson_scripts']['controlnet']['args'][0].update(controlnet)
-        # Process LORAs
-        data = get_active_setting('imglora')
-        positive_prompt_prefix = data.get("positive_prompt_prefix")
-        positive_prompt_suffix = data.get("positive_prompt_suffix")
-        positive_prompt_suffix2 = data.get("positive_prompt_suffix2")
-        positive_prompt_suffix2_blacklist = data.get("positive_prompt_suffix2_blacklist")
-        negative_prompt_prefix = data.get("negative_prompt_prefix")
-        presets = data.get("presets")
+    global busy_drawing
+    busy_drawing = True
+    try:
+        if await a1111_online(i):
+            info_embed.title = "Processing"
+            info_embed.description = " ... "  # await check_a1111_progress()
+            if client.fresh:
+                info_embed.description = "First request tends to take a long time, please be patient"
+            picture_frame = await i.channel.send(embed=info_embed)
+            info_embed.title = "Sending prompt to A1111 ..."
+            # Initialize payload settings
+            payload = {"prompt": image_prompt, "negative_prompt": '', "width": 512, "height": 512, "steps": 20}
+            if neg_prompt: payload.update({"negative_prompt": neg_prompt})
+            activepayload = get_active_setting('imgmodel').get('payload')
+            payload.update(activepayload)
+            activeoverride = get_active_setting('imgmodel').get('override_settings')
+            payload['override_settings'] = activeoverride
+            # Process payload triggers
+            process_payload_mods(payload, text)
+            # Process face swap triggers
+            process_faces(payload, text)
+            if size: payload.update(size)
+            # Process extensions
+            if face_swap:
+                payload['alwayson_scripts']['reactor']['args'][0] = face_swap # image in base64 format
+                payload['alwayson_scripts']['reactor']['args'][1] = True # Enable
+            if controlnet: payload['alwayson_scripts']['controlnet']['args'][0].update(controlnet)
+            # Process LORAs
+            data = get_active_setting('imglora')
+            positive_prompt_prefix = data.get("positive_prompt_prefix")
+            positive_prompt_suffix = data.get("positive_prompt_suffix")
+            positive_prompt_suffix2 = data.get("positive_prompt_suffix2")
+            positive_prompt_suffix2_blacklist = data.get("positive_prompt_suffix2_blacklist")
+            negative_prompt_prefix = data.get("negative_prompt_prefix")
+            presets = data.get("presets")
 
-        if positive_prompt_prefix:
-            payload['prompt'] = f'{positive_prompt_prefix} {image_prompt}'
-        if positive_prompt_suffix:
-            payload['prompt'] += positive_prompt_suffix
-        if negative_prompt_prefix:
-            payload['negative_prompt'] += negative_prompt_prefix
-        
-        apply_presets(payload, presets, i, text)
-        apply_suffix2(payload, positive_prompt_suffix2, positive_prompt_suffix2_blacklist)
-        clean_payload(payload)
-        await process_image_gen(payload, picture_frame, i)
+            if positive_prompt_prefix:
+                payload['prompt'] = f'{positive_prompt_prefix} {image_prompt}'
+            if positive_prompt_suffix:
+                payload['prompt'] += positive_prompt_suffix
+            if negative_prompt_prefix:
+                payload['negative_prompt'] += negative_prompt_prefix
+            
+            apply_presets(payload, presets, i, text)
+            apply_suffix2(payload, positive_prompt_suffix2, positive_prompt_suffix2_blacklist)
+            clean_payload(payload)
+            await process_image_gen(payload, picture_frame, i)
+    except Exception as e:
+        print(f"An error occurred: {e}")
+    busy_drawing = False
 
 @client.hybrid_command()
 async def sync(interaction: discord.Interaction):
@@ -1325,91 +1341,100 @@ async def image(
     cnet_map: typing.Optional[app_commands.Choice[str]]
     ):
 
-    text = prompt
-    pos_style_prompt = prompt
-    neg_style_prompt = ""
-    size_dict = {}
-    faceswapimg = ''
-    controlnet_dict = {}
+    global busy_drawing
+    if busy_drawing:
+        await i.channel.send("(busy generating an image, please try again after image generation is completed)")
+        return
+    busy_drawing = True
+    try:
+        text = prompt
+        pos_style_prompt = prompt
+        neg_style_prompt = ""
+        size_dict = {}
+        faceswapimg = ''
+        controlnet_dict = {}
 
-    message_content = f">>> **Prompt:** {pos_style_prompt}"
+        message_content = f">>> **Prompt:** {pos_style_prompt}"
 
-    if neg_prompt:
-        neg_style_prompt = f"{neg_prompt}, {neg_style_prompt}"
-        message_content += f" | **Negative Prompt:** {neg_prompt}"
+        if neg_prompt:
+            neg_style_prompt = f"{neg_prompt}, {neg_style_prompt}"
+            message_content += f" | **Negative Prompt:** {neg_prompt}"
 
-    if style:
-        selected_style_option = next((option for option in style_options if option['name'] == style.value), None)
+        if style:
+            selected_style_option = next((option for option in style_options if option['name'] == style.value), None)
 
-        if selected_style_option:
-            pos_style_prompt = selected_style_option.get('positive').format(prompt)
-            neg_style_prompt = selected_style_option.get('negative')
-        message_content += f" | **Style:** {style.value}"
+            if selected_style_option:
+                pos_style_prompt = selected_style_option.get('positive').format(prompt)
+                neg_style_prompt = selected_style_option.get('negative')
+            message_content += f" | **Style:** {style.value}"
 
-    if size:
-        selected_size_option = next((option for option in size_options if option['name'] == size.value), None)
-        if selected_size_option:
-            size_dict['width'] = selected_size_option.get('width')
-            size_dict['height'] = selected_size_option.get('height')
-        message_content += f" | **Size:** {size.value}"
+        if size:
+            selected_size_option = next((option for option in size_options if option['name'] == size.value), None)
+            if selected_size_option:
+                size_dict['width'] = selected_size_option.get('width')
+                size_dict['height'] = selected_size_option.get('height')
+            message_content += f" | **Size:** {size.value}"
 
-    if config.sd['extensions']['reactor_enabled']:
-        if face_swap:
-            if face_swap.content_type and face_swap.content_type.startswith("image/"):
-                imgurl = face_swap.url
-                attached_img = await face_swap.read()
-                faceswapimg = base64.b64encode(attached_img).decode('utf-8')
-                message_content += f" | **Face Swap:** Image Provided"
-            else:
-                await i.send("Please attach a valid image to use for Face Swap.",ephemeral=True)
-                return
+        if config.sd['extensions']['reactor_enabled']:
+            if face_swap:
+                if face_swap.content_type and face_swap.content_type.startswith("image/"):
+                    imgurl = face_swap.url
+                    attached_img = await face_swap.read()
+                    faceswapimg = base64.b64encode(attached_img).decode('utf-8')
+                    message_content += f" | **Face Swap:** Image Provided"
+                else:
+                    await i.send("Please attach a valid image to use for Face Swap.",ephemeral=True)
+                    return
 
-    if config.sd['extensions']['controlnet_enabled']:
-        if cnet_model:
-            selected_cnet_option = next((option for option in controlnet_options if option['name'] == cnet_model.value), None)
-            if selected_cnet_option:
-                controlnet_dict['model'] = selected_cnet_option.get('model')
-                controlnet_dict['module'] = selected_cnet_option.get('module')
-                controlnet_dict['guidance_end'] = selected_cnet_option.get('guidance_end')
-                controlnet_dict['weight'] = selected_cnet_option.get('weight')
-                controlnet_dict['enabled'] = True
-            message_content += f" | **ControlNet:** Model: {cnet_model.value}"
-
-        if cnet_input:
-            if cnet_input.content_type and cnet_input.content_type.startswith("image/"):
-                imgurl = cnet_input.url
-                attached_img = await cnet_input.read()
-                cnetimage = base64.b64encode(attached_img).decode('utf-8')
-                controlnet_dict['input_image'] = cnetimage
-            else:
-                await i.send("Invalid image. Please attach a valid image.",ephemeral=True)
-                return
-            if cnet_map:
-                if cnet_map.value == "no_map":
+        if config.sd['extensions']['controlnet_enabled']:
+            if cnet_model:
+                selected_cnet_option = next((option for option in controlnet_options if option['name'] == cnet_model.value), None)
+                if selected_cnet_option:
+                    controlnet_dict['model'] = selected_cnet_option.get('model')
                     controlnet_dict['module'] = selected_cnet_option.get('module')
-                if cnet_map.value == "map":
-                    controlnet_dict['module'] = "none"
-                if cnet_map.value == "invert_map":
-                    controlnet_dict['module'] = "invert (from white bg & black line)"
-                message_content += f", Module: {controlnet_dict['module']}"
-                message_content += f", Map Input: {cnet_map.value}"
-            else:
-                message_content += f", Module: {controlnet_dict['module']}"
+                    controlnet_dict['guidance_end'] = selected_cnet_option.get('guidance_end')
+                    controlnet_dict['weight'] = selected_cnet_option.get('weight')
+                    controlnet_dict['enabled'] = True
+                message_content += f" | **ControlNet:** Model: {cnet_model.value}"
 
-            if (cnet_model and not cnet_input) or (cnet_input and not cnet_model):
-                await i.send("ControlNet feature requires **both** selecting a model (cnet_model) and attaching an image (cnet_input).",ephemeral=True)
-                return
+            if cnet_input:
+                if cnet_input.content_type and cnet_input.content_type.startswith("image/"):
+                    imgurl = cnet_input.url
+                    attached_img = await cnet_input.read()
+                    cnetimage = base64.b64encode(attached_img).decode('utf-8')
+                    controlnet_dict['input_image'] = cnetimage
+                else:
+                    await i.send("Invalid image. Please attach a valid image.",ephemeral=True)
+                    return
+                if cnet_map:
+                    if cnet_map.value == "no_map":
+                        controlnet_dict['module'] = selected_cnet_option.get('module')
+                    if cnet_map.value == "map":
+                        controlnet_dict['module'] = "none"
+                    if cnet_map.value == "invert_map":
+                        controlnet_dict['module'] = "invert (from white bg & black line)"
+                    message_content += f", Module: {controlnet_dict['module']}"
+                    message_content += f", Map Input: {cnet_map.value}"
+                else:
+                    message_content += f", Module: {controlnet_dict['module']}"
 
-    await i.send(message_content)
+                if (cnet_model and not cnet_input) or (cnet_input and not cnet_model):
+                    await i.send("ControlNet feature requires **both** selecting a model (cnet_model) and attaching an image (cnet_input).",ephemeral=True)
+                    return
 
-    await pic(
-        i,
-        text,
-        image_prompt=pos_style_prompt,
-        neg_prompt=neg_style_prompt,
-        size=size_dict if size_dict else None,
-        face_swap=faceswapimg if face_swap else None,
-        controlnet=controlnet_dict if controlnet_dict else None)
+        await i.send(message_content)
+
+        await pic(
+            i,
+            text,
+            image_prompt=pos_style_prompt,
+            neg_prompt=neg_style_prompt,
+            size=size_dict if size_dict else None,
+            face_swap=faceswapimg if face_swap else None,
+            controlnet=controlnet_dict if controlnet_dict else None)
+    except Exception as e:
+        print(f"An error occurred: {e}")
+    busy_drawing = False
 
 #----END IMAGE PROCESSING----#
 
