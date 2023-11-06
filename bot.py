@@ -563,7 +563,7 @@ def chatbot_wrapper_wrapper(user_input, save_history):
 async def llm_gen(i, queues, save_history):
     global blocking
     global reply_count
-
+    previous_user_id = None
     while len(queues) > 0:
         blocking = True
         reply_count += 1
@@ -571,6 +571,12 @@ async def llm_gen(i, queues, save_history):
         mention = list(user_input.keys())[0]
         user_input = user_input[mention]
         last_resp = chatbot_wrapper_wrapper(user_input, save_history)
+        if len(queues) >= 1:
+            next_in_queue = queues[0]
+            next_mention = list(next_in_queue.keys())[0]
+            if mention != previous_user_id or mention != next_mention:
+                last_resp = f"@{mention} " + last_resp
+        previous_user_id = mention  # Update the current user ID for the next iteration
         logging.info("reply sent: \"" + mention + ": {'text': '" + user_input["text"] + "', 'response': '" + last_resp + "'}\"")
         await send_long_message(i.channel, last_resp)
         # if bot_args.limit_history is not None and len(user_input['state']['history']['visible']) > bot_args.limit_history:
