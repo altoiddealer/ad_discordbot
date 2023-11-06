@@ -984,6 +984,18 @@ async def cont(i):
 
 async def process_image_gen(payload, picture_frame, i):
     try:
+        censor_mode = None
+        do_censor = False
+        if config.sd['nsfw_censoring']['enabled']:
+            censor_mode = config.sd['nsfw_censoring']['mode'] 
+            triggers = config.sd['nsfw_censoring']['triggers']
+            if any(trigger in payload['prompt'].lower() for trigger in triggers):
+                do_censor = True
+                if censor_mode == 1:
+                    info_embed.title = "Image prompt was flagged as inappropriate."
+                    await i.send("Image prompt was flagged as inappropriate.")
+                    await picture_frame.delete()
+                    return
         images = await a1111_txt2img(payload, picture_frame)
         if not images:
             info_embed.title = "No images generated"
@@ -994,8 +1006,8 @@ async def process_image_gen(payload, picture_frame, i):
             # Ensure the output directory exists
             output_dir = 'ad_discordbot/sd_outputs/'
             os.makedirs(output_dir, exist_ok=True)
-            # Send all images to the channel
-            image_files = [discord.File(f'temp_img_{idx}.png') for idx in range(len(images))]
+            # If the censor mode is 0 (blur), prefix the image file with "SPOILER_"
+            image_files = [discord.File(f'temp_img_{idx}.png', filename=f'SPOILER_temp_img_{idx}.png') if do_censor and censor_mode == 0 else discord.File(f'temp_img_{idx}.png') for idx in range(len(images))]
             await i.channel.send(files=image_files)
             # Save the image at index 0 with the date/time naming convention
             os.rename(f'temp_img_0.png', f'{output_dir}/{datetime.now().strftime("%Y-%m-%d_%H-%M-%S")}_0.png')

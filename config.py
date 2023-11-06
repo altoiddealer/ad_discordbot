@@ -18,9 +18,16 @@ discord = {
 
 sd = {
     'A1111': "http://127.0.0.1:7860",   # Default URL for A1111 API. Adjust if you have issues connecting.
-    'extensions': {                     # Only set extensions as True if they are installed AND active in your A1111.
+    # Bot has integrations with the following extensions. **Only enable them if they are installed AND active in A1111.**
+    'extensions': {
         'controlnet_enabled': False,    # Requires: sd-webui-controlnet AND configuring ad_discordbot/dict_cmdoptions.yaml
         'reactor_enabled': False        # Requires: sd-webui-reactor
+    },
+    # Feature to compare the image prompt to defined trigger phrases and determine if image should be censored
+    'nsfw_censoring': {
+        'enabled': False,
+        'mode': 0,   # 0 = blur image / 1 = block image from being generated
+        'triggers': ['nude', 'erotic']
     }
 }
 
