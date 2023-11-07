@@ -1679,7 +1679,7 @@ async def guess_imgmodel_res(active_settings, selected_imgmodel_filename):
         matched_preset = None
         for preset in presets:
             if preset['max_filesize'] > file_size_gb:
-                matched_preset = preset
+                matched_preset = dict(preset)
                 del matched_preset['max_filesize']
                 break
         if matched_preset:
