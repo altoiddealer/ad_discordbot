@@ -675,7 +675,7 @@ async def on_ready():
 
         for source in sources:
             try:
-                _, _, _, _, context, _ = load_character(source, '', '')
+                _, _, _, _, context, _, _ = load_character(source, '', '')
                 if context:
                     client.llm_context = context
                     break  # Character loaded successfully, exit the loop
