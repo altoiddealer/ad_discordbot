@@ -421,7 +421,7 @@ async def change_profile(i, character):
     try:
         # Load the new character's information
         new_char = load_character(character, '', '', instruct=False)
-        name1, name2, picture, greeting, context, _ = new_char
+        name1, name2, picture, greeting, context, _, _ = new_char
         i.bot.llm_context = context
 
         if change_name and i.bot.user.display_name != name2:
