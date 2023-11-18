@@ -1840,6 +1840,7 @@ class LLMUserInputs():
             "seed": -1.0,
             "temperature": 0.7,
             "top_p": 0.1,
+            "min_p": 0.0,
             "top_k": 40,
             "tfs": 0,
             "top_a": 0,
