@@ -599,12 +599,13 @@ async def auto_select_imgmodel(current_imgmodel_name, imgmodels, imgmodel_names,
                     imgmodels.remove(matched_imgmodel)
             selected_imgmodel = random.choice(imgmodels)
         elif mode == 'cycle':
-            if current_imgmodel_name:
+            if current_imgmodel_name in imgmodel_names:
                 current_index = imgmodel_names.index(current_imgmodel_name)
                 next_index = (current_index + 1) % len(imgmodel_names)  # Cycle to the beginning if at the end
                 selected_imgmodel = imgmodels[next_index]
             else:
                 selected_imgmodel = random.choice(imgmodels) # If no image model set yet, select randomly
+                print("The previous imgmodel name was not matched in list of fetched imgmodels, so cannot 'cycle'. New imgmodel was instead picked at random.")
         return selected_imgmodel
     except Exception as e:
         print("Error automatically selecting image model:", e)
@@ -617,7 +618,16 @@ async def auto_update_imgmodel_task(mode='random'):
         await asyncio.sleep(duration)
         try: # Collect and filter imgmodels
             imgmodels, current_imgmodel_name = await fetch_imgmodels()
-            imgmodels, imgmodel_names = await filter_imgmodels(imgmodels)
+            print("imgmodels, current_imgmodel_name", imgmodels, current_imgmodel_name)
+            imgmodels = await filter_imgmodels(imgmodels)
+            print("imgmodels 1", imgmodels)
+            imgmodel_names = [imgmodel.get('imgmodel_name', imgmodel.get('sd_model_checkpoint', None)) for imgmodel in imgmodels]
+            print("imgmodel_names", imgmodel_names)
+            # Update 'model_name' keys in A1111 fetched list to ensure uniform naming with API and .yaml methods. This is held off until now to resolve conflict in filtering step.
+            for imgmodel in imgmodels:
+                if 'model_name' in imgmodel:
+                    imgmodel['imgmodel_name'] = imgmodel.pop('model_name')
+            print("imgmodels 2", imgmodels)
             # Select an imgmodel automatically
             selected_imgmodel = await auto_select_imgmodel(current_imgmodel_name, imgmodels, imgmodel_names, mode)
             ## Update imgmodel
@@ -649,7 +659,7 @@ async def auto_update_imgmodel_task(mode='random'):
                 print(f"Updated imgmodel settings to: {selected_imgmodel_name}")
         except Exception as e:
             print(f"Error automatically updating image model: {e}")
-      #  await asyncio.sleep(duration)
+        #await asyncio.sleep(duration)
 
 imgmodel_update_task = None # Global variable allows process to be cancelled and restarted (reset sleep timer)
 
@@ -1641,19 +1651,21 @@ async def filter_imgmodels(imgmodels):
                     and (not exclude_list or not any(re.search(re.escape(exclude_text), imgmodel.get('imgmodel_name', '') + imgmodel.get('sd_model_checkpoint', ''), re.IGNORECASE) for exclude_text in exclude_list))
                 )
             ]
+        return imgmodels
+    except Exception as e:
+        print("Error filtering image model list:", e)
+
+# Reduce imgmodel list to discord limitation of 25 menu items for /imgmodel command
+async def limit_imgmodels(imgmodels):
+    try:
         total_models = len(imgmodels)
         if total_models > 25:
             omitted_models = total_models - 25
             print(f"Due to Discord limitations, only the first 25 models can be listed ({omitted_models} omitted).")
             imgmodels = imgmodels[:25]
-        imgmodel_names = [imgmodel.get('imgmodel_name', imgmodel.get('sd_model_checkpoint', None)) for imgmodel in imgmodels]
-        # Update 'model_name' keys in A1111 fetched list to be uniform with .yaml method. This is held off until now to resolve conflict in filtering step.
-        for imgmodel in imgmodels:
-            if 'model_name' in imgmodel:
-                imgmodel['imgmodel_name'] = imgmodel.pop('model_name')
-        return imgmodels, imgmodel_names
+        return imgmodels
     except Exception as e:
-        print("Error filtering image model list:", e)
+        print("Error limiting image model list:", e)
 
 # Update imgloras at same time as imgmodel, as configured
 async def change_imgloras(active_settings, imglora_name):
@@ -1819,7 +1831,12 @@ class ImgModelDropdown(discord.ui.Select):
 async def imgmodel(i):
     try: # Collect and filter imgmodel data
         imgmodels, _ = await fetch_imgmodels()
-        imgmodels, _ = await filter_imgmodels(imgmodels)
+        imgmodels = await filter_imgmodels(imgmodels)
+        imgmodels = await limit_imgmodels(imgmodels)
+        # Update 'model_name' keys in A1111 fetched list to ensure uniform naming with API and .yaml methods. This is held off until now to resolve conflict in filtering step.
+        for imgmodel in imgmodels:
+            if 'model_name' in imgmodel:
+                imgmodel['imgmodel_name'] = imgmodel.pop('model_name')
         view = discord.ui.View()
         view.add_item(ImgModelDropdown(imgmodels))
         await i.send("Choose an imgmodel:", view=view, ephemeral=True)
