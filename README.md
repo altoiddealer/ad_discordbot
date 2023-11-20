@@ -1,4 +1,6 @@
-**11/20/2023: Big update - "imgloras" are now "imgtags". If you manually apply updates to your existing config.py, dict .yaml files, etc, please carefully compare the changes.**
+**11/20/2023: Big update - "imgloras" are now "imgtags".
+
+If you manually apply updates to your existing config.py, dict .yaml files, etc, please carefully [compare the changes](https://github.com/altoiddealer/ad_discordbot/commit/96ff8e6698e98b25cd00837f529278275ecb6c51).**
 
 
 # altoiddealer's Discord Bot
