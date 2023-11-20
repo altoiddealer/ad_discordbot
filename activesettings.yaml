@@ -10,8 +10,8 @@ behavior:
   reply_to_itself: 0.0
   reply_with_image: 0.0
   time_offset: 0.0
-imglora:
-  imglora_name: ''
+imgtag:
+  imgtag_name: ''
   negative_prompt_prefix: ''
   positive_prompt_prefix: ''
   positive_prompt_suffix: ''

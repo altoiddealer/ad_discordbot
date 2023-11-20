@@ -22,6 +22,14 @@ sd = {
     'extensions': {
         'controlnet_enabled': False,    # Requires: sd-webui-controlnet AND configuring ad_discordbot/dict_cmdoptions.yaml
         'reactor_enabled': False        # Requires: sd-webui-reactor
+        'lrctl': {                     # Requires: sd-webui-loractl (https://github.com/cheald/sd-webui-loractl)
+            'enabled': False,   # This extension enhances LORA processing by allowing adjustable weights during image generation. Weight is scaled linearly between step definitions.
+            'min_loras': 2,     # Minimum number of loras in the prompt to trigger the following weight scaling definitions.
+            'lora_1_scaling': '1.0@0,0.5@0.5',  # format is (% of existing lora weight)@(step percent),(more step definitions). These are not static weights- these are multiplied by the existing LORA weight. '1.0@0' = begin generation with existing LORA weight.
+            'lora_2_scaling': '0.5@0,1.0@0.5',  # You can define as many steps as you want. ex1: '0.5@0' would just cut the LORA weight in half. ex2: '0.0@0,1.0@0.5,0.0@1.0' would look like a pyramid on the graph.
+            # More scaling definitions can be added ex: 'lora_3_scaling' etc
+            'additional_loras_scaling': '0.4@0.0,0.8@0.5'   # Applies to LORAs when there are more than specifically defined. If 4 loras are found in prompt, but only defined up to lora_2_scaling, then the last 2 LORAs would be scaled by this definition.
+        }
     },
     # Feature to compare the image prompt to defined trigger phrases and determine if image should be censored
     'nsfw_censoring': {
@@ -48,10 +56,10 @@ imgmodels = {
         'presets': [                # Defininitions for if 'guess_model_res' = True.  Add presets as desired, sorted in ascending order.
             {'max_filesize': 6.0,                               # 'max_filesize' expressed in GB.
                 'width': 512, 'height': 512, 'enable_hr': True, # Any defined 'payload' options will be updated.
-                'imglora_name': 'SD15 Loras'},                  # If you specify an imglora_name from 'dict_imgloras.yaml', those will also be swapped in.
+                'imgtag_name': 'SD15 ImgTags'},                  # If you specify an imgtag_name from 'dict_imgtags.yaml', those will also be swapped in.
             {'max_filesize': 100.0,
                 'width': 1024, 'height': 1024, 'enable_hr': False, 
-                'imglora_name': 'SDXL Loras'}
+                'imgtag_name': 'SDXL ImgTags'}
         ]
     },
 
@@ -85,7 +93,7 @@ imgmodels = {
 # Feature to modify settings / prompts from trigger phrases
 imgprompt_settings = {
     'trigger_search_mode': 'userllm',   # What to compare triggers against. 'user' = user prompt only / 'llm' = bot reply only / 'userllm' = search all text
-    'insert_loras_in_prompt': True,     # ImgLora handling. True = insert positive_prompt after matches found in prompt / False = append all to end of prompt.
+    'insert_imgtags_in_prompt': True,     # ImgTag handling. True = insert positive_prompt after matches found in prompt / False = append all to end of prompt.
 
     # Trigger an image response with words/phrases.
     'trigger_img_gen_by_phrase': {

@@ -5,7 +5,7 @@
 # You can safely ommit options (omitted items will not delete default values)
 - imgmodel_name: (SDXL) Base Model v1.0, 0.9 VAE
   imgmodel_url: 'https://huggingface.co/stabilityai/stable-diffusion-xl-base-0.9' # For announcements
-  imgmodel_loras: ''  # If you reference an imgmodel_name from dict_imgloras.yaml, they will sync with imgmodel changes. Ex: imgmodel_loras: SDXL Loras
+  imgmodel_imgtags: ''  # If you reference an imgmodel_name from dict_imgtags.yaml, they will sync with imgmodel changes. Ex: imgmodel_imgtags: SDXL ImgTags
   override_settings:
     sd_model_checkpoint: "sdxl\\sd_xl_base_1.0_0.9vae.safetensors [e6bb9ea85b]"
     sd_vae: "Automatic"
