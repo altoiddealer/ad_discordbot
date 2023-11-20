@@ -1,6 +1,5 @@
-**10/10/2023: Important update to Installation instructions.**
+**11/20/2023: Big update - "imgloras" are now "imgtags". If you manually apply updates to your existing config.py, dict .yaml files, etc, please carefully compare the changes.**
 
-**10/15/2023: OpenCV-Python no longer required.** For existing installs you may `pip uninstall opencv-python`
 
 # altoiddealer's Discord Bot
 
