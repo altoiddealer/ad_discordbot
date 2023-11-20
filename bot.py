@@ -1187,10 +1187,14 @@ def apply_presets(payload, presets, i, text):
             triggers = [t.strip() for t in preset['trigger'].split(',')]
             for trigger in triggers:
                 trigger_regex = r"\b{}\b".format(re.escape(trigger.lower()))
-                if re.search(trigger_regex, search_text.lower()):
-                    matched_presets.append(preset)
+                match = re.search(trigger_regex, search_text.lower())
+                if match:
+                    matched_presets.append((preset, match.start()))
                     break
         if matched_presets:
+            # Sorts the matched presets based on their position index in search_text when matched
+            matched_presets.sort(key=lambda x: x[1])
+            matched_presets = [preset for preset, _ in matched_presets]
             # Collect 'trump' parameters for each matched preset
             trump_params = []
             for preset in matched_presets:
