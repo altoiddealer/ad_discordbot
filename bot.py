@@ -618,16 +618,12 @@ async def auto_update_imgmodel_task(mode='random'):
         await asyncio.sleep(duration)
         try: # Collect and filter imgmodels
             imgmodels, current_imgmodel_name = await fetch_imgmodels()
-            print("imgmodels, current_imgmodel_name", imgmodels, current_imgmodel_name)
             imgmodels = await filter_imgmodels(imgmodels)
-            print("imgmodels 1", imgmodels)
             imgmodel_names = [imgmodel.get('imgmodel_name', imgmodel.get('sd_model_checkpoint', None)) for imgmodel in imgmodels]
-            print("imgmodel_names", imgmodel_names)
             # Update 'model_name' keys in A1111 fetched list to ensure uniform naming with API and .yaml methods. This is held off until now to resolve conflict in filtering step.
             for imgmodel in imgmodels:
                 if 'model_name' in imgmodel:
                     imgmodel['imgmodel_name'] = imgmodel.pop('model_name')
-            print("imgmodels 2", imgmodels)
             # Select an imgmodel automatically
             selected_imgmodel = await auto_select_imgmodel(current_imgmodel_name, imgmodels, imgmodel_names, mode)
             ## Update imgmodel
