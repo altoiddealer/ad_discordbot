@@ -36,7 +36,14 @@ sd = {
         'enabled': False,
         'mode': 0,   # 0 = blur image / 1 = block image from being generated
         'triggers': ['nude', 'erotic']
-    }
+    },
+    # Feature to add randomness to payload parameters. For each image request, a random value from each range will be merged with your current settings (activesettings.yaml).
+    'param_variances': {
+        'enabled': False,
+        'presets': [
+            {'cfg_scale': (-2,2), 'steps': (0,10), 'hr_scale': (-0.15,0.15)}
+        ]
+    } 
 }
 
 # Slips in a message about the current time before your context.

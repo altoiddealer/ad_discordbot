@@ -1086,6 +1086,38 @@ def process_faces(payload, text):
             payload.update(preset_payload)  # Update the payload with each preset's settings
     return payload
 
+def random_value_from_range(value_range):
+    if isinstance(value_range, tuple) and len(value_range) == 2:
+        start, end = value_range
+        if isinstance(start, (int, float)) and isinstance(end, (int, float)):
+            num_digits = max(len(str(start).split('.')[-1]), len(str(end).split('.')[-1]))
+            value = random.uniform(start, end) if isinstance(start, float) or isinstance(end, float) else random.randint(start, end)
+            value = round(value, num_digits)
+            return value
+    print(f'Invalid range "{value_range}". Defaulting to "0".')
+    return 0
+
+def process_param_variances(payload, presets_list):
+    processed_variances = []
+    for presets in presets_list:
+        processed_presets = {}
+        for key, value in presets.items():
+            if isinstance(value, dict):
+                processed_presets[key] = process_param_variances([value])
+            elif isinstance(value, (list, tuple)):
+                if isinstance(value, tuple):
+                    processed_presets[key] = random_value_from_range(value)
+                elif isinstance(value, (int, float)):
+                    processed_presets[key] = value
+                else:
+                    print(f'Invalid params "{key}", "{value}".')
+        processed_variances.append(processed_presets)
+    for processed_params in processed_variances:
+        for key, value in processed_params.items():
+            if key in payload:
+                payload[key] += value
+    return payload
+
 def process_payload_mods(payload, text):
     # Process triggered mods
     trigger_params = config.imgprompt_settings['trigger_img_params_by_phrase']
@@ -1254,6 +1286,9 @@ async def pic(i, text, image_prompt, neg_prompt=None, size=None, face_swap=None,
             payload['override_settings'] = activeoverride
             # Process payload triggers
             process_payload_mods(payload, text)
+            # Process payload param variances
+            if config.sd['param_variances']['enabled']:
+                payload = process_param_variances(payload, config.sd['param_variances']['presets'])
             # Process face swap triggers
             process_faces(payload, text)
             if size: payload.update(size)
