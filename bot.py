@@ -838,7 +838,7 @@ def determine_date():
             hours = (current_time - days) * 24
             current_time = datetime.now() + timedelta(days=days, hours=hours)
         else:
-            return None     
+            return None
         current_time = current_time.strftime("%Y-%m-%d %H:%M:%S")
     return current_time
 
@@ -924,7 +924,7 @@ async def on_message(i):
     save_history=True
     user_input, llm_prompt = process_dynamic_context(user_input, text, llm_prompt, save_history)
     # apply datetime to prompt
-    current_time = determine_date
+    current_time = determine_date()
     # save a global copy of text/llm_prompt for /regen cmd
     retain_last_user_message(text, llm_prompt)
     if user_asks_for_image(i, text):
