@@ -21,7 +21,7 @@ sd = {
     # Bot has integrations with the following extensions. **Only enable them if they are installed AND active in A1111.**
     'extensions': {
         'controlnet_enabled': False,    # Requires: sd-webui-controlnet AND configuring ad_discordbot/dict_cmdoptions.yaml
-        'reactor_enabled': False        # Requires: sd-webui-reactor
+        'reactor_enabled': False,        # Requires: sd-webui-reactor
         'lrctl': {                     # Requires: sd-webui-loractl (https://github.com/cheald/sd-webui-loractl)
             'enabled': False,   # This extension enhances LORA processing by allowing adjustable weights during image generation. Weight is scaled linearly between step definitions.
             'min_loras': 2,     # Minimum number of loras in the prompt to trigger the following weight scaling definitions.
