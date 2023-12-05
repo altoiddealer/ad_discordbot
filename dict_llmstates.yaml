@@ -9,6 +9,7 @@
     max_tokens_second: 0
     seed: -1.0
     temperature: 0.98
+    temperature_last: false
     top_p: 0.37
     top_k: 100
     tfs: 0
@@ -16,6 +17,8 @@
     typical_p: 1
     epsilon_cutoff: 0
     eta_cutoff: 0
+    frequency_penalty: 0
+    presence_penalty: 0
     repetition_penalty: 1.18
     repetition_penalty_range: 0
     encoder_repetition_penalty: 1
