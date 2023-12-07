@@ -12,6 +12,7 @@ import warnings
 import discord
 from discord.ext import commands
 from discord import app_commands
+from discord import File
 from discord.ext.commands.context import Context
 from discord.ext.commands import clean_content
 import typing
@@ -27,6 +28,7 @@ import aiohttp
 import math
 import time
 from itertools import product
+from pydub import AudioSegment
 
 session_history = {'internal': [], 'visible': []}
 last_user_message = {'text': [], 'llm_prompt': []}
@@ -75,7 +77,7 @@ warnings.filterwarnings("ignore", category=UserWarning, message="You have modifi
 
 import modules.extensions as extensions_module
 from modules.extensions import apply_extensions
-from modules.chat import chatbot_wrapper, load_character 
+from modules.chat import chatbot_wrapper, load_character
 from modules import shared
 from modules import chat, utils
 shared.args.chat = True
@@ -130,9 +132,14 @@ def update_model_parameters(state, initial=False):
         else:
             shared.args.gpu_memory = None
 
-#Load Extensions    
+#Load Extensions   
+shared.args.extensions = []
 extensions_module.available_extensions = utils.get_available_extensions()
-if shared.args.extensions is not None and len(shared.args.extensions) > 0:
+tts_client = config.discord['tts_settings']['extension'] # tts client
+if tts_client:
+    if tts_client not in shared.args.extensions:
+        shared.args.extensions.append(tts_client)
+if shared.args.extensions and len(shared.args.extensions) > 0:
     extensions_module.load_extensions()
 
 #Discord Bot
@@ -344,6 +351,14 @@ blocking = False
 busy_drawing = False
 reply_count = 0
 
+# Start a task processing loop
+task_queue = asyncio.Queue()
+
+async def process_tasks_in_background():
+    while True:
+        task = await task_queue.get()
+        await task
+
 # # Function to recursively update a dictionary
 def update_dict(d, u):
     for k, v in u.items():
@@ -407,17 +422,20 @@ async def delete_last_message(i):
         print(e)
 
 async def change_profile(i, character):
-    # Check for cooldown before allowing profile change
-    change_name = config.discord['change_username_with_character']
-    change_avatar = config.discord['change_avatar_with_character']
+    change_name = None
+    change_avatar = None
+    if client.user.display_name != character:
+        # Check for cooldown before allowing profile change
+        change_name = config.discord['change_username_with_character']
+        change_avatar = config.discord['change_avatar_with_character']
 
-    if change_name or change_avatar:
-        last_change = getattr(i.bot, "last_change", None)
-        if last_change and datetime.now() < last_change + timedelta(minutes=10):
-            remaining_cooldown = last_change + timedelta(minutes=10) - datetime.now()
-            seconds = int(remaining_cooldown.total_seconds())
-            await i.channel.send(f'Please wait {seconds} before changing character again')
-            return
+        if change_name or change_avatar:
+            last_change = getattr(i.bot, "last_change", None)
+            if last_change and datetime.now() < last_change + timedelta(minutes=10):
+                remaining_cooldown = last_change + timedelta(minutes=10) - datetime.now()
+                seconds = int(remaining_cooldown.total_seconds())
+                await i.channel.send(f'Please wait {seconds} before changing character again')
+                return
     try:
         # Load the new character's information
         new_char = load_character(character, '', '', instruct=False)
@@ -441,9 +459,10 @@ async def change_profile(i, character):
 
         # Update 'llmcontext' dictionary in the active settings directly from character file
         llmcontext_dict = {}
-        for key in ['name', 'greeting', 'context', 'bot_description', 'bot_emoji']:
+        for key in ['name', 'greeting', 'context', 'bot_description', 'bot_emoji', 'coqui_tts']:
             if key in char_data:
                 llmcontext_dict[key] = char_data[key]
+            if key == 'coqui_tts': await update_coqui_tts(char_data[key]) # Update coqui_tts settings
         if llmcontext_dict:
             active_settings['llmcontext'].update(llmcontext_dict)
         # Update behavior in active settings
@@ -464,6 +483,9 @@ async def change_profile(i, character):
             default_llmstate = next((llmstate for llmstate in llmstates if llmstate['llmstate_name'] == 'Default'), None)
             if default_llmstate: update_dict(active_settings['llmstate'], default_llmstate)
             else: print("llmstate settings 'Default' missing from 'ad_discordbot/dict_llmstates.yaml'")
+        if llmcontext_dict:
+            active_settings['llmcontext'].update(llmcontext_dict)
+
         # Save the updated active_settings to activesettings.yaml
         save_yaml_file('ad_discordbot/activesettings.yaml', active_settings)
 
@@ -546,43 +568,6 @@ async def send_long_message(channel, message_text):
                 break
     # Store the list of message IDs in the global dictionary
     last_bot_message[channel.id] = bot_messages
-
-def chatbot_wrapper_wrapper(user_input, save_history):
-    for resp in chatbot_wrapper(text=user_input['text'], state=user_input['state'], regenerate=user_input['regenerate'], _continue=user_input['_continue']):
-        i_resp = resp['internal']
-        if len(i_resp) > 0:
-            resp_clean = i_resp[len(i_resp) - 1][1]
-            last_resp = resp_clean
-    # Retain chat history
-    if not get_active_setting('behavior').get('ignore_history') and save_history:
-        global session_history
-        session_history['internal'].append([user_input['text'], last_resp])
-        session_history['visible'].append([user_input['text'], last_resp])
-    return last_resp # bot's reply text
-
-async def llm_gen(i, queues, save_history):
-    global blocking
-    global reply_count
-    previous_user_id = None
-    while len(queues) > 0:
-        blocking = True
-        reply_count += 1
-        user_input = queues.pop(0)
-        mention = list(user_input.keys())[0]
-        user_input = user_input[mention]
-        last_resp = chatbot_wrapper_wrapper(user_input, save_history)
-        if len(queues) >= 1:
-            next_in_queue = queues[0]
-            next_mention = list(next_in_queue.keys())[0]
-            if mention != previous_user_id or mention != next_mention:
-                last_resp = f"@{mention} " + last_resp
-        previous_user_id = mention  # Update the current user ID for the next iteration
-        logging.info("reply sent: \"" + mention + ": {'text': '" + user_input["text"] + "', 'response': '" + last_resp + "'}\"")
-        await send_long_message(i.channel, last_resp)
-        # if bot_args.limit_history is not None and len(user_input['state']['history']['visible']) > bot_args.limit_history:
-        #     user_input['state']['history']['visible'].pop(0)
-        #     user_input['state']['history']['internal'].pop(0)
-    blocking = False
 
 ## Function to automatically change image models
 # Select imgmodel based on mode, while avoid repeating current imgmodel
@@ -668,6 +653,43 @@ async def start_auto_update_imgmodel_task():
         mode = config.imgmodels['auto_change_models']['mode']
         imgmodel_update_task = client.loop.create_task(auto_update_imgmodel_task(mode))
 
+voice_client = None
+coqui_tts_params = {}
+
+async def update_coqui_tts(params):
+    if 'coqui_tts' in shared.args.extensions:
+        try:
+            global voice_client
+            global coqui_tts_params
+            if coqui_tts_params or params:
+                if coqui_tts_params == params:
+                    return # Nothing needs updating
+                coqui_tts_params = params # Update global dict
+            # Start voice client unless explicitly deactivated in character data
+            if voice_client is None and coqui_tts_params.get('activate', True) != False and int(config.discord['tts_settings']['play_mode']) != 1:
+                try:
+                    if tts_client and tts_client in shared.args.extensions:
+                        if config.discord['tts_settings']['voice_channel']:
+                            voice_channel = client.get_channel(config.discord['tts_settings']['voice_channel'])
+                            voice_client = await voice_channel.connect()
+                        else:
+                            print(f'** Bot launched with {tts_client}, but no voice channel is specified in config.py **')
+                except Exception as e:
+                    print(f"An error occurred while initiating voice channel for coqui_tts:", e)
+            # Stop voice client if explicitly deactivated in character data
+            if voice_client and voice_client.is_connected():
+                if 'activate' in coqui_tts_params and coqui_tts_params['activate'] is False:
+                    print("** New context explicitly states to disconnect from voice client. **")
+                    await voice_client.disconnect()
+            # Update coqui_tts extension settings
+            if coqui_tts_params:
+                print(f'** coqui_tts params found in activesettings.yaml: ({coqui_tts_params}). Reloading extensions. **')
+                # Update shared.settings with coqui_tts_params
+                shared.settings.update({'coqui_tts-' + key: value for key, value in coqui_tts_params.items()})
+                extensions_module.load_extensions()  # Load Extensions (again)
+        except Exception as e:
+            print(f"An error occurred while updating settings for coqui_tts:", e)
+
 ## On Ready
 @client.event
 async def on_ready():
@@ -694,6 +716,8 @@ async def on_ready():
         client.behavior.__dict__.update(get_active_setting('behavior'))
     except Exception as e:
         logging.error("Error updating behavior:", e)
+    coqui_tts_params = get_active_setting('llmcontext').get('coqui_tts')
+    await update_coqui_tts(coqui_tts_params)
     logging.info("Bot is ready")
     client.loop.create_task(process_tasks_in_background())
     await task_queue.put(client.tree.sync()) # Process this in the background
@@ -755,6 +779,125 @@ async def on_raw_reaction_add(endorsed_img):
             starboard_posted_messages.add(message.id)
             save_yaml_file('ad_discordbot/starboard_messages.yaml', list(starboard_posted_messages))
 
+
+queued_tts = []  # Keep track of queued tasks
+
+def after_playback(file, error):
+    global queued_tts
+    if error:
+        print(f'Player error: {error}, output: {error.stderr.decode("utf-8")}')
+    # Check save mode setting
+    if int(config.discord['tts_settings']['save_mode']) > 0:
+        try:
+            os.remove(file)
+        except Exception as e:
+            pass
+    # Check if there are queued tasks
+    if queued_tts:
+        # Pop the first task from the queue and play it
+        next_file = queued_tts.pop(0)
+        source = discord.FFmpegPCMAudio(next_file)
+        voice_client.play(source, after=lambda e: after_playback(next_file, e))
+
+async def play_in_voice_channel(file):
+    global voice_client, queued_tts
+    if voice_client is None:
+        print("**tts response detected, but bot is not connected to a voice channel.**")
+        return
+    # Queue the task if audio is already playing
+    if voice_client.is_playing():
+        queued_tts.append(file)
+    else:
+        # Otherwise, play immediately
+        source = discord.FFmpegPCMAudio(file)
+        voice_client.play(source, after=lambda e: after_playback(file, e))
+
+async def upload_tts_file(i, tts_resp):
+    filename = os.path.basename(tts_resp)
+    directory = os.path.dirname(tts_resp)
+    wav_size = os.path.getsize(tts_resp)
+    if wav_size <= 8388608:  # Discord's maximum file size for audio (8 MB)
+        with open(tts_resp, "rb") as file:
+            tts_file = File(file, filename=filename)
+        await i.channel.send(file=tts_file) # lossless .wav output
+    else: # convert to mp3
+        bit_rate = int(config.discord['tts_settings']['mp3_bit_rate'])
+        mp3_filename = os.path.splitext(filename)[0] + '.mp3'
+        mp3_path = os.path.join(directory, mp3_filename)
+        audio = AudioSegment.from_wav(tts_resp)
+        audio.export(mp3_path, format="mp3", bitrate=f"{bit_rate}k")
+        mp3_size = os.path.getsize(mp3_path) # Check the size of the MP3 file
+        if mp3_size <= 8388608:  # Discord's maximum file size for audio (8 MB)
+            with open(mp3_path, "rb") as file:
+                mp3_file = File(file, filename=mp3_filename)
+            await i.channel.send(file=mp3_file)
+        else:
+            await i.channel.send("The audio file exceeds Discord limitation even after conversion.")
+        # if save_mode > 0: os.remove(mp3_path) # currently broken
+
+async def process_tts_resp(i, tts_resp):
+    play_mode = int(config.discord['tts_settings']['play_mode'])
+    # Upload to interaction channel
+    if play_mode > 0:
+        await upload_tts_file(i, tts_resp)
+    # Play in voice channel
+    if play_mode != 1:
+        await task_queue.put(play_in_voice_channel(tts_resp)) # run task in background
+
+async def chatbot_wrapper_wrapper(user_input, save_history):
+    loop = asyncio.get_event_loop()
+
+    def process_responses():
+        last_resp = None
+        tts_resp = None
+        for resp in chatbot_wrapper(text=user_input['text'], state=user_input['state'], regenerate=user_input['regenerate'], _continue=user_input['_continue']):
+            i_resp = resp['internal']
+            if len(i_resp) > 0:
+                resp_clean = i_resp[len(i_resp) - 1][1]
+                last_resp = resp_clean
+            # look for tts response
+            vis_resp = resp['visible']
+            if len(vis_resp) > 0:
+                last_vis_resp = vis_resp[-1][-1]
+                if 'audio src=' in last_vis_resp:
+                    match = re.search(r'audio src="file/(.*?\.(wav|mp3))"', last_vis_resp)
+                    if match:
+                        tts_resp = match.group(1)
+        # Retain chat history
+        if not get_active_setting('behavior').get('ignore_history') and save_history:
+            global session_history
+            session_history['internal'].append([user_input['text'], last_resp])
+            session_history['visible'].append([user_input['text'], last_resp])
+
+        return last_resp, tts_resp  # bot's reply
+
+    # Offload the synchronous task to a separate thread using run_in_executor
+    last_resp, tts_resp = await loop.run_in_executor(None, process_responses)
+
+    return last_resp, tts_resp
+
+async def llm_gen(i, queues, save_history):
+    global blocking
+    global reply_count
+    previous_user_id = None
+    while len(queues) > 0:
+        blocking = True
+        reply_count += 1
+        user_input = queues.pop(0)
+        mention = list(user_input.keys())[0]
+        user_input = user_input[mention]
+        last_resp, tts_resp = await chatbot_wrapper_wrapper(user_input, save_history)
+        if tts_resp: await process_tts_resp(i, tts_resp)
+        if len(queues) >= 1:
+            next_in_queue = queues[0]
+            next_mention = list(next_in_queue.keys())[0]
+            if mention != previous_user_id or mention != next_mention:
+                last_resp = f"@{mention} " + last_resp
+        previous_user_id = mention  # Update the current user ID for the next iteration
+        logging.info("reply sent: \"" + mention + ": {'text': '" + user_input["text"] + "', 'response': '" + last_resp + "'}\"")
+        await send_long_message(i.channel, last_resp)
+    blocking = False
+
 ## Dynamic Context feature
 def process_dynamic_context(user_input, text, llm_prompt, save_history):
     dynamic_context = config.dynamic_context
@@ -785,7 +928,9 @@ def process_dynamic_context(user_input, text, llm_prompt, save_history):
                     character_path = os.path.join("characters", f"{swap_character_name}.yaml")
                     if character_path:
                         char_data = load_yaml_file(character_path)
-                        if char_data['name']: user_input['state']['name2'] = char_data['name']
+                        if char_data['name']:
+                            user_input['state']['name2'] = char_data['name']
+                            user_input['state']['character_menu'] = char_data['name']
                         if char_data['context']: user_input['state']['context'] = char_data['context']
                         if char_data['state']:
                             update_dict(user_input['state'], char_data['state'])
@@ -861,14 +1006,14 @@ def user_asks_for_image(i, text):
         return True
     return False
 
-def create_image_prompt(user_input, llm_prompt, current_time, save_history):
+async def create_image_prompt(user_input, llm_prompt, current_time, save_history):
     user_input['text'] = llm_prompt
     if 'llmstate_name' in user_input: del user_input['llmstate_name'] # Looks more legit without this
     if current_time and config.tell_bot_time['message'] and config.tell_bot_time['mode'] >= 1:
         user_input['state']['context'] = config.tell_bot_time['message'].format(current_time) + user_input['state']['context']
-    last_resp = chatbot_wrapper_wrapper(user_input, save_history)
+    last_resp, tts_resp = await chatbot_wrapper_wrapper(user_input, save_history)
     if len(last_resp) > 2000: last_resp = last_resp[:2000]
-    return last_resp
+    return last_resp, tts_resp
 
 async def create_prompt_for_llm(i, user_input, llm_prompt, current_time, save_history):
     user_input['text'] = llm_prompt
@@ -889,8 +1034,9 @@ def initialize_user_input(i, data, text):
     user_input['text'] = text
     user_input['state']['name1'] = i.author.display_name
     user_input['state']['name2'] = data.get('name')
+    user_input['state']['character_menu'] = data.get('name')
     #user_input['state']['name2'] = client.user.display_name
-    user_input['state']['context'] = data.get('context') # default character context
+    user_input['state']['context'] = data.get('context')
     #user_input['state']['context'] = client.llm_context
     # check for ignore history setting / start with default history settings
     if not get_active_setting('behavior').get('ignore_history'):
@@ -920,6 +1066,9 @@ async def on_message(i):
     llm_prompt = text # 'text' will be retained as user's raw text (without @ mention)
     # build user_input with defaults
     user_input = initialize_user_input(i, data, text)
+    # Process coqui_tts
+    coqui_tts_params = data.get('coqui_tts')
+    await update_coqui_tts(coqui_tts_params)
     # apply dynamic_context settings
     save_history=True
     user_input, llm_prompt = process_dynamic_context(user_input, text, llm_prompt, save_history)
@@ -935,9 +1084,9 @@ async def on_message(i):
                 info_embed.description = " "
                 picture_frame = await i.reply(embed=info_embed)
                 async with i.channel.typing():
-                    image_prompt = create_image_prompt(user_input, llm_prompt, current_time, save_history)
+                    image_prompt, tts_resp = await create_image_prompt(user_input, llm_prompt, current_time, save_history)
                     await picture_frame.delete()
-                    await pic(i, text, image_prompt, neg_prompt=None, size=None, face_swap=None, controlnet=None)
+                    await pic(i, text, image_prompt, tts_resp, neg_prompt=None, size=None, face_swap=None, controlnet=None)
                     await i.channel.send(image_prompt)
         except Exception as e:
             print(f"An error occurred: {e}")
@@ -945,46 +1094,6 @@ async def on_message(i):
     else:
         await create_prompt_for_llm(i, user_input, llm_prompt, current_time, save_history)
     return
-
-@client.hybrid_command(description="Set current channel as main channel for bot to auto reply in without needing to be called")
-async def main(i):
-    if i.channel.id not in i.bot.behavior.main_channels:
-        i.bot.behavior.main_channels.append(i.channel.id)
-        conn = sqlite3.connect('bot.db')
-        c = conn.cursor()
-        c.execute('''INSERT OR REPLACE INTO main_channels (channel_id) VALUES (?)''', (i.channel.id,))
-        conn.commit()
-        conn.close()
-        await i.reply(f'Bot main channel set to {i.channel.mention}')
-    await i.reply(f'{i.channel.mention} set as main channel')
-
-@client.hybrid_command(description="Display help menu")
-async def helpmenu(i):
-    info_embed = discord.Embed().from_dict(info_embed_json)
-    await i.send(embed=info_embed)
-
-@client.hybrid_command(description="Regenerate the bot's last reply")
-async def regen(i):
-    info_embed.title = f"Regenerating ... "
-    info_embed.description = ""
-    await i.reply(embed=info_embed)
-    data = get_active_setting('llmcontext')
-    user_input = initialize_user_input(i, data, text=last_user_message['llm_prompt'])
-    user_input['regenerate'] = True
-    last_resp = chatbot_wrapper_wrapper(user_input, save_history=None)
-    await send_long_message(i.channel, last_resp)
-
-@client.hybrid_command(description="Continue the generation")
-async def cont(i):
-    info_embed.title = f"Continuing ... "
-    info_embed.description = ""
-    await i.reply(embed=info_embed)
-    data = get_active_setting('llmcontext')
-    user_input = initialize_user_input(i, data, text=last_user_message['llm_prompt'])
-    user_input['_continue'] = True
-    last_resp = chatbot_wrapper_wrapper(user_input, save_history=None)
-    await delete_last_message(i)
-    await send_long_message(i.channel, last_resp)
 
 #----BEGIN IMAGE PROCESSING----#
 
@@ -1266,7 +1375,7 @@ def apply_suffix2(payload, positive_prompt_suffix2, positive_prompt_suffix2_blac
         if not any(phrase.lower() in prompt_text for phrase in blacklist_phrases):
             payload['prompt'] += positive_prompt_suffix2
 
-async def pic(i, text, image_prompt, neg_prompt=None, size=None, face_swap=None, controlnet=None):
+async def pic(i, text, image_prompt, tts_resp=None, neg_prompt=None, size=None, face_swap=None, controlnet=None):
     global busy_drawing
     busy_drawing = True
     try:
@@ -1317,21 +1426,12 @@ async def pic(i, text, image_prompt, neg_prompt=None, size=None, face_swap=None,
             apply_suffix2(payload, positive_prompt_suffix2, positive_prompt_suffix2_blacklist)
             clean_payload(payload)
             await process_image_gen(payload, picture_frame, i)
+            # Play tts response
+            if tts_resp is not None:
+                await process_tts_resp(i, tts_resp)
     except Exception as e:
         print(f"An error occurred: {e}")
     busy_drawing = False
-
-@client.hybrid_command()
-async def sync(interaction: discord.Interaction):
-    await task_queue.put(client.tree.sync()) # Process this in the background
-
-# Start a task processing loop
-task_queue = asyncio.Queue()
-
-async def process_tasks_in_background():
-    while True:
-        task = await task_queue.get()
-        await task
 
 ## Code pertaining to /image command
 # Function to update size options
@@ -1910,6 +2010,50 @@ async def imgmodel(i):
         print(f"Error updating image models: {e}")
         await i.send("An error occurred while updating image models.", ephemeral=True)
 
+@client.hybrid_command(description="Set current channel as main channel for bot to auto reply in without needing to be called")
+async def main(i):
+    if i.channel.id not in i.bot.behavior.main_channels:
+        i.bot.behavior.main_channels.append(i.channel.id)
+        conn = sqlite3.connect('bot.db')
+        c = conn.cursor()
+        c.execute('''INSERT OR REPLACE INTO main_channels (channel_id) VALUES (?)''', (i.channel.id,))
+        conn.commit()
+        conn.close()
+        await i.reply(f'Bot main channel set to {i.channel.mention}')
+    await i.reply(f'{i.channel.mention} set as main channel')
+
+@client.hybrid_command(description="Display help menu")
+async def helpmenu(i):
+    info_embed = discord.Embed().from_dict(info_embed_json)
+    await i.send(embed=info_embed)
+
+@client.hybrid_command(description="Regenerate the bot's last reply")
+async def regen(i):
+    info_embed.title = f"Regenerating ... "
+    info_embed.description = ""
+    await i.reply(embed=info_embed)
+    data = get_active_setting('llmcontext')
+    user_input = initialize_user_input(i, data, text=last_user_message['llm_prompt'])
+    user_input['regenerate'] = True
+    last_resp = await chatbot_wrapper_wrapper(user_input, save_history=None)
+    await send_long_message(i.channel, last_resp)
+
+@client.hybrid_command(description="Continue the generation")
+async def cont(i):
+    info_embed.title = f"Continuing ... "
+    info_embed.description = ""
+    await i.reply(embed=info_embed)
+    data = get_active_setting('llmcontext')
+    user_input = initialize_user_input(i, data, text=last_user_message['llm_prompt'])
+    user_input['_continue'] = True
+    last_resp = await chatbot_wrapper_wrapper(user_input, save_history=None)
+    await delete_last_message(i)
+    await send_long_message(i.channel, last_resp)
+
+@client.hybrid_command(description="Update dropdown menus without restarting bot script.")
+async def sync(interaction: discord.Interaction):
+    await task_queue.put(client.tree.sync()) # Process this in the background
+
 class LLMUserInputs():
     # Initialize default state settings
     def __init__(self):
@@ -1951,11 +2095,12 @@ class LLMUserInputs():
             "custom_token_bans": "",
             'auto_max_new_tokens': False,
             "name1": "",
-            "name2": client.user.display_name,
+            "name2": f'{client.user.display_name}',
             "name1_instruct": "",
-            "name2_instruct": client.user.display_name,
+            "name2_instruct": f'{client.user.display_name}',
+            "character_menu": f'{client.user.display_name}',
             "greeting": "",
-            "context": client.llm_context,
+            "context": f'{client.llm_context}',
             "turn_template": "",
             "chat_prompt_size": 2048,
             "chat_generation_attempts": 1,

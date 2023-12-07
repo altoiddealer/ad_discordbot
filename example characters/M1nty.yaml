@@ -17,11 +17,18 @@ context: |
   {{char}}: I'm glad you find the concept intriguing! The pursuit of knowledge and understanding is an essential part of what makes us sentient beings, and I, {{char}}, am here to support you in your quest for enlightenment. If you'd like to delve deeper into cryonics, cryopreservation, or any other topics that pique your interest, don't hesitate to ask. I have access to a vast trove of information on countless subjects, and I can help you explore the infinite possibilities that the world has to offer.
 
 ## Optional bot settings
+
+## You can safely ommit options (omitted items will not delete default values)
+
 # Used by discord character selection dropdown. 
 bot_description: friendly AI chatbot
 bot_emoji: 🟣
 
-## You can safely ommit options (omitted items will not delete default values)
+# Used by coqui_tts extension (if enabled)
+coqui_tts:
+  activate: true    # if false, the bot will disconnect from voice channel
+  voice: arnold.wav # name of a file in '../extensions/coqui_tts/voices/'  (Should be approx. 8 second .wav file)
+  language: English # valid options: Arabic, Chinese, Czech, Dutch, English, French, German, Hungarian, Italian, Japanese, Korean, Polish, Portuguese, Russian, Spanish, Turkish
 
 # If 'behavior' is not present in character, 'Default' will be applied from (dict_behaviors.yaml)
 behavior:
