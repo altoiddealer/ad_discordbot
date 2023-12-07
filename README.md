@@ -121,6 +121,7 @@ This bot stands apart from many other ones due to a variety of custom features:
 # Getting TTS responses from the bot (**currently coqui_tts only**)
 
 1. **Run the .cmd file** in text-generation-webui directory (**ex: cmd_windows.bat**), and performing the following commands:
+   
    Required for bot to join a discord voice channel:
    ```
    pip install pynacl
