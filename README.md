@@ -141,3 +141,4 @@ This bot stands apart from many other ones due to a variety of custom features:
 
 4. The necessary model file(s) should download on first launch of the bot.  If not, then first launch textgen-webui normally and enable the extension.
 
+5. **Your characters can have their own settings including voices!  See example character M1nty for usage**
