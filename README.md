@@ -121,6 +121,7 @@ This bot stands apart from many other ones due to a variety of custom features:
 # Getting TTS responses from the bot (**currently coqui_tts only**)
 
 1. **Run the .cmd file** in text-generation-webui directory (**ex: cmd_windows.bat**), and performing the following commands:
+   Required for bot to join a discord voice channel:
    ```
    pip install pynacl
    ```
@@ -135,10 +136,10 @@ This bot stands apart from many other ones due to a variety of custom features:
    pip install -r extensions\coqui_tts\requirements.txt
    ```
 
-2. Ensure that your bot has sufficient permissions to use the Voice channel and/or upload files
+3. Ensure that your bot has sufficient permissions to use the Voice channel and/or upload files
 
-3. Configure **config.py** in the section **discord** > **tts_settings**
+4. Configure **config.py** in the section **discord** > **tts_settings**
 
-4. The necessary model file(s) should download on first launch of the bot.  If not, then first launch textgen-webui normally and enable the extension.
+5. The necessary model file(s) should download on first launch of the bot.  If not, then first launch textgen-webui normally and enable the extension.
 
-5. **Your characters can have their own settings including voices!  See example character M1nty for usage**
+6. **Your characters can have their own settings including voices!  See example character M1nty for usage**
