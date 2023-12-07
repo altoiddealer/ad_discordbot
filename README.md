@@ -1,3 +1,4 @@
+**12/7/2023: coqui_tts Extension support now added!**
 **11/20/2023: Big update - "imgloras" are now "imgtags".**
 
 If you manually apply updates to your existing config.py, dict .yaml files, etc, please carefully [compare the changes](https://github.com/altoiddealer/ad_discordbot/commit/96ff8e6698e98b25cd00837f529278275ecb6c51).
@@ -116,3 +117,29 @@ This bot stands apart from many other ones due to a variety of custom features:
 * @ mention it including a trigger phrase defined in config.py, and the bot will reply with a Stable Diffusion prompt and image based on your prompt.
 
 * Use **/image** command to use your own prompt with advanced options
+
+# Getting TTS responses from the bot (**currently coqui_tts only**)
+
+1. **Run the .cmd file** in text-generation-webui directory (**ex: cmd_windows.bat**), and performing the following commands:
+   Required for bot to join a discord voice channel:
+   ```
+   pip install pynacl
+   ```
+   
+   Linux / Mac:
+   ```
+   pip install -r extensions/coqui_tts/requirements.txt
+   ```
+   
+   Windows:
+   ```
+   pip install -r extensions\coqui_tts\requirements.txt
+   ```
+
+3. Ensure that your bot has sufficient permissions to use the Voice channel and/or upload files
+
+4. Configure **config.py** in the section **discord** > **tts_settings**
+
+5. The necessary model file(s) should download on first launch of the bot.  If not, then first launch textgen-webui normally and enable the extension.
+
+6. **Your characters can have their own settings including voices!  See example character M1nty for usage**
