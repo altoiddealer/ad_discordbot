@@ -1,4 +1,5 @@
-**12/7/2023: coqui_tts Extension support now added!**
+**12/8/2023: TTS Support, and Character Specific Extension Settings now added!**
+
 **11/20/2023: Big update - "imgloras" are now "imgtags".**
 
 If you manually apply updates to your existing config.py, dict .yaml files, etc, please carefully [compare the changes](https://github.com/altoiddealer/ad_discordbot/commit/96ff8e6698e98b25cd00837f529278275ecb6c51).
@@ -118,7 +119,7 @@ This bot stands apart from many other ones due to a variety of custom features:
 
 * Use **/image** command to use your own prompt with advanced options
 
-# Getting TTS responses from the bot (**currently coqui_tts only**)
+# Getting TTS responses from the bot (**coqui_tts tested, others may work**)
 
 1. **Run the .cmd file** in text-generation-webui directory (**ex: cmd_windows.bat**), and performing the following commands:
    
@@ -126,6 +127,10 @@ This bot stands apart from many other ones due to a variety of custom features:
    ```
    pip install pynacl
    ```
+
+2. **Install your TTS extension**. Example instructions for **coqui_tts**:
+   
+   **Run the .cmd file** in text-generation-webui directory (**ex: cmd_windows.bat**), and performing the following commands:
    
    Linux / Mac:
    ```
