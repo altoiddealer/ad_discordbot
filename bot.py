@@ -139,8 +139,6 @@ tts_client = config.discord['tts_settings']['extension'] # tts client
 if tts_client:
     if tts_client not in shared.args.extensions:
         shared.args.extensions.append(tts_client)
-if shared.args.extensions and len(shared.args.extensions) > 0:
-    extensions_module.load_extensions()
 
 #Discord Bot
 prompt = "This is a conversation with your Assistant. The Assistant is very helpful and is eager to chat with you and answer your questions."
@@ -303,6 +301,9 @@ for extension in shared.settings["default_extensions"]:
     if extension not in shared.args.extensions:
         shared.args.extensions.append(extension)
 
+if shared.args.extensions and len(shared.args.extensions) > 0:
+    extensions_module.load_extensions()
+    
 available_models = get_available_models()
 
 # Model defined through --model
@@ -459,12 +460,13 @@ async def change_profile(i, character):
 
         # Update 'llmcontext' dictionary in the active settings directly from character file
         llmcontext_dict = {}
-        for key in ['name', 'greeting', 'context', 'bot_description', 'bot_emoji', 'coqui_tts']:
+        for key in ['name', 'greeting', 'context', 'bot_description', 'bot_emoji', 'extensions', 'use_voice_channel']:
             if key in char_data:
                 llmcontext_dict[key] = char_data[key]
-            if key == 'coqui_tts': await update_coqui_tts(char_data[key]) # Update coqui_tts settings
+        await update_extensions(char_data.get('extensions', {})) # Update character specific extension settings
+        await voice_channel(char_data.get('use_voice_channel', None)) # Toggle voice channel
         if llmcontext_dict:
-            active_settings['llmcontext'].update(llmcontext_dict)
+            active_settings['llmcontext'] = llmcontext_dict # Replace the entire dictionary key
         # Update behavior in active settings
         char_behavior = char_data.get('behavior')
         if char_behavior is not None:
@@ -496,16 +498,15 @@ async def change_profile(i, character):
         if greeting:
             await i.channel.send(greeting)
         else:
-            await interaction.response.send_message(f"**{character} has entered the chat.**")
+            await i.channel.send(f"**{character} has entered the chat.**")
 
         # Update last_change timestamp
         i.bot.last_change = datetime.now()
 
     except (discord.HTTPException, Exception) as e:
         await i.channel.send(f"An error occurred: {e}")
-
-    if i.bot.behavior.read_chatlog:
-        pass
+    
+    return
 
 async def send_long_message(channel, message_text):
     """ Splits a longer message into parts while preserving sentence boundaries and code blocks """
@@ -654,41 +655,54 @@ async def start_auto_update_imgmodel_task():
         imgmodel_update_task = client.loop.create_task(auto_update_imgmodel_task(mode))
 
 voice_client = None
-coqui_tts_params = {}
 
-async def update_coqui_tts(params):
-    if 'coqui_tts' in shared.args.extensions:
+async def voice_channel(vc_setting):
+    global voice_client
+    # Start voice client if configured, and not explicitly deactivated in character settings
+    if voice_client is None and (vc_setting is None or vc_setting) and int(config.discord['tts_settings']['play_mode']) != 1:
         try:
-            global voice_client
-            global coqui_tts_params
-            if coqui_tts_params or params:
-                if coqui_tts_params == params:
-                    return # Nothing needs updating
-                coqui_tts_params = params # Update global dict
-            # Start voice client unless explicitly deactivated in character data
-            if voice_client is None and coqui_tts_params.get('activate', True) != False and int(config.discord['tts_settings']['play_mode']) != 1:
-                try:
-                    if tts_client and tts_client in shared.args.extensions:
-                        if config.discord['tts_settings']['voice_channel']:
-                            voice_channel = client.get_channel(config.discord['tts_settings']['voice_channel'])
-                            voice_client = await voice_channel.connect()
-                        else:
-                            print(f'** Bot launched with {tts_client}, but no voice channel is specified in config.py **')
-                except Exception as e:
-                    print(f"An error occurred while initiating voice channel for coqui_tts:", e)
-            # Stop voice client if explicitly deactivated in character data
-            if voice_client and voice_client.is_connected():
-                if 'activate' in coqui_tts_params and coqui_tts_params['activate'] is False:
-                    print("** New context explicitly states to disconnect from voice client. **")
-                    await voice_client.disconnect()
-            # Update coqui_tts extension settings
-            if coqui_tts_params:
-                print(f'** coqui_tts params found in activesettings.yaml: ({coqui_tts_params}). Reloading extensions. **')
-                # Update shared.settings with coqui_tts_params
-                shared.settings.update({'coqui_tts-' + key: value for key, value in coqui_tts_params.items()})
-                extensions_module.load_extensions()  # Load Extensions (again)
+            if tts_client and tts_client in shared.args.extensions:
+                if config.discord['tts_settings']['voice_channel']:
+                    voice_channel = client.get_channel(config.discord['tts_settings']['voice_channel'])
+                    voice_client = await voice_channel.connect()
+                else:
+                    print(f'** Bot launched with {tts_client}, but no voice channel is specified in config.py **')
+            else:
+                print(f'** Character setting "use_voice_channel" = True, and "voice channel" is specified in config.py, BUT no "tts_client" is specified in config.py **')
         except Exception as e:
-            print(f"An error occurred while updating settings for coqui_tts:", e)
+            print(f"An error occurred while connecting to voice channel:", e)
+    # Stop voice client if explicitly deactivated in character settings
+    if voice_client and voice_client.is_connected():
+        try:
+            if vc_setting is False:
+                print("** New context has setting to disconnect from voice channel. **")
+                await voice_client.disconnect()
+                voice_client = None
+        except Exception as e:
+            print(f"An error occurred while disconnecting from voice channel:", e)
+
+char_extension_params = {}
+
+async def update_extensions(params):
+    try:
+        global char_extension_params
+        if char_extension_params or params:
+            if char_extension_params == params:
+                return # Nothing needs updating
+            char_extension_params = params # Update global dict
+        # Update character specific extension settings
+        if char_extension_params:
+            char_extensions = list(char_extension_params.keys())
+            print(f'** Character specific extension params found in activesettings.yaml for: ({char_extensions}). Reloading extensions. **')
+            # Update shared.settings with char_extension_params
+            for param in char_extensions:
+                listed_param = char_extension_params[param]
+                shared.settings.update({'{}-{}'.format(param, key): value for key, value in listed_param.items()})
+        else:
+            print(f'** No extension params for this character. Reloading extensions with initial values. **')            
+        extensions_module.load_extensions()  # Load Extensions (again)
+    except Exception as e:
+        print(f"An error occurred while updating character extension settings:", e)
 
 ## On Ready
 @client.event
@@ -716,8 +730,9 @@ async def on_ready():
         client.behavior.__dict__.update(get_active_setting('behavior'))
     except Exception as e:
         logging.error("Error updating behavior:", e)
-    coqui_tts_params = get_active_setting('llmcontext').get('coqui_tts')
-    await update_coqui_tts(coqui_tts_params)
+    llmcontext = get_active_setting('llmcontext')
+    await update_extensions(llmcontext.get('extensions', {})) # Update character specific extension settings
+    await voice_channel(llmcontext.get('use_voice_channel', None)) # Toggle voice channel
     logging.info("Bot is ready")
     client.loop.create_task(process_tasks_in_background())
     await task_queue.put(client.tree.sync()) # Process this in the background
@@ -842,7 +857,7 @@ async def process_tts_resp(i, tts_resp):
         await upload_tts_file(i, tts_resp)
     # Play in voice channel
     if play_mode != 1:
-        await task_queue.put(play_in_voice_channel(tts_resp)) # run task in background
+        await play_in_voice_channel(tts_resp) # run task in background
 
 async def chatbot_wrapper_wrapper(user_input, save_history):
     loop = asyncio.get_event_loop()
@@ -881,22 +896,25 @@ async def llm_gen(i, queues, save_history):
     global reply_count
     previous_user_id = None
     while len(queues) > 0:
+        if blocking:
+            await asyncio.sleep(1)
+            continue
         blocking = True
         reply_count += 1
         user_input = queues.pop(0)
         mention = list(user_input.keys())[0]
         user_input = user_input[mention]
         last_resp, tts_resp = await chatbot_wrapper_wrapper(user_input, save_history)
-        if tts_resp: await process_tts_resp(i, tts_resp)
         if len(queues) >= 1:
             next_in_queue = queues[0]
             next_mention = list(next_in_queue.keys())[0]
             if mention != previous_user_id or mention != next_mention:
-                last_resp = f"@{mention} " + last_resp
+                last_resp = f"{mention} " + last_resp
         previous_user_id = mention  # Update the current user ID for the next iteration
         logging.info("reply sent: \"" + mention + ": {'text': '" + user_input["text"] + "', 'response': '" + last_resp + "'}\"")
         await send_long_message(i.channel, last_resp)
-    blocking = False
+        if tts_resp: await task_queue.put(process_tts_resp(i, tts_resp)) # Process this in background
+        blocking = False
 
 ## Dynamic Context feature
 def process_dynamic_context(user_input, text, llm_prompt, save_history):
@@ -1066,9 +1084,8 @@ async def on_message(i):
     llm_prompt = text # 'text' will be retained as user's raw text (without @ mention)
     # build user_input with defaults
     user_input = initialize_user_input(i, data, text)
-    # Process coqui_tts
-    coqui_tts_params = data.get('coqui_tts')
-    await update_coqui_tts(coqui_tts_params)
+    await update_extensions(data.get('extensions', {})) # Update character specific extension settings
+    await voice_channel(data.get('use_voice_channel', None)) # Toggle voice channel
     # apply dynamic_context settings
     save_history=True
     user_input, llm_prompt = process_dynamic_context(user_input, text, llm_prompt, save_history)
@@ -1428,7 +1445,7 @@ async def pic(i, text, image_prompt, tts_resp=None, neg_prompt=None, size=None, 
             await process_image_gen(payload, picture_frame, i)
             # Play tts response
             if tts_resp is not None:
-                await process_tts_resp(i, tts_resp)
+                await task_queue.put(process_tts_resp(i, tts_resp)) # Process this in background
     except Exception as e:
         print(f"An error occurred: {e}")
     busy_drawing = False
@@ -2035,8 +2052,9 @@ async def regen(i):
     data = get_active_setting('llmcontext')
     user_input = initialize_user_input(i, data, text=last_user_message['llm_prompt'])
     user_input['regenerate'] = True
-    last_resp = await chatbot_wrapper_wrapper(user_input, save_history=None)
+    last_resp, tts_resp = await chatbot_wrapper_wrapper(user_input, save_history=None)
     await send_long_message(i.channel, last_resp)
+    if tts_resp: await task_queue.put(process_tts_resp(i, tts_resp)) # Process this in background
 
 @client.hybrid_command(description="Continue the generation")
 async def cont(i):
@@ -2046,7 +2064,7 @@ async def cont(i):
     data = get_active_setting('llmcontext')
     user_input = initialize_user_input(i, data, text=last_user_message['llm_prompt'])
     user_input['_continue'] = True
-    last_resp = await chatbot_wrapper_wrapper(user_input, save_history=None)
+    last_resp, tts_resp = await chatbot_wrapper_wrapper(user_input, save_history=None)
     await delete_last_message(i)
     await send_long_message(i.channel, last_resp)
 
