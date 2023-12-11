@@ -137,6 +137,16 @@ shared.args.extensions = []
 extensions_module.available_extensions = utils.get_available_extensions()
 tts_client = config.discord['tts_settings']['extension'] # tts client
 if tts_client:
+    tts_api_key = config.discord['tts_settings'].get('api_key', None)
+    if tts_client == 'coqui_tts':
+        tts_voice_key = 'voice'
+        tts_lang_key = 'language'
+    if tts_client == 'silero_tts':
+        tts_voice_key = 'speaker'
+        tts_lang_key = 'language'
+    if tts_client == 'elevenlabs_tts':
+        tts_voice_key = 'selected_voice'
+        tts_lang_key = ''
     if tts_client not in shared.args.extensions:
         shared.args.extensions.append(tts_client)
 
@@ -681,22 +691,27 @@ async def voice_channel(vc_setting):
         except Exception as e:
             print(f"An error occurred while disconnecting from voice channel:", e)
 
-char_extension_params = {}
+last_extension_params = {}
 
 async def update_extensions(params):
     try:
-        global char_extension_params
-        if char_extension_params or params:
-            if char_extension_params == params:
+        global last_extension_params
+        if last_extension_params or params:
+            if last_extension_params == params:
                 return # Nothing needs updating
-            char_extension_params = params # Update global dict
-        # Update character specific extension settings
-        if char_extension_params:
-            char_extensions = list(char_extension_params.keys())
-            print(f'** Character specific extension params found in activesettings.yaml for: ({char_extensions}). Reloading extensions. **')
-            # Update shared.settings with char_extension_params
-            for param in char_extensions:
-                listed_param = char_extension_params[param]
+            last_extension_params = params # Update global dict
+        # Add tts API key if one is provided in config.py
+        if tts_api_key:
+            if tts_client not in last_extension_params:
+                last_extension_params[tts_client] = {'api_key': tts_api_key}
+            else:
+                last_extension_params[tts_client].update({'api_key': tts_api_key})
+        # Update extension settings
+        if last_extension_params:
+            last_extensions = list(last_extension_params.keys())
+            # Update shared.settings with last_extension_params
+            for param in last_extensions:
+                listed_param = last_extension_params[param]
                 shared.settings.update({'{}-{}'.format(param, key): value for key, value in listed_param.items()})
         else:
             print(f'** No extension params for this character. Reloading extensions with initial values. **')            
@@ -1368,9 +1383,9 @@ def apply_presets(payload, presets, i, text):
                     triggers = [t.strip() for t in preset['trigger'].split(',')]
                     # Iterate through the triggers for the current preset
                     for trigger in triggers:
-                        pattern = re.escape(trigger.lower())
+                        trigger_regex = r"\b{}\b".format(re.escape(trigger.lower()))
                         #pattern = re.escape(trigger.lower())
-                        match = re.search(pattern, payload['prompt'].lower())
+                        match = re.search(trigger_regex, payload['prompt'].lower())
                         if match:
                             matched_text = match.group(0)
                             break
@@ -2067,6 +2082,178 @@ async def cont(i):
     last_resp, tts_resp = await chatbot_wrapper_wrapper(user_input, save_history=None)
     await delete_last_message(i)
     await send_long_message(i.channel, last_resp)
+
+async def process_speak_silero_non_eng(i, lang):
+    non_eng_speaker = None
+    non_eng_model = None
+    try:
+        with open('extensions/silero_tts/languages.json', 'r') as file:
+            languages_data = json.load(file)
+        if lang in languages_data:
+            default_voice = languages_data[lang].get('default_voice')
+            if default_voice: non_eng_speaker = default_voice
+            silero_model = languages_data[lang].get('model_id')
+            if silero_model: non_eng_model = silero_model
+            tts_args = {'silero_tts': {'language': lang, 'speaker': non_eng_speaker, 'model_id': non_eng_model}}
+        if not (non_eng_speaker and non_eng_model):
+            await i.send(f'Could not determine the correct voice and model ID for language "{lang}". Defaulting to English.', ephemeral=True)
+            tts_args = {'silero_tts': {'language': 'English', 'speaker': 'en_1'}}
+    except Exception as e:
+        print(f"Error processing non-English voice for silero_tts: {e}")
+        await i.send(f"Error processing non-English voice for silero_tts: {e}", ephemeral=True)
+    return tts_args
+
+async def process_speak_args(i, selected_voice=None, lang=None, user_voice=None):
+    try:
+        tts_args = {}
+        if lang:
+            if tts_client == 'elevenlabs_tts':
+                if lang != 'English':
+                    tts_args.setdefault(tts_client, {}).setdefault('model', 'eleven_multilingual_v1')
+                    # Currently no language parameter for elevenlabs_tts
+            else:
+                tts_args.setdefault(tts_client, {}).setdefault(tts_lang_key, lang)
+                tts_args[tts_client][tts_lang_key] = lang
+        if selected_voice or user_voice:
+            tts_args.setdefault(tts_client, {}).setdefault(tts_voice_key, 'temp_voice.wav' if user_voice else selected_voice)
+        elif tts_client == 'silero_tts' and lang:
+            if lang != 'English':
+                tts_args = await process_speak_silero_non_eng(i, lang) # returns complete args for silero_tts
+                if selected_voice: await i.send(f'Currently, non-English languages will use a default voice (not using "{selected_voice}")', ephemeral=True)
+        elif tts_client in last_extension_params and tts_voice_key in last_extension_params[tts_client]:
+            pass # Default to voice in last_extension_params
+        elif f'{tts_client}-{tts_voice_key}' in shared.settings:
+            pass # Default to voice in shared.settings
+        else:
+            await i.send("No voice was selected or provided, and a default voice was not found. Request will probably fail...", ephemeral=True)
+    except Exception as e:
+        print(f"Error processing tts options: {e}")
+        await i.send(f"Error processing tts options: {e}", ephemeral=True)
+    return tts_args
+
+async def process_user_voice(i, voice_input=None):
+    try:
+        if not (voice_input and getattr(voice_input, 'content_type', '').startswith("audio/")):
+            return ''
+        if tts_client != 'coqui_tts':
+            await i.send("Sorry, current tts extension does not allow using a voice attachment (only works for 'coqui_tts)", ephemeral=True)
+            return ''
+        voiceurl = voice_input.url
+        voiceurl_without_params = voiceurl.split('?')[0]
+        if not voiceurl_without_params.endswith(".wav"):
+            await i.send("Invalid audio format. Please try again with a valid WAV file.", ephemeral=True)
+            return ''
+        user_voice = f'{tts_client}/temp_voice.wav'
+        async with aiohttp.ClientSession() as session:
+            async with session.get(voiceurl) as resp:
+                if resp.status == 200:
+                    voice_data = await resp.read()
+                    with open(user_voice, 'wb') as f:
+                        f.write(voice_data)
+                    return user_voice
+                else:
+                    await i.send("Error downloading your audio file. Please try again.", ephemeral=True)
+                    return ''
+    except Exception as e:
+        print(f"Error processing user provided voice file: {e}")
+        await i.send("An error occurred while processing the voice file.", ephemeral=True)
+
+async def process_speak(i, input_text, selected_voice=None, lang=None, voice_input=None):
+    try:
+        user_voice = await process_user_voice(i, voice_input)
+        tts_args = await process_speak_args(i, selected_voice, lang, user_voice)
+        info_embed.title = f"Generating speach from text ... "
+        info_embed.description = ""
+        message = await i.reply(embed=info_embed)
+        data = get_active_setting('llmcontext')
+        user_input = initialize_user_input(i, data, text=input_text)
+        user_input['_continue'] = True
+        user_input['state']['max_new_tokens'] = 1
+        user_input['state']['min_length'] = 0
+        user_input['state']['history'] = {'internal': [[input_text, input_text]], 'visible': [[input_text, input_text]]}
+        await update_extensions(tts_args) # Update tts_client extension settings
+        _, tts_resp = await chatbot_wrapper_wrapper(user_input, save_history=False)
+        if tts_resp: await task_queue.put(process_tts_resp(i, tts_resp)) # Process this in background
+        await update_extensions(data.get('extensions', {})) # Restore character specific extension settings
+        if user_voice: os.remove(user_voice)
+        await i.send(f'**{i.author} requested text to speech:**\n{input_text}')
+        await message.delete()            
+    except Exception as e:
+        print(f"Error processing tts request: {e}")
+        await i.send(f"Error processing tts request: {e}", ephemeral=True)
+
+if tts_client:
+    valid_tts_clients = ['coqui_tts', 'silero_tts', 'elevenlabs_tts']
+    if tts_client not in valid_tts_clients:
+        print(f'tts client "{tts_client}" is not yet supported. "/speak" command will not be registered. List of supported tts_clients: {valid_tts_clients}')
+    else:
+        ext = ''
+        lang_list = []
+        if tts_client == 'coqui_tts':
+            ext = '.wav'
+            lang_list = ['Arabic', 'Chinese', 'Czech', 'Dutch', 'English', 'French', 'German', 'Hungarian', 'Italian', 'Japanese', 'Korean', 'Polish', 'Portuguese', 'Russian', 'Spanish', 'Turkish']
+            tts_voices_dir = f'extensions/{tts_client}/voices'
+            if os.path.exists(tts_voices_dir) and os.path.isdir(tts_voices_dir):
+                all_voices = [voice_name[:-4] for voice_name in os.listdir(tts_voices_dir) if voice_name.endswith(".wav")]   
+        elif tts_client == 'silero_tts':
+            lang_list = ['English', 'Spanish', 'French', 'German', 'Russian', 'Tatar', 'Ukranian', 'Uzbek', 'English (India)', 'Avar', 'Bashkir', 'Bulgarian', 'Chechen', 'Chuvash', 'Kalmyk', 'Karachay-Balkar', 'Kazakh', 'Khakas', 'Komi-Ziryan', 'Mari', 'Nogai', 'Ossetic', 'Tuvinian', 'Udmurt', 'Yakut']
+            print('''There's too many Voice/language permutations to make them all selectable in "/speak" command. Loading a bunch of English options. Non-English languages will automatically play using respective default speaker.''')
+            all_voices = [f"en_{i}" for i in range(1, 76)] # will just include English voices in select menus. Other languages will use defaults.
+        elif tts_client == 'elevenlabs_tts':
+            lang_list = ['English', 'German', 'Polish', 'Spanish', 'Italian', 'French', 'Portuegese', 'Hindi', 'Arabic']
+            print('''Getting list of available voices for elevenlabs_tts for "/speak" command...''')
+            from extensions.elevenlabs_tts.script import refresh_voices, update_api_key
+            if tts_api_key:
+                update_api_key(tts_api_key)
+            all_voices = refresh_voices()
+        voice_options = [app_commands.Choice(name=voice_name, value=f'{voice_name}{ext}') for voice_name in all_voices[:25]]
+        if len(all_voices) > 25:
+            voice_options1 = [app_commands.Choice(name=voice_name, value=f'{voice_name}{ext}') for voice_name in all_voices[25:50]]    
+            if len(all_voices) > 50:      
+                voice_options2 = [app_commands.Choice(name=voice_name, value=f'{voice_name}{ext}') for voice_name in all_voices[50:75]]                       
+                if len(all_voices) > 75: print("'/speak' command only allows up to 75 voices. Some voices were omitted.")
+        if lang_list: lang_options = [app_commands.Choice(name=lang, value=lang) for lang in lang_list]
+        else: lang_options = [app_commands.Choice(name='English', value='English')] # Default to English
+
+        if len(all_voices) <= 25:
+            @client.hybrid_command(name="speak", description='AI will speak your text using a selected voice')
+            @app_commands.choices(voice=voice_options)
+            @app_commands.choices(lang=lang_options)
+            async def speak(i: discord.Interaction, input_text: str, voice: typing.Optional[app_commands.Choice[str]], lang: typing.Optional[app_commands.Choice[str]], voice_input: typing.Optional[discord.Attachment]):
+                selected_voice = voice.vale if voice is not None else ''
+                voice_input = voice_input.value if voice_input is not None else ''
+                #user_voice = await process_user_voice(i, voice_input)
+                lang = lang.value if lang is not None else ''
+                await process_speak(i, input_text, selected_voice, lang, voice_input)
+
+        elif 25 < len(all_voices) <= 50:
+            @client.hybrid_command(name="speak", description='AI will speak your text using a selected voice (pick only one)')
+            @app_commands.choices(voice=voice_options)
+            @app_commands.choices(voice1=voice_options1)
+            @app_commands.choices(lang=lang_options)
+            async def speak(i: discord.Interaction, input_text: str, voice: typing.Optional[app_commands.Choice[str]], voice1: typing.Optional[app_commands.Choice[str]], lang: typing.Optional[app_commands.Choice[str]], voice_input: typing.Optional[discord.Attachment]):
+                if voice and voice1:
+                    await i.send("A voice was picked from two separate menus. Using the first selection.", ephemeral=True)
+                selected_voice = ((voice or voice1) and (voice or voice1).value) or ''
+                voice_input = voice_input.value if voice_input is not None else ''
+                #user_voice = await process_user_voice(i, voice_input)
+                lang = lang.value if lang is not None else ''
+                await process_speak(i, input_text, selected_voice, lang, voice_input)
+
+        elif 50 < len(all_voices) <= 75:
+            @client.hybrid_command(name="speak", description='AI will speak your text using a selected voice (pick only one)')
+            @app_commands.choices(voice=voice_options)
+            @app_commands.choices(voice1=voice_options1)
+            @app_commands.choices(voice2=voice_options2)
+            @app_commands.choices(lang=lang_options)
+            async def speak(i: discord.Interaction, input_text: str, voice: typing.Optional[app_commands.Choice[str]], voice1: typing.Optional[app_commands.Choice[str]], voice2: typing.Optional[app_commands.Choice[str]], lang: typing.Optional[app_commands.Choice[str]], voice_input: typing.Optional[discord.Attachment]):
+                if sum(1 for v in (voice, voice1, voice2) if v) > 1:
+                    await i.send("A voice was picked from two separate menus. Using the first selection.", ephemeral=True)
+                selected_voice = ((voice or voice1 or voice2) and (voice or voice1 or voice2).value) or ''
+                voice_input = voice_input.value if voice_input is not None else ''
+                #user_voice = await process_user_voice(i, voice_input)
+                lang = lang.value if lang is not None else ''
+                await process_speak(i, input_text, selected_voice, lang, voice_input)
 
 @client.hybrid_command(description="Update dropdown menus without restarting bot script.")
 async def sync(interaction: discord.Interaction):

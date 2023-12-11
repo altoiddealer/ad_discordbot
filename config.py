@@ -6,7 +6,8 @@ discord = {
     'char_name': "M1nty",                 # default bot name (**Required if change_username_with_character = False**)
     # ** Currently only 'coqui_tts' has been tested. Other tts extensions may work. **
     'tts_settings': {      # REQUIRES: 'pip install pynacl' in textgen-webui venv for bot to join a voice channel
-        'extension': '',   # '' = Disabled. Ex: 'coqui_tts' (Loads automatically. Don't include in '--extensions' launch flag)
+        'extension': '',    # '' = Disabled. Ex: 'coqui_tts' (Loads automatically. Don't include in '--extensions' launch flag)
+        'api_key': '',      # May be required for some tts extensions (ex: elevenlabs_tts)
         'voice_channel': 11111111111111111111,   # ** Bot will need voice & channel permissions. **
         'play_mode': 0,         # 0 = use voice channel / 1 = upload file to chat channel / 2 = both (use voice & upload file)
         'mp3_bit_rate': 128,    # If play_mode = 1 or 2, and the output (.wav) exceeds 8MB (discord limit), it will convert to .mp3 before uploading.
