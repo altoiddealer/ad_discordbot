@@ -1,3 +1,5 @@
+**12/11/2023: New "/speak" command! Silero and ElevenLabs TTS extensions now supported!**
+
 **12/8/2023: TTS Support, and Character Specific Extension Settings now added!**
 
 **11/20/2023: Big update - "imgloras" are now "imgtags".**
