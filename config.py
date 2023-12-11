@@ -4,7 +4,7 @@ discord = {
     'change_username_with_character': True, # When changing username OR avatar, you will not be able
     'change_avatar_with_character': True,   # to use /character cmd for 10 minutes (Discord policy)
     'char_name': "M1nty",                 # default bot name (**Required if change_username_with_character = False**)
-    # ** Currently only 'coqui_tts' has been tested. Other tts extensions may work. **
+    # ** Currently only 'coqui_tts', 'silero_tts', and 'elevenlabs_tts' have been tested. Other tts extensions may work. **
     'tts_settings': {      # REQUIRES: 'pip install pynacl' in textgen-webui venv for bot to join a voice channel
         'extension': '',    # '' = Disabled. Ex: 'coqui_tts' (Loads automatically. Don't include in '--extensions' launch flag)
         'api_key': '',      # May be required for some tts extensions (ex: elevenlabs_tts)
