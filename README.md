@@ -121,7 +121,7 @@ This bot stands apart from many other ones due to a variety of custom features:
 
 * Use **/image** command to use your own prompt with advanced options
 
-# Getting TTS responses from the bot (**coqui_tts tested, others may work**)
+# Getting TTS responses from the bot (Tested: coqui_tts, silero_tts, elevenlabs_tts)
 
 1. **Run the .cmd file** in text-generation-webui directory (**ex: cmd_windows.bat**), and performing the following commands:
    
