@@ -581,6 +581,23 @@ async def send_long_message(channel, message_text):
     last_bot_message[channel.id] = bot_messages
 
 ## Function to automatically change image models
+# Set the topic of the channel and announce imgmodel as configured
+async def auto_announce_imgmodel(selected_imgmodel, selected_imgmodel_name):
+    try:
+        # Set the topic of the channel and announce imgmodel as configured
+        if config.imgmodels['auto_change_models']['channel_announce']:
+            channel = client.get_channel(config.imgmodels['auto_change_models']['channel_announce'])
+            if config.imgmodels['update_topic']['enabled']:
+                await imgmodel_update_topic(channel, selected_imgmodel, selected_imgmodel_name)
+            if config.imgmodels['announce_in_chat']['enabled']:
+                reply = await imgmodel_announce(selected_imgmodel, selected_imgmodel_name)
+                if reply:
+                    await channel.send(reply)
+                else:
+                    await channel.send(f"Updated imgmodel settings to: {selected_imgmodel_name}")
+    except Exception as e:
+        print("Error announcing automatically selected imgmodel:", e)
+
 # Select imgmodel based on mode, while avoid repeating current imgmodel
 async def auto_select_imgmodel(current_imgmodel_name, imgmodels, imgmodel_names, mode='random'):   
     try:         
@@ -611,20 +628,15 @@ async def auto_update_imgmodel_task(mode='random'):
     while True:
         frequency = config.imgmodels['auto_change_models']['frequency']
         duration = frequency*3600 # 3600 = 1 hour
-        await asyncio.sleep(duration)
-        try: # Collect and filter imgmodels
-            imgmodels, current_imgmodel_name = await fetch_imgmodels()
-            imgmodels = await filter_imgmodels(imgmodels)
-            imgmodel_names = [imgmodel.get('imgmodel_name', imgmodel.get('sd_model_checkpoint', None)) for imgmodel in imgmodels]
-            # Update 'model_name' keys in A1111 fetched list to ensure uniform naming with API and .yaml methods. This is held off until now to resolve conflict in filtering step.
-            for imgmodel in imgmodels:
-                if 'model_name' in imgmodel:
-                    imgmodel['imgmodel_name'] = imgmodel.pop('model_name')
+        #await asyncio.sleep(duration)
+        try:
+            active_settings = load_yaml_file('ad_discordbot/activesettings.yaml')
+            current_imgmodel_name = active_settings.get('imgmodel', {}).get('imgmodel_name', '')
+            imgmodel_names = [imgmodel.get('sd_model_checkpoint', imgmodel.get('imgmodel_name', None)) for imgmodel in all_imgmodels]
             # Select an imgmodel automatically
-            selected_imgmodel = await auto_select_imgmodel(current_imgmodel_name, imgmodels, imgmodel_names, mode)
+            selected_imgmodel = await auto_select_imgmodel(current_imgmodel_name, all_imgmodels, imgmodel_names, mode)
             ## Update imgmodel
             selected_imgmodel_name = selected_imgmodel.get('imgmodel_name')
-            active_settings = load_yaml_file('ad_discordbot/activesettings.yaml')
             # Process .yaml method
             if not config.imgmodels['get_imgmodels_via_api']['enabled']:
                 update_dict(active_settings.get('imgmodel', {}), selected_imgmodel)
@@ -638,20 +650,11 @@ async def auto_update_imgmodel_task(mode='random'):
             # Update size options for /image command
             await task_queue.put(update_size_options(active_settings.get('imgmodel').get('payload').get('width'),active_settings.get('imgmodel').get('payload').get('height')))
             # Set the topic of the channel and announce imgmodel as configured
-            if config.imgmodels['auto_change_models']['channel_announce']:
-                channel = client.get_channel(config.imgmodels['auto_change_models']['channel_announce'])
-                if config.imgmodels['update_topic']['enabled']:
-                    await imgmodel_update_topic(channel, selected_imgmodel, selected_imgmodel_name)
-                if config.imgmodels['announce_in_chat']['enabled']:
-                    reply = await imgmodel_announce(selected_imgmodel, selected_imgmodel_name)
-                    if reply:
-                        await channel.send(reply)
-                    else:
-                        await channel.send(f"Updated imgmodel settings to: {selected_imgmodel_name}")
-                print(f"Updated imgmodel settings to: {selected_imgmodel_name}")
+            await auto_announce_imgmodel(selected_imgmodel, selected_imgmodel_name)
+            print(f"Updated imgmodel settings to: {selected_imgmodel_name}")
         except Exception as e:
             print(f"Error automatically updating image model: {e}")
-        #await asyncio.sleep(duration)
+        await asyncio.sleep(duration)
 
 imgmodel_update_task = None # Global variable allows process to be cancelled and restarted (reset sleep timer)
 
@@ -1814,28 +1817,52 @@ async def imgtags(i):
     view.add_item(SettingsDropdown('ad_discordbot/dict_imgtags.yaml', 'imgtag_name', 'imgtag'))
     await i.send("Choose ImgTags:", view=view, ephemeral=True)
 
-# Build list of imgmodels depending on user preference (user .yaml / A1111 API)
-async def fetch_imgmodels():
-    try:
-        active_settings = load_yaml_file('ad_discordbot/activesettings.yaml')
-        current_imgmodel_name = active_settings.get('imgmodel', {}).get('imgmodel_name', '')
-        if not config.imgmodels['get_imgmodels_via_api']['enabled']:
-            imgmodels = load_yaml_file('ad_discordbot/dict_imgmodels.yaml')
-        else:
-            async with aiohttp.ClientSession() as session: # populate options from A1111 API
-                async with session.get(url=f'{A1111}/sdapi/v1/sd-models') as response:
-                    if response.status == 200:
-                        imgmodels = await response.json()
-                        # Update 'title' keys in A1111 fetched list to be uniform with .yaml method
-                        for imgmodel in imgmodels:
-                            if 'title' in imgmodel:
-                                imgmodel['sd_model_checkpoint'] = imgmodel.pop('title')
-                    else:
-                        print(f"Error fetching image models from the API (response: '{response.status}')")                   
-        return imgmodels, current_imgmodel_name
-    except Exception as e:
-        print("Error fetching image models:", e)
+@client.hybrid_command(description="Set current channel as main channel for bot to auto reply in without needing to be called")
+async def main(i):
+    if i.channel.id not in i.bot.behavior.main_channels:
+        i.bot.behavior.main_channels.append(i.channel.id)
+        conn = sqlite3.connect('bot.db')
+        c = conn.cursor()
+        c.execute('''INSERT OR REPLACE INTO main_channels (channel_id) VALUES (?)''', (i.channel.id,))
+        conn.commit()
+        conn.close()
+        await i.reply(f'Bot main channel set to {i.channel.mention}')
+    await i.reply(f'{i.channel.mention} set as main channel')
 
+@client.hybrid_command(description="Display help menu")
+async def helpmenu(i):
+    info_embed = discord.Embed().from_dict(info_embed_json)
+    await i.send(embed=info_embed)
+
+@client.hybrid_command(description="Regenerate the bot's last reply")
+async def regen(i):
+    info_embed.title = f"Regenerating ... "
+    info_embed.description = ""
+    await i.reply(embed=info_embed)
+    data = get_active_setting('llmcontext')
+    user_input = initialize_user_input(i, data, text=last_user_message['llm_prompt'])
+    user_input['regenerate'] = True
+    last_resp, tts_resp = await chatbot_wrapper_wrapper(user_input, save_history=None)
+    await send_long_message(i.channel, last_resp)
+    if tts_resp: await task_queue.put(process_tts_resp(i, tts_resp)) # Process this in background
+
+@client.hybrid_command(description="Continue the generation")
+async def cont(i):
+    info_embed.title = f"Continuing ... "
+    info_embed.description = ""
+    await i.reply(embed=info_embed)
+    data = get_active_setting('llmcontext')
+    user_input = initialize_user_input(i, data, text=last_user_message['llm_prompt'])
+    user_input['_continue'] = True
+    last_resp, tts_resp = await chatbot_wrapper_wrapper(user_input, save_history=None)
+    await delete_last_message(i)
+    await send_long_message(i.channel, last_resp)
+
+@client.hybrid_command(description="Update dropdown menus without restarting bot script.")
+async def sync(interaction: discord.Interaction):
+    await task_queue.put(client.tree.sync()) # Process this in the background
+
+## /imgmodel command
 # Apply user defined filters to imgmodel list
 async def filter_imgmodels(imgmodels):
     try:
@@ -1853,17 +1880,26 @@ async def filter_imgmodels(imgmodels):
     except Exception as e:
         print("Error filtering image model list:", e)
 
-# Reduce imgmodel list to discord limitation of 25 menu items for /imgmodel command
-async def limit_imgmodels(imgmodels):
+# Build list of imgmodels depending on user preference (user .yaml / A1111 API)
+async def fetch_imgmodels():
     try:
-        total_models = len(imgmodels)
-        if total_models > 25:
-            omitted_models = total_models - 25
-            print(f"Due to Discord limitations, only the first 25 models can be listed ({omitted_models} omitted).")
-            imgmodels = imgmodels[:25]
+        if not config.imgmodels['get_imgmodels_via_api']['enabled']:
+            imgmodels = load_yaml_file('ad_discordbot/dict_imgmodels.yaml')
+        else:
+            async with aiohttp.ClientSession() as session: # populate options from A1111 API
+                async with session.get(url=f'{A1111}/sdapi/v1/sd-models') as response:
+                    if response.status == 200:
+                        imgmodels = await response.json()
+                        # Update 'title' keys in A1111 fetched list to be uniform with .yaml method
+                        for imgmodel in imgmodels:
+                            if 'title' in imgmodel:
+                                imgmodel['sd_model_checkpoint'] = imgmodel.pop('title')
+                    else:
+                        print(f"Error fetching image models from the API (response: '{response.status}')") 
+        imgmodels = await filter_imgmodels(imgmodels)
         return imgmodels
     except Exception as e:
-        print("Error limiting image model list:", e)
+        print("Error fetching image models:", e)
 
 # Update imgtags at same time as imgmodel, as configured
 async def change_imgtags(active_settings, imgtag_name):
@@ -1965,127 +2001,119 @@ async def imgmodel_update_topic(channel, selected_imgmodel, selected_imgmodel_na
     except Exception as e:
         print("Error updating channel topic:", e)
 
-# Dropdown menu invoked by /imgmodel command
-class ImgModelDropdown(discord.ui.Select):
-    def __init__(self, imgmodels):
-        options = [
-            discord.SelectOption(label=imgmodel["imgmodel_name"], value=imgmodel["imgmodel_name"])
-            for imgmodel in imgmodels
-        ]
-        super().__init__(placeholder='Choose an Image Model', options=options)
-        self.imgmodels = imgmodels
-    async def callback(self, interaction: discord.Interaction):
-        try:
-            selected_item_value = self.values[0]
-            # Collect imgmodel data for .yaml method
-            if not config.imgmodels['get_imgmodels_via_api']['enabled']:
-                imgmodels = load_yaml_file('ad_discordbot/dict_imgmodels.yaml')
-                selected_imgmodel = next(imgmodel for imgmodel in imgmodels if imgmodel['imgmodel_name'] == selected_item_value)
-            else: # Collect imgmodel data for A1111 API method
-                selected_imgmodel = {}
-                for imgmodel in self.imgmodels:
-                    if imgmodel["imgmodel_name"] == selected_item_value:
-                        selected_imgmodel = {
-                            "sd_model_checkpoint": imgmodel["sd_model_checkpoint"],
-                            "imgmodel_name": imgmodel.get("imgmodel_name"),
-                            "filename": imgmodel.get("filename", None)
-                        }
-                        break
-            ## Update imgmodel
-            selected_imgmodel_name = selected_imgmodel.get('imgmodel_name')
-            active_settings = load_yaml_file('ad_discordbot/activesettings.yaml')
-            # Process .yaml method
-            if not config.imgmodels['get_imgmodels_via_api']['enabled']:
-                update_dict(active_settings.get('imgmodel', {}), selected_imgmodel)
-                if selected_imgmodel.get('imgmodel_imgtags') is not None:
-                    await change_imgtags(active_settings, selected_imgmodel.get('imgmodel_imgtags'))
-            else: # Process A1111 API method
-                await change_imgmodel_api(active_settings, selected_imgmodel, selected_imgmodel_name)  
-            save_yaml_file('ad_discordbot/activesettings.yaml', active_settings)
-            # Load the imgmodel and VAE via A1111 API
-            await task_queue.put(a1111_load_imgmodel(active_settings['imgmodel']['override_settings'])) # Process this in the background
-            # Update size options for /image command
-            await task_queue.put(update_size_options(active_settings.get('imgmodel').get('payload').get('width'),active_settings.get('imgmodel').get('payload').get('height')))
-            # Restart task to change image models automatically
-            await task_queue.put(start_auto_update_imgmodel_task()) # Process this in the background
-            # Set the topic of the channel and announce imgmodel as configured
-            if config.imgmodels['update_topic']['enabled']:
-                channel = interaction.channel
-                await imgmodel_update_topic(channel, selected_imgmodel, selected_imgmodel_name)
-            if config.imgmodels['announce_in_chat']['enabled']:
-                reply = await imgmodel_announce(selected_imgmodel, selected_imgmodel_name)
-                if reply:
-                    await interaction.response.send_message(reply)
-                else:
-                    await interaction.response.send_message(f"Updated imgmodel settings to: {selected_imgmodel_name}")
-            print(f"Updated imgmodel settings to: {selected_imgmodel_name}")
-        except Exception as e:
-            print("Error updating image model:", e)
-        if config.discord['post_active_settings']['enabled']:
-            await task_queue.put(post_active_settings())
-
-# /imgmodel command
-@client.hybrid_command(description="Choose an imgmodel")
-async def imgmodel(i):
-    try: # Collect and filter imgmodel data
-        imgmodels, _ = await fetch_imgmodels()
-        imgmodels = await filter_imgmodels(imgmodels)
-        imgmodels = await limit_imgmodels(imgmodels)
-        # Update 'model_name' keys in A1111 fetched list to ensure uniform naming with API and .yaml methods. This is held off until now to resolve conflict in filtering step.
-        for imgmodel in imgmodels:
-            if 'model_name' in imgmodel:
-                imgmodel['imgmodel_name'] = imgmodel.pop('model_name')
-        view = discord.ui.View()
-        view.add_item(ImgModelDropdown(imgmodels))
-        await i.send("Choose an imgmodel:", view=view, ephemeral=True)
+async def process_imgmodel_announce(i, selected_imgmodel, selected_imgmodel_name):
+    try:
+        # Set the topic of the channel and announce imgmodel as configured
+        if config.imgmodels['update_topic']['enabled']:
+            channel = i.channel
+            await imgmodel_update_topic(channel, selected_imgmodel, selected_imgmodel_name)
+        if config.imgmodels['announce_in_chat']['enabled']:
+            reply = await imgmodel_announce(selected_imgmodel, selected_imgmodel_name)
+            if reply:
+                await i.send(reply)
+            else:
+                await i.send(f"Updated imgmodel settings to: {selected_imgmodel_name}")
     except Exception as e:
-        print(f"Error updating image models: {e}")
-        await i.send("An error occurred while updating image models.", ephemeral=True)
+        print("Error announcing imgmodel:", e)
 
-@client.hybrid_command(description="Set current channel as main channel for bot to auto reply in without needing to be called")
-async def main(i):
-    if i.channel.id not in i.bot.behavior.main_channels:
-        i.bot.behavior.main_channels.append(i.channel.id)
-        conn = sqlite3.connect('bot.db')
-        c = conn.cursor()
-        c.execute('''INSERT OR REPLACE INTO main_channels (channel_id) VALUES (?)''', (i.channel.id,))
-        conn.commit()
-        conn.close()
-        await i.reply(f'Bot main channel set to {i.channel.mention}')
-    await i.reply(f'{i.channel.mention} set as main channel')
+async def get_selected_imgmodel_data(selected_imgmodel_value):
+    try:
+        if not config.imgmodels['get_imgmodels_via_api']['enabled']:
+            imgmodels = load_yaml_file('ad_discordbot/dict_imgmodels.yaml')
+            selected_imgmodel = next(imgmodel for imgmodel in imgmodels if imgmodel['imgmodel_name'] == selected_imgmodel_value)
+        else: # Collect imgmodel data for A1111 API method
+            selected_imgmodel = {}
+            for imgmodel in all_imgmodels:
+                if imgmodel["imgmodel_name"] == selected_imgmodel_value:
+                    selected_imgmodel = {
+                        "sd_model_checkpoint": imgmodel["sd_model_checkpoint"],
+                        "imgmodel_name": imgmodel.get("imgmodel_name"),
+                        "filename": imgmodel.get("filename", None)
+                    }
+                    break
+    except Exception as e:
+        print("Error getting image model data:", e)
+    return selected_imgmodel
 
-@client.hybrid_command(description="Display help menu")
-async def helpmenu(i):
-    info_embed = discord.Embed().from_dict(info_embed_json)
-    await i.send(embed=info_embed)
+async def process_imgmodel(i, selected_imgmodel_value):
+    try:
+        selected_imgmodel = await get_selected_imgmodel_data(selected_imgmodel_value)
+        selected_imgmodel_name = selected_imgmodel.get('imgmodel_name')
+        active_settings = load_yaml_file('ad_discordbot/activesettings.yaml')
+        # Process .yaml method
+        if not config.imgmodels['get_imgmodels_via_api']['enabled']:
+            update_dict(active_settings.get('imgmodel', {}), selected_imgmodel)
+            if selected_imgmodel.get('imgmodel_imgtags') is not None:
+                await change_imgtags(active_settings, selected_imgmodel.get('imgmodel_imgtags'))
+        else: # Process A1111 API method
+            await change_imgmodel_api(active_settings, selected_imgmodel, selected_imgmodel_name)
+        save_yaml_file('ad_discordbot/activesettings.yaml', active_settings)
+        # Load the imgmodel and VAE via A1111 API
+        await task_queue.put(a1111_load_imgmodel(active_settings['imgmodel']['override_settings'])) # Process this in the background
+        # Update size options for /image command
+        await task_queue.put(update_size_options(active_settings.get('imgmodel').get('payload').get('width'),active_settings.get('imgmodel').get('payload').get('height')))
+        await process_imgmodel_announce(i, selected_imgmodel, selected_imgmodel_name)
+        print(f"Updated imgmodel settings to: {selected_imgmodel_name}")
+    except Exception as e:
+        print("Error updating image model:", e)
+    if config.discord['post_active_settings']['enabled']:
+        await task_queue.put(post_active_settings())
 
-@client.hybrid_command(description="Regenerate the bot's last reply")
-async def regen(i):
-    info_embed.title = f"Regenerating ... "
-    info_embed.description = ""
-    await i.reply(embed=info_embed)
-    data = get_active_setting('llmcontext')
-    user_input = initialize_user_input(i, data, text=last_user_message['llm_prompt'])
-    user_input['regenerate'] = True
-    last_resp, tts_resp = await chatbot_wrapper_wrapper(user_input, save_history=None)
-    await send_long_message(i.channel, last_resp)
-    if tts_resp: await task_queue.put(process_tts_resp(i, tts_resp)) # Process this in background
+all_imgmodels = []
+all_imgmodels = asyncio.run(fetch_imgmodels())
+for imgmodel in all_imgmodels:
+    if 'model_name' in imgmodel:
+        imgmodel['imgmodel_name'] = imgmodel.pop('model_name')
 
-@client.hybrid_command(description="Continue the generation")
-async def cont(i):
-    info_embed.title = f"Continuing ... "
-    info_embed.description = ""
-    await i.reply(embed=info_embed)
-    data = get_active_setting('llmcontext')
-    user_input = initialize_user_input(i, data, text=last_user_message['llm_prompt'])
-    user_input['_continue'] = True
-    last_resp, tts_resp = await chatbot_wrapper_wrapper(user_input, save_history=None)
-    await delete_last_message(i)
-    await send_long_message(i.channel, last_resp)
+if all_imgmodels:
+    imgmodel_options = [app_commands.Choice(name=imgmodel["imgmodel_name"], value=imgmodel["imgmodel_name"]) for imgmodel in all_imgmodels[:25]]
+    if len(all_imgmodels) > 25:
+        imgmodel_options1 = [app_commands.Choice(name=imgmodel["imgmodel_name"], value=imgmodel["imgmodel_name"]) for imgmodel in all_imgmodels[25:50]]    
+        if len(all_imgmodels) > 50:      
+            imgmodel_options2 = [app_commands.Choice(name=imgmodel["imgmodel_name"], value=imgmodel["imgmodel_name"]) for imgmodel in all_imgmodels[50:75]]                       
+            if len(all_imgmodels) > 75:
+                imgmodel_options3 = [app_commands.Choice(name=imgmodel["imgmodel_name"], value=imgmodel["imgmodel_name"]) for imgmodel in all_imgmodels[75:100]]                       
+                if len(all_imgmodels) > 100: print("'/imgmodel' command only allows up to 100 image models. Some models were omitted.")
 
-@client.hybrid_command(description="Update dropdown menus without restarting bot script.")
-async def sync(interaction: discord.Interaction):
-    await task_queue.put(client.tree.sync()) # Process this in the background
+    if len(all_imgmodels) <= 25:
+        @client.hybrid_command(name="imgmodel", description='Choose an imgmodel')
+        @app_commands.choices(imgmodels=imgmodel_options)
+        async def imgmodel(i: discord.Interaction, imgmodels: typing.Optional[app_commands.Choice[str]]):
+            selected_imgmodel = imgmodels.value if imgmodels is not None else ''
+            await process_imgmodel(i, selected_imgmodel)
+
+    elif 25 < len(all_imgmodels) <= 50:
+        @client.hybrid_command(name="imgmodel", description='Choose an imgmodel (pick only one)')
+        @app_commands.choices(models_1=imgmodel_options)
+        @app_commands.choices(models_2=imgmodel_options1)
+        async def imgmodel(i: discord.Interaction, models_1: typing.Optional[app_commands.Choice[str]], models_2: typing.Optional[app_commands.Choice[str]]):
+            if models_1 and models_2:
+                await i.send("More than one imgmodel was selected. Using the first selection.", ephemeral=True)
+            selected_imgmodel = ((models_1 or models_2) and (models_1 or models_2).value) or ''
+            await process_imgmodel(i, selected_imgmodel)
+
+    elif 50 < len(all_imgmodels) <= 75:
+        @client.hybrid_command(name="imgmodel", description='Choose an imgmodel (pick only one)')
+        @app_commands.choices(models_1=imgmodel_options)
+        @app_commands.choices(models_2=imgmodel_options1)
+        @app_commands.choices(models_3=imgmodel_options2)
+        async def imgmodel(i: discord.Interaction, models_1: typing.Optional[app_commands.Choice[str]], models_2: typing.Optional[app_commands.Choice[str]], models_3: typing.Optional[app_commands.Choice[str]]):
+            if sum(1 for v in (models_1, models_2, models_3) if v) > 1:
+                await i.send("More than one imgmodel was selected. Using the first selection.", ephemeral=True)
+            selected_imgmodel = ((models_1 or models_2 or models_3) and (models_1 or models_2 or models_3).value) or ''
+            await process_imgmodel(i, selected_imgmodel)
+
+    elif 75 < len(all_imgmodels) <= 100:
+        @client.hybrid_command(name="imgmodel", description='Choose an imgmodel (pick only one)')
+        @app_commands.choices(models_1=imgmodel_options)
+        @app_commands.choices(models_2=imgmodel_options1)
+        @app_commands.choices(models_3=imgmodel_options2)
+        @app_commands.choices(models_4=imgmodel_options3)
+        async def imgmodel(i: discord.Interaction, models_1: typing.Optional[app_commands.Choice[str]], models_2: typing.Optional[app_commands.Choice[str]], models_3: typing.Optional[app_commands.Choice[str]], models_4: typing.Optional[app_commands.Choice[str]]):
+            if sum(1 for v in (models_1, models_2, models_3, models_4) if v) > 1:
+                await i.send("More than one imgmodel was selected. Using the first selection.", ephemeral=True)
+            selected_imgmodel = ((models_1 or models_2 or models_3 or models_4) and (models_1 or models_2 or models_3 or models_4).value) or ''
+            await process_imgmodel(i, selected_imgmodel)
 
 ## /Speak command
 async def process_speak_silero_non_eng(i, lang):
@@ -2181,8 +2209,9 @@ async def process_speak(i, input_text, selected_voice=None, lang=None, voice_inp
         if tts_resp: await task_queue.put(process_tts_resp(i, tts_resp)) # Process this in background
         await update_extensions(data.get('extensions', {})) # Restore character specific extension settings
         if user_voice: os.remove(user_voice)
-        await i.send(f'**{i.author} requested text to speech:**\n{input_text}')
-        await message.delete()            
+       # await i.send(f'**{i.author} requested text to speech:**\n{input_text}')
+        await send_long_message(i.channel, (f'**{i.author} requested text to speech:**\n{input_text}'))
+        await message.delete()
     except Exception as e:
         print(f"Error processing tts request: {e}")
         await i.send(f"Error processing tts request: {e}", ephemeral=True)
@@ -2199,7 +2228,7 @@ if tts_client:
             lang_list = ['Arabic', 'Chinese', 'Czech', 'Dutch', 'English', 'French', 'German', 'Hungarian', 'Italian', 'Japanese', 'Korean', 'Polish', 'Portuguese', 'Russian', 'Spanish', 'Turkish']
             tts_voices_dir = f'extensions/{tts_client}/voices'
             if os.path.exists(tts_voices_dir) and os.path.isdir(tts_voices_dir):
-                all_voices = [voice_name[:-4] for voice_name in os.listdir(tts_voices_dir) if voice_name.endswith(".wav")]   
+                all_voices = [voice_name[:-4] for voice_name in os.listdir(tts_voices_dir) if voice_name.endswith(".wav")]
         elif tts_client == 'silero_tts':
             lang_list = ['English', 'Spanish', 'French', 'German', 'Russian', 'Tatar', 'Ukranian', 'Uzbek', 'English (India)', 'Avar', 'Bashkir', 'Bulgarian', 'Chechen', 'Chuvash', 'Kalmyk', 'Karachay-Balkar', 'Kazakh', 'Khakas', 'Komi-Ziryan', 'Mari', 'Nogai', 'Ossetic', 'Tuvinian', 'Udmurt', 'Yakut']
             print('''There's too many Voice/language permutations to make them all selectable in "/speak" command. Loading a bunch of English options. Non-English languages will automatically play using respective default speaker.''')
@@ -2260,7 +2289,6 @@ if tts_client:
                 #user_voice = await process_user_voice(i, voice_input)
                 lang = lang.value if lang is not None else ''
                 await process_speak(i, input_text, selected_voice, lang, voice_input)
-
 
 class LLMUserInputs():
     # Initialize default state settings
