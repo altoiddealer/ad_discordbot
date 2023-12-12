@@ -628,7 +628,7 @@ async def auto_update_imgmodel_task(mode='random'):
     while True:
         frequency = config.imgmodels['auto_change_models']['frequency']
         duration = frequency*3600 # 3600 = 1 hour
-        #await asyncio.sleep(duration)
+        await asyncio.sleep(duration)
         try:
             active_settings = load_yaml_file('ad_discordbot/activesettings.yaml')
             current_imgmodel_name = active_settings.get('imgmodel', {}).get('imgmodel_name', '')
@@ -654,7 +654,7 @@ async def auto_update_imgmodel_task(mode='random'):
             print(f"Updated imgmodel settings to: {selected_imgmodel_name}")
         except Exception as e:
             print(f"Error automatically updating image model: {e}")
-        await asyncio.sleep(duration)
+        #await asyncio.sleep(duration)
 
 imgmodel_update_task = None # Global variable allows process to be cancelled and restarted (reset sleep timer)
 
