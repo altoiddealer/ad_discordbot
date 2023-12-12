@@ -2083,6 +2083,11 @@ async def cont(i):
     await delete_last_message(i)
     await send_long_message(i.channel, last_resp)
 
+@client.hybrid_command(description="Update dropdown menus without restarting bot script.")
+async def sync(interaction: discord.Interaction):
+    await task_queue.put(client.tree.sync()) # Process this in the background
+
+## /Speak command
 async def process_speak_silero_non_eng(i, lang):
     non_eng_speaker = None
     non_eng_model = None
@@ -2206,11 +2211,12 @@ if tts_client:
             if tts_api_key:
                 update_api_key(tts_api_key)
             all_voices = refresh_voices()
-        voice_options = [app_commands.Choice(name=voice_name, value=f'{voice_name}{ext}') for voice_name in all_voices[:25]]
+        all_voices.sort() # Sort alphabetically
+        voice_options = [app_commands.Choice(name=voice_name.replace('_', ' ').title(), value=f'{voice_name}{ext}') for voice_name in all_voices[:25]]
         if len(all_voices) > 25:
-            voice_options1 = [app_commands.Choice(name=voice_name, value=f'{voice_name}{ext}') for voice_name in all_voices[25:50]]    
+            voice_options1 = [app_commands.Choice(name=voice_name.replace('_', ' ').title(), value=f'{voice_name}{ext}') for voice_name in all_voices[25:50]]    
             if len(all_voices) > 50:      
-                voice_options2 = [app_commands.Choice(name=voice_name, value=f'{voice_name}{ext}') for voice_name in all_voices[50:75]]                       
+                voice_options2 = [app_commands.Choice(name=voice_name.replace('_', ' ').title(), value=f'{voice_name}{ext}') for voice_name in all_voices[50:75]]                       
                 if len(all_voices) > 75: print("'/speak' command only allows up to 75 voices. Some voices were omitted.")
         if lang_list: lang_options = [app_commands.Choice(name=lang, value=lang) for lang in lang_list]
         else: lang_options = [app_commands.Choice(name='English', value='English')] # Default to English
@@ -2220,7 +2226,7 @@ if tts_client:
             @app_commands.choices(voice=voice_options)
             @app_commands.choices(lang=lang_options)
             async def speak(i: discord.Interaction, input_text: str, voice: typing.Optional[app_commands.Choice[str]], lang: typing.Optional[app_commands.Choice[str]], voice_input: typing.Optional[discord.Attachment]):
-                selected_voice = voice.vale if voice is not None else ''
+                selected_voice = voice.value if voice is not None else ''
                 voice_input = voice_input.value if voice_input is not None else ''
                 #user_voice = await process_user_voice(i, voice_input)
                 lang = lang.value if lang is not None else ''
@@ -2255,9 +2261,6 @@ if tts_client:
                 lang = lang.value if lang is not None else ''
                 await process_speak(i, input_text, selected_voice, lang, voice_input)
 
-@client.hybrid_command(description="Update dropdown menus without restarting bot script.")
-async def sync(interaction: discord.Interaction):
-    await task_queue.put(client.tree.sync()) # Process this in the background
 
 class LLMUserInputs():
     # Initialize default state settings
