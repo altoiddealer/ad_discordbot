@@ -135,8 +135,13 @@ def update_model_parameters(state, initial=False):
 #Load Extensions   
 shared.args.extensions = []
 extensions_module.available_extensions = utils.get_available_extensions()
-tts_client = config.discord['tts_settings']['extension'] # tts client
+
+supported_tts_clients = ['coqui_tts', 'silero_tts', 'elevenlabs_tts']
+tts_client = config.discord['tts_settings'].get('extension', '') # tts client
 if tts_client:
+    if tts_client not in supported_tts_clients:
+        print(f'tts client "{tts_client}" is not yet confirmed to be work. The "/speak" command will not be registered. List of supported tts_clients: {supported_tts_clients}')
+
     tts_api_key = config.discord['tts_settings'].get('api_key', None)
     if tts_client == 'coqui_tts':
         tts_voice_key = 'voice'
@@ -2159,10 +2164,29 @@ async def process_speak_args(i, selected_voice=None, lang=None, user_voice=None)
             pass # Default to voice in shared.settings
         else:
             await i.send("No voice was selected or provided, and a default voice was not found. Request will probably fail...", ephemeral=True)
+        return tts_args
     except Exception as e:
         print(f"Error processing tts options: {e}")
         await i.send(f"Error processing tts options: {e}", ephemeral=True)
-    return tts_args
+
+async def convert_and_resample_mp3(mp3_file, output_directory=None):
+    try:
+        audio = AudioSegment.from_mp3(mp3_file)
+        if audio.channels == 2:
+            audio = audio.set_channels(1)   # should be Mono
+        audio = audio.set_frame_rate(22050) # ideal sample rate
+        audio = audio.set_sample_width(2)   # 2 bytes for 16 bits
+        output_directory = output_directory or os.path.dirname(mp3_file)
+        wav_filename = os.path.splitext(os.path.basename(mp3_file))[0] + '.wav'
+        wav_path = f"{output_directory}/{wav_filename}"
+        audio.export(wav_path, format="wav")
+        print(f'User provided file "{mp3_file}" was converted to .wav for "/speak" command')
+        return wav_path
+    except Exception as e:
+        print(f"Error converting user's .mp3 to .wav: {e}")
+        await i.send("An error occurred while processing the voice file.", ephemeral=True)
+    finally:
+        if mp3_file: os.remove(mp3_file)
 
 async def process_user_voice(i, voice_input=None):
     try:
@@ -2173,20 +2197,26 @@ async def process_user_voice(i, voice_input=None):
             return ''
         voiceurl = voice_input.url
         voiceurl_without_params = voiceurl.split('?')[0]
-        if not voiceurl_without_params.endswith(".wav"):
-            await i.send("Invalid audio format. Please try again with a valid WAV file.", ephemeral=True)
+        if not voiceurl_without_params.endswith((".wav", ".mp3")):
+            await i.send("Invalid audio format. Please try again with a WAV or MP3 file.", ephemeral=True)
             return ''
-        user_voice = f'{tts_client}/temp_voice.wav'
+        voice_data_ext = voiceurl_without_params[-4:]
+        user_voice = f'extensions/{tts_client}/voices/temp_voice{voice_data_ext}'
         async with aiohttp.ClientSession() as session:
             async with session.get(voiceurl) as resp:
                 if resp.status == 200:
                     voice_data = await resp.read()
                     with open(user_voice, 'wb') as f:
                         f.write(voice_data)
-                    return user_voice
                 else:
                     await i.send("Error downloading your audio file. Please try again.", ephemeral=True)
                     return ''
+        if voice_data_ext == '.mp3':
+            try:
+                user_voice = await convert_and_resample_mp3(user_voice, output_directory=None)
+            except:
+                if user_voice: os.remove(user_voice)
+        return user_voice
     except Exception as e:
         print(f"Error processing user provided voice file: {e}")
         await i.send("An error occurred while processing the voice file.", ephemeral=True)
@@ -2216,13 +2246,11 @@ async def process_speak(i, input_text, selected_voice=None, lang=None, voice_inp
         print(f"Error processing tts request: {e}")
         await i.send(f"Error processing tts request: {e}", ephemeral=True)
 
-if tts_client:
-    valid_tts_clients = ['coqui_tts', 'silero_tts', 'elevenlabs_tts']
-    if tts_client not in valid_tts_clients:
-        print(f'tts client "{tts_client}" is not yet supported. "/speak" command will not be registered. List of supported tts_clients: {valid_tts_clients}')
-    else:
+async def fetch_speak_options():
+    try:
         ext = ''
         lang_list = []
+        all_voicess = []
         if tts_client == 'coqui_tts':
             ext = '.wav'
             lang_list = ['Arabic', 'Chinese', 'Czech', 'Dutch', 'English', 'French', 'German', 'Hungarian', 'Italian', 'Japanese', 'Korean', 'Polish', 'Portuguese', 'Russian', 'Spanish', 'Turkish']
@@ -2241,54 +2269,57 @@ if tts_client:
                 update_api_key(tts_api_key)
             all_voices = refresh_voices()
         all_voices.sort() # Sort alphabetically
-        voice_options = [app_commands.Choice(name=voice_name.replace('_', ' ').title(), value=f'{voice_name}{ext}') for voice_name in all_voices[:25]]
-        if len(all_voices) > 25:
-            voice_options1 = [app_commands.Choice(name=voice_name.replace('_', ' ').title(), value=f'{voice_name}{ext}') for voice_name in all_voices[25:50]]    
-            if len(all_voices) > 50:      
-                voice_options2 = [app_commands.Choice(name=voice_name.replace('_', ' ').title(), value=f'{voice_name}{ext}') for voice_name in all_voices[50:75]]                       
-                if len(all_voices) > 75: print("'/speak' command only allows up to 75 voices. Some voices were omitted.")
-        if lang_list: lang_options = [app_commands.Choice(name=lang, value=lang) for lang in lang_list]
-        else: lang_options = [app_commands.Choice(name='English', value='English')] # Default to English
+        return ext, lang_list, all_voices
+    except Exception as e:
+        print(f'Error building options for "/speak" command: {e}')
 
-        if len(all_voices) <= 25:
-            @client.hybrid_command(name="speak", description='AI will speak your text using a selected voice')
-            @app_commands.choices(voice=voice_options)
-            @app_commands.choices(lang=lang_options)
-            async def speak(i: discord.Interaction, input_text: str, voice: typing.Optional[app_commands.Choice[str]], lang: typing.Optional[app_commands.Choice[str]], voice_input: typing.Optional[discord.Attachment]):
-                selected_voice = voice.value if voice is not None else ''
-                voice_input = voice_input.value if voice_input is not None else ''
-                #user_voice = await process_user_voice(i, voice_input)
-                lang = lang.value if lang is not None else ''
-                await process_speak(i, input_text, selected_voice, lang, voice_input)
+if tts_client and tts_client in supported_tts_clients:
+    ext, lang_list, all_voices = asyncio.run(fetch_speak_options())
+    voice_options = [app_commands.Choice(name=voice_name.replace('_', ' ').title(), value=f'{voice_name}{ext}') for voice_name in all_voices[:25]]
+    if len(all_voices) > 25:
+        voice_options1 = [app_commands.Choice(name=voice_name.replace('_', ' ').title(), value=f'{voice_name}{ext}') for voice_name in all_voices[25:50]]    
+        if len(all_voices) > 50:      
+            voice_options2 = [app_commands.Choice(name=voice_name.replace('_', ' ').title(), value=f'{voice_name}{ext}') for voice_name in all_voices[50:75]]                       
+            if len(all_voices) > 75: print("'/speak' command only allows up to 75 voices. Some voices were omitted.")
+    if lang_list: lang_options = [app_commands.Choice(name=lang, value=lang) for lang in lang_list]
+    else: lang_options = [app_commands.Choice(name='English', value='English')] # Default to English
 
-        elif 25 < len(all_voices) <= 50:
-            @client.hybrid_command(name="speak", description='AI will speak your text using a selected voice (pick only one)')
-            @app_commands.choices(voice=voice_options)
-            @app_commands.choices(voice1=voice_options1)
-            @app_commands.choices(lang=lang_options)
-            async def speak(i: discord.Interaction, input_text: str, voice: typing.Optional[app_commands.Choice[str]], voice1: typing.Optional[app_commands.Choice[str]], lang: typing.Optional[app_commands.Choice[str]], voice_input: typing.Optional[discord.Attachment]):
-                if voice and voice1:
-                    await i.send("A voice was picked from two separate menus. Using the first selection.", ephemeral=True)
-                selected_voice = ((voice or voice1) and (voice or voice1).value) or ''
-                voice_input = voice_input.value if voice_input is not None else ''
-                #user_voice = await process_user_voice(i, voice_input)
-                lang = lang.value if lang is not None else ''
-                await process_speak(i, input_text, selected_voice, lang, voice_input)
+    if len(all_voices) <= 25:
+        @client.hybrid_command(name="speak", description='AI will speak your text using a selected voice')
+        @app_commands.choices(voice=voice_options)
+        @app_commands.choices(lang=lang_options)
+        async def speak(i: discord.Interaction, input_text: str, voice: typing.Optional[app_commands.Choice[str]], lang: typing.Optional[app_commands.Choice[str]], voice_input: typing.Optional[discord.Attachment]):
+            selected_voice = voice.value if voice is not None else ''
+            voice_input = voice_input if voice_input is not None else ''
+            lang = lang.value if lang is not None else ''
+            await process_speak(i, input_text, selected_voice, lang, voice_input)
 
-        elif 50 < len(all_voices) <= 75:
-            @client.hybrid_command(name="speak", description='AI will speak your text using a selected voice (pick only one)')
-            @app_commands.choices(voice=voice_options)
-            @app_commands.choices(voice1=voice_options1)
-            @app_commands.choices(voice2=voice_options2)
-            @app_commands.choices(lang=lang_options)
-            async def speak(i: discord.Interaction, input_text: str, voice: typing.Optional[app_commands.Choice[str]], voice1: typing.Optional[app_commands.Choice[str]], voice2: typing.Optional[app_commands.Choice[str]], lang: typing.Optional[app_commands.Choice[str]], voice_input: typing.Optional[discord.Attachment]):
-                if sum(1 for v in (voice, voice1, voice2) if v) > 1:
-                    await i.send("A voice was picked from two separate menus. Using the first selection.", ephemeral=True)
-                selected_voice = ((voice or voice1 or voice2) and (voice or voice1 or voice2).value) or ''
-                voice_input = voice_input.value if voice_input is not None else ''
-                #user_voice = await process_user_voice(i, voice_input)
-                lang = lang.value if lang is not None else ''
-                await process_speak(i, input_text, selected_voice, lang, voice_input)
+    elif 25 < len(all_voices) <= 50:
+        @client.hybrid_command(name="speak", description='AI will speak your text using a selected voice (pick only one)')
+        @app_commands.choices(voice_1=voice_options)
+        @app_commands.choices(voice_2=voice_options1)
+        @app_commands.choices(lang=lang_options)
+        async def speak(i: discord.Interaction, input_text: str, voice_1: typing.Optional[app_commands.Choice[str]], voice_2: typing.Optional[app_commands.Choice[str]], lang: typing.Optional[app_commands.Choice[str]], voice_input: typing.Optional[discord.Attachment]):
+            if voice_1 and voice_2:
+                await i.send("A voice was picked from two separate menus. Using the first selection.", ephemeral=True)
+            selected_voice = ((voice_1 or voice_2) and (voice_1 or voice_2).value) or ''
+            voice_input = voice_input if voice_input is not None else ''
+            lang = lang.value if lang is not None else ''
+            await process_speak(i, input_text, selected_voice, lang, voice_input)
+
+    elif 50 < len(all_voices) <= 75:
+        @client.hybrid_command(name="speak", description='AI will speak your text using a selected voice (pick only one)')
+        @app_commands.choices(voice_1=voice_options)
+        @app_commands.choices(voice_2=voice_options1)
+        @app_commands.choices(voice_3=voice_options2)
+        @app_commands.choices(lang=lang_options)
+        async def speak(i: discord.Interaction, input_text: str, voice_1: typing.Optional[app_commands.Choice[str]], voice_2: typing.Optional[app_commands.Choice[str]], voice_3: typing.Optional[app_commands.Choice[str]], lang: typing.Optional[app_commands.Choice[str]], voice_input: typing.Optional[discord.Attachment]):
+            if sum(1 for v in (voice_1, voice_2, voice_3) if v) > 1:
+                await i.send("A voice was picked from two separate menus. Using the first selection.", ephemeral=True)
+            selected_voice = ((voice_1 or voice_2 or voice_3) and (voice_1 or voice_2 or voice_3).value) or ''
+            voice_input = voice_input if voice_input is not None else ''
+            lang = lang.value if lang is not None else ''
+            await process_speak(i, input_text, selected_voice, lang, voice_input)
 
 class LLMUserInputs():
     # Initialize default state settings
