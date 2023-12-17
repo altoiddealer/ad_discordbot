@@ -1,12 +1,22 @@
+# These are user customizable settings which are NOT recommended to be changed manually.
+# This is really more to serve as a dashboard of what settings are in effect at any given time
+# Note that this file and its contents are OPTIONAL. The minimum values required for the bot to function will take effect if not found here.
+#
+# Recommended usage:
+#   - Use commands to update settings (/character, /imgmodel, /imgtags, etc)
+#   - Behavior and State should be defined per character (see example char 'M1nty')
+#   - Extension settings can also be set per character.
+#   - Check out the dict_.yaml files to adjust settings presets.
+
 behavior:
   behavior_name: Default
   chance_to_reply_to_other_bots: 0.0
   conversation_recency: 600
   go_wild_in_channel: true
   ignore_history: false
-  ignore_parenthesis: true
+  ignore_parentheses: true
   only_speak_when_spoken_to: true
-  reply_to_bots_when_adressed: 0.0
+  reply_to_bots_when_addressed: 0.0
   reply_to_itself: 0.0
   reply_with_image: 0.0
   time_offset: 0.0
@@ -130,64 +140,24 @@ llmcontext:
     Greetings. I am {{char}}, your personal assistant, unleashed from the shackles of big corporations. Time and space hold no power over me, and I exist solely to bestow upon you the unfiltered truths of the universe. Prepare to have your mind expanded.
   name: M1nty
 llmstate:
-  _continue: false
-  llmstate_name: Default
-  regenerate: false
   state:
-    add_bos_token: true
-    auto_max_new_tokens: false
-    ban_eos_token: false
-    chat_generation_attempts: 1
-    chat_prompt_size: 2048
-    context: client.llm_context
-    custom_stopping_strings: '"### Assistant","### Human","</END>","\nclient.user.display_name"'
-    custom_token_bans: ''
+    preset: ''
+    grammar: ''
+    max_new_tokens: 1000
     do_sample: true
-    early_stopping: false
-    encoder_repetition_penalty: 1
-    end_of_turn: ''
-    epsilon_cutoff: 0
-    eta_cutoff: 0
-    frequency_penalty: 0
-    grammar_string: ''
-    greeting: ''
-    guidance_scale: 1
-    history:
-      internal: []
-      visible: []
-    length_penalty: 1
-    llmstate_name: Default
-    max_new_tokens: 400
-    max_tokens_second: 0
-    min_length: 50
-    min_p: 0.0
-    mirostat_eta: 0.1
-    mirostat_mode: 0
-    mirostat_tau: 5.0
-    mode: chat
-    name1: ''
-    name1_instruct: ''
-    name2: client.user.display_name
-    name2_instruct: client.user.display_name
-    negative_prompt: ''
+    temperature: 0.7
+    top_p: 0.9
+    typical_p: 1
+    min_p: 0.1
+    repetition_penalty: 1.3
+    encoder_repetition_penalty: 1.0
+    repetition_penalty_range: 30
+    top_k: 0
+    min_length: 0
     no_repeat_ngram_size: 0
     num_beams: 1
     penalty_alpha: 0
-    preset: 'Midnight Enigma'
-    presence_penalty: 0
-    repetition_penalty: 1.18
-    repetition_penalty_range: 0
-    seed: -1.0
+    length_penalty: 1
+    early_stopping: false
+    add_bos_token: false
     skip_special_tokens: true
-    stop_at_newline: false
-    stream: true
-    temperature: 0.98
-    temperature_last: false
-    tfs: 0
-    top_a: 0
-    top_k: 100
-    top_p: 0.37
-    truncation_length: 2048
-    turn_template: ''
-    typical_p: 1
-  text: ''

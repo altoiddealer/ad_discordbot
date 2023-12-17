@@ -53,9 +53,9 @@ behavior:
   reply_with_image: 1.0     # 0.0 = never happens / 1.0 = always happens
   reply_to_itself: 0.0      # 0.0 = never happens / 1.0 = always happens
   chance_to_reply_to_other_bots: 0.0  # Chance for bot to reply when other bots speak in main channel
-  reply_to_bots_when_adressed: 0.0    # Chance for bot to reply when other bots mention it by name
+  reply_to_bots_when_addressed: 0.0    # Chance for bot to reply when other bots mention it by name
   only_speak_when_spoken_to: true     # This value gets ignored if you're talking in the bot's main channel
-  ignore_parenthesis: true  # (Bot ignores you if you write like this)
+  ignore_parentheses: true  # (Bot ignores you if you write like this)
   go_wild_in_channel: true  # Whether or not the bot will always reply in the main channel
   conversation_recency: 600 # How long (in seconds) a user is determined to be "in active conversation"
 
