@@ -425,26 +425,25 @@ async def character_loader(source):
         _, name, _, greeting, context = load_character(source, '', '')
         missing_keys = [key for key, value in {'name': name, 'greeting': greeting, 'context': context}.items() if not value]
         if any (missing_keys):
-            print(f'Character "{source}" is missing the following required info:"{missing_keys}". Using a default setting for each missing key.')
-            for missing_key in missing_keys:
-                # Apply default values for missing keys
-                if missing_key == 'name': name = client.settings['llmcontext']['name']
-                elif missing_key == 'greeting': greeting = client.settings['llmcontext']['greeting']
-                elif missing_key == 'context': context = client.settings['llmcontext']['context']
+            print(f'Note that character "{source}" is missing the following info:"{missing_keys}".')
         textgen_data = {'name': name, 'greeting': greeting, 'context': context}
         # Check for extra bot data
         char_path = os.path.join("characters", f"{source}.yaml")
         char_data = load_yaml_file(char_path)
         char_data = dict(char_data)
         # Gather context specific keys from the character data
+        extensions_value = {}
+        vc_value = False
         char_llmcontext = {}
         for key, value in char_data.items():
             if key in ['bot_description', 'bot_emoji', 'extensions', 'use_voice_channel']:
                 char_llmcontext[key] = value
                 if key == 'extensions':
-                    await update_extensions(value)
+                    extensions_value = value
                 elif key == 'use_voice_channel':
-                    await voice_channel(value)
+                    vc_value = value
+        await update_extensions(extensions_value)
+        await voice_channel(vc_value)
         # Merge any extra data with the llmcontext data
         char_llmcontext.update(textgen_data)
         # Collect behavior data
@@ -452,11 +451,13 @@ async def character_loader(source):
         if char_behavior is None:
             behaviors = load_yaml_file('ad_discordbot/dict_behaviors.yaml')
             char_behavior = next((b for b in behaviors if b['behavior_name'] == 'Default'), client.settings['behavior'])
+            print("No character specific Behavior settings. Using 'Default' ('ad_discordbot/dict_behaviors.yaml').")
         # Collect llmstate data
-        char_llmstate = char_data.get('llmstate', None)
+        char_llmstate = char_data.get('state', None)
         if char_llmstate is None:
             llmstates = load_yaml_file('ad_discordbot/dict_llmstates.yaml')
-            char_llmstate = next((s for s in llmstates if s['llmstate_name'] == 'Default'), client.settings['llmstate'])
+            char_llmstate = next((s for s in llmstates if s['llmstate_name'] == 'Default'), client.settings['llmstate']['state'])
+            print("No character specific LLM State settings. Using 'Default' ('ad_discordbot/dict_llmstates.yaml').")
         # Commit the character data to client.settings
         client.settings['llmcontext'] = dict(char_llmcontext) # Replace the entire dictionary key
         update_dict(client.settings['behavior'], dict(char_behavior))
@@ -505,9 +506,9 @@ async def change_character(i, char_name):
         await update_client_profile(change_username, change_avatar, char_name)
         # Save the updated active_settings to activesettings.yaml
         active_settings = load_yaml_file('ad_discordbot/activesettings.yaml')
-        active_settings['llmcontext'] = char_llmcontext # Replace the entire dictionary key
-        update_dict(active_settings['behavior'], char_behavior)
-        update_dict(active_settings['llmstate'], char_llmstate)
+        active_settings['llmcontext'] = char_llmcontext
+        active_settings['behavior'] = char_behavior
+        active_settings['llmstate']['state'] = char_llmstate
         save_yaml_file('ad_discordbot/activesettings.yaml', active_settings)
         # Ensure all settings are synchronized
         update_client_settings()
@@ -787,7 +788,6 @@ async def on_ready():
         # If name doesn't match the bot's discord username, try to figure out best char data to initialize with
         if source != client.user.display_name:
             print(f'The bot\'s discord username "{client.user.display_name}" does not match the last known character name "{source}".')
-            print("If there are any errors regarding 'positional arguements', chances are this bot or textgen-webui needs updating (compare to 'load_characters() in '/modules/chat.py')")
             sources = [
                 client.user.display_name, # Try current bot name
                 client.settings['llmcontext']['name'], # Try last known name
@@ -798,7 +798,7 @@ async def on_ready():
                 try:
                     _, char_name, _, _, _ = load_character(source, '', '')
                     if char_name:
-                        print(f'Initializing with character "{char_name}". Please use "/character" command for a more streamlined experience.')                            
+                        print(f'Initializing with character "{source}". Please use "/character" command for a more streamlined experience.')                            
                         break  # Character loaded successfully, exit the loop
                 except Exception as e:
                     logging.error("Error loading character:", e)
@@ -1786,6 +1786,7 @@ class CharacterDropdown(discord.ui.Select):
     async def callback(self, interaction: discord.Interaction):
         character = self.values[0]
         await change_character(self.i, character)
+        print(f'Loaded new character: "{character}".')
         await interaction.response.send_message(client.settings['llmcontext'].get('greeting', f'"**{character} has entered the chat**"'))
 
 @client.hybrid_command(description="Choose Character")
@@ -2463,11 +2464,11 @@ class ImgTag:
 
 class LLMContext:
     def __init__(self):
-        self.bot_description = 'Friendly chatbot'
-        self.bot_emoji = '\xF0\u0178\u0178\xA3'
+        self.bot_description = ''
+        self.bot_emoji = ''
         self.context = 'The following is a conversation with an AI Large Language Model. The AI has been trained to answer questions, provide recommendations, and help with decision making. The AI follows user requests. The AI thinks outside the box.'
         self.extensions = {}
-        self.greeting = 'How can I help you today?'
+        self.greeting = '' # 'How can I help you today?'
         self.llmcontext_name = '' # label used for /llmcontext command
         self.name = 'AI'
         self.use_voice_channel = False

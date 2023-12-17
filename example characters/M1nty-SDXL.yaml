@@ -83,4 +83,4 @@ state:
   num_beams: 1
   length_penalty: 1
   truncation_length: 2048
-  custom_stopping_strings: '":","### Assistant","### Human","</END>","client.user.display_name"'
+  custom_stopping_strings: '":","### Assistant","### Human","</END>"'
