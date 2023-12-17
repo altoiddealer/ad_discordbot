@@ -787,7 +787,6 @@ async def on_ready():
         source = client.settings['llmcontext']['name']
         # If name doesn't match the bot's discord username, try to figure out best char data to initialize with
         if source != client.user.display_name:
-            print(f'The bot\'s discord username "{client.user.display_name}" does not match the last known character name "{source}".')
             sources = [
                 client.user.display_name, # Try current bot name
                 client.settings['llmcontext']['name'], # Try last known name
@@ -798,7 +797,7 @@ async def on_ready():
                 try:
                     _, char_name, _, _, _ = load_character(source, '', '')
                     if char_name:
-                        print(f'Initializing with character "{source}". Please use "/character" command for a more streamlined experience.')                            
+                        print(f'Initializing with character "{source}". Use "/character" for changing characters.')                            
                         break  # Character loaded successfully, exit the loop
                 except Exception as e:
                     logging.error("Error loading character:", e)
@@ -1786,8 +1785,11 @@ class CharacterDropdown(discord.ui.Select):
     async def callback(self, interaction: discord.Interaction):
         character = self.values[0]
         await change_character(self.i, character)
+        greeting_message = client.settings['llmcontext']['greeting']
+        if not greeting_message:
+            greeting_message = f'**{character}** has entered the chat"'
+        await interaction.response.send_message(greeting_message)
         print(f'Loaded new character: "{character}".')
-        await interaction.response.send_message(client.settings['llmcontext'].get('greeting', f'"**{character} has entered the chat**"'))
 
 @client.hybrid_command(description="Choose Character")
 async def character(i):
