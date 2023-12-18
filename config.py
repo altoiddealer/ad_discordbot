@@ -55,6 +55,12 @@ sd = {
     } 
 }
 
+# Former default behavior of textgen-webui (but not anymore). Use this setting to update 'context' + 'greeting'.
+replace_char_names = {
+    'replace_user': '{{user}}', # replace every instance with user's username. '' = don't replace anything
+    'replace_char': '{{char}}'   # replace every instance with bot's character name. '' = don't replace anything
+}
+
 # Slips in a message about the current time before your context.
 tell_bot_time = {
     'enabled': True,
