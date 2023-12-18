@@ -433,7 +433,7 @@ async def character_loader(source):
         char_data = dict(char_data)
         # Gather context specific keys from the character data
         extensions_value = {}
-        vc_value = False
+        vc_value = ''
         char_llmcontext = {}
         for key, value in char_data.items():
             if key in ['bot_description', 'bot_emoji', 'extensions', 'use_voice_channel']:
@@ -683,16 +683,16 @@ async def voice_channel(vc_setting):
                     voice_channel = client.get_channel(config.discord['tts_settings']['voice_channel'])
                     voice_client = await voice_channel.connect()
                 else:
-                    print(f'** Bot launched with {tts_client}, but no voice channel is specified in config.py **')
+                    print(f'Bot launched with {tts_client}, but no voice channel is specified in config.py')
             else:
-                print(f'** Character setting "use_voice_channel" = True, and "voice channel" is specified in config.py, BUT no "tts_client" is specified in config.py **')
+                print(f'Character "use_voice_channel" = True, and "voice channel" is specified in config.py, but no "tts_client" is specified in config.py')
         except Exception as e:
             print(f"An error occurred while connecting to voice channel:", e)
     # Stop voice client if explicitly deactivated in character settings
     if voice_client and voice_client.is_connected():
         try:
             if vc_setting is False:
-                print("** New context has setting to disconnect from voice channel. **")
+                print("New context has setting to disconnect from voice channel. Disconnecting...")
                 await voice_client.disconnect()
                 voice_client = None
         except Exception as e:
@@ -933,12 +933,26 @@ async def process_tts_resp(i, tts_resp):
     if play_mode != 1:
         await play_in_voice_channel(tts_resp) # run task in background
 
+async def fix_user_input(user_input):
+    # Fix user_input by adding any missing required settings
+    defaults = Settings() # Create an instance of the default settings
+    defaults = defaults.settings_to_dict() # Convert instance to dict
+    default_state = defaults['llmstate']['state']
+    current_state = user_input['state']
+    user_input['state'] = fix_dict(current_state, default_state)
+    return user_input
+
 async def chatbot_wrapper_wrapper(user_input, save_history):
+    # await fix_user_input(user_input)
     loop = asyncio.get_event_loop()
 
     def process_responses():
         last_resp = None
         tts_resp = None
+        name1_value = user_input['state']['name1']
+        name2_value = user_input['state']['name2']
+        user_input['state']['custom_stopping_strings'] += f',"{name1_value}","{name2_value}"'
+        user_input['state']['stopping_strings'] += f',"{name1_value}","{name2_value}"'
         for resp in chatbot_wrapper(text=user_input['text'], state=user_input['state'], regenerate=user_input['regenerate'], _continue=user_input['_continue'], loading_message=True, for_ui=False):
             i_resp = resp['internal']
             if len(i_resp) > 0:
@@ -957,6 +971,8 @@ async def chatbot_wrapper_wrapper(user_input, save_history):
             global session_history
             session_history['internal'].append([user_input['text'], last_resp])
             session_history['visible'].append([user_input['text'], last_resp])
+        update_client_settings()
+        update_behavior()
 
         return last_resp, tts_resp  # bot's reply
 
@@ -991,7 +1007,7 @@ async def llm_gen(i, queues, save_history):
         blocking = False
 
 ## Dynamic Context feature
-def process_dynamic_context(user_input, text, llm_prompt, save_history):
+async def process_dynamic_context(i, user_input, text, llm_prompt, save_history):
     dynamic_context = config.dynamic_context
     matched_presets = []
     if dynamic_context.get('enabled', False):
@@ -1019,13 +1035,21 @@ def process_dynamic_context(user_input, text, llm_prompt, save_history):
                 try:
                     character_path = os.path.join("characters", f"{swap_char_name}.yaml")
                     if character_path:
-                        char_data = dict(load_yaml_file(character_path))
-                        if char_data['name']:
-                            user_input['state']['name2'] = char_data['name']
-                            user_input['state']['character_menu'] = char_data['name']
-                        if char_data.get('context', ''): user_input['state']['context'] = char_data['context']
+                        char_data = load_yaml_file(character_path)
+                        char_data = dict(char_data)
+                        name1 = i.author.display_name
+                        name2 = ''
                         if char_data.get('state', {}):
-                            update_dict(user_input['state'], char_data['state'])
+                            user_input['state'] = char_data['state']
+                            user_input['state']['name1'] = name1
+                        if char_data['name']:
+                            name2 = char_data['name']
+                            user_input['state']['name2'] = name2
+                            user_input['state']['character_menu'] = name2
+                        if char_data.get('context', ''):
+                            context = char_data['context']
+                            context = await replace_character_names(context, name1, name2)
+                            user_input['state']['context'] = context
                 except Exception as e:
                     print(f"An error occurred while loading the YAML file for swap_character:", e)
                 print_content += f"Character: {swap_char_name}"
@@ -1060,7 +1084,8 @@ def process_dynamic_context(user_input, text, llm_prompt, save_history):
             # Print results
             if dynamic_context['print_results']:
                 print(print_content)
-    return user_input, llm_prompt
+        await fix_user_input(user_input)
+    return user_input, llm_prompt, save_history
 
 def determine_date():
     current_time = ''
@@ -1099,13 +1124,16 @@ def user_asks_for_image(i, text):
     return False
 
 async def create_image_prompt(user_input, llm_prompt, current_time, save_history):
-    user_input['text'] = llm_prompt
-    if 'llmstate_name' in user_input: del user_input['llmstate_name'] # Looks more legit without this
-    if current_time and config.tell_bot_time.get('message', '') and config.tell_bot_time.get('mode', 0) >= 1:
-        user_input['state']['context'] = config.tell_bot_time['message'].format(current_time) + user_input['state']['context']
-    last_resp, tts_resp = await chatbot_wrapper_wrapper(user_input, save_history)
-    if len(last_resp) > 2000: last_resp = last_resp[:2000]
-    return last_resp, tts_resp
+    try:
+        user_input['text'] = llm_prompt
+        if 'llmstate_name' in user_input: del user_input['llmstate_name'] # Looks more legit without this
+        if current_time and config.tell_bot_time.get('message', '') and config.tell_bot_time.get('mode', 0) >= 1:
+            user_input['state']['context'] = config.tell_bot_time['message'].format(current_time) + user_input['state']['context']
+        last_resp, tts_resp = await chatbot_wrapper_wrapper(user_input, save_history)
+        if len(last_resp) > 2000: last_resp = last_resp[:2000]
+        return last_resp, tts_resp
+    except Exception as e:
+        print(f"An error occurred while processing image prompt: {e}")
 
 async def create_prompt_for_llm(i, user_input, llm_prompt, current_time, save_history):
     user_input['text'] = llm_prompt
@@ -1121,13 +1149,24 @@ async def create_prompt_for_llm(i, user_input, llm_prompt, current_time, save_hi
         async with i.channel.typing():
             await llm_gen(i, queues, save_history)
 
-def initialize_user_input(i, text):
+async def replace_character_names(text, name1, name2):
+    user = config.replace_char_names.get('replace_user', '')
+    char = config.replace_char_names.get('replace_char', '')
+    if user: text = text.replace(f'{user}', name1)
+    if char: text = text.replace(f'{char}', name2)
+    return text
+
+async def initialize_user_input(i, text):
     user_input = client.settings['llmstate'] # default state settings
     user_input['text'] = text
-    user_input['state']['name1'] = i.author.display_name
-    user_input['state']['name2'] = client.settings['llmcontext']['name']
-    user_input['state']['character_menu'] = client.settings['llmcontext']['name']
-    user_input['state']['context'] = client.settings['llmcontext']['context']
+    name1 = i.author.display_name
+    name2 = client.settings['llmcontext']['name']
+    context = client.settings['llmcontext']['context']
+    context = await replace_character_names(context, name1, name2)
+    user_input['state']['name1'] = name1
+    user_input['state']['name2'] = name2
+    user_input['state']['character_menu'] = name2
+    user_input['state']['context'] = context
     # check for ignore history setting / start with default history settings
     if not client.behavior.ignore_history:
         user_input['state']['history'] = session_history
@@ -1154,12 +1193,12 @@ async def on_message(i):
         text = text.replace(f"@{config.discord['char_name']} ","", 1)
     llm_prompt = text # 'text' will be retained as user's raw text (without @ mention)
     # build user_input with defaults
-    user_input = initialize_user_input(i, text)
+    user_input = await initialize_user_input(i, text)
     await update_extensions(client.settings['llmcontext'].get('extensions', {})) # Update character specific extension settings
     await voice_channel(client.settings['llmcontext'].get('use_voice_channel', None)) # Toggle voice channel
     # apply dynamic_context settings
-    save_history=True
-    user_input, llm_prompt = process_dynamic_context(user_input, text, llm_prompt, save_history)
+    save_history = True
+    user_input, llm_prompt, save_history = await process_dynamic_context(i, user_input, text, llm_prompt, save_history)
     # apply datetime to prompt
     current_time = determine_date()
     # save a global copy of text/llm_prompt for /regen cmd
@@ -1177,7 +1216,7 @@ async def on_message(i):
                     await pic(i, text, image_prompt, tts_resp, neg_prompt=None, size=None, face_swap=None, controlnet=None)
                     await i.channel.send(image_prompt)
         except Exception as e:
-            print(f"An error occurred: {e}")
+            print(f"An error occurred in on_message: {e}")
         busy_drawing = False
     else:
         await create_prompt_for_llm(i, user_input, llm_prompt, current_time, save_history)
@@ -1785,11 +1824,16 @@ class CharacterDropdown(discord.ui.Select):
     async def callback(self, interaction: discord.Interaction):
         character = self.values[0]
         await change_character(self.i, character)
-        greeting_message = client.settings['llmcontext']['greeting']
-        if not greeting_message:
-            greeting_message = f'**{character}** has entered the chat"'
-        await interaction.response.send_message(greeting_message)
+        greeting = client.settings['llmcontext']['greeting']
+        if greeting:
+            name1 = 'You'
+            name2 = character
+            greeting = await replace_character_names(greeting, name1, name2)
+        else:
+            greeting = f'**{character}** has entered the chat"'
+        await interaction.response.send_message(greeting)
         print(f'Loaded new character: "{character}".')
+        return
 
 @client.hybrid_command(description="Choose Character")
 async def character(i):
@@ -1910,7 +1954,7 @@ async def regen(i):
     info_embed.title = f"Regenerating ... "
     info_embed.description = ""
     await i.reply(embed=info_embed)
-    user_input = initialize_user_input(i, text=last_user_message['llm_prompt'])
+    user_input = await initialize_user_input(i, text=last_user_message['llm_prompt'])
     user_input['regenerate'] = True
     last_resp, tts_resp = await chatbot_wrapper_wrapper(user_input, save_history=None)
     await send_long_message(i.channel, last_resp)
@@ -1921,7 +1965,7 @@ async def cont(i):
     info_embed.title = f"Continuing ... "
     info_embed.description = ""
     await i.reply(embed=info_embed)
-    user_input = initialize_user_input(i, text=last_user_message['llm_prompt'])
+    user_input = await initialize_user_input(i, text=last_user_message['llm_prompt'])
     user_input['_continue'] = True
     last_resp, tts_resp = await chatbot_wrapper_wrapper(user_input, save_history=None)
     await delete_last_message(i)
@@ -2293,7 +2337,7 @@ async def process_speak(i, input_text, selected_voice=None, lang=None, voice_inp
         info_embed.title = f"Generating speach from text ... "
         info_embed.description = ""
         message = await i.reply(embed=info_embed)
-        user_input = initialize_user_input(i, text=input_text)
+        user_input = await initialize_user_input(i, text=input_text)
         user_input['_continue'] = True
         user_input['state']['max_new_tokens'] = 1
         user_input['state']['min_length'] = 0
@@ -2480,59 +2524,61 @@ class LLMState:
         self.llmstate_name = '' # label used for /llmstate command
         self.text = ''
         self.state = {
-            'history': {'internal': [], 'visible': []},
-            'preset': 'None',
-            'max_new_tokens': 400,
-            'max_tokens_second': 0,
-            'seed': -1.0,
-            'temperature': 0.7,
-            'temperature_last': False,
-            'top_p': 0.1,
-            'min_p': 0.0,
-            'top_k': 40,
-            'tfs': 0,
-            'top_a': 0,
-            'typical_p': 1,
+            # These are defaults for 'Midnight Enigma' preset
+            'add_bos_token': True,
+            'auto_max_new_tokens': False,
+            'ban_eos_token': False, 
+            'character_menu': '',
+            'character_menu': '',
+            'chat_generation_attempts': 1,
+            'chat_prompt_size': 2048,
+            'custom_stopping_strings': '',
+            'custom_token_bans': '',
+            'do_sample': True,
+            'early_stopping': False,
+            'encoder_repetition_penalty': 1,
             'epsilon_cutoff': 0,
             'eta_cutoff': 0,
             'frequency_penalty': 0,
-            'presence_penalty': 0,
-            'repetition_penalty': 1.18,
-            'repetition_penalty_range': 0,
-            'encoder_repetition_penalty': 1,
-            'no_repeat_ngram_size': 0,
-            'min_length': 50,
-            'do_sample': True,
-            'penalty_alpha': 0,
-            'num_beams': 1,
-            'length_penalty': 1,
-            'early_stopping': False,
-            'add_bos_token': True,
-            'ban_eos_token': False, 
-            'skip_special_tokens': True,
-            'truncation_length': 2048,
-            'custom_stopping_strings': '"### Assistant","### Human","</END>"',
-            'custom_token_bans': '',
-            'auto_max_new_tokens': False,
-            'name1': '',
-            'name2': '',
-            'name1_instruct': '',
-            'name2_instruct': '',
-            'character_menu': '',
+            'grammar_string': '',
             'greeting': '',
-            'turn_template': '',
-            'chat_prompt_size': 2048,
-            'chat_generation_attempts': 1,
-            'stop_at_newline': False,
-            'mode': 'chat',
-            'stream': True,
+            'guidance_scale': 1,
+            'history': {'internal': [], 'visible': []},
+            'length_penalty': 1,
+            'max_new_tokens': 512,
+            'max_tokens_second': 0,
+            'min_length': 0,
+            'min_p': 0.00,
+            'mirostat_eta': 0.1,
             'mirostat_mode': 0,
             'mirostat_tau': 5,
-            'mirostat_eta': 0.1,
-            'grammar_string': '',
-            'guidance_scale': 1,
+            'mode': 'chat',
+            'name1': '',
+            'name1_instruct': '',
+            'name2': '',
+            'name2_instruct': '',
             'negative_prompt': '',
-            'character_menu': '',
+            'no_repeat_ngram_size': 0,
+            'num_beams': 1,
+            'penalty_alpha': 0,
+            'presence_penalty': 0,
+            'preset': '',
+            'repetition_penalty': 1.18,
+            'repetition_penalty_range': 1024,
+            'seed': -1.0,
+            'skip_special_tokens': True,
+            'stop_at_newline': False,
+            'stopping_strings': '',
+            'stream': True,
+            'temperature': 0.98,
+            'temperature_last': False,
+            'tfs': 1,
+            'top_a': 0,
+            'top_k': 100,
+            'top_p': 0.37,
+            'truncation_length': 2048,
+            'turn_template': '',
+            'typical_p': 1,
             'chat_template_str': '''{%- for message in messages %}\n    {%- if message['role'] == 'system' -%}\n        {{- message['content'] + '\\n\\n' -}}\n    {%- else -%}\n        {%- if message['role'] == 'user' -%}\n            {{- name1 + ': ' + message['content'] + '\\n'-}}\n        {%- else -%}\n            {{- name2 + ': ' + message['content'] + '\\n' -}}\n        {%- endif -%}\n    {%- endif -%}\n{%- endfor -%}''',
             'instruction_template_str': '''{%- set found_item = false -%}\n{%- for message in messages -%}\n    {%- if message['role'] == 'system' -%}\n        {%- set found_item = true -%}\n    {%- endif -%}\n{%- endfor -%}\n{%- if not found_item -%}\n    {{- '' + 'Below is an instruction that describes a task. Write a response that appropriately completes the request.' + '\\n\\n' -}}\n{%- endif %}\n{%- for message in messages %}\n    {%- if message['role'] == 'system' -%}\n        {{- '' + message['content'] + '\\n\\n' -}}\n    {%- else -%}\n        {%- if message['role'] == 'user' -%}\n            {{-'### Instruction:\\n' + message['content'] + '\\n\\n'-}}\n        {%- else -%}\n            {{-'### Response:\\n' + message['content'] + '\\n\\n' -}}\n        {%- endif -%}\n    {%- endif -%}\n{%- endfor -%}\n{%- if add_generation_prompt -%}\n    {{-'### Response:\\n'-}}\n{%- endif -%}'''
             }
