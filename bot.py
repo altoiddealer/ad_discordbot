@@ -951,8 +951,14 @@ async def chatbot_wrapper_wrapper(user_input, save_history):
         tts_resp = None
         name1_value = user_input['state']['name1']
         name2_value = user_input['state']['name2']
-        user_input['state']['custom_stopping_strings'] += f',"{name1_value}","{name2_value}"'
-        user_input['state']['stopping_strings'] += f',"{name1_value}","{name2_value}"'
+        if user_input['state']['custom_stopping_strings']:
+            user_input['state']['custom_stopping_strings'] += f',"{name1_value}","{name2_value}"'
+        else:
+            user_input['state']['custom_stopping_strings'] = f'"{name1_value}","{name2_value}"'
+        if user_input['state']['custom_stopping_strings']:
+            user_input['state']['stopping_strings'] += f',"{name1_value}","{name2_value}"'
+        else:
+            user_input['state']['stopping_strings'] = f'"{name1_value}","{name2_value}"'
         for resp in chatbot_wrapper(text=user_input['text'], state=user_input['state'], regenerate=user_input['regenerate'], _continue=user_input['_continue'], loading_message=True, for_ui=False):
             i_resp = resp['internal']
             if len(i_resp) > 0:
