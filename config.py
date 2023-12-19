@@ -4,9 +4,9 @@ discord = {
     'change_username_with_character': True, # When changing username OR avatar, you will not be able
     'change_avatar_with_character': True,   # to use /character cmd for 10 minutes (Discord policy)
     'char_name': "M1nty",                 # default bot name (**Required if change_username_with_character = False**)
-    # ** Currently only 'coqui_tts', 'silero_tts', and 'elevenlabs_tts' have been tested. Other tts extensions may work. **
+    # ** Currently only 'alltalk_tts', 'coqui_tts', 'silero_tts', and 'elevenlabs_tts' have been tested. Other tts extensions may work. **
     'tts_settings': {      # REQUIRES: 'pip install pynacl' in textgen-webui venv for bot to join a voice channel
-        'extension': '',    # '' = Disabled. Ex: 'coqui_tts' (Loads automatically. Don't include in '--extensions' launch flag)
+        'extension': '',    # '' = Disabled. Ex: 'alltalk_tts' (Loads automatically. Don't include in '--extensions' launch flag)
         'api_key': '',      # May be required for some tts extensions (ex: elevenlabs_tts)
         'voice_channel': 11111111111111111111,   # ** Bot will need voice & channel permissions. **
         'play_mode': 0,         # 0 = use voice channel / 1 = upload file to chat channel / 2 = both (use voice & upload file)

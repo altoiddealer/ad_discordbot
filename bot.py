@@ -136,7 +136,7 @@ def update_model_parameters(state, initial=False):
 shared.args.extensions = []
 extensions_module.available_extensions = utils.get_available_extensions()
 
-supported_tts_clients = ['coqui_tts', 'silero_tts', 'elevenlabs_tts']
+supported_tts_clients = ['alltalk_tts', 'coqui_tts', 'silero_tts', 'elevenlabs_tts']
 tts_client = config.discord['tts_settings'].get('extension', '') # tts client
 tts_api_key = None
 if tts_client:
@@ -144,6 +144,9 @@ if tts_client:
         print(f'tts client "{tts_client}" is not yet confirmed to be work. The "/speak" command will not be registered. List of supported tts_clients: {supported_tts_clients}')
 
     tts_api_key = config.discord['tts_settings'].get('api_key', None)
+    if tts_client == 'alltalk_tts':
+        tts_voice_key = 'voice'
+        tts_lang_key = 'language'
     if tts_client == 'coqui_tts':
         tts_voice_key = 'voice'
         tts_lang_key = 'language'
@@ -2307,8 +2310,8 @@ async def process_user_voice(i, voice_input=None):
     try:
         if not (voice_input and getattr(voice_input, 'content_type', '').startswith("audio/")):
             return ''
-        if tts_client != 'coqui_tts':
-            await i.send("Sorry, current tts extension does not allow using a voice attachment (only works for 'coqui_tts)", ephemeral=True)
+        if tts_client != 'alltalk_tts' and tts_client != 'coqui_tts':
+            await i.send("Sorry, current tts extension does not allow using a voice attachment (only works for 'alltalk_tts' and 'coqui_tts)", ephemeral=True)
             return ''
         voiceurl = voice_input.url
         voiceurl_without_params = voiceurl.split('?')[0]
@@ -2365,7 +2368,7 @@ async def fetch_speak_options():
         ext = ''
         lang_list = []
         all_voicess = []
-        if tts_client == 'coqui_tts':
+        if tts_client == 'coqui_tts' or tts_client == 'alltalk_tts':
             ext = '.wav'
             lang_list = ['Arabic', 'Chinese', 'Czech', 'Dutch', 'English', 'French', 'German', 'Hungarian', 'Italian', 'Japanese', 'Korean', 'Polish', 'Portuguese', 'Russian', 'Spanish', 'Turkish']
             tts_voices_dir = f'extensions/{tts_client}/voices'
