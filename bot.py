@@ -514,8 +514,7 @@ async def change_character(i, char_name):
         active_settings['llmstate']['state'] = char_llmstate
         save_yaml_file('ad_discordbot/activesettings.yaml', active_settings)
         # Ensure all settings are synchronized
-        update_client_settings()
-        update_behavior()
+        update_client_settings() # Sync updated user settings to client
         # Clear chat history
         reset_session_history()
     except Exception as e:
@@ -635,7 +634,6 @@ async def auto_update_imgmodel_task(mode='random'):
         duration = frequency*3600 # 3600 = 1 hour
         await asyncio.sleep(duration)
         try:
-            update_client_settings()
             active_settings = load_yaml_file('ad_discordbot/activesettings.yaml')
             current_imgmodel_name = active_settings.get('imgmodel', {}).get('imgmodel_name', '')
             imgmodel_names = [imgmodel.get('sd_model_checkpoint', imgmodel.get('imgmodel_name', '')) for imgmodel in all_imgmodels]
@@ -651,7 +649,7 @@ async def auto_update_imgmodel_task(mode='random'):
             else: # Process A1111 API method
                 await change_imgmodel_api(active_settings, selected_imgmodel, selected_imgmodel_name)
             save_yaml_file('ad_discordbot/activesettings.yaml', active_settings)
-            update_client_settings() # Sync user updates
+            update_client_settings() # Sync updated user settings to client
             # Load the imgmodel and VAE via A1111 API
             await task_queue.put(a1111_load_imgmodel(active_settings['imgmodel'].get('override_settings', {}))) # Process this in the background
             # Update size options for /image command
@@ -753,18 +751,10 @@ async def first_run():
         conn.close()
         client.database = Database()
 
-def update_behavior():
-    try:
-        client.behavior = Behavior() # Create an instance of the default behavior
-        behavior = get_active_setting('behavior')
-        client.behavior.update_behavior_dict(behavior) # Update behavior with user settings
-    except Exception as e:
-        print("Error updating behavior:", e)
-
 # Function to overwrite default settings with activesettings
 def update_client_settings():
     try:
-        defaults = Settings() # Create an instance of the default settings, convert it to dict
+        defaults = Settings() # Instance of the default settings
         defaults = defaults.settings_to_dict() # Convert instance to dict
         # Current user custom settings
         active_settings = load_yaml_file('ad_discordbot/activesettings.yaml')
@@ -773,6 +763,10 @@ def update_client_settings():
         fixed_settings = fix_dict(active_settings, defaults)
         # Commit fixed settings to the discord client (always accessible)
         client.settings = fixed_settings
+        # Update client behavior
+        client.behavior = Behavior() # Instance of the default behavior
+        behavior = active_settings['behavior']
+        client.behavior.update_behavior_dict(behavior)
     except Exception as e:
         print("Error updating client settings:", e)
 
@@ -780,8 +774,7 @@ def update_client_settings():
 @client.event
 async def on_ready():
     try:
-        update_client_settings() # initialize with Settings() updated by current activesettings.yaml
-        update_behavior() # initialize with Behavior() updated by current activesettings.yaml
+        update_client_settings() # initialize with defaults, updated by current activesettings.yaml
         client.database = Database() # general bot settings
         # If first time running bot
         if client.database.first_run:
@@ -980,8 +973,6 @@ async def chatbot_wrapper_wrapper(user_input, save_history):
             global session_history
             session_history['internal'].append([user_input['text'], last_resp])
             session_history['visible'].append([user_input['text'], last_resp])
-        update_client_settings()
-        update_behavior()
 
         return last_resp, tts_resp  # bot's reply
 
@@ -1059,6 +1050,7 @@ async def process_dynamic_context(i, user_input, text, llm_prompt, save_history)
                             context = char_data['context']
                             context = await replace_character_names(context, name1, name2)
                             user_input['state']['context'] = context
+                        await fix_user_input(user_input) # Add any missing required information
                 except Exception as e:
                     print(f"An error occurred while loading the YAML file for swap_character:", e)
                 print_content += f"Character: {swap_char_name}"
@@ -1093,7 +1085,6 @@ async def process_dynamic_context(i, user_input, text, llm_prompt, save_history)
             # Print results
             if dynamic_context['print_results']:
                 print(print_content)
-        await fix_user_input(user_input)
     return user_input, llm_prompt, save_history
 
 def determine_date():
@@ -1183,8 +1174,6 @@ async def initialize_user_input(i, text):
 
 @client.event
 async def on_message(i):
-    update_client_settings()
-    update_behavior()
     ctx = Context(message=i,prefix=None,bot=client,view=None)
     text = await commands.clean_content().convert(ctx, i.content)
     if client.behavior.bot_should_reply(i, text): pass # Bot replies
@@ -1203,8 +1192,6 @@ async def on_message(i):
     llm_prompt = text # 'text' will be retained as user's raw text (without @ mention)
     # build user_input with defaults
     user_input = await initialize_user_input(i, text)
-    await update_extensions(client.settings['llmcontext'].get('extensions', {})) # Update character specific extension settings
-    await voice_channel(client.settings['llmcontext'].get('use_voice_channel', None)) # Toggle voice channel
     # apply dynamic_context settings
     save_history = True
     user_input, llm_prompt, save_history = await process_dynamic_context(i, user_input, text, llm_prompt, save_history)
@@ -1516,7 +1503,6 @@ async def pic(i, text, image_prompt, tts_resp=None, neg_prompt=None, size=None, 
     busy_drawing = True
     try:
         if await a1111_online(i):
-            update_client_settings()
             info_embed.title = "Processing"
             info_embed.description = " ... "  # await check_a1111_progress()
             if client.fresh:
@@ -1901,7 +1887,7 @@ class SettingsDropdown(discord.ui.Select):
             selected_item = next(item for item in items if item[self.label_key] == selected_item_name)
             await update_active_settings(selected_item, self.active_settings_key)
             print(f"Updated {self.active_settings_key} settings to: {selected_item_name}")
-            update_client_settings() # Sync updated user settings
+            update_client_settings() # Sync updated user settings to client
             # If a new LLMContext is selected
             if self.active_settings_key == 'llmcontext':
                 reset_session_history() # Reset conversation
@@ -2170,7 +2156,7 @@ async def process_imgmodel(i, selected_imgmodel_value):
         else: # Process A1111 API method
             await change_imgmodel_api(active_settings, selected_imgmodel, selected_imgmodel_name)
         save_yaml_file('ad_discordbot/activesettings.yaml', active_settings)
-        update_client_settings() # Sync user updates
+        update_client_settings() # Sync updated user settings to client
         # Load the imgmodel and VAE via A1111 API
         await task_queue.put(a1111_load_imgmodel(active_settings['imgmodel']['override_settings'])) # Process this in the background
         # Update size options for /image command
