@@ -1994,18 +1994,24 @@ async def fetch_imgmodels():
         if not config.imgmodels['get_imgmodels_via_api']['enabled']:
             imgmodels = load_yaml_file('ad_discordbot/dict_imgmodels.yaml')
         else:
-            async with aiohttp.ClientSession() as session: # populate options from A1111 API
-                async with session.get(url=f'{A1111}/sdapi/v1/sd-models') as response:
-                    if response.status == 200:
-                        imgmodels = await response.json()
-                        # Update 'title' keys in A1111 fetched list to be uniform with .yaml method
-                        for imgmodel in imgmodels:
-                            if 'title' in imgmodel:
-                                imgmodel['sd_model_checkpoint'] = imgmodel.pop('title')
-                    else:
-                        print(f"Error fetching image models from the API (response: '{response.status}')") 
-        imgmodels = await filter_imgmodels(imgmodels)
-        return imgmodels
+            try:
+                async with aiohttp.ClientSession() as session: # populate options from A1111 API
+                    async with session.get(url=f'{A1111}/sdapi/v1/sd-models') as response:
+                        if response.status == 200:
+                            imgmodels = await response.json()
+                            # Update 'title' keys in A1111 fetched list to be uniform with .yaml method
+                            for imgmodel in imgmodels:
+                                if 'title' in imgmodel:
+                                    imgmodel['sd_model_checkpoint'] = imgmodel.pop('title')
+                        else:
+                            return ''
+                            print(f"Error fetching image models from the API (response: '{response.status}')")
+            except Exception as e:
+                print("Error fetching image models via API:", e)
+                return ''     
+        if imgmodels:
+            imgmodels = await filter_imgmodels(imgmodels)
+            return imgmodels
     except Exception as e:
         print("Error fetching image models:", e)
 
@@ -2170,11 +2176,11 @@ async def process_imgmodel(i, selected_imgmodel_value):
 
 all_imgmodels = []
 all_imgmodels = asyncio.run(fetch_imgmodels())
-for imgmodel in all_imgmodels:
-    if 'model_name' in imgmodel:
-        imgmodel['imgmodel_name'] = imgmodel.pop('model_name')
 
 if all_imgmodels:
+    for imgmodel in all_imgmodels:
+        if 'model_name' in imgmodel:
+            imgmodel['imgmodel_name'] = imgmodel.pop('model_name')
     imgmodel_options = [app_commands.Choice(name=imgmodel["imgmodel_name"], value=imgmodel["imgmodel_name"]) for imgmodel in all_imgmodels[:25]]
     if len(all_imgmodels) > 25:
         imgmodel_options1 = [app_commands.Choice(name=imgmodel["imgmodel_name"], value=imgmodel["imgmodel_name"]) for imgmodel in all_imgmodels[25:50]]    
