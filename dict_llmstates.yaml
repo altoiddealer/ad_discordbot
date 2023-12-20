@@ -4,54 +4,97 @@
 # **If character file does not have a defined llmstate, 'Default' will be applied**
 - llmstate_name: Default
   state:
-    preset: 'Midnight Enigma'
-    max_new_tokens: 400
-    max_tokens_second: 0
-    seed: -1.0
-    temperature: 0.98
-    temperature_last: false
-    top_p: 0.37
-    top_k: 100
-    tfs: 0
-    top_a: 0
-    typical_p: 1
+    preset: ''
+    grammar_string: ''
+    add_bos_token: true
+    auto_max_new_tokens: false
+    ban_eos_token: false
+    character_menu: ''
+    chat_generation_attempts: 1
+    chat_prompt_size: 2048
+    custom_stopping_strings: ''
+    custom_token_bans: ''
+    do_sample: true
+    early_stopping: false
+    encoder_repetition_penalty: 1
     epsilon_cutoff: 0
     eta_cutoff: 0
     frequency_penalty: 0
+    greeting: ''
+    guidance_scale: 1
+    history:
+      internal: []
+      visible: []
+    length_penalty: 1
+    max_new_tokens: 512
+    max_tokens_second: 0
+    min_length: 0
+    min_p: 0.00
+    mirostat_eta: 0.1
+    mirostat_mode: 0
+    mirostat_tau: 5
+    mode: 'chat'
+    name1: ''
+    name1_instruct: ''
+    name2: ''
+    name2_instruct: ''
+    negative_prompt: ''
+    no_repeat_ngram_size: 0
+    num_beams: 1
+    penalty_alpha: 0
     presence_penalty: 0
     repetition_penalty: 1.18
-    repetition_penalty_range: 0
-    encoder_repetition_penalty: 1
-    no_repeat_ngram_size: 0
-    min_length: 50
-    do_sample: true
-    penalty_alpha: 0
-    num_beams: 1
-    length_penalty: 1
-    early_stopping: false
-    add_bos_token: true
-    ban_eos_token: false
+    repetition_penalty_range: 1024
+    seed: -1.0
     skip_special_tokens: true
-    truncation_length: 2048
-    custom_stopping_strings: '"### Assistant","### Human","</END>","\nclient.user.display_name"'
-    auto_max_new_tokens: false
-    name1: ''
-    name2: client.user.display_name
-    name1_instruct: ''
-    name2_instruct: client.user.display_name
-    turn_template: ''
-    chat_prompt_size: 2048
-    chat_generation_attempts: 1
     stop_at_newline: false
-    mode: chat
+    stopping_strings: ''
     stream: true
-    mirostat_mode: 0
-    mirostat_tau: 5.00
-    mirostat_eta: 0.10
-    grammar_string: ''
-    guidance_scale: 1
-    negative_prompt: ''
-    end_of_turn: ''
+    temperature: 0.98
+    temperature_last: false
+    tfs: 1
+    top_a: 0
+    top_k: 100
+    top_p: 0.37
+    truncation_length: 2048
+    turn_template: ''
+    typical_p: 1
+    chat_template_str: >-
+      {%- for message in messages %}
+          {%- if message['role'] == 'system' -%}
+              {{- message['content'] + '\\n\\n' -}}
+          {%- else -%}
+              {%- if message['role'] == 'user' -%}
+                  {{- name1 + ': ' + message['content'] + '\\n'-}}
+              {%- else -%}
+                  {{- name2 + ': ' + message['content'] + '\\n' -}}
+              {%- endif -%}
+          {%- endif -%}
+      {%- endfor -%}
+    instruction_template_str: >-
+      {%- set found_item = false -%}
+      {%- for message in messages -%}
+          {%- if message['role'] == 'system' -%}
+              {%- set found_item = true -%}
+          {%- endif -%}
+      {%- endfor -%}
+      {%- if not found_item -%}
+          {{- '' + 'Below is an instruction that describes a task. Write a response that appropriately completes the request.' + '\\n\\n' -}}
+      {%- endif %}
+      {%- for message in messages %}
+          {%- if message['role'] == 'system' -%}
+              {{- '' + message['content'] + '\\n\\n' -}}
+          {%- else -%}
+              {%- if message['role'] == 'user' -%}
+                  {{-'### Instruction:\\n' + message['content'] + '\\n\\n'-}}
+              {%- else -%}
+                  {{-'### Response:\\n' + message['content'] + '\\n\\n' -}}
+              {%- endif -%}
+          {%- endif -%}
+      {%- endfor -%}
+      {%- if add_generation_prompt -%}
+          {{-'### Response:\\n'-}}
+      {%- endif -%}
 
 - llmstate_name: Img Mode
   state:

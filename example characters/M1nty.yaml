@@ -58,9 +58,9 @@ behavior:
 
 # If 'state' is not present in character, 'Default' will be applied from (dict_llmstates.yaml)
 state:
-  preset: 'None'
-  grammar: ''
-  max_new_tokens: 1000
+  preset: ''
+  grammar_string: ''
+  max_new_tokens: 512
   do_sample: true
   temperature: 0.7
   top_p: 0.9

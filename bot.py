@@ -2520,10 +2520,11 @@ class LLMState:
         self.text = ''
         self.state = {
             # These are defaults for 'Midnight Enigma' preset
+            'preset': '',
+            'grammar_string': '',
             'add_bos_token': True,
             'auto_max_new_tokens': False,
             'ban_eos_token': False, 
-            'character_menu': '',
             'character_menu': '',
             'chat_generation_attempts': 1,
             'chat_prompt_size': 2048,
@@ -2535,7 +2536,6 @@ class LLMState:
             'epsilon_cutoff': 0,
             'eta_cutoff': 0,
             'frequency_penalty': 0,
-            'grammar_string': '',
             'greeting': '',
             'guidance_scale': 1,
             'history': {'internal': [], 'visible': []},
@@ -2557,7 +2557,6 @@ class LLMState:
             'num_beams': 1,
             'penalty_alpha': 0,
             'presence_penalty': 0,
-            'preset': '',
             'repetition_penalty': 1.18,
             'repetition_penalty_range': 1024,
             'seed': -1.0,
