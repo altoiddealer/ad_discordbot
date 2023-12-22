@@ -29,6 +29,7 @@ import math
 import time
 from itertools import product
 from pydub import AudioSegment
+import copy
 
 session_history = {'internal': [], 'visible': []}
 last_user_message = {'text': [], 'llm_prompt': []}
@@ -464,7 +465,7 @@ async def character_loader(source):
         # Commit the character data to client.settings
         client.settings['llmcontext'] = dict(char_llmcontext) # Replace the entire dictionary key
         update_dict(client.settings['behavior'], dict(char_behavior))
-        update_dict(client.settings['llmstate'], dict(char_llmstate))
+        update_dict(client.settings['llmstate']['state'], dict(char_llmstate))
         # Data for saving to activesettings.yaml (skipped in on_ready())
         return char_llmcontext, char_behavior, char_llmstate
     except Exception as e:
@@ -1157,7 +1158,7 @@ async def replace_character_names(text, name1, name2):
     return text
 
 async def initialize_user_input(i, text):
-    user_input = client.settings['llmstate'] # default state settings
+    user_input = copy.deepcopy(client.settings['llmstate'])
     user_input['text'] = text
     name1 = i.author.display_name
     name2 = client.settings['llmcontext']['name']
@@ -1513,7 +1514,7 @@ async def pic(i, text, image_prompt, tts_resp=None, neg_prompt=None, size=None, 
             payload = {"prompt": image_prompt, "negative_prompt": '', "width": 512, "height": 512, "steps": 20}
             if neg_prompt: payload.update({"negative_prompt": neg_prompt})
             payload.update(client.settings['imgmodel'].get('payload', {}))
-            payload['override_settings'] = client.settings['imgmodel'].get('override_settings', {})
+            payload['override_settings'] = dict(client.settings['imgmodel'].get('override_settings', {}))
             # Process payload triggers
             process_payload_mods(payload, text)
             # Process payload param variances
