@@ -1292,7 +1292,7 @@ def process_faces(payload, text):
     trigger_params = config.imgprompt_settings.get('trigger_faces_by_phrase', {})
     if trigger_params.get('enabled', False):
         matched_presets = []     
-        for preset in trigger_params.get('presets', [{}]):
+        for preset in trigger_params.get('presets', []):
             triggers = preset.get('triggers', '')
             preset_payload = {}  # Create a dictionary to hold faces for each preset
             if any(trigger in text.lower() for trigger in triggers):
@@ -1513,12 +1513,14 @@ async def pic(i, text, image_prompt, tts_resp=None, neg_prompt=None, size=None, 
             # Initialize payload settings
             payload = {"prompt": image_prompt, "negative_prompt": '', "width": 512, "height": 512, "steps": 20}
             if neg_prompt: payload.update({"negative_prompt": neg_prompt})
-            payload.update(client.settings['imgmodel'].get('payload', {}))
-            payload['override_settings'] = dict(client.settings['imgmodel'].get('override_settings', {}))
+            # Apply settings from imgmodel configuration
+            imgmodel_payload = copy.deepcopy(client.settings['imgmodel'].get('payload', {}))
+            payload.update(imgmodel_payload)
+            payload['override_settings'] = copy.deepcopy(client.settings['imgmodel'].get('override_settings', {}))
             # Process payload triggers
             process_payload_mods(payload, text)
             # Process payload param variances
-            if config.sd.get('param_variances', {}).get('enabled', False):
+            if config.sd['param_variances'].get('enabled', False):
                 payload = process_param_variances(payload, config.sd['param_variances'].get('presets', []))
             # Process face swap triggers
             process_faces(payload, text)
@@ -1529,12 +1531,12 @@ async def pic(i, text, image_prompt, tts_resp=None, neg_prompt=None, size=None, 
                 payload['alwayson_scripts']['reactor']['args'][1] = True # Enable
             if controlnet: payload['alwayson_scripts']['controlnet']['args'][0].update(controlnet)
             # Process ImgTagss
-            positive_prompt_prefix = client.settings['imgtag'].get('positive_prompt_prefix', '')
-            positive_prompt_suffix = client.settings['imgtag'].get('positive_prompt_suffix', '')
-            positive_prompt_suffix2 = client.settings['imgtag'].get('positive_prompt_suffix2', '')
-            positive_prompt_suffix2_blacklist = client.settings['imgtag'].get('positive_prompt_suffix2_blacklist', '')
-            negative_prompt_prefix = client.settings['imgtag'].get('negative_prompt_prefix', '')
-            presets = client.settings['imgtag'].get('presets', [])
+            positive_prompt_prefix = copy.copy(client.settings['imgtag'].get('positive_prompt_prefix', ''))
+            positive_prompt_suffix = copy.copy(client.settings['imgtag'].get('positive_prompt_suffix', ''))
+            positive_prompt_suffix2 = copy.copy(client.settings['imgtag'].get('positive_prompt_suffix2', ''))
+            positive_prompt_suffix2_blacklist = copy.copy(client.settings['imgtag'].get('positive_prompt_suffix2_blacklist', ''))
+            negative_prompt_prefix = copy.copy(client.settings['imgtag'].get('negative_prompt_prefix', ''))
+            presets = copy.deepcopy(client.settings['imgtag'].get('presets', []))
 
             if positive_prompt_prefix:
                 payload['prompt'] = f'{positive_prompt_prefix} {image_prompt}'
@@ -1993,7 +1995,8 @@ async def filter_imgmodels(imgmodels):
 async def fetch_imgmodels():
     try:
         if not config.imgmodels['get_imgmodels_via_api']['enabled']:
-            imgmodels = load_yaml_file('ad_discordbot/dict_imgmodels.yaml')
+            imgmodels_data = load_yaml_file('ad_discordbot/dict_imgmodels.yaml')
+            imgmodels = copy.deepcopy(imgmodels_data)
         else:
             try:
                 async with aiohttp.ClientSession() as session: # populate options from A1111 API
@@ -2026,7 +2029,7 @@ async def change_imgtags(active_settings, imgtag_name):
                 selected_imgmodel_imgtags = imgtags
                 break
         if selected_imgmodel_imgtags is not None:
-            update_dict(active_settings.get('imgtag', {}), selected_imgmodel_imgtags)
+            active_settings['imgtag'] = selected_imgmodel_imgtags
             active_settings['imgmodel']['imgmodel_imgtags'] = imgtag_name
     except Exception as e:
         print(f"Error updating imgtags for {imgtag_name} in ad_discordbot/activesettings.yaml:", e)
