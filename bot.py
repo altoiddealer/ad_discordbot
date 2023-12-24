@@ -1270,12 +1270,13 @@ def clean_payload(payload):
             unique_values_list.append(value)
     processed_negative_prompt = ', '.join(unique_values_list)
     payload['negative_prompt'] = processed_negative_prompt
-    # Delete unwanted keys
-    if not config.sd['extensions'].get('controlnet_enabled', False):
-        del payload['alwayson_scripts']['controlnet'] # Delete all 'controlnet' keys if disabled by config
-    if not config.sd['extensions'].get('reactor_enabled', False):
-        del payload['alwayson_scripts']['reactor'] # Delete all 'reactor' keys if disabled by config
-    # Workaround for denoising strength A1111 bug (will be fixed in next A1111 version)
+    # Delete unwanted extension keys
+    if payload.get('alwayson_scripts', {}):
+        if not config.sd['extensions'].get('controlnet_enabled', False):
+            del payload['alwayson_scripts']['controlnet'] # Delete all 'controlnet' keys if disabled by config
+        if not config.sd['extensions'].get('reactor_enabled', False):
+            del payload['alwayson_scripts']['reactor'] # Delete all 'reactor' keys if disabled by config
+    # Workaround for denoising strength A1111 bug
     if not payload.get('enable_hr', False):
         payload['denoising_strength'] = None
     # Delete all empty keys
@@ -1523,7 +1524,7 @@ async def pic(i, text, image_prompt, tts_resp=None, neg_prompt=None, size=None, 
             if config.sd['param_variances'].get('enabled', False):
                 payload = process_param_variances(payload, config.sd['param_variances'].get('presets', []))
             # Process face swap triggers
-            process_faces(payload, text)
+            payload = process_faces(payload, text)
             if size: payload.update(size)
             # Process extensions
             if face_swap:
@@ -1553,7 +1554,7 @@ async def pic(i, text, image_prompt, tts_resp=None, neg_prompt=None, size=None, 
             if tts_resp is not None:
                 await task_queue.put(process_tts_resp(i, tts_resp)) # Process this in background
     except Exception as e:
-        print(f"An error occurred: {e}")
+        print(f"An error occurred in pic(): {e}")
     busy_drawing = False
 
 ## Code pertaining to /image command
@@ -1752,7 +1753,7 @@ async def image(
             face_swap=faceswapimg if face_swap else None,
             controlnet=controlnet_dict if controlnet_dict else None)
     except Exception as e:
-        print(f"An error occurred: {e}")
+        print(f"An error occurred in image(): {e}")
     busy_drawing = False
 
 #----END IMAGE PROCESSING----#
@@ -2500,7 +2501,14 @@ class ImgModel:
         self.imgmodel_url = ''
         self.override_settings = {}
         self.payload = {
-            'alwayson_scripts': {}
+            'alwayson_scripts': {
+                'controlnet': {
+                    'args': [{'enabled': False, 'input_image': 'none', 'lowvram': True, 'model': 'none', 'module': 'none', 'pixel_perfect': True}]
+                },
+                'reactor': {
+                    'args': ['', False, '0', '0', 'inswapper_128.onnx', 'CodeFormer', 1, True, '4x_NMKD-Superscale-SP_178000_G', 1.5, 1, False, True, 1, 0, 0, False, 0.8, False, False, 'CUDA', True, 0, '', '']
+                }
+            }
         }
 
 class ImgTag:
