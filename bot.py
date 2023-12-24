@@ -975,7 +975,6 @@ async def extra_stopping_strings(user_input):
 async def chatbot_wrapper_wrapper(user_input, save_history):
     # await fix_user_input(user_input)
     user_input = await extra_stopping_strings(user_input)
-    print("stopping strings", user_input['state']['stopping_strings'])
     loop = asyncio.get_event_loop()
 
     def process_responses():
