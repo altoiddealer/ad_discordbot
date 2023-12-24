@@ -78,5 +78,8 @@ state:
   early_stopping: false
   add_bos_token: false
   skip_special_tokens: true
-  custom_stopping_strings: '":","### Assistant","### Human","</END>"'
-  stopping_strings: '":","### Assistant","### Human","</END>"'
+  # Stopping strings you may include which this bot will dynamically replace:
+  # "name1" (the user's name)
+  # "name2" (the character's name)
+  custom_stopping_strings: '":","### Assistant","### Human","</END>","name1","name2"'
+  stopping_strings: '":","### Assistant","### Human","</END>","name1","name2"'

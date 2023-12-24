@@ -366,21 +366,34 @@ def update_dict_matched_keys(d, u):
             d[k] = v
     return d
 
-def load_yaml_file(file_path):
+
+def load_file(file_path):
     try:
-        with open(file_path, 'r') as file:
-            data = yaml.safe_load(file)
-        return data
+        file_suffix = Path(file_path).suffix.lower()
+
+        if file_suffix in [".json", ".yml", ".yaml"]:
+            with open(file_path, 'r', encoding='utf-8') as file:
+                if file_suffix in [".json"]:
+                    data = json.load(file)
+                else:
+                    data = yaml.safe_load(file)
+            return data
+        else:
+            print(f"Unsupported file format: {file_suffix}")
+            return None
+
     except FileNotFoundError:
+        print(f"File not found: {file_suffix}")
         return None
     except Exception as e:
         print(f"An error occurred while reading {file_path}: {str(e)}")
         return None
 
+
 def save_yaml_file(file_path, data):
     try:
         with open(file_path, 'w') as file:
-            yaml.dump(data, file, default_flow_style=False, width=float("inf"))
+            yaml.dump(data, file, encoding='utf-8', default_flow_style=False, width=float("inf"))
     except Exception as e:
         print(f"An error occurred while saving {file_path}: {str(e)}")
 
@@ -433,7 +446,7 @@ async def character_loader(source):
         textgen_data = {'name': name, 'greeting': greeting, 'context': context}
         # Check for extra bot data
         char_path = os.path.join("characters", f"{source}.yaml")
-        char_data = load_yaml_file(char_path)
+        char_data = load_file(char_path)
         char_data = dict(char_data)
         # Gather context specific keys from the character data
         extensions_value = {}
@@ -453,13 +466,13 @@ async def character_loader(source):
         # Collect behavior data
         char_behavior = char_data.get('behavior', None)
         if char_behavior is None:
-            behaviors = load_yaml_file('ad_discordbot/dict_behaviors.yaml')
+            behaviors = load_file('ad_discordbot/dict_behaviors.yaml')
             char_behavior = next((b for b in behaviors if b['behavior_name'] == 'Default'), client.settings['behavior'])
             print("No character specific Behavior settings. Using 'Default' ('ad_discordbot/dict_behaviors.yaml').")
         # Collect llmstate data
         char_llmstate = char_data.get('state', None)
         if char_llmstate is None:
-            llmstates = load_yaml_file('ad_discordbot/dict_llmstates.yaml')
+            llmstates = load_file('ad_discordbot/dict_llmstates.yaml')
             char_llmstate = next((s for s in llmstates if s['llmstate_name'] == 'Default'), client.settings['llmstate']['state'])
             print("No character specific LLM State settings. Using 'Default' ('ad_discordbot/dict_llmstates.yaml').")
         # Commit the character data to client.settings
@@ -509,7 +522,7 @@ async def change_character(i, char_name):
         # Update discord username / avatar
         await update_client_profile(change_username, change_avatar, char_name)
         # Save the updated active_settings to activesettings.yaml
-        active_settings = load_yaml_file('ad_discordbot/activesettings.yaml')
+        active_settings = load_file('ad_discordbot/activesettings.yaml')
         active_settings['llmcontext'] = char_llmcontext
         active_settings['behavior'] = char_behavior
         active_settings['llmstate']['state'] = char_llmstate
@@ -635,7 +648,7 @@ async def auto_update_imgmodel_task(mode='random'):
         duration = frequency*3600 # 3600 = 1 hour
         await asyncio.sleep(duration)
         try:
-            active_settings = load_yaml_file('ad_discordbot/activesettings.yaml')
+            active_settings = load_file('ad_discordbot/activesettings.yaml')
             current_imgmodel_name = active_settings.get('imgmodel', {}).get('imgmodel_name', '')
             imgmodel_names = [imgmodel.get('sd_model_checkpoint', imgmodel.get('imgmodel_name', '')) for imgmodel in all_imgmodels]
             # Select an imgmodel automatically
@@ -758,7 +771,7 @@ def update_client_settings():
         defaults = Settings() # Instance of the default settings
         defaults = defaults.settings_to_dict() # Convert instance to dict
         # Current user custom settings
-        active_settings = load_yaml_file('ad_discordbot/activesettings.yaml')
+        active_settings = load_file('ad_discordbot/activesettings.yaml')
         active_settings = dict(active_settings)
         # Add any missing required settings
         fixed_settings = fix_dict(active_settings, defaults)
@@ -827,7 +840,7 @@ async def a1111_online(i):
 ## Starboard feature
 # Fetch images already starboard'd
 try:
-    data = load_yaml_file('ad_discordbot/starboard_messages.yaml')
+    data = load_file('ad_discordbot/starboard_messages.yaml')
     if data is None: starboard_posted_messages = ""
     else: starboard_posted_messages = set(data)
 except FileNotFoundError:
@@ -939,23 +952,35 @@ async def fix_user_input(user_input):
     user_input['state'] = fix_dict(current_state, default_state)
     return user_input
 
+async def extra_stopping_strings(user_input):
+    name1_value = user_input['state']['name1']
+    name2_value = user_input['state']['name2']
+    # Check and replace in custom_stopping_strings
+    custom_stopping_strings = user_input['state']['custom_stopping_strings']
+    if "name1" in custom_stopping_strings:
+        custom_stopping_strings = custom_stopping_strings.replace("name1", name1_value)
+    if "name2" in custom_stopping_strings:
+        custom_stopping_strings = custom_stopping_strings.replace("name2", name2_value)
+    user_input['state']['custom_stopping_strings'] = custom_stopping_strings
+    # Check and replace in stopping_strings
+    stopping_strings = user_input['state']['stopping_strings']
+    if "name1" in stopping_strings:
+        stopping_strings = stopping_strings.replace("name1", name1_value)
+    if "name2" in stopping_strings:
+        stopping_strings = stopping_strings.replace("name2", name2_value)
+    user_input['state']['stopping_strings'] = stopping_strings
+
+    return user_input
+
 async def chatbot_wrapper_wrapper(user_input, save_history):
     # await fix_user_input(user_input)
+    user_input = await extra_stopping_strings(user_input)
+    print("stopping strings", user_input['state']['stopping_strings'])
     loop = asyncio.get_event_loop()
 
     def process_responses():
         last_resp = None
         tts_resp = None
-        name1_value = user_input['state']['name1']
-        name2_value = user_input['state']['name2']
-        if user_input['state']['custom_stopping_strings']:
-            user_input['state']['custom_stopping_strings'] += f',"{name1_value}","{name2_value}"'
-        else:
-            user_input['state']['custom_stopping_strings'] = f'"{name1_value}","{name2_value}"'
-        if user_input['state']['custom_stopping_strings']:
-            user_input['state']['stopping_strings'] += f',"{name1_value}","{name2_value}"'
-        else:
-            user_input['state']['stopping_strings'] = f'"{name1_value}","{name2_value}"'
         for resp in chatbot_wrapper(text=user_input['text'], state=user_input['state'], regenerate=user_input['regenerate'], _continue=user_input['_continue'], loading_message=True, for_ui=False):
             i_resp = resp['internal']
             if len(i_resp) > 0:
@@ -1036,7 +1061,7 @@ async def process_dynamic_context(i, user_input, text, llm_prompt, save_history)
                 try:
                     character_path = os.path.join("characters", f"{swap_char_name}.yaml")
                     if character_path:
-                        char_data = load_yaml_file(character_path)
+                        char_data = load_file(character_path)
                         char_data = dict(char_data)
                         name1 = i.author.display_name
                         name2 = ''
@@ -1561,7 +1586,7 @@ async def pic(i, text, image_prompt, tts_resp=None, neg_prompt=None, size=None, 
 # Function to update size options
 async def update_size_options(new_width, new_height):
     global size_choices
-    options = load_yaml_file('ad_discordbot/dict_cmdoptions.yaml')
+    options = load_file('ad_discordbot/dict_cmdoptions.yaml')
     sizes = options.get('sizes', [])
     aspect_ratios = [size.get("ratio") for size in sizes.get('ratios', [])]
     average = average_width_height(new_width, new_height)
@@ -1609,9 +1634,9 @@ def average_width_height(width, height):
     if (width + height) % 2 != 0: avg += 1
     return avg
 
-options = load_yaml_file('ad_discordbot/dict_cmdoptions.yaml')
+options = load_file('ad_discordbot/dict_cmdoptions.yaml')
 options = dict(options)
-active_settings = load_yaml_file('ad_discordbot/activesettings.yaml')
+active_settings = load_file('ad_discordbot/activesettings.yaml')
 active_settings = dict(active_settings)
 
 sizes = options.get('sizes', {})
@@ -1788,7 +1813,7 @@ async def status(i):
 
 def get_active_setting(key):
     try:
-        active_settings = load_yaml_file('ad_discordbot/activesettings.yaml')
+        active_settings = load_file('ad_discordbot/activesettings.yaml')
         if key in active_settings:
             return active_settings[key]
         else:
@@ -1805,6 +1830,7 @@ def generate_characters():
             if file.suffix in [".json", ".yml", ".yaml"]:
                 character = {}
                 character['name'] = file.stem
+                character['filename'] = file.name
                 filepath = str(Path(file).absolute())
                 with open(filepath, encoding='utf-8') as f:
                     data = json.load(f) if file.suffix == ".json" else yaml.safe_load(f)
@@ -1817,11 +1843,12 @@ def generate_characters():
 
 class CharacterDropdown(discord.ui.Select):
     def __init__(self, i):
-        options = [discord.SelectOption(label=character["name"], description=character["bot_description"], emoji=character["bot_emoji"]) for character in generate_characters()]
+        options = [discord.SelectOption(label=character["name"], value=character["filename"], description=character["bot_description"], emoji=character["bot_emoji"]) for character in generate_characters()]
         super().__init__(placeholder='', min_values=1, max_values=1, options=options)
         self.i = i
     async def callback(self, interaction: discord.Interaction):
-        character = self.values[0]
+        character_filename = self.values[0]
+        character = Path(character_filename).stem
         await change_character(self.i, character)
         greeting = client.settings['llmcontext']['greeting']
         if greeting:
@@ -1843,7 +1870,7 @@ async def character(i):
 # Apply changes for Settings commands
 async def update_active_settings(selected_item, active_settings_key):
     try:
-        active_settings = load_yaml_file('ad_discordbot/activesettings.yaml')
+        active_settings = load_file('ad_discordbot/activesettings.yaml')
         target_settings = active_settings.setdefault(active_settings_key, {})
         update_dict(target_settings, selected_item)
         save_yaml_file('ad_discordbot/activesettings.yaml', active_settings)
@@ -1855,7 +1882,7 @@ async def post_active_settings():
     if config.discord['post_active_settings'].get('target_channel_id', ''):
         channel = await client.fetch_channel(config.discord['post_active_settings']['target_channel_id'])
         if channel:
-            active_settings = load_yaml_file('ad_discordbot/activesettings.yaml')
+            active_settings = load_file('ad_discordbot/activesettings.yaml')
             settings_content = yaml.dump(active_settings, default_flow_style=False)
             # Fetch and delete all existing messages in the channel
             async for message in channel.history(limit=None):
@@ -1871,7 +1898,7 @@ async def post_active_settings():
 class SettingsDropdown(discord.ui.Select):
     def __init__(self, data_file, label_key, active_settings_key):
         try:
-            items = load_yaml_file(data_file)
+            items = load_file(data_file)
             options = [
                 discord.SelectOption(label=item[label_key], value=item[label_key])
                 for item in items
@@ -1887,7 +1914,7 @@ class SettingsDropdown(discord.ui.Select):
     async def callback(self, interaction: discord.Interaction):
         selected_item_name = self.values[0]
         try:
-            items = load_yaml_file(self.data_file)
+            items = load_file(self.data_file)
             selected_item = next(item for item in items if item[self.label_key] == selected_item_name)
             await update_active_settings(selected_item, self.active_settings_key)
             print(f"Updated {self.active_settings_key} settings to: {selected_item_name}")
@@ -1996,7 +2023,7 @@ async def filter_imgmodels(imgmodels):
 async def fetch_imgmodels():
     try:
         if not config.imgmodels['get_imgmodels_via_api']['enabled']:
-            imgmodels_data = load_yaml_file('ad_discordbot/dict_imgmodels.yaml')
+            imgmodels_data = load_file('ad_discordbot/dict_imgmodels.yaml')
             imgmodels = copy.deepcopy(imgmodels_data)
         else:
             try:
@@ -2023,7 +2050,7 @@ async def fetch_imgmodels():
 # Update imgtags at same time as imgmodel, as configured
 async def change_imgtags(active_settings, imgtag_name):
     try:
-        imgtags_data = load_yaml_file('ad_discordbot/dict_imgtags.yaml')
+        imgtags_data = load_file('ad_discordbot/dict_imgtags.yaml')
         selected_imgmodel_imgtags = None
         for imgtags in imgtags_data:
             if imgtags.get('imgtag_name') == imgtag_name:
@@ -2138,7 +2165,7 @@ async def process_imgmodel_announce(i, selected_imgmodel, selected_imgmodel_name
 async def get_selected_imgmodel_data(selected_imgmodel_value):
     try:
         if not config.imgmodels['get_imgmodels_via_api']['enabled']:
-            imgmodels = load_yaml_file('ad_discordbot/dict_imgmodels.yaml')
+            imgmodels = load_file('ad_discordbot/dict_imgmodels.yaml')
             selected_imgmodel = next(imgmodel for imgmodel in imgmodels if imgmodel['imgmodel_name'] == selected_imgmodel_value)
         else: # Collect imgmodel data for A1111 API method
             selected_imgmodel = {}
@@ -2158,7 +2185,7 @@ async def process_imgmodel(i, selected_imgmodel_value):
     try:
         selected_imgmodel = await get_selected_imgmodel_data(selected_imgmodel_value)
         selected_imgmodel_name = selected_imgmodel.get('imgmodel_name')
-        active_settings = load_yaml_file('ad_discordbot/activesettings.yaml')
+        active_settings = load_file('ad_discordbot/activesettings.yaml')
         # Process .yaml method
         if not config.imgmodels['get_imgmodels_via_api']['enabled']:
             update_dict(active_settings.get('imgmodel', {}), selected_imgmodel)
