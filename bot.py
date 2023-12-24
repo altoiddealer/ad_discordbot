@@ -258,15 +258,30 @@ def update_model_parameters(state, initial=False):
 
 # Loading custom settings
 settings_file = None
+# Check if a settings file is provided and exists
 if shared.args.settings is not None and Path(shared.args.settings).exists():
     settings_file = Path(shared.args.settings)
+# Check if settings file exists
 elif Path("settings.json").exists():
     settings_file = Path("settings.json")
+elif Path("settings.yaml").exists():
+    settings_file = Path("settings.yaml")
+elif Path("settings.yml").exists():
+    settings_file = Path("settings.yml")
 if settings_file is not None:
     print(f"Loading settings from {settings_file}...")
-    new_settings = json.loads(open(settings_file, "r").read())
-    for item in new_settings:
-        shared.settings[item] = new_settings[item]
+    settings_file_suffix = settings_file.suffix.lower()
+    with open(settings_file, 'r', encoding='utf-8') as file:
+        if settings_file_suffix in [".json"]:
+            new_settings = json.load(file)
+        else:
+            new_settings = yaml.safe_load(file)
+    # Update shared.settings with the loaded settings
+    if new_settings is not None:
+        for item in new_settings:
+            shared.settings[item] = new_settings[item]
+    else:
+        print("Failed to load settings.")
 
 # Default extensions
 extensions_module.available_extensions = get_available_extensions()
