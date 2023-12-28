@@ -632,8 +632,9 @@ async def auto_announce_imgmodel(selected_imgmodel, selected_imgmodel_name):
         print("Error announcing automatically selected imgmodel:", e)
 
 # Select imgmodel based on mode, while avoid repeating current imgmodel
-async def auto_select_imgmodel(current_imgmodel_name, imgmodels, imgmodel_names, mode='random'):   
-    try:         
+async def auto_select_imgmodel(current_imgmodel_name, all_imgmodels, imgmodel_names, mode='random'):   
+    try:
+        imgmodels = copy.deepcopy(all_imgmodels)
         if mode == 'random':
             if current_imgmodel_name:
                 matched_imgmodel = None
@@ -2227,6 +2228,7 @@ if all_imgmodels:
     for imgmodel in all_imgmodels:
         if 'model_name' in imgmodel:
             imgmodel['imgmodel_name'] = imgmodel.pop('model_name')
+
     imgmodel_options = [app_commands.Choice(name=imgmodel["imgmodel_name"], value=imgmodel["imgmodel_name"]) for imgmodel in all_imgmodels[:25]]
     if len(all_imgmodels) > 25:
         imgmodel_options1 = [app_commands.Choice(name=imgmodel["imgmodel_name"], value=imgmodel["imgmodel_name"]) for imgmodel in all_imgmodels[25:50]]    
