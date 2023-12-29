@@ -1,6 +1,4 @@
-# These are user customizable settings which are NOT recommended to be changed manually.
-# This is really more to serve as a dashboard of what settings are in effect at any given time
-# Note that this file and its contents are OPTIONAL. The minimum values required for the bot to function will take effect if not found here.
+# This file serves as a dashboard to see what settings are in effect at any given time (NOT recommended to be changed manually.)
 #
 # Recommended usage:
 #   - Use commands to update settings (/character, /imgmodel, /imgtags, etc)
@@ -9,7 +7,6 @@
 #   - Check out the dict_.yaml files to adjust settings presets.
 
 behavior:
-  behavior_name: Default
   chance_to_reply_to_other_bots: 0.0
   conversation_recency: 600
   go_wild_in_channel: true

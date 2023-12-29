@@ -463,6 +463,8 @@ async def character_loader(source):
         char_path = os.path.join("characters", f"{source}.yaml")
         char_data = load_file(char_path)
         char_data = dict(char_data)
+        # Merge with basesettings
+        char_data = merge_base(char_data, 'llmcontext')
         # Gather context specific keys from the character data
         extensions_value = {}
         vc_value = ''
@@ -479,17 +481,11 @@ async def character_loader(source):
         # Merge any extra data with the llmcontext data
         char_llmcontext.update(textgen_data)
         # Collect behavior data
-        char_behavior = char_data.get('behavior', None)
-        if char_behavior is None:
-            behaviors = load_file('ad_discordbot/dict_behaviors.yaml')
-            char_behavior = next((b for b in behaviors if b['behavior_name'] == 'Default'), client.settings['behavior'])
-            print("No character specific Behavior settings. Using 'Default' ('ad_discordbot/dict_behaviors.yaml').")
+        char_behavior = char_data.get('behavior', {})
+        char_behavior = merge_base(char_behavior, 'behavior')
         # Collect llmstate data
-        char_llmstate = char_data.get('state', None)
-        if char_llmstate is None:
-            llmstates = load_file('ad_discordbot/dict_llmstates.yaml')
-            char_llmstate = next((s for s in llmstates if s['llmstate_name'] == 'Default'), client.settings['llmstate']['state'])
-            print("No character specific LLM State settings. Using 'Default' ('ad_discordbot/dict_llmstates.yaml').")
+        char_llmstate = char_data.get('state', {})
+        char_llmstate = merge_base(char_llmstate, 'llmstate,state')
         # Commit the character data to client.settings
         client.settings['llmcontext'] = dict(char_llmcontext) # Replace the entire dictionary key
         update_dict(client.settings['behavior'], dict(char_behavior))
@@ -1826,6 +1822,22 @@ async def status(i):
     status_embed.description = msg
     await i.send(embed=status_embed)
 
+def merge_base(newsettings, basekey):
+    try:
+        base_settings = load_file('ad_discordbot/dict_base_settings.yaml')
+        keys = basekey.split(',')
+        current_dict = base_settings
+        for key in keys:
+            if key in current_dict:
+                current_dict = current_dict[key].copy()
+            else:
+                return None
+        current_dict.update(newsettings)
+        return newsettings
+    except Exception as e:
+        print(f"Error loading ad_discordbot/dict_base_settings.yaml ({basekey}):", e)
+        return None
+
 def get_active_setting(key):
     try:
         active_settings = load_file('ad_discordbot/activesettings.yaml')
@@ -1943,21 +1955,6 @@ class SettingsDropdown(discord.ui.Select):
         except Exception as e:
             print(f"Error updating ad_discordbot/activesettings.yaml ({self.active_settings_key}):", e)
 
-@client.hybrid_command(description="Choose LLM context")
-async def llmcontext(i):
-    view = discord.ui.View()
-    view.add_item(SettingsDropdown('ad_discordbot/dict_llmcontexts.yaml', 'llmcontext_name', 'llmcontext'))
-    await i.send("Choose LLM context:", view=view, ephemeral=True)
-@client.hybrid_command(description="Choose an llmstate")
-async def llmstate(i):
-    view = discord.ui.View()
-    view.add_item(SettingsDropdown('ad_discordbot/dict_llmstates.yaml', 'llmstate_name', 'llmstate'))
-    await i.send("Choose an llmstate:", view=view, ephemeral=True)
-@client.hybrid_command(description="Choose a behavior")
-async def behaviors(i):
-    view = discord.ui.View()
-    view.add_item(SettingsDropdown('ad_discordbot/dict_behaviors.yaml', 'behavior_name', 'behavior'))
-    await i.send("Choose a behavior:", view=view, ephemeral=True)
 @client.hybrid_command(description="Choose ImgTags")
 async def imgtags(i):
     view = discord.ui.View()
