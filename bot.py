@@ -625,7 +625,7 @@ async def auto_announce_imgmodel(selected_imgmodel, selected_imgmodel_name):
         print("Error announcing automatically selected imgmodel:", e)
 
 # Select imgmodel based on mode, while avoid repeating current imgmodel
-async def auto_select_imgmodel(current_imgmodel_name, all_imgmodels, imgmodel_names, mode='random'):   
+async def auto_select_imgmodel(current_imgmodel_name, imgmodel_names, mode='random'):   
     try:
         imgmodels = copy.deepcopy(all_imgmodels)
         if mode == 'random':
@@ -659,27 +659,16 @@ async def auto_update_imgmodel_task(mode='random'):
         try:
             active_settings = load_file('ad_discordbot/activesettings.yaml')
             current_imgmodel_name = active_settings.get('imgmodel', {}).get('imgmodel_name', '')
-            imgmodel_names = [imgmodel.get('sd_model_checkpoint', imgmodel.get('imgmodel_name', '')) for imgmodel in all_imgmodels]
+            imgmodel_names = [imgmodel.get('sd_model_checkpoint', imgmodel.get('imgmodel_name', '')) for imgmodel in all_imgmodels]           
             # Select an imgmodel automatically
-            selected_imgmodel = await auto_select_imgmodel(current_imgmodel_name, all_imgmodels, imgmodel_names, mode)
-            ## Update imgmodel
-            selected_imgmodel_name = selected_imgmodel.get('imgmodel_name', '')
-            # Process .yaml method
-            if not config.imgmodels['get_imgmodels_via_api'].get('enabled', True):
-                update_dict(active_settings.get('imgmodel', {}), selected_imgmodel)
-                if selected_imgmodel.get('imgmodel_imgtags', '') is not None:
-                    await change_imgtags(active_settings, selected_imgmodel['imgmodel_imgtags'])
-            else: # Process A1111 API method
-                await change_imgmodel_api(active_settings, selected_imgmodel, selected_imgmodel_name)
-            save_yaml_file('ad_discordbot/activesettings.yaml', active_settings)
-            update_client_settings() # Sync updated user settings to client
-            # Load the imgmodel and VAE via A1111 API
-            await task_queue.put(a1111_load_imgmodel(active_settings['imgmodel'].get('override_settings', {}))) # Process this in the background
-            # Update size options for /image command
-            await task_queue.put(update_size_options(active_settings.get('imgmodel').get('payload', {}).get('width', 512),active_settings.get('imgmodel').get('payload', {}).get('height', 512)))
+            selected_imgmodel = await auto_select_imgmodel(current_imgmodel_name, imgmodel_names, mode)
+            # Merge selected imgmodel/imgtag data with base settings
+            selected_imgmodel, selected_imgmodel_name, selected_imgmodel_imgtags, imgtag_name = await merge_imgmodel_data(selected_imgmodel)
+            # Commit all the settings
+            await update_imgmodel(selected_imgmodel, selected_imgmodel_name, selected_imgmodel_imgtags, imgtag_name)
             # Set the topic of the channel and announce imgmodel as configured
             await auto_announce_imgmodel(selected_imgmodel, selected_imgmodel_name)
-            print(f"Updated imgmodel settings to: {selected_imgmodel_name}")
+            print(f"Automatically updated imgmodel settings to: {selected_imgmodel_name}")
         except Exception as e:
             print(f"Error automatically updating image model: {e}")
         #await asyncio.sleep(duration)
@@ -1818,6 +1807,12 @@ async def status(i):
     await i.send(embed=status_embed)
 
 def merge_base(newsettings, basekey):
+    def deep_update(original, update):
+        for key, value in update.items():
+            if isinstance(value, dict) and key in original and isinstance(original[key], dict):
+                deep_update(original[key], value)
+            else:
+                original[key] = value
     try:
         base_settings = load_file('ad_discordbot/dict_base_settings.yaml')
         keys = basekey.split(',')
@@ -1827,8 +1822,8 @@ def merge_base(newsettings, basekey):
                 current_dict = current_dict[key].copy()
             else:
                 return None
-        current_dict.update(newsettings)
-        return newsettings
+        deep_update(current_dict, newsettings) # Recursively update the dictionary
+        return current_dict
     except Exception as e:
         print(f"Error loading ad_discordbot/dict_base_settings.yaml ({basekey}):", e)
         return None
@@ -2054,58 +2049,6 @@ async def fetch_imgmodels():
     except Exception as e:
         print("Error fetching image models:", e)
 
-# Update imgtags at same time as imgmodel, as configured
-async def change_imgtags(active_settings, imgtag_name):
-    try:
-        imgtags_data = load_file('ad_discordbot/dict_imgtags.yaml')
-        selected_imgmodel_imgtags = None
-        for imgtags in imgtags_data:
-            if imgtags.get('imgtag_name') == imgtag_name:
-                selected_imgmodel_imgtags = imgtags
-                break
-        if selected_imgmodel_imgtags is not None:
-            active_settings['imgtag'] = selected_imgmodel_imgtags
-            active_settings['imgmodel']['imgmodel_imgtags'] = imgtag_name
-    except Exception as e:
-        print(f"Error updating imgtags for {imgtag_name} in ad_discordbot/activesettings.yaml:", e)
-
-# Check filesize of selected imgmodel to assume resolution and imgtags 
-async def guess_imgmodel_res(active_settings, selected_imgmodel_filename):
-    try:
-        file_size_bytes = os.path.getsize(selected_imgmodel_filename)
-        file_size_gb = file_size_bytes / (1024 ** 3)  # 1 GB = 1024^3 bytes
-        presets = config.imgmodels['get_imgmodels_via_api']['presets']
-        matched_preset = None
-        for preset in presets:
-            if preset['max_filesize'] > file_size_gb:
-                matched_preset = dict(preset)
-                del matched_preset['max_filesize']
-                break
-        if matched_preset:
-            if matched_preset.get('imgtag_name') is not None:
-                # Update ImgTags
-                await change_imgtags(active_settings, matched_preset.get('imgtag_name'))
-                del matched_preset['imgtag_name']
-            update_dict(active_settings.get('imgmodel').get('payload'), matched_preset)
-            #active_settings['imgmodel']['payload']['width'] = matched_preset['width']
-            #active_settings['imgmodel']['payload']['height'] = matched_preset['height']
-    except Exception as e:
-        print("Error guessing imgmodel resolution:", e)
-
-# Change imgmodel using A1111 API method
-async def change_imgmodel_api(active_settings, selected_imgmodel, selected_imgmodel_name):
-    try:
-        if config.imgmodels['get_imgmodels_via_api']['guess_model_res']:
-            selected_imgmodel_filename = selected_imgmodel.get('filename')
-            if selected_imgmodel_filename is not None:
-                # Check filesize of selected imgmodel to assume resolution and imgtags 
-                await guess_imgmodel_res(active_settings, selected_imgmodel_filename)
-        active_settings['imgmodel']['override_settings']['sd_model_checkpoint'] = selected_imgmodel['sd_model_checkpoint']
-        active_settings['imgmodel']['imgmodel_name'] = selected_imgmodel_name
-        active_settings['imgmodel']['imgmodel_url'] = ''
-    except Exception as e:
-        print("Error updating image model:", e)
-
 async def a1111_load_imgmodel(options):
     try:
         async with aiohttp.ClientSession() as session:
@@ -2169,14 +2112,84 @@ async def process_imgmodel_announce(i, selected_imgmodel, selected_imgmodel_name
     except Exception as e:
         print("Error announcing imgmodel:", e)
 
+async def update_imgmodel(selected_imgmodel, selected_imgmodel_name, selected_imgmodel_imgtags, imgtag_name):
+    try:
+        active_settings = load_file('ad_discordbot/activesettings.yaml')
+        active_settings['imgmodel'] = selected_imgmodel
+        active_settings['imgtag'] = selected_imgmodel_imgtags
+        active_settings['imgmodel']['imgmodel_imgtags'] = imgtag_name
+        save_yaml_file('ad_discordbot/activesettings.yaml', active_settings)
+        update_client_settings() # Sync updated user settings to client
+        # Load the imgmodel and VAE via A1111 API
+        await task_queue.put(a1111_load_imgmodel(active_settings['imgmodel']['override_settings'])) # Process this in the background
+        # Update size options for /image command
+        await task_queue.put(update_size_options(active_settings.get('imgmodel').get('payload').get('width'),active_settings.get('imgmodel').get('payload').get('height')))
+    except Exception as e:
+        print("Error updating settings with the selected imgmodel data:", e)
+
+# Check filesize of selected imgmodel to assume resolution and imgtags 
+async def guess_imgmodel_res(selected_imgmodel_filename):
+    try:
+        file_size_bytes = os.path.getsize(selected_imgmodel_filename)
+        file_size_gb = file_size_bytes / (1024 ** 3)  # 1 GB = 1024^3 bytes
+        presets = config.imgmodels['get_imgmodels_via_api']['presets']
+        matched_preset = ''
+        for preset in presets:
+            if preset['max_filesize'] > file_size_gb:
+                matched_preset = dict(preset)
+                del matched_preset['max_filesize']
+                break
+        return matched_preset
+    except Exception as e:
+        print("Error guessing selected imgmodel resolution:", e)
+
+async def merge_imgmodel_data(selected_imgmodel):
+    try:
+        selected_imgmodel_name = selected_imgmodel.get('imgmodel_name')
+        selected_imgmodel_imgtags = {}
+        # Get imgtags if defined
+        imgtag_name = selected_imgmodel.get('imgmodel_imgtags', '')
+        # Create proper dictionary if A1111 API method
+        if config.imgmodels['get_imgmodels_via_api']['enabled']:
+            imgmodel_settings = {'payload': {}, 'override_settings': {}}
+            if config.imgmodels['get_imgmodels_via_api']['guess_model_res']:
+                selected_imgmodel_filename = selected_imgmodel.get('filename')
+                if selected_imgmodel_filename is not None:
+                    # Check filesize of selected imgmodel to assume resolution and imgtags 
+                    matched_preset = await guess_imgmodel_res(selected_imgmodel_filename)
+                    if matched_preset:
+                        if matched_preset.get('imgtag_name', ''):
+                            # Get imgtags if defined for API method
+                            imgtag_name = matched_preset['imgtag_name']
+                            del matched_preset['imgtag_name']
+                        # Add user defined payload mods for API method
+                        imgmodel_settings['payload'] = matched_preset
+            imgmodel_settings['override_settings']['sd_model_checkpoint'] = selected_imgmodel['sd_model_checkpoint']
+            imgmodel_settings['imgmodel_name'] = selected_imgmodel_name
+            imgmodel_settings['imgmodel_url'] = ''
+            # Replace input dictionary
+            selected_imgmodel = imgmodel_settings
+        # Merge the selected imgmodel data with base imgmodel data
+        selected_imgmodel = merge_base(selected_imgmodel, 'imgmodel')
+        # Merge imgtags if any were defined
+        if imgtag_name:
+            imgtags_data = load_file('ad_discordbot/dict_imgtags.yaml')
+            for imgtags in imgtags_data:
+                if imgtags.get('imgtag_name') == imgtag_name:
+                    selected_imgmodel_imgtags = imgtags
+                    break
+        return selected_imgmodel, selected_imgmodel_name, selected_imgmodel_imgtags, imgtag_name
+    except Exception as e:
+        print("Error merging selected imgmodel data with base imgmodel data:", e)
+
 async def get_selected_imgmodel_data(selected_imgmodel_value):
     try:
+        all_imgmodel_data = copy.deepcopy(all_imgmodels)
         if not config.imgmodels['get_imgmodels_via_api']['enabled']:
-            imgmodels = load_file('ad_discordbot/dict_imgmodels.yaml')
-            selected_imgmodel = next(imgmodel for imgmodel in imgmodels if imgmodel['imgmodel_name'] == selected_imgmodel_value)
+            selected_imgmodel = next(imgmodel for imgmodel in all_imgmodel_data if imgmodel['imgmodel_name'] == selected_imgmodel_value)
         else: # Collect imgmodel data for A1111 API method
             selected_imgmodel = {}
-            for imgmodel in all_imgmodels:
+            for imgmodel in all_imgmodel_data:
                 if imgmodel["imgmodel_name"] == selected_imgmodel_value:
                     selected_imgmodel = {
                         "sd_model_checkpoint": imgmodel["sd_model_checkpoint"],
@@ -2184,32 +2197,22 @@ async def get_selected_imgmodel_data(selected_imgmodel_value):
                         "filename": imgmodel.get("filename", None)
                     }
                     break
+        return selected_imgmodel
     except Exception as e:
-        print("Error getting image model data:", e)
-    return selected_imgmodel
+        print("Error getting selected imgmodel data:", e)
 
 async def process_imgmodel(i, selected_imgmodel_value):
     try:
         selected_imgmodel = await get_selected_imgmodel_data(selected_imgmodel_value)
-        selected_imgmodel_name = selected_imgmodel.get('imgmodel_name')
-        active_settings = load_file('ad_discordbot/activesettings.yaml')
-        # Process .yaml method
-        if not config.imgmodels['get_imgmodels_via_api']['enabled']:
-            update_dict(active_settings.get('imgmodel', {}), selected_imgmodel)
-            if selected_imgmodel.get('imgmodel_imgtags') is not None:
-                await change_imgtags(active_settings, selected_imgmodel.get('imgmodel_imgtags'))
-        else: # Process A1111 API method
-            await change_imgmodel_api(active_settings, selected_imgmodel, selected_imgmodel_name)
-        save_yaml_file('ad_discordbot/activesettings.yaml', active_settings)
-        update_client_settings() # Sync updated user settings to client
-        # Load the imgmodel and VAE via A1111 API
-        await task_queue.put(a1111_load_imgmodel(active_settings['imgmodel']['override_settings'])) # Process this in the background
-        # Update size options for /image command
-        await task_queue.put(update_size_options(active_settings.get('imgmodel').get('payload').get('width'),active_settings.get('imgmodel').get('payload').get('height')))
+        # Merge selected imgmodel/imgtag data with base settings
+        selected_imgmodel, selected_imgmodel_name, selected_imgmodel_imgtags, imgtag_name = await merge_imgmodel_data(selected_imgmodel)
+        # Commit all the settings
+        await update_imgmodel(selected_imgmodel, selected_imgmodel_name, selected_imgmodel_imgtags, imgtag_name)
+        # Set the topic of the channel and announce imgmodel as configured
         await process_imgmodel_announce(i, selected_imgmodel, selected_imgmodel_name)
         print(f"Updated imgmodel settings to: {selected_imgmodel_name}")
     except Exception as e:
-        print("Error updating image model:", e)
+        print("Error processing selected imgmodel from /image command:", e)
     if config.discord['post_active_settings']['enabled']:
         await task_queue.put(post_active_settings())
 
