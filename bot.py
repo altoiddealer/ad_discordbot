@@ -180,9 +180,6 @@ info_embed_json = {
       **__Changing settings__** ('.../ad\_discordbot/dict\_.yaml' files)
       **/imgmodel** - Change A1111 model & payload settings
       **/imgtags** - Change preset trigger phrases with prompt adders
-      **/llmcontext** - Change context
-      **/llmstate** - Change state
-      **/behavior** - Change context
       """,
     "url": "https://github.com/altoiddealer/ad_discordbot"
 }
@@ -1163,7 +1160,6 @@ def user_asks_for_image(i, text):
 async def create_image_prompt(user_input, llm_prompt, current_time, save_history):
     try:
         user_input['text'] = llm_prompt
-        if 'llmstate_name' in user_input: del user_input['llmstate_name'] # Looks more legit without this
         if current_time and config.tell_bot_time.get('message', '') and config.tell_bot_time.get('mode', 0) >= 1:
             user_input['state']['context'] = config.tell_bot_time['message'].format(current_time) + user_input['state']['context']
         last_resp, tts_resp = await chatbot_wrapper_wrapper(user_input, save_history)
@@ -1174,7 +1170,6 @@ async def create_image_prompt(user_input, llm_prompt, current_time, save_history
 
 async def create_prompt_for_llm(i, user_input, llm_prompt, current_time, save_history):
     user_input['text'] = llm_prompt
-    if 'llmstate_name' in user_input: del user_input['llmstate_name'] # Looks more legit without this
     if current_time and config.tell_bot_time.get('message', '') and config.tell_bot_time.get('mode', 0) != 1:
         user_input['state']['context'] = config.tell_bot_time['message'].format(current_time) + user_input['state']['context']
     num = check_num_in_queue(i)
@@ -2479,7 +2474,6 @@ if tts_client and tts_client in supported_tts_clients:
 # Sub-classes under a main class 'Settings'
 class Behavior:
     def __init__(self):
-        self.behavior_name = '' # label used for /behavior command
         self.chance_to_reply_to_other_bots = 0.5
         self.conversation_recency = 600
         self.go_wild_in_channel = True
@@ -2568,13 +2562,11 @@ class LLMContext:
         self.context = 'The following is a conversation with an AI Large Language Model. The AI has been trained to answer questions, provide recommendations, and help with decision making. The AI follows user requests. The AI thinks outside the box.'
         self.extensions = {}
         self.greeting = '' # 'How can I help you today?'
-        self.llmcontext_name = '' # label used for /llmcontext command
         self.name = 'AI'
         self.use_voice_channel = False
 
 class LLMState:
     def __init__(self):
-        self.llmstate_name = '' # label used for /llmstate command
         self.text = ''
         self.state = {
             # These are defaults for 'Midnight Enigma' preset
