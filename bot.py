@@ -660,7 +660,7 @@ async def auto_update_imgmodel_task(mode='random'):
         try:
             active_settings = load_file('ad_discordbot/activesettings.yaml')
             current_imgmodel_name = active_settings.get('imgmodel', {}).get('imgmodel_name', '')
-            imgmodel_names = [imgmodel.get('sd_model_checkpoint', imgmodel.get('imgmodel_name', '')) for imgmodel in all_imgmodels]           
+            imgmodel_names = [imgmodel.get('imgmodel_name', '') for imgmodel in all_imgmodels]           
             # Select an imgmodel automatically
             selected_imgmodel = await auto_select_imgmodel(current_imgmodel_name, imgmodel_names, mode)
             # Merge selected imgmodel/imgtag data with base settings
