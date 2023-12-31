@@ -84,6 +84,7 @@ from modules import chat, utils
 shared.args.chat = True
 from modules.LoRA import add_lora_to_model
 from modules.models import load_model
+from modules.models_settings import get_model_metadata
 from threading import Lock, Thread
 shared.generation_lock = Lock()
 
@@ -739,6 +740,48 @@ async def update_extensions(params):
     except Exception as e:
         print(f"An error occurred while updating character extension settings:", e)
 
+# Initialize in chat mode
+async def load_chat():
+    try:
+        # This will be either the char name found in activesettings.yaml, or the default char name
+        source = client.settings['llmcontext']['name']
+        # If name doesn't match the bot's discord username, try to figure out best char data to initialize with
+        if source != client.user.display_name:
+            sources = [
+                client.user.display_name, # Try current bot name
+                client.settings['llmcontext']['name'], # Try last known name
+                config.discord.get('char_name', '') # Try default name in config.py
+            ]
+            for source in sources:
+                print(f'Trying to load character "{source}"...')
+                try:
+                    _, char_name, _, _, _ = load_character(source, '', '')
+                    if char_name:
+                        print(f'Initializing with character "{source}". Use "/character" for changing characters.')                            
+                        break  # Character loaded successfully, exit the loop
+                except Exception as e:
+                    logging.error("Error loading character:", e)
+        # Load character, but don't save it's settings to activesettings (Only user actions will result in modifications)
+        await character_loader(source)
+    except Exception as e:
+        print("Error initializing in chat mode:", e)
+
+# Initialize in instruct mode
+async def load_instruct():
+    try:
+        # Set the instruction template for the model
+        instruction_template_str = ''
+        llmmodel_metadata = get_model_metadata(shared.model_name)
+        if llmmodel_metadata:
+            instruction_template_str = llmmodel_metadata.get('instruction_template_str', '')
+            if instruction_template_str:
+                client.settings['llmstate']['state']['instruction_template_str'] = instruction_template_str
+                print(f'The metadata for model "{shared.model_name}" includes an instruction template which will be used.')
+            else:
+                print(f'The metadata for model "{shared.model_name}" does not include an instruction template. Using default.')    
+    except Exception as e:
+        print("Error initializing in chat mode:", e)
+
 # If first time bot script is run
 async def first_run():
     try:
@@ -768,11 +811,16 @@ def update_client_settings():
     try:
         defaults = Settings() # Instance of the default settings
         defaults = defaults.settings_to_dict() # Convert instance to dict
+        # Base settings
+        base_settings = load_file('ad_discordbot/dict_base_settings.yaml')
+        base_settings = dict(base_settings)
         # Current user custom settings
         active_settings = load_file('ad_discordbot/activesettings.yaml')
         active_settings = dict(active_settings)
+        # Merge active_settings over base_settings
+        merged_settings = update_dict(base_settings, active_settings)
         # Add any missing required settings
-        fixed_settings = fix_dict(active_settings, defaults)
+        fixed_settings = fix_dict(merged_settings, defaults)
         # Commit fixed settings to the discord client (always accessible)
         client.settings = fixed_settings
         # Update client behavior
@@ -791,26 +839,15 @@ async def on_ready():
         # If first time running bot
         if client.database.first_run:
             await first_run()
-        # This will be either the char name found in activesettings.yaml, or the default char name
-        source = client.settings['llmcontext']['name']
-        # If name doesn't match the bot's discord username, try to figure out best char data to initialize with
-        if source != client.user.display_name:
-            sources = [
-                client.user.display_name, # Try current bot name
-                client.settings['llmcontext']['name'], # Try last known name
-                config.discord.get('char_name', '') # Try default name in config.py
-            ]
-            for source in sources:
-                print(f'Trying to load character "{source}"...')
-                try:
-                    _, char_name, _, _, _ = load_character(source, '', '')
-                    if char_name:
-                        print(f'Initializing with character "{source}". Use "/character" for changing characters.')                            
-                        break  # Character loaded successfully, exit the loop
-                except Exception as e:
-                    logging.error("Error loading character:", e)
-        # Load character, but don't save it's settings to activesettings (Only user actions will result in modifications)
-        await character_loader(source)
+        # Set the mode (chat / chat-instruct / instruct)
+        mode = client.settings['llmstate']['state']['mode']
+        print(f'Initializing in {mode} mode')
+        # Get instruction template if not 'chat'
+        if mode != 'chat':
+            await load_instruct()
+        # Get character info if not 'instruct'
+        if mode != 'instruct':
+            await load_chat()
         # For processing tasks in the background
         client.loop.create_task(process_tasks_in_background())
         await task_queue.put(client.tree.sync()) # Process this in the background
@@ -1186,6 +1223,8 @@ async def initialize_user_input(i, text):
     context = await replace_character_names(context, name1, name2)
     user_input['state']['name1'] = name1
     user_input['state']['name2'] = name2
+    user_input['state']['name1_instruct'] = name1
+    user_input['state']['name2_instruct'] = name2
     user_input['state']['character_menu'] = name2
     user_input['state']['context'] = context
     # check for ignore history setting / start with default history settings
@@ -2483,7 +2522,7 @@ class Behavior:
         self.ignore_history = False
         self.ignore_parentheses = True
         self.only_speak_when_spoken_to = True
-        self.reply_to_bots_when_addressed = 0.3
+        self.reply_to_bots_when_adressed = 0.3
         self.reply_to_itself = 0.0
         self.reply_with_image = 0.0
         self.user_conversations = {}
@@ -2514,8 +2553,8 @@ class Behavior:
         if i.author.bot and client.user.display_name.lower() in text.lower() and i.channel.id in client.database.main_channels:
             if 'bye' in text.lower(): # don't reply if another bot is saying goodbye
                 return False
-            return self.probability_to_reply(self.reply_to_bots_when_addressed)
-        # Whether to reply when text is nested in parenthesis
+            return self.probability_to_reply(self.reply_to_bots_when_adressed)
+        # Whether to reply when text is nested in parentheses
         if self.ignore_parentheses and (i.content.startswith('(') and i.content.endswith(')')) or (i.content.startswith('<:') and i.content.endswith(':>')):
             return False
         # Whether to reply if only speak when spoken to
@@ -2582,6 +2621,7 @@ class LLMState:
             'chat_generation_attempts': 1,
             'chat_prompt_size': 2048,
             'custom_stopping_strings': '',
+            'custom_system_message': '',
             'custom_token_bans': '',
             'do_sample': True,
             'early_stopping': False,
@@ -2627,7 +2667,8 @@ class LLMState:
             'turn_template': '',
             'typical_p': 1,
             'chat_template_str': '''{%- for message in messages %}\n    {%- if message['role'] == 'system' -%}\n        {{- message['content'] + '\\n\\n' -}}\n    {%- else -%}\n        {%- if message['role'] == 'user' -%}\n            {{- name1 + ': ' + message['content'] + '\\n'-}}\n        {%- else -%}\n            {{- name2 + ': ' + message['content'] + '\\n' -}}\n        {%- endif -%}\n    {%- endif -%}\n{%- endfor -%}''',
-            'instruction_template_str': '''{%- set found_item = false -%}\n{%- for message in messages -%}\n    {%- if message['role'] == 'system' -%}\n        {%- set found_item = true -%}\n    {%- endif -%}\n{%- endfor -%}\n{%- if not found_item -%}\n    {{- '' + 'Below is an instruction that describes a task. Write a response that appropriately completes the request.' + '\\n\\n' -}}\n{%- endif %}\n{%- for message in messages %}\n    {%- if message['role'] == 'system' -%}\n        {{- '' + message['content'] + '\\n\\n' -}}\n    {%- else -%}\n        {%- if message['role'] == 'user' -%}\n            {{-'### Instruction:\\n' + message['content'] + '\\n\\n'-}}\n        {%- else -%}\n            {{-'### Response:\\n' + message['content'] + '\\n\\n' -}}\n        {%- endif -%}\n    {%- endif -%}\n{%- endfor -%}\n{%- if add_generation_prompt -%}\n    {{-'### Response:\\n'-}}\n{%- endif -%}'''
+            'instruction_template_str': '''{%- set ns = namespace(found=false) -%}\n{%- for message in messages -%}\n    {%- if message['role'] == 'system' -%}\n        {%- set ns.found = true -%}\n    {%- endif -%}\n{%- endfor -%}\n{%- if not ns.found -%}\n    {{- '' + 'Below is an instruction that describes a task. Write a response that appropriately completes the request.' + '\\n\\n' -}}\n{%- endif %}\n{%- for message in messages %}\n    {%- if message['role'] == 'system' -%}\n        {{- '' + message['content'] + '\\n\\n' -}}\n    {%- else -%}\n        {%- if message['role'] == 'user' -%}\n            {{-'### Instruction:\\n' + message['content'] + '\\n\\n'-}}\n        {%- else -%}\n            {{-'### Response:\\n' + message['content'] + '\\n\\n' -}}\n        {%- endif -%}\n    {%- endif -%}\n{%- endfor -%}\n{%- if add_generation_prompt -%}\n    {{-'### Response:\\n'-}}\n{%- endif -%}''',
+            'chat-instruct_command': '''Continue the chat dialogue below. Write a single reply for the character "<|character|>".\n\n<|prompt|>'''
             }
         self.regenerate = False
         self._continue = False
