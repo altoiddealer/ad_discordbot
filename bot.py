@@ -811,16 +811,11 @@ def update_client_settings():
     try:
         defaults = Settings() # Instance of the default settings
         defaults = defaults.settings_to_dict() # Convert instance to dict
-        # Base settings
-        base_settings = load_file('ad_discordbot/dict_base_settings.yaml')
-        base_settings = dict(base_settings)
         # Current user custom settings
         active_settings = load_file('ad_discordbot/activesettings.yaml')
         active_settings = dict(active_settings)
-        # Merge active_settings over base_settings
-        merged_settings = update_dict(base_settings, active_settings)
         # Add any missing required settings
-        fixed_settings = fix_dict(merged_settings, defaults)
+        fixed_settings = fix_dict(active_settings, defaults)
         # Commit fixed settings to the discord client (always accessible)
         client.settings = fixed_settings
         # Update client behavior
