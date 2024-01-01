@@ -2259,16 +2259,25 @@ if all_imgmodels:
             imgmodel['imgmodel_name'] = imgmodel.pop('model_name')
 
     imgmodel_options = [app_commands.Choice(name=imgmodel["imgmodel_name"], value=imgmodel["imgmodel_name"]) for imgmodel in all_imgmodels[:25]]
+    last_imgmodel_options = imgmodel_options[-1].name[0].capitalize() # Letter for options description
     if len(all_imgmodels) > 25:
-        imgmodel_options1 = [app_commands.Choice(name=imgmodel["imgmodel_name"], value=imgmodel["imgmodel_name"]) for imgmodel in all_imgmodels[25:50]]    
-        if len(all_imgmodels) > 50:      
-            imgmodel_options2 = [app_commands.Choice(name=imgmodel["imgmodel_name"], value=imgmodel["imgmodel_name"]) for imgmodel in all_imgmodels[50:75]]                       
+        imgmodel_options1 = [app_commands.Choice(name=imgmodel["imgmodel_name"], value=imgmodel["imgmodel_name"]) for imgmodel in all_imgmodels[25:50]]
+        first_imgmodel_options1 = imgmodel_options1[0].name[0].capitalize() # Letter for options description
+        last_imgmodel_options1 = imgmodel_options1[-1].name[0].capitalize() # Letter for options description
+        if len(all_imgmodels) > 50:
+            imgmodel_options2 = [app_commands.Choice(name=imgmodel["imgmodel_name"], value=imgmodel["imgmodel_name"]) for imgmodel in all_imgmodels[50:75]]
+            first_imgmodel_options2 = imgmodel_options2[0].name[0].capitalize() # Letter for options description
+            last_imgmodel_options2 = imgmodel_options2[-1].name[0].capitalize() # Letter for options description
             if len(all_imgmodels) > 75:
-                imgmodel_options3 = [app_commands.Choice(name=imgmodel["imgmodel_name"], value=imgmodel["imgmodel_name"]) for imgmodel in all_imgmodels[75:100]]                       
-                if len(all_imgmodels) > 100: print("'/imgmodel' command only allows up to 100 image models. Some models were omitted.")
+                imgmodel_options3 = [app_commands.Choice(name=imgmodel["imgmodel_name"], value=imgmodel["imgmodel_name"]) for imgmodel in all_imgmodels[75:100]]
+                first_imgmodel_options3 = imgmodel_options3[0].name[0].capitalize() # Letter for options description
+                if len(all_imgmodels) > 100:
+                    all_imgmodels = all_imgmodels[:100]
+                    print("'/imgmodel' command only allows up to 100 image models. Some models were omitted.")
 
     if len(all_imgmodels) <= 25:
         @client.hybrid_command(name="imgmodel", description='Choose an imgmodel')
+        @app_commands.describe(imgmodels='Imgmodels A-Z')
         @app_commands.choices(imgmodels=imgmodel_options)
         async def imgmodel(i: discord.Interaction, imgmodels: typing.Optional[app_commands.Choice[str]]):
             selected_imgmodel = imgmodels.value if imgmodels is not None else ''
@@ -2276,7 +2285,9 @@ if all_imgmodels:
 
     elif 25 < len(all_imgmodels) <= 50:
         @client.hybrid_command(name="imgmodel", description='Choose an imgmodel (pick only one)')
+        @app_commands.describe(models_1=f'Imgmodels A-{last_imgmodel_options}')
         @app_commands.choices(models_1=imgmodel_options)
+        @app_commands.describe(models_2=f'Imgmodels {first_imgmodel_options1}-Z')
         @app_commands.choices(models_2=imgmodel_options1)
         async def imgmodel(i: discord.Interaction, models_1: typing.Optional[app_commands.Choice[str]], models_2: typing.Optional[app_commands.Choice[str]]):
             if models_1 and models_2:
@@ -2286,8 +2297,11 @@ if all_imgmodels:
 
     elif 50 < len(all_imgmodels) <= 75:
         @client.hybrid_command(name="imgmodel", description='Choose an imgmodel (pick only one)')
+        @app_commands.describe(models_1=f'Imgmodels A-{last_imgmodel_options}')
         @app_commands.choices(models_1=imgmodel_options)
+        @app_commands.describe(models_2=f'Imgmodels {first_imgmodel_options1}-{last_imgmodel_options1}')
         @app_commands.choices(models_2=imgmodel_options1)
+        @app_commands.describe(models_3=f'Imgmodels {first_imgmodel_options2}-Z')
         @app_commands.choices(models_3=imgmodel_options2)
         async def imgmodel(i: discord.Interaction, models_1: typing.Optional[app_commands.Choice[str]], models_2: typing.Optional[app_commands.Choice[str]], models_3: typing.Optional[app_commands.Choice[str]]):
             if sum(1 for v in (models_1, models_2, models_3) if v) > 1:
@@ -2297,9 +2311,13 @@ if all_imgmodels:
 
     elif 75 < len(all_imgmodels) <= 100:
         @client.hybrid_command(name="imgmodel", description='Choose an imgmodel (pick only one)')
+        @app_commands.describe(models_1=f'Imgmodels A-{last_imgmodel_options}')
         @app_commands.choices(models_1=imgmodel_options)
+        @app_commands.describe(models_2=f'Imgmodels {first_imgmodel_options1}-{last_imgmodel_options1}')
         @app_commands.choices(models_2=imgmodel_options1)
+        @app_commands.describe(models_3=f'Imgmodels {first_imgmodel_options2}-{last_imgmodel_options2}')
         @app_commands.choices(models_3=imgmodel_options2)
+        @app_commands.describe(models_4=f'Imgmodels {first_imgmodel_options3}-Z')
         @app_commands.choices(models_4=imgmodel_options3)
         async def imgmodel(i: discord.Interaction, models_1: typing.Optional[app_commands.Choice[str]], models_2: typing.Optional[app_commands.Choice[str]], models_3: typing.Optional[app_commands.Choice[str]], models_4: typing.Optional[app_commands.Choice[str]]):
             if sum(1 for v in (models_1, models_2, models_3, models_4) if v) > 1:
@@ -2462,16 +2480,23 @@ async def fetch_speak_options():
 if tts_client and tts_client in supported_tts_clients:
     ext, lang_list, all_voices = asyncio.run(fetch_speak_options())
     voice_options = [app_commands.Choice(name=voice_name.replace('_', ' ').title(), value=f'{voice_name}{ext}') for voice_name in all_voices[:25]]
+    last_voice_options = voice_options[-1].name[0].capitalize() # Letter for options description
     if len(all_voices) > 25:
-        voice_options1 = [app_commands.Choice(name=voice_name.replace('_', ' ').title(), value=f'{voice_name}{ext}') for voice_name in all_voices[25:50]]    
-        if len(all_voices) > 50:      
-            voice_options2 = [app_commands.Choice(name=voice_name.replace('_', ' ').title(), value=f'{voice_name}{ext}') for voice_name in all_voices[50:75]]                       
-            if len(all_voices) > 75: print("'/speak' command only allows up to 75 voices. Some voices were omitted.")
+        voice_options1 = [app_commands.Choice(name=voice_name.replace('_', ' ').title(), value=f'{voice_name}{ext}') for voice_name in all_voices[25:50]]
+        first_voice_options1 = voice_options1[0].name[0].capitalize() # Letter for options description
+        last_voice_options1 = voice_options1[-1].name[0].capitalize() # Letter for options description
+        if len(all_voices) > 50:
+            voice_options2 = [app_commands.Choice(name=voice_name.replace('_', ' ').title(), value=f'{voice_name}{ext}') for voice_name in all_voices[50:75]]
+            first_voice_options2 = voice_options2[0].name[0].capitalize() # Letter for options description
+            if len(all_voices) > 75:
+                all_voices = all_voices[:75]
+                print("'/speak' command only allows up to 75 voices. Some voices were omitted.")
     if lang_list: lang_options = [app_commands.Choice(name=lang, value=lang) for lang in lang_list]
     else: lang_options = [app_commands.Choice(name='English', value='English')] # Default to English
 
     if len(all_voices) <= 25:
         @client.hybrid_command(name="speak", description='AI will speak your text using a selected voice')
+        @app_commands.describe(voice='Voices A-Z')
         @app_commands.choices(voice=voice_options)
         @app_commands.choices(lang=lang_options)
         async def speak(i: discord.Interaction, input_text: str, voice: typing.Optional[app_commands.Choice[str]], lang: typing.Optional[app_commands.Choice[str]], voice_input: typing.Optional[discord.Attachment]):
@@ -2482,7 +2507,9 @@ if tts_client and tts_client in supported_tts_clients:
 
     elif 25 < len(all_voices) <= 50:
         @client.hybrid_command(name="speak", description='AI will speak your text using a selected voice (pick only one)')
+        @app_commands.describe(voice_1=f'Voices A-{last_voice_options}')
         @app_commands.choices(voice_1=voice_options)
+        @app_commands.describe(voice_2=f'Voices {first_voice_options1}-Z')
         @app_commands.choices(voice_2=voice_options1)
         @app_commands.choices(lang=lang_options)
         async def speak(i: discord.Interaction, input_text: str, voice_1: typing.Optional[app_commands.Choice[str]], voice_2: typing.Optional[app_commands.Choice[str]], lang: typing.Optional[app_commands.Choice[str]], voice_input: typing.Optional[discord.Attachment]):
@@ -2495,8 +2522,11 @@ if tts_client and tts_client in supported_tts_clients:
 
     elif 50 < len(all_voices) <= 75:
         @client.hybrid_command(name="speak", description='AI will speak your text using a selected voice (pick only one)')
+        @app_commands.describe(voice_1=f'Voices A-{last_voice_options}')
         @app_commands.choices(voice_1=voice_options)
+        @app_commands.describe(voice_2=f'Voices {first_voice_options1}-{last_voice_options1}')
         @app_commands.choices(voice_2=voice_options1)
+        @app_commands.describe(voice_3=f'Voices {first_voice_options2}-Z')
         @app_commands.choices(voice_3=voice_options2)
         @app_commands.choices(lang=lang_options)
         async def speak(i: discord.Interaction, input_text: str, voice_1: typing.Optional[app_commands.Choice[str]], voice_2: typing.Optional[app_commands.Choice[str]], voice_3: typing.Optional[app_commands.Choice[str]], lang: typing.Optional[app_commands.Choice[str]], voice_input: typing.Optional[discord.Attachment]):
