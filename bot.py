@@ -83,7 +83,7 @@ from modules import shared
 from modules import chat, utils
 shared.args.chat = True
 from modules.LoRA import add_lora_to_model
-from modules.models import load_model
+from modules.models import load_model, unload_model
 from modules.models_settings import get_model_metadata
 from threading import Lock, Thread
 shared.generation_lock = Lock()
@@ -188,7 +188,7 @@ info_embed = discord.Embed().from_dict(info_embed_json)
 
 # Load text-generation-webui
 # Define functions
-def get_available_models():
+def get_llmmodels():
     return sorted([re.sub(".pth$", "", item.name) for item in list(Path(f"{shared.args.model_dir}/").glob("*")) if not item.name.endswith((".txt", "-np", ".pt", ".json", ".yaml"))], key=str.lower)
 
 def get_available_extensions():
@@ -290,30 +290,30 @@ for extension in shared.settings["default_extensions"]:
 
 if shared.args.extensions and len(shared.args.extensions) > 0:
     extensions_module.load_extensions()
-    
-available_models = get_available_models()
+
+all_llmmodels = get_llmmodels()
 
 # Model defined through --model
 if shared.args.model is not None:
     shared.model_name = shared.args.model
 
 # Only one model is available
-elif len(available_models) == 1:
-    shared.model_name = available_models[0]
+elif len(all_llmmodels) == 1:
+    shared.model_name = all_llmmodels[0]
 
 # Select the model from a command-line menu
 elif shared.model_name == "None" or shared.args.model_menu:
-    if len(available_models) == 0:
-        print("No models are available! Please download at least one.")
+    if len(all_llmmodels) == 0:
+        print("No LLM models are available! Please download at least one.")
         sys.exit(0)
     else:
-        print("The following models are available:\n")
-        for i, model in enumerate(available_models):
+        print("The following LLM models are available:\n")
+        for i, model in enumerate(all_llmmodels):
             print(f"{i+1}. {model}")
-        print(f"\nWhich one do you want to load? 1-{len(available_models)}\n")
+        print(f"\nWhich one do you want to load? 1-{len(all_llmmodels)}\n")
         i = int(input()) - 1
         print()
-    shared.model_name = available_models[i]
+    shared.model_name = all_llmmodels[i]
 
 # If any model has been selected, load it
 if shared.model_name != "None":
@@ -2324,6 +2324,100 @@ if all_imgmodels:
                 await i.send("More than one imgmodel was selected. Using the first selection.", ephemeral=True)
             selected_imgmodel = ((models_1 or models_2 or models_3 or models_4) and (models_1 or models_2 or models_3 or models_4).value) or ''
             await process_imgmodel(i, selected_imgmodel)
+
+## /llmmodel command
+# Load the selected LLM model
+async def load_llmmodel():
+    try:
+        # Load the selected LLM model
+        shared.model, shared.tokenizer = load_model(shared.model_name)
+        if shared.args.lora:
+            add_lora_to_model([shared.args.lora])
+    except Exception as e:
+        print("Error loading selected LLM model:", e)
+
+# Process selected LLM model
+async def process_llmmodel(i, selected_llmmodel):
+    try:
+        if shared.model_name != "None":
+            unload_model() # Unload current LLM model
+        # Assign values for selected LLM model
+        shared.model_name = selected_llmmodel
+        model_settings = get_model_specific_settings(shared.model_name)
+        shared.settings.update(model_settings)
+        update_model_parameters(model_settings, initial=True)
+        await i.send(f"Changed LLM model to: {selected_llmmodel}")
+        await task_queue.put(load_llmmodel())
+    except Exception as e:
+        print("Error processing /llmmodel command:", e)
+
+if all_llmmodels:
+    llmmodel_options = [app_commands.Choice(name=llmmodel, value=llmmodel) for llmmodel in all_llmmodels[:25]]
+    last_llmmodel_options = llmmodel_options[-1].name[0].capitalize() # Letter for options description
+    if len(all_llmmodels) > 25:
+        llmmodel_options1 = [app_commands.Choice(name=llmmodel, value=llmmodel) for llmmodel in all_llmmodels[25:50]]
+        first_llmmodel_options1 = llmmodel_options1[0].name[0].capitalize() # Letter for options description
+        last_llmmodel_options1 = llmmodel_options1[-1].name[0].capitalize() # Letter for options description
+        if len(all_llmmodels) > 50:
+            llmmodel_options2 = [app_commands.Choice(name=llmmodel, value=llmmodel) for llmmodel in all_llmmodels[50:75]]
+            first_llmmodel_options2 = llmmodel_options2[0].name[0].capitalize() # Letter for options description
+            last_llmmodel_options2 = llmmodel_options2[-1].name[0].capitalize() # Letter for options description
+            if len(all_llmmodels) > 75:
+                llmmodel_options3 = [app_commands.Choice(name=llmmodel, value=llmmodel) for llmmodel in all_llmmodels[75:100]]
+                first_llmmodel_options3 = llmmodel_options3[0].name[0].capitalize() # Letter for options description
+                if len(all_llmmodels) > 100:
+                    all_llmmodels = all_llmmodels[:100]
+                    print("'/llmmodel' command only allows up to 100 LLM models. Some models were omitted.")
+
+    if len(all_llmmodels) <= 25:
+        @client.hybrid_command(name="llmmodel", description='Choose an LLM model')
+        @app_commands.describe(llmmodels='LLM models A-Z')
+        @app_commands.choices(llmmodels=llmmodel_options)
+        async def llmmodel(i: discord.Interaction, llmmodels: typing.Optional[app_commands.Choice[str]]):
+            selected_llmmodel = llmmodels.value if llmmodels is not None else ''
+            await process_llmmodel(i, selected_llmmodel)
+
+    elif 25 < len(all_llmmodels) <= 50:
+        @client.hybrid_command(name="llmmodel", description='Choose an LLM model (pick only one)')
+        @app_commands.describe(models_1=f'LLM models A-{last_llmmodel_options}')
+        @app_commands.choices(models_1=llmmodel_options)
+        @app_commands.describe(models_2=f'LLM models {first_llmmodel_options1}-Z')
+        @app_commands.choices(models_2=llmmodel_options1)
+        async def llmmodel(i: discord.Interaction, models_1: typing.Optional[app_commands.Choice[str]], models_2: typing.Optional[app_commands.Choice[str]]):
+            if models_1 and models_2:
+                await i.send("More than one LLM model was selected. Using the first selection.", ephemeral=True)
+            selected_llmmodel = ((models_1 or models_2) and (models_1 or models_2).value) or ''
+            await process_llmmodel(i, selected_llmmodel)
+
+    elif 50 < len(all_llmmodels) <= 75:
+        @client.hybrid_command(name="llmmodel", description='Choose an LLM model (pick only one)')
+        @app_commands.describe(models_1=f'LLM models A-{last_llmmodel_options}')
+        @app_commands.choices(models_1=llmmodel_options)
+        @app_commands.describe(models_2=f'LLM models {first_llmmodel_options1}-{last_llmmodel_options1}')
+        @app_commands.choices(models_2=llmmodel_options1)
+        @app_commands.describe(models_3=f'LLM models {first_llmmodel_options2}-Z')
+        @app_commands.choices(models_3=llmmodel_options2)
+        async def llmmodel(i: discord.Interaction, models_1: typing.Optional[app_commands.Choice[str]], models_2: typing.Optional[app_commands.Choice[str]], models_3: typing.Optional[app_commands.Choice[str]]):
+            if sum(1 for v in (models_1, models_2, models_3) if v) > 1:
+                await i.send("More than one LLM model was selected. Using the first selection.", ephemeral=True)
+            selected_llmmodel = ((models_1 or models_2 or models_3) and (models_1 or models_2 or models_3).value) or ''
+            await process_llmmodel(i, selected_llmmodel)
+
+    elif 75 < len(all_llmmodels) <= 100:
+        @client.hybrid_command(name="llmmodel", description='Choose an LLM model (pick only one)')
+        @app_commands.describe(models_1=f'LLM models A-{last_llmmodel_options}')
+        @app_commands.choices(models_1=llmmodel_options)
+        @app_commands.describe(models_2=f'LLM models {first_llmmodel_options1}-{last_llmmodel_options1}')
+        @app_commands.choices(models_2=llmmodel_options1)
+        @app_commands.describe(models_3=f'LLM models {first_llmmodel_options2}-{last_llmmodel_options2}')
+        @app_commands.choices(models_3=llmmodel_options2)
+        @app_commands.describe(models_4=f'LLM models {first_llmmodel_options3}-Z')
+        @app_commands.choices(models_4=llmmodel_options3)
+        async def llmmodel(i: discord.Interaction, models_1: typing.Optional[app_commands.Choice[str]], models_2: typing.Optional[app_commands.Choice[str]], models_3: typing.Optional[app_commands.Choice[str]], models_4: typing.Optional[app_commands.Choice[str]]):
+            if sum(1 for v in (models_1, models_2, models_3, models_4) if v) > 1:
+                await i.send("More than one LLM model was selected. Using the first selection.", ephemeral=True)
+            selected_llmmodel = ((models_1 or models_2 or models_3 or models_4) and (models_1 or models_2 or models_3 or models_4).value) or ''
+            await process_llmmodel(i, selected_llmmodel)
 
 ## /Speak command
 async def process_speak_silero_non_eng(i, lang):
