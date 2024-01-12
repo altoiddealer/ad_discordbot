@@ -106,6 +106,10 @@ llmstate:
     custom_system_message: ''
     custom_token_bans: ''
     do_sample: true
+    dynamic_temperature: False
+    dynatemp_low: 1
+    dynatemp_high: 1
+    dynatemp_exponent: 1
     early_stopping: false
     encoder_repetition_penalty: 1
     epsilon_cutoff: 0
