@@ -2773,6 +2773,7 @@ class LLMState:
             'num_beams': 1,
             'penalty_alpha': 0,
             'presence_penalty': 0,
+            'prompt_lookup_num_tokens': 0,
             'repetition_penalty': 1.18,
             'repetition_penalty_range': 1024,
             'seed': -1.0,
