@@ -1,5 +1,5 @@
 # These are the baseline settings you may adjust to your liking.
-# When you use bot commands like /character, /imgmodel, /imgtags, etc - those settings will always override these.
+# When you use bot commands like /character, /imgmodel, etc - those settings will always override these.
 # To see the currently active settings, look in activesettings.yaml (which is not intended to be edited).
 
 # There are many settings here you probably don't need to tinker with.
@@ -16,7 +16,6 @@ behavior:
   conversation_recency: 600 # How long (in seconds) a user is determined to be "in active conversation"
 
 imgmodel:
-  imgmodel_imgtags: ''
   imgmodel_url: ''
   override_settings:
     CLIP_stop_at_last_layers: 1
@@ -74,14 +73,6 @@ imgmodel:
           - 1                   #22 Source: 0 - Image, 1 - Face Model, 2 - Source Folder
           - ''                  #23 Filename of the face model (from "models/reactor/faces"), e.g. elena.safetensors, don't forget to set #22 to 1
           - ''                  #24 The path to the folder containing source faces images, don't forget to set #22 to 2
-
-imgtag:
-  negative_prompt_prefix: ''
-  positive_prompt_prefix: ''
-  positive_prompt_suffix: ''
-  positive_prompt_suffix2: ''
-  positive_prompt_suffix2_blacklist: ''
-  presets: []
 
 llmcontext:
   bot_description: ''

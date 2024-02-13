@@ -83,3 +83,8 @@ state:
   # "name2" (the character's name)
   custom_stopping_strings: '"### Assistant","### Human","</END>","\nname1:","\nname2:"'
   stopping_strings: '"### Assistant","### Human","</END>","\nname1:","\nname2:"'
+
+# Character specific 'tags' may be defined. See 'dict_tags.yaml' for more info on usage and list of valid tag keys.
+tags:
+  - trigger: 'selfie,self {portrait|photo}'
+    positive_prompt_prefix: 'friendly robot made of peppermint Altoids'

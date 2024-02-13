@@ -2,8 +2,8 @@
 # Intended as a dashboard to see what settings are in effect at any given time
 #
 # Recommended usage:
-#   - Use commands to update settings (/character, /imgmodel, /imgtags, etc)
-#   - Behavior and State should be defined per character (see example char 'M1nty')
+#   - Use commands to update settings (/character, /imgmodel, etc)
+#   - Behavior, State and Tags may be defined per character (see example char 'M1nty')
 #   - Extension settings can also be set per character.
 #   - Check out the dict_.yaml files to adjust settings presets.
 
@@ -18,14 +18,6 @@ behavior:
   reply_to_itself: 0.0
   reply_with_image: 0.0
   time_offset: 0.0
-imgtag:
-  imgtag_name: ''
-  negative_prompt_prefix: ''
-  positive_prompt_prefix: ''
-  positive_prompt_suffix: ''
-  positive_prompt_suffix2: ''
-  positive_prompt_suffix2_blacklist: ''
-  presets:
 imgmodel:
   imgmodel_name: ''
   imgmodel_url: ''

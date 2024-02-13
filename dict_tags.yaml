@@ -1,0 +1,110 @@
+# The 'tags' feature is a versatile method to tailor the bot's behavior for your use case.
+# tags may be defined in this file for global effect, as well as in character cards and imgmodel definitions.
+
+# Notes:
+# - 'trigger' key is recommended for most tags (except 'global_tag_keys' and 'tag_preset_name').
+# - Multiple comma-separated trigger phrases can be used per each tag (trigger: 'a boy,a dog' can match either 'a boy' or 'a dog')
+# - You may simplify triggers using this syntax: 'a {boy|dog}' --- the script will read this as 'a boy,a dog'
+# - The behavior of tags listed higher may override ones listed lower. Sources are also prioritized: character > imgmodel > base_tags > global_base_tags
+# - Valid tag keys are detailed at the end of this file and on GitHub
+
+# 'global_tag_keys' apply to ALL tag definitions. Keys defined in your tags will override global tag keys.
+global_tag_keys:
+  search_mode: userllm          # Search method for trigger matching. 'user' = user prompt only / 'llm' = bot reply only / 'userllm' = search both for matches
+  case_sensitive: false         # If your triggers are case sensitive
+  text_joining: ' '               # Relevant to 'insert_text'. Method of joining the inserted text to the user's llm prompt.
+  img_text_joining: ', '          # Relevant to 'positive_prompt' (and '_prefix' / '_suffix'). Method of joining the inserted text to the img prompt.
+  positive_prompt_method: after   # Relevant in tags with key 'positive_prompt'. 'after' = insert value after matched text / 'before' = before text / 'replace' = replace text
+
+
+# 'base_tags' are always in effect. Base tags have lower priority than tags defined anywhere else.
+base_tags:
+  - time_message: "It is now {}\n"  # datetime is inserted at {}. Bot will not be told the current date/time unless a tag is active with 'time_message' or 'time_offset'
+    time_offset: 0.0                # 0 = today's date (system time). -0.5 shifts the current date to be 12 hours ago. (UOM = days)
+#  - img_param_variances: {cfg_scale: (-2,4), steps: (-20,20), hr_scale: (-0.50,0.15)} # A1111 payload parameters can be randomized within your specified ranges. Must be formatted as a dictionary.
+  - trigger: 'nude,erotic'
+    img_censoring: 0            # 0 = disabled / 1 = blur image / 2 = block image from being generated
+  - trigger: 'draw,generate'
+    search_mode: user           # Only search user's prompt
+    on_prefix_only: true        # Only triggers if matched at very beginning
+    image_response: true        # The LLM's reply will be used for A1111 img generation
+    swap_character: Minty-SDXL  # Filename of character in /characters.
+    insert_text: ''
+    insert_text_method: replace
+    load_history: -1            # 0 = default (all history included) / -1 = prompt excludes chat history / > 1 = llm only sees this many recent exchanges.
+    save_history: false         # Whether to save this interaction to history or not.
+  - trigger: 'take a photo,take {a|another} picture'
+    search_mode: user
+    image_response: true
+    instruct: '''[SYSTEM] You have been tasked with generating an image: "{}". Describe the image in vivid detail as if you were describing it to a blind person. The description in your response will be sent to an image generation API.'''
+  - trigger: 'selfie,self portrait'
+    search_mode: user
+    image_response: true
+    instruct: '''[SYSTEM] You have been tasked with taking a selfie: "{}". Include your appearance, your current state of clothing, your surroundings and what you are doing right now.'''
+
+
+# 'tag_presets' are not in effect by default - they will be imported anywhere you use a 'tag_preset_name' tag.
+# Useful for when you want to use the same set of tags for mulitple uses (a few characters, a few imgmodels, etc).
+# Example: '- tag_preset_name: SDXL Tags' would be a simple way to share tags among all your SDXL imgmodels defined in dict_imgmodels.yaml.
+tag_presets:
+  - tag_preset_name: SDXL Tags # Each tag preset must be named
+    tags:                         # Tag presets must have their tag definitions nested under a 'tags' key
+      - trigger: 'vertical,selfie,self {photo|portrait}'
+        payload: {width: 896, height: 1152} # A1111 payload can be modified using 'payload'. Must be formatted as a dictionary.
+      - trigger: 'horizontal,landscape'
+        payload: {width: 1152, height: 896}
+      - trigger: 'plain'
+        override_settings: {CLIP_stop_at_last_layers: 2} # A1111 override_settings can also be modified. Must be formatted as a dictionary.
+      - trigger: 'grimace'
+        positive_prompt: '<lora:PE_Grimace_v1.0:0.75>'
+      - trigger: '{ps1|playstation} {style|art|graphics},style of {ps1|playstation}'
+        positive_prompt: 'ps1 style <lora:ps1_style_SDXL_v2:1.0>'
+        negative_prompt: 'blurry' # 'negative_prompt' = inserted at the end of the negative prompt (does not behave like 'positive_prompt' which is relative to the matched text)
+        trumps: 'low poly' # If any other matched tag has a trigger phrase matching a 'trump' phrase, it will not be used. (*can be comma separated to trump multiple tags*)
+      - trigger: 'low {poly|polygon}'
+        positive_prompt: '<lora:LowpolySDXL_v1.0:1.0>'
+        negative_prompt: 'blurry'
+  - tag_preset_name: SD15 Tags
+    tags:
+      - positive_prompt_prefix: 'masterpiece, detailed, ' # '_prefix' makes this inserted at the beginning of the image prompt
+        positive_prompt_suffix: ' <lora:more_details:0.5> <lora:epiNoiseoffset_v2Pynoise:0.5>' # '_suffix' makes this inserted at the end of the image prompt
+        negative_prompt_prefix: '<kkw-Extreme-Neg:0.5>, <negative_hand-neg:0.5>, by <bad-artist:0.5>, ' # same logic as positive_prompt. Can similarly use '_suffix' (or just 'negative_prompt')
+      - trigger: 'selfie,self photo'
+        positive_prompt: '(taking a selfie:1.2), (arms outstretched:1.1)'
+      - trigger: 'gta,gta4,grand theft auto,archer style'
+        positive_prompt: 'GtaSA2004 cartoon <lora:GTA_Style:1.0>'
+      - trigger: 'gigachad'
+        positive_prompt: '<lora:Gigachadv1:0.8>'
+
+
+# List of all available tag keys:
+#
+# Relevant to all tags:
+#   search_mode: userllm              Search method for trigger matching. 'user' = user prompt only / 'llm' = bot reply only / 'userllm' = search both for matches
+#   trigger: 'trigger,another one'    Recommended for most tags (except 'global_tag_keys' and 'tag_preset_name').
+#   case_sensitive: (true/false)      If the triggers are case sensitive
+#   on_prefix_only: (true/false)      If triggers must be matched at beginning of the searched text
+#
+# Relevant to text generation (LLM):
+#   time_message: "It is now {}\n"    datetime is inserted at {}. Bot will not be told the current date/time unless a tag is active with 'time_message' or 'time_offset'
+#   time_offset: 0.0                  0 = today's date (system time). -0.5 shifts the current date to be 12 hours ago. (UOM = days)
+#   instruct: 'string with a {}'      Useful for adding text before and/or after your prompt to the LLM.
+#   insert_text: ''                   Text you may want to insert relative to the matched search text.
+#   insert_text_method: replace       Relevant in tags with key 'pinsert_text'. 'after' = insert value after matched text / 'before' = before text / 'replace' = replace text
+#   text_joining: ' '                 Relevant to all insertion methods except "replace"
+#   swap_character: 'string'          Filename of character in /characters (do not include extension). That character's name, context, and state parameters will be used in LLM payload.
+#   load_history: 0                   0 = default (all history included) / -1 = prompt excludes chat history / > 1 = llm only sees this many recent exchanges.
+#   save_history: (true/false)        Whether to save this interaction to history or not.
+
+# Relevant to img generation (A1111):
+#   image_response: (true/false)      If LLM's reply should include A1111 img generation
+#   img_censoring: 0                  0 = disabled / 1 = blur image / 2 = block image from being generated
+#   positive_prompt: 'string'         Text you may want to insert relative to the matched text in the image prompt.
+#   positive_prompt_method: after     Relevant to 'positive_prompt'. 'after' = insert value after matched text / 'before' = before text / 'replace' = replace text
+#   positive_prompt_prefix: 'string'  Insert text at the beginning of the image positive prompt
+#   positive_prompt_suffix: 'string'  Insert text at the end of the image positive prompt
+#   negative_prompt_prefix: 'string'  Insert text at the beginning of the image negative prompt
+#   negative_prompt: 'string'         Insert text at the end of the image negative prompt ('_suffix' also works)
+#   img_text_joining: ', '            Relevant to all insertion methods except "replace"
+#   payload: {dictionary}             Replacements for A1111 payload. Must be formatted as a dictionary.
+#   img_param_variances: {dictionary} Randomization ranges for A1111 payload parameters. Must be formatted as a dictionary.
