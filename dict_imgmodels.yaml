@@ -5,7 +5,10 @@
 # You can safely ommit options (omitted items will not delete default values)
 - imgmodel_name: (SDXL) Base Model v1.0, 0.9 VAE
   imgmodel_url: 'https://huggingface.co/stabilityai/stable-diffusion-xl-base-0.9' # For announcements
-  imgmodel_imgtags: ''  # If you reference an imgmodel_name from dict_imgtags.yaml, they will sync with imgmodel changes. Ex: imgmodel_imgtags: SDXL ImgTags
+  tags:
+    - tag_preset_name: SDXL Tags  # tag presets should be single list items (prefixed by a hyphen -) / not grouped with any other tags
+    # You may load multiple tag presets (again, as separate list items)
+    # You may define additional imgmodel specific tags such as a special 'negative_prompt', 'positive_prompt_prefix', etc.
   override_settings:
     sd_model_checkpoint: "sdxl\\sd_xl_base_1.0_0.9vae.safetensors [e6bb9ea85b]"
     sd_vae: "Automatic"
@@ -22,6 +25,6 @@
     denoising_strength: 0.5
     hr_scale: 2
     hr_second_pass_steps: 0
-    # Refinder is disabled if refiner_switch_at: 0.0 or refiner_checkpoint: ''
+    # Refiner is disabled if refiner_switch_at: 0.0 or refiner_checkpoint: ''
     refiner_checkpoint: '' # 'sd_xl_refiner_1.0_0.9vae.safetensors [8d0ce6c016]'
     refiner_switch_at: 0.8
