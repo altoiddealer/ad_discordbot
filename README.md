@@ -16,17 +16,13 @@ A Discord Bot for chatting with LLMs using txt-generation-webui API.
 
 This bot stands apart from many other ones due to a variety of custom features:
 
--"Dynamic Context" activated by user configured trigger phrases to autmoatically swap character context, state settings, add instruct to prompt, alter history handling, with option to remove trigger phrase from user prompt
+-"Tags", activated by user configured trigger phrases (or immediately when trigger omitted) to manipulate bot behavior including handling image response, swapping character, modifying llm state settings, modifying the user's promopt and/or LLM's reply, alter history handling, seemingly endless possibilites.
 
 -All settings can be modified on-the-fly in active_settings.yaml. Settings changed via commands are immediately reflected in active_settings.yaml.
 
 -Plenty of customization due to a variety of Settings commands paired with easy to manage .yaml dictionaries.
 
 -Continue and Regenerate responses with /cont and /regen commands - both work fluidly with very long messages exceeding Discords message size limitation.
-
--Get image response from bot via user configured trigger phrases
-
--Modify Stable Diffusion payload settings automatically via user configured phrases
 
 -Send your image prompt directly to A1111 with powerful /image command that includes support for ControlNet and Reactor (face swap)
 
