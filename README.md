@@ -1,8 +1,8 @@
+**02/13/2024: Major update introducing the Tags feature. Take care migrating your existing settings**
+
 **12/11/2023: New "/speak" command! Silero and ElevenLabs TTS extensions now supported!**
 
 **12/8/2023: TTS Support, and Character Specific Extension Settings now added!**
-
-**11/20/2023: Big update - "imgloras" are now "imgtags".**
 
 If you manually apply updates to your existing config.py, dict .yaml files, etc, please carefully [compare the changes](https://github.com/altoiddealer/ad_discordbot/commit/96ff8e6698e98b25cd00837f529278275ecb6c51).
 
