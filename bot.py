@@ -2886,6 +2886,7 @@ class LLMState:
             'prompt_lookup_num_tokens': 0,
             'repetition_penalty': 1.18,
             'repetition_penalty_range': 1024,
+            'sampler_priority': [],
             'seed': -1.0,
             'skip_special_tokens': True,
             'stop_at_newline': False,
