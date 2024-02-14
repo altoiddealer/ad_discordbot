@@ -1315,7 +1315,7 @@ def match_tags(search_text, tags):
                     matches[list_name].append(tag)
                     continue
                 triggers = [t.strip() for t in tag['trigger'].split(',')]
-                for trigger in triggers:
+                for index, trigger in enumerate(triggers):
                     case_sensitive = tag.get('case_sensitive', False)
                     if case_sensitive:
                         trigger_regex = r"\b{}\b".format(re.escape(trigger))
@@ -1328,14 +1328,15 @@ def match_tags(search_text, tags):
                             unmatched[list_name].remove(tag)
                             tag['phase'] = phase if tag.get('phase', None) is None else 'userllm'
                             tag['matched_trigger'] = trigger # retain the matched trigger phrase
-                            if (('insert_text' in tag and phase == 'llm') or ('positive_prompt' in tag and phase == 'img')):
+                            if (('insert_text' in tag and phase == 'llm') or ('positive_prompt' in tag and phase == 'img')) or index == len(triggers) - 1:
                                 matches[list_name].append((tag, trigger_match.start(), trigger_match.end())) # Add as a tuple with start/end indexes if inserting text later
                             else:
                                 if 'positive_prompt' in tag:
                                     tag['imgtag_matched_early'] = True
                                 matches[list_name].append(tag)
+                            break  # Exit the loop after a match is found
                     else:
-                        if 'matched_trigger' in tag and 'positive_prompt' in tag:
+                        if phase == 'img' and 'matched_trigger' in tag and 'positive_prompt' in tag and index == len(triggers) - 1:
                             tag['imgtag_uninserted'] = True
                             matches[list_name].append(tag)
         if matches:
