@@ -70,7 +70,7 @@ imgmodel:
           - false               #19 Target Image Hash Check
           - CUDA                #20 CPU or CUDA
           - true                #21 Face Mask Correction
-          - 1                   #22 Source: 0 - Image, 1 - Face Model, 2 - Source Folder
+          - 0                   #22 Source: 0 - Image, 1 - Face Model, 2 - Source Folder
           - ''                  #23 Filename of the face model (from "models/reactor/faces"), e.g. elena.safetensors, don't forget to set #22 to 1
           - ''                  #24 The path to the folder containing source faces images, don't forget to set #22 to 2
 

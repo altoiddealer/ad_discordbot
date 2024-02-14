@@ -99,6 +99,7 @@ tag_presets:
 # Relevant to img generation (A1111):
 #   image_response: (true/false)      If LLM's reply should include A1111 img generation
 #   img_censoring: 0                  0 = disabled / 1 = blur image / 2 = block image from being generated
+#   face_swap: 'string'               Filename for a face image to be used with Reactor extension. Valid file types: .png, .jpg, .txt (containing base64 string)
 #   positive_prompt: 'string'         Text you may want to insert relative to the matched text in the image prompt.
 #   positive_prompt_method: after     Relevant to 'positive_prompt'. 'after' = insert value after matched text / 'before' = before text / 'replace' = replace text
 #   positive_prompt_prefix: 'string'  Insert text at the beginning of the image positive prompt

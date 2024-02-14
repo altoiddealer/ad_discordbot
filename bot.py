@@ -1241,13 +1241,17 @@ def process_prompt_tags(prompt, matches):
                 end += cumulative_offset  # Adjust end index for cumulative changes
                 phase = tag['phase']
                 if phase == 'llm':
-                    insert_text = tag['insert_text']
+                    insert_text = tag.get('insert_text', None)
                     join = tag.get('text_joining', ' ')
                     insert_method = tag.get('insert_text_method', 'after')  # Default to 'after'
                 else:
-                    insert_text = tag['positive_prompt']
+                    insert_text = tag.get('positive_prompt', None)
                     join = tag.get('img_text_joining', ' ')
                     insert_method = tag.get('positive_prompt_method', 'after')  # Default to 'after'
+                if insert_text is None:
+                    print(f"Error processing matched tag {item}. Skipping this tag.")
+                    matched_list[index] = tag
+                    continue
                 original_length = len(updated_prompt)
                 if insert_method == 'replace':
                     if insert_text == '':
@@ -1328,7 +1332,7 @@ def match_tags(search_text, tags):
                             unmatched[list_name].remove(tag)
                             tag['phase'] = phase if tag.get('phase', None) is None else 'userllm'
                             tag['matched_trigger'] = trigger # retain the matched trigger phrase
-                            if (('insert_text' in tag and phase == 'llm') or ('positive_prompt' in tag and phase == 'img')) or index == len(triggers) - 1:
+                            if (('insert_text' in tag and phase == 'llm') or ('positive_prompt' in tag and phase == 'img')):
                                 matches[list_name].append((tag, trigger_match.start(), trigger_match.end())) # Add as a tuple with start/end indexes if inserting text later
                             else:
                                 if 'positive_prompt' in tag:
@@ -1653,10 +1657,20 @@ def process_img_param_variances(img_payload, presets_list):
 # Process Reactor (face swap)
 def process_face(img_payload, face_value):
     try:
-        face_file_path = f'ad_discordbot/swap_faces/{value}'
-        if os.path.exists(face_file_path):
-            if os.path.isfile(face_file_path) and face_file_path.endswith((".txt", ".png", ".jpg")):
-                if face_file_path.endswith((".txt")):
+        base_path = f'ad_discordbot/swap_faces/'
+        if any(ext in face_value for ext in (".txt", ".png", ".jpg")): # extension included in value
+            face_file_path = os.path.join(base_path, face_value)
+        else:
+            for ext in (".txt", ".png", ".jpg"):
+                temp_path = os.path.join(base_path, face_value + ext)
+                if os.path.exists(temp_path):
+                    face_file_path = temp_path
+                    break
+            else:
+                raise FileNotFoundError(f"File '{face_value}' not found with supported extensions (.txt, .png, .jpg)")
+        if os.path.isfile(face_file_path):
+            if face_file_path.endswith((".txt", ".png", ".jpg")):
+                if face_file_path.endswith(".txt"):
                     with open(face_file_path, "r") as txt_file:
                         img_payload['alwayson_scripts']['reactor']['args'][0] = txt_file.read()
                 else:
@@ -1679,8 +1693,10 @@ def process_img_payload_tags(img_payload, matches):
         payload_mods = {}
         override_settings_mods = {}
         processed_once = set()
-        for matched_list in reversed(matches.values()):
-            for tag in reversed(matched_list):
+        for matched_list in matches.values():
+            for tag in matched_list:
+                if isinstance(tag, tuple):
+                    tag = tag[0] # For tags with prompt insertion indexes
                 if 'payload' in tag:
                     if isinstance(tag['payload'], dict):  
                         for key, value in tag['payload'].items():
