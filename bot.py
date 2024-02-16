@@ -1103,12 +1103,11 @@ def determine_date(matches):
         message = {}
         offset = ''
         current_time = ''
-        for matched_list in matches.values():
-            for tag in matched_list:
-                if 'time_message' in tag:
-                    message = tag.get('time_message', '')                   
-                if 'time_offset' in tag:
-                    offset = tag.get('time_offset', 0.0)
+        for tag in matches:
+            if 'time_message' in tag:
+                message = tag.get('time_message', '')                   
+            if 'time_offset' in tag:
+                offset = tag.get('time_offset', 0.0)
         if message or offset:
             if offset == 0.0:
                 current_time = datetime.now()
@@ -1128,10 +1127,9 @@ def determine_date(matches):
 def user_asks_for_image(i, text, matches):
     try:
         # Check config for image trigger settings
-        for matched_list in matches.values():
-            for tag in matched_list:
-                if 'image_response' in tag:
-                    return tag.get('image_response', False)
+        for tag in matches:
+            if 'image_response' in tag:
+                return tag.get('image_response', False)
         # Last method to trigger an image response
         if random.random() < client.behavior.reply_with_image:
             return True
@@ -1168,20 +1166,19 @@ async def process_llm_payload_tags(user_name, llm_payload, llm_prompt, matches):
         instruct = None
         load_history = None
         save_history = None
-        for list_name, matched_list in matches.items():
-            for tag in matched_list:
-                # Values that will only apply from the first tag matches.
-                if 'swap_character' in tag and swap_character is None:
-                    swap_character = tag['swap_character']
-                if 'instruct' in tag and instruct is None:
-                    instruct = tag['instruct']
-                if 'load_history' in tag and load_history is None:
-                    load_history = tag['load_history']
-                if 'save_history' in tag and save_history is None:
-                    save_history = tag['save_history']
-                    llm_payload['save_history'] = tag['save_history']
+        for tag in matches:
+            # Values that will only apply from the first tag matches.
+            if 'swap_character' in tag and swap_character is None:
+                swap_character = tag['swap_character']
+            if 'instruct' in tag and instruct is None:
+                instruct = tag['instruct']
+            if 'load_history' in tag and load_history is None:
+                load_history = tag['load_history']
+            if 'save_history' in tag and save_history is None:
+                save_history = tag['save_history']
+                llm_payload['save_history'] = tag['save_history']
         if swap_character or instruct or load_history or save_history:
-            print_content = f"TAGS: LLM behavior was modified ("
+            print_content = f"[TAGS] LLM behavior was modified ("
             # Swap Character handling:
             if swap_character:
                 try:
@@ -1228,17 +1225,16 @@ async def process_llm_payload_tags(user_name, llm_payload, llm_prompt, matches):
     except Exception as e:
         logging.error("Error processing LLM tags:", e)
 
-def process_prompt_tags(prompt, matches):
+def process_prompt_tags(prompt, tags):
     try:
-        updated_prompt = copy.copy(prompt)
-        cumulative_offset = 0  # Track cumulative changes in text length
-        for list_name, matched_list in matches.items():
-            for index, item in enumerate(matched_list):
-                if not isinstance(item, tuple):
-                    continue  # Skip processing if item is not a tuple
+        updated_matches = []
+        matches = tags['matches']
+        matches.sort(key=lambda x: -x[1] if isinstance(x, tuple) else float('-inf')) # reverse the sort order so insertion indexes are processed from back to front.
+        for item in matches:
+            if not isinstance(item, tuple):
+                updated_matches.append(item) # Skip dictionaries, only tuples are being inserted
+            else:
                 tag, start, end = item # unpack tuple
-                start += cumulative_offset  # Adjust start index for cumulative changes
-                end += cumulative_offset  # Adjust end index for cumulative changes
                 phase = tag['phase']
                 if phase == 'llm':
                     insert_text = tag.get('insert_text', None)
@@ -1250,59 +1246,52 @@ def process_prompt_tags(prompt, matches):
                     insert_method = tag.get('positive_prompt_method', 'after')  # Default to 'after'
                 if insert_text is None:
                     print(f"Error processing matched tag {item}. Skipping this tag.")
-                    matched_list[index] = tag
-                    continue
-                original_length = len(updated_prompt)
-                if insert_method == 'replace':
-                    if insert_text == '':
-                        updated_prompt = updated_prompt[:start] + updated_prompt[end:].lstrip()
-                    else:
-                        updated_prompt = updated_prompt[:start] + insert_text + updated_prompt[end:]
-                elif insert_method == 'after':
-                    updated_prompt = updated_prompt[:end] + join + insert_text + updated_prompt[end:]
-                elif insert_method == 'before':
-                    updated_prompt = updated_prompt[:start] + insert_text + join + updated_prompt[start:]
-                new_length = len(updated_prompt)
-                cumulative_offset -= original_length - new_length
-
-                matched_list[index] = tag # Convert the tuple back to a normal tag
-        return updated_prompt, matches
+                else:
+                    if insert_method == 'replace':
+                        if insert_text == '':
+                            prompt = prompt[:start] + prompt[end:].lstrip()
+                        else:
+                            prompt = prompt[:start] + insert_text + prompt[end:]
+                    elif insert_method == 'after':
+                        prompt = prompt[:end] + join + insert_text + prompt[end:]
+                    elif insert_method == 'before':
+                        prompt = prompt[:start] + insert_text + join + prompt[start:]
+                updated_matches.append(tag)
+        tags['matches'] = updated_matches
+        return prompt, tags
     except Exception as e:
         logging.error("Error processing LLM prompt tags:", e)
 
 def process_matched_tags(matches):
     try:
-        # Sort matches within each list to order they were matched in the search text
-        for list_name, matched_list in matches.items():
-            matched_list.sort(key=lambda x: x[1] if isinstance(x, tuple) else float('-inf')) # if tuple, second item will be match.start() value
-        # Collect all 'trump' parameters for each matched tag across all sublists
+        # Sort matches within the list to order they were matched in the search text
+        matches.sort(key=lambda x: x[1] if isinstance(x, tuple) else float('-inf')) # if tuple, second item will be match.start() value
+        # Collect all 'trump' parameters for all matched tags
         trump_params = set()
-        for matched_list in matches.values():
-            for tag in matched_list:
-                if isinstance(tag, tuple):
-                    tag_dict = tag[0]  # get tag value if tuple
-                else:
-                    tag_dict = tag
-                if 'trumps' in tag_dict and tag_dict['trumps']:
-                    trump_params.update([param.strip().lower() for param in tag_dict['trumps'].split(',')])
-        # Remove duplicates from the trump_params list
+        for tag in matches:
+            if isinstance(tag, tuple):
+                tag_dict = tag[0]  # get tag value if tuple
+            else:
+                tag_dict = tag
+            if 'trumps' in tag_dict and tag_dict['trumps']:
+                trump_params.update([param.strip().lower() for param in tag_dict['trumps'].split(',')])
+        # Remove duplicates from the trump_params set
         trump_params = set(trump_params)
-        # Iterate over all sublists in 'matches' and remove 'trumped' tags
-        for list_name, matched_list in matches.items():
-            new_matched_list = []
-            for tag in matched_list:
-                if isinstance(tag, tuple):
-                    tag_dict = tag[0]  # get tag value if tuple
-                else:
-                    tag_dict = tag
-                if any(trigger.strip().lower() == trump.strip().lower() for trigger in tag_dict.get('trigger', '').split(',') for trump in trump_params):
-                    logging.info(f"TAG TRUMP: {tag_dict} was trumped by another tag.")
-                else:
-                    new_matched_list.append(tag)
-            matches[list_name] = new_matched_list
-        return matches
+        # Iterate over all tags in 'matches' and remove 'trumped' tags
+        new_matches = []
+        for tag in matches:
+            if isinstance(tag, tuple):
+                tag_dict = tag[0]  # get tag value if tuple
+            else:
+                tag_dict = tag
+            if any(trigger.strip().lower() == trump.strip().lower() for trigger in tag_dict.get('trigger', '').split(',') for trump in trump_params):
+                logging.info(f"TAG TRUMP: {tag_dict} was trumped by another tag.")
+            else:
+                new_matches.append(tag)
+        return new_matches
     except Exception as e:
         logging.error("Error processing matched tags:", e)
+        return matches  # return original matches if error occurs
 
 def match_tags(search_text, tags):
     try:
@@ -1311,16 +1300,16 @@ def match_tags(search_text, tags):
         updated_tags = copy.deepcopy(tags)
         matches = updated_tags['matches']
         unmatched = updated_tags['unmatched']
-        for list_name, unmatched_list in tags['unmatched'].items():  # iterates over initial tags list while updating a copy
+        for list_name, unmatched_list in tags['unmatched'].items():
             for tag in unmatched_list:
                 if 'trigger' not in tag:
                     unmatched[list_name].remove(tag)
                     tag['phase'] = phase
-                    matches[list_name].append(tag)
+                    matches.append(tag)
                     continue
+                case_sensitive = tag.get('case_sensitive', False)
                 triggers = [t.strip() for t in tag['trigger'].split(',')]
                 for index, trigger in enumerate(triggers):
-                    case_sensitive = tag.get('case_sensitive', False)
                     if case_sensitive:
                         trigger_regex = r"\b{}\b".format(re.escape(trigger))
                         trigger_match = re.search(trigger_regex, search_text)
@@ -1331,20 +1320,20 @@ def match_tags(search_text, tags):
                         if not (tag.get('on_prefix_only', False) and trigger_match.start() != 0):
                             unmatched[list_name].remove(tag)
                             tag['phase'] = phase if tag.get('phase', None) is None else 'userllm'
-                            tag['matched_trigger'] = trigger # retain the matched trigger phrase
+                            tag['matched_trigger'] = trigger  # retain the matched trigger phrase
                             if (('insert_text' in tag and phase == 'llm') or ('positive_prompt' in tag and phase == 'img')):
-                                matches[list_name].append((tag, trigger_match.start(), trigger_match.end())) # Add as a tuple with start/end indexes if inserting text later
+                                matches.append((tag, trigger_match.start(), trigger_match.end()))  # Add as a tuple with start/end indexes if inserting text later
                             else:
                                 if 'positive_prompt' in tag:
                                     tag['imgtag_matched_early'] = True
-                                matches[list_name].append(tag)
+                                matches.append(tag)
                             break  # Exit the loop after a match is found
                     else:
-                        if phase == 'img' and 'matched_trigger' in tag and 'positive_prompt' in tag and index == len(triggers) - 1:
+                        if ('imgtag_matched_early' in tag) and (index == len(triggers) - 1): # Was previously matched in 'user' text, but not in 'llm' text.
                             tag['imgtag_uninserted'] = True
-                            matches[list_name].append(tag)
+                            matches.append(tag)
         if matches:
-            matches = process_matched_tags(matches)
+            matches = process_matched_tags(matches) # sort and trump tags
         # Adjust the return value depending on which phase match_tags() was called on
         unmatched['llm'] = llm_tags
         if 'user' in unmatched:
@@ -1353,10 +1342,10 @@ def match_tags(search_text, tags):
     except Exception as e:
         logging.error("Error matching tags:", e)
 
-def sort_tags(expanded_tags):
+def sort_tags(all_tags):
     try:
-        sorted_tags = {'matches': {'user': [], 'llm': [], 'userllm': []}, 'unmatched': {'user': [], 'llm': [], 'userllm': []}}
-        for tag in expanded_tags:
+        sorted_tags = {'matches': [], 'unmatched': {'user': [], 'llm': [], 'userllm': []}}
+        for tag in all_tags:
             search_mode = tag.get('search_mode', 'userllm')  # Default to 'userllm' if 'search_mode' is not present
             if search_mode in sorted_tags['unmatched']:
                 sorted_tags['unmatched'][search_mode].append({k: v for k, v in tag.items() if k != 'search_mode'})
@@ -1455,9 +1444,9 @@ async def on_message(i):
         tags = get_tags()
         # match tags labeled for user / userllm.
         tags = match_tags(llm_prompt, tags)
-        matches = tags['matches']
         # apply tags to prompt
-        llm_prompt, matches = process_prompt_tags(llm_prompt, matches)
+        llm_prompt, tags = process_prompt_tags(llm_prompt, tags)
+        matches = tags['matches']
         # apply tags relevant to LLM
         llm_payload, llm_prompt = await process_llm_payload_tags(i.author.display_name, llm_payload, llm_prompt, matches)
         # apply datetime to prompt
@@ -1555,7 +1544,7 @@ def apply_lrctl(matches):
         scaling_settings = [v for k, v in config.sd.get('extensions', {}).get('lrctl', {}).items() if 'scaling' in k]
         scaling_settings = scaling_settings if scaling_settings else ['']
         # Flatten the matches dictionary values to get a list of all tags (including those within tuples)
-        matched_tags = [tag if isinstance(tag, dict) else tag[0] for matched_list in matches.values() for tag in matched_list]
+        matched_tags = [tag if isinstance(tag, dict) else tag[0] for tag in matches]
         # Filter the matched tags to include only those with certain patterns in their text fields
         lora_tags = [tag for tag in matched_tags if any(re.findall(r'<lora:[^:]+:[^>]+>', text) for text in (tag.get('positive_prompt', ''), tag.get('positive_prompt_prefix', ''), tag.get('positive_prompt_suffix', '')))]
         if len(lora_tags) >= config.sd['extensions']['lrctl']['min_loras']:
@@ -1582,32 +1571,32 @@ def apply_lrctl(matches):
                                     new_positive_prompt = positive_prompt.replace(lora_match, updated_lora_match)                                   
                                     # Update the appropriate key in the tag dictionary
                                     tag[used_key] = new_positive_prompt
-                                    logging.info(f'''TAGS: lrctl formatting applied: "{positive_prompt}" > "{new_positive_prompt}"''') 
+                                    logging.info(f'''[TAGS] loractl applied: "{lora_match}" > "{updated_lora_match}"''') 
         return matches
     except Exception as e:
         logging.error("Error processing lrctl:", e)
 
-def process_img_prompt_tags(img_payload, matches):
+def process_img_prompt_tags(img_payload, tags):
     try:
-        img_prompt, matches = process_prompt_tags(img_payload['prompt'], matches)
+        img_prompt, tags = process_prompt_tags(img_payload['prompt'], tags)
         updated_positive_prompt = copy.copy(img_prompt)
         updated_negative_prompt = copy.copy(img_payload['negative_prompt'])
-        for matched_list in matches.values():
-            for tag in matched_list:
-                join = tag.get('img_text_joining', ' ')
-                if 'imgtag_uninserted' in tag: # was flagged as a trigger match but not inserted
-                    logging.info(f'''Could not find matched trigger phrase "{tag['matched_trigger']}" in the prompt text, so it is being added at the end of the prompt.''')
-                    updated_positive_prompt = updated_positive_prompt + ", " + tag['positive_prompt']
-                if 'positive_prompt_prefix' in tag:
-                    updated_positive_prompt = tag['positive_prompt_prefix'] + join + updated_positive_prompt
-                if 'positive_prompt_suffix' in tag:
-                    updated_positive_prompt += join + tag['positive_prompt_suffix']
-                if 'negative_prompt_prefix' in tag:
-                    updated_negative_prompt = tag['negative_prompt'] + join + updated_negative_prompt
-                if 'negative_prompt' in tag:
-                    updated_negative_prompt += join + tag['negative_prompt']
-                if 'negative_prompt_suffix' in tag:
-                    updated_negative_prompt += join + tag['negative_prompt']
+        matches = tags['matches']
+        for tag in matches:
+            join = tag.get('img_text_joining', ' ')
+            if 'imgtag_uninserted' in tag: # was flagged as a trigger match but not inserted
+                logging.info(f'''"{tag['matched_trigger']}" not found in the image prompt. Appending rather than inserting.''')
+                updated_positive_prompt = updated_positive_prompt + ", " + tag['positive_prompt']
+            if 'positive_prompt_prefix' in tag:
+                updated_positive_prompt = tag['positive_prompt_prefix'] + join + updated_positive_prompt
+            if 'positive_prompt_suffix' in tag:
+                updated_positive_prompt += join + tag['positive_prompt_suffix']
+            if 'negative_prompt_prefix' in tag:
+                updated_negative_prompt = tag['negative_prompt'] + join + updated_negative_prompt
+            if 'negative_prompt' in tag:
+                updated_negative_prompt += join + tag['negative_prompt']
+            if 'negative_prompt_suffix' in tag:
+                updated_negative_prompt += join + tag['negative_prompt']
         img_payload['prompt'] = updated_positive_prompt
         img_payload['negative_prompt'] = updated_negative_prompt
         return img_payload
@@ -1679,7 +1668,7 @@ def process_face(img_payload, face_value):
                         faceswapimg = base64.b64encode(image_data).decode('utf-8')
                         img_payload['alwayson_scripts']['reactor']['args'][0] = faceswapimg
                 img_payload['alwayson_scripts']['reactor']['args'][1] = True
-                logging.info(f'TAGS: Face swap was triggered and applied "{face_value}"')
+                logging.info(f'[TAGS] Face swap was triggered and applied "{face_value}"')
             else:
                 logging.error("Invalid value for face swap input (must be .txt, .png, or .jpg).")
         else:
@@ -1693,32 +1682,31 @@ def process_img_payload_tags(img_payload, matches):
         payload_mods = {}
         override_settings_mods = {}
         processed_once = set()
-        for matched_list in matches.values():
-            for tag in matched_list:
-                if isinstance(tag, tuple):
-                    tag = tag[0] # For tags with prompt insertion indexes
-                if 'payload' in tag:
-                    if isinstance(tag['payload'], dict):  
-                        for key, value in tag['payload'].items():
-                            payload_mods[key] = value
-                    else:
-                        logging.warning("A tag was matched with invalid 'payload'; must be a dictionary.")
-                if 'override_settings' in tag:
-                    if isinstance(tag['override_settings'], dict):  
-                        for key, value in tag['override_settings'].items():
-                            override_settings_mods[key] = value
-                    else:
-                        logging.warning("A tag was matched with invalid 'override_settings'; must be a dictionary.")
-                if 'face_swap' in tag:
-                    img_payload = process_face(img_payload, tag['face_swap'])
-                # Process these keys only once
-                if 'img_censoring' in tag and tag['img_censoring'] > 0 and 'img_censoring' not in processed_once:
-                    img_payload['img_censoring'] = tag['img_censoring']
-                    processed_once.add('img_censoring')
-                if 'img_param_variances' in tag and 'img_param_variances' not in processed_once:
-                    param_variances = tag['img_param_variances']
-                    img_payload = process_img_param_variances(img_payload, param_variances)
-                    processed_once.add('img_param_variances')
+        for tag in matches:
+            if isinstance(tag, tuple):
+                tag = tag[0] # For tags with prompt insertion indexes
+            if 'payload' in tag:
+                if isinstance(tag['payload'], dict):  
+                    for key, value in tag['payload'].items():
+                        payload_mods[key] = value
+                else:
+                    logging.warning("A tag was matched with invalid 'payload'; must be a dictionary.")
+            if 'override_settings' in tag:
+                if isinstance(tag['override_settings'], dict):  
+                    for key, value in tag['override_settings'].items():
+                        override_settings_mods[key] = value
+                else:
+                    logging.warning("A tag was matched with invalid 'override_settings'; must be a dictionary.")
+            if tag.get('face_swap'):
+                img_payload = process_face(img_payload, tag['face_swap'])
+            # Process these keys only once
+            if 'img_censoring' in tag and tag['img_censoring'] > 0 and 'img_censoring' not in processed_once:
+                img_payload['img_censoring'] = tag['img_censoring']
+                processed_once.add('img_censoring')
+            if 'img_param_variances' in tag and 'img_param_variances' not in processed_once:
+                param_variances = tag['img_param_variances']
+                img_payload = process_img_param_variances(img_payload, param_variances)
+                processed_once.add('img_param_variances')
         img_payload.update(payload_mods)
         img_payload.update(override_settings_mods)
         return img_payload
@@ -1729,20 +1717,20 @@ def match_img_tags(img_prompt, tags):
     try:
         # Unmatch any previously matched tags which try to insert text into the img_prompt
         unmatched_userllm_tags = copy.deepcopy(tags['unmatched']['userllm'])
-        for tag in tags['matches']['userllm'][:]:  # Iterate over a copy of the list
-            if tag.get('trigger') and tag.get('positive_prompt'): # collect all previously matched tags with a defined trigger + positive_prompt
+        for tag in tags['matches'][:]:  # Iterate over a copy of the list
+            if tag.get('imgtag_matched_early'): # collect all previously matched tags with a defined trigger + positive_prompt
                 unmatched_userllm_tags.append(tag)
-                tags['matches']['userllm'].remove(tag)
-        tags['unmatched']['userllm'] = unmatched_userllm_tags # previously matched tags with a defined trigger + positive_prompt are now unmatched again
+                tags['matches'].remove(tag)
+        tags['unmatched']['userllm'] = unmatched_userllm_tags # previously matched tags with a 'positive_prompt' are still accounted for but now unmatched
         # match tags labeled for llm / userllm.
         tags = match_tags(img_prompt, tags)
         # Rematch any previously matched tags that failed to match text in img_prompt
-        matches_userllm_tags = copy.deepcopy(tags['matches']['userllm'])
+        matches = copy.deepcopy(tags['matches'])
         for tag in tags['unmatched']['userllm'][:]:  # Iterate over a copy of the list
             if tag.get('imgtag_matched_early') and tag.get('imgtag_uninserted'):
-                matches_userllm_tags.append(tag)
+                matches.append(tag)
                 tags['unmatched']['userllm'].remove(tag)
-        tags['matches']['userllm'] = matches_userllm_tags
+        tags['matches'] = matches
         return tags
     except Exception as e:
         logging.error("Error matching tags for img phase:", e)
@@ -1772,7 +1760,7 @@ async def pic(i, text, tags, img_prompt, tts_resp=None, neg_prompt=None, size=No
             # Process lrctl
             if config.sd['extensions'].get('lrctl', {}).get('enabled', False): matches = apply_lrctl(matches)
             # Apply tags relevant to Img prompts
-            img_payload = process_img_prompt_tags(img_payload, matches)
+            img_payload = process_img_prompt_tags(img_payload, tags)
             # Apply menu selections from /image command
             if size: img_payload.update(size)
             if face_swap:
@@ -2305,15 +2293,15 @@ async def update_imgmodel(selected_imgmodel, selected_imgmodel_name, selected_im
         logging.error("Error updating settings with the selected imgmodel data:", e)
 
 # Check filesize of selected imgmodel to assume resolution / tags
-async def guess_imgmodel_res(selected_imgmodel_filename):
+async def guess_model_res(selected_imgmodel_filename):
     try:
         file_size_bytes = os.path.getsize(selected_imgmodel_filename)
         file_size_gb = file_size_bytes / (1024 ** 3)  # 1 GB = 1024^3 bytes
-        presets = config.imgmodels['get_imgmodels_via_api']['presets']
+        presets = copy.deepcopy(config.imgmodels['get_imgmodels_via_api']['presets'])
         matched_preset = ''
         for preset in presets:
             if preset['max_filesize'] > file_size_gb:
-                matched_preset = dict(preset)
+                matched_preset = preset
                 del matched_preset['max_filesize']
                 break
         return matched_preset
@@ -2328,13 +2316,13 @@ async def merge_imgmodel_data(selected_imgmodel):
         # Create proper dictionary if A1111 API method
         if config.imgmodels['get_imgmodels_via_api']['enabled']:
             imgmodel_settings = {'payload': {}, 'override_settings': {}}
-            if config.imgmodels['get_imgmodels_via_api']['guess_imgmodel_res']:
+            if config.imgmodels['get_imgmodels_via_api']['guess_model_res']:
                 selected_imgmodel_filename = selected_imgmodel.get('filename')
                 if selected_imgmodel_filename is not None:
                     # Check filesize of selected imgmodel to assume resolution and tags 
-                    matched_preset = await guess_imgmodel_res(selected_imgmodel_filename)
+                    matched_preset = await guess_model_res(selected_imgmodel_filename)
                     if matched_preset:
-                        if matched_preset.get('tag_preset_name', ''):
+                        if 'tag_preset_name' in matched_preset:
                             selected_imgmodel_tags = [{'tag_preset_name': matched_preset['tag_preset_name']}]
                             del matched_preset['tag_preset_name']
                         # Add user defined payload mods for API method
