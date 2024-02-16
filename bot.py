@@ -1229,7 +1229,7 @@ def process_prompt_tags(prompt, tags):
     try:
         updated_matches = []
         matches = tags['matches']
-        matches.sort(key=lambda x: -x[1] if isinstance(x, tuple) else float('-inf')) # reverse the sort order so insertion indexes are processed from back to front.
+        matches.sort(key=lambda x: -x[1] if isinstance(x, tuple) else float('inf')) # reverse the sort order so insertion indexes are processed from back to front.
         for item in matches:
             if not isinstance(item, tuple):
                 updated_matches.append(item) # Skip dictionaries, only tuples are being inserted
@@ -1257,6 +1257,7 @@ def process_prompt_tags(prompt, tags):
                     elif insert_method == 'before':
                         prompt = prompt[:start] + insert_text + join + prompt[start:]
                 updated_matches.append(tag)
+        updated_matches.reverse()
         tags['matches'] = updated_matches
         return prompt, tags
     except Exception as e:
@@ -1264,8 +1265,6 @@ def process_prompt_tags(prompt, tags):
 
 def process_matched_tags(matches):
     try:
-        # Sort matches within the list to order they were matched in the search text
-        matches.sort(key=lambda x: x[1] if isinstance(x, tuple) else float('-inf')) # if tuple, second item will be match.start() value
         # Collect all 'trump' parameters for all matched tags
         trump_params = set()
         for tag in matches:
@@ -1592,10 +1591,13 @@ def process_img_prompt_tags(img_payload, tags):
             if 'positive_prompt_suffix' in tag:
                 updated_positive_prompt += join + tag['positive_prompt_suffix']
             if 'negative_prompt_prefix' in tag:
+                join = join if updated_negative_prompt else ''
                 updated_negative_prompt = tag['negative_prompt'] + join + updated_negative_prompt
             if 'negative_prompt' in tag:
+                join = join if updated_negative_prompt else ''
                 updated_negative_prompt += join + tag['negative_prompt']
             if 'negative_prompt_suffix' in tag:
+                join = join if updated_negative_prompt else ''
                 updated_negative_prompt += join + tag['negative_prompt']
         img_payload['prompt'] = updated_positive_prompt
         img_payload['negative_prompt'] = updated_negative_prompt
