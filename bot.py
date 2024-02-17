@@ -757,7 +757,9 @@ async def load_chat():
                         logging.info(f'Initializing with character "{source}". Use "/character" for changing characters.')                            
                         break  # Character loaded successfully, exit the loop
                 except Exception as e:
-                    logging.error("Error loading character:", e)
+                    logging.error("Error loading character for chat mode:", e)
+            if not char_name:
+                logging.error(f"Character not found in '/characters'. Tried files: {sources}")
         # Load character, but don't save it's settings to activesettings (Only user actions will result in modifications)
         await character_loader(source)
     except Exception as e:
@@ -777,7 +779,7 @@ async def load_instruct():
             else:
                 logging.warning(f'The metadata for model "{shared.model_name}" does not include an instruction template. Using default.')    
     except Exception as e:
-        logging.error("Error initializing in chat mode:", e)
+        logging.error("Error initializing in instruct mode:", e)
 
 # If first time bot script is run
 async def first_run():
