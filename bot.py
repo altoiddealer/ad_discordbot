@@ -1272,7 +1272,7 @@ def process_matched_tags(matches):
                 tag_dict = tag[0]  # get tag value if tuple
             else:
                 tag_dict = tag
-            if 'trumps' in tag_dict and tag_dict['trumps']:
+            if 'trumps' in tag_dict:
                 trump_params.update([param.strip().lower() for param in tag_dict['trumps'].split(',')])
         # Remove duplicates from the trump_params set
         trump_params = set(trump_params)
@@ -1284,7 +1284,7 @@ def process_matched_tags(matches):
             else:
                 tag_dict = tag
             if any(trigger.strip().lower() == trump.strip().lower() for trigger in tag_dict.get('trigger', '').split(',') for trump in trump_params):
-                logging.info(f"TAG TRUMP: {tag_dict} was trumped by another tag.")
+                logging.info(f'''[TAGS] Tag with triggers "{tag_dict['trigger']}" was trumped by another tag.''')
             else:
                 new_matches.append(tag)
         return new_matches
@@ -1332,7 +1332,7 @@ def match_tags(search_text, tags):
                             tag['imgtag_uninserted'] = True
                             matches.append(tag)
         if matches:
-            matches = process_matched_tags(matches) # sort and trump tags
+            updated_tags['matches'] = process_matched_tags(matches) # sort and trump tags
         # Adjust the return value depending on which phase match_tags() was called on
         unmatched['llm'] = llm_tags
         if 'user' in unmatched:
@@ -1584,7 +1584,7 @@ def process_img_prompt_tags(img_payload, tags):
         for tag in matches:
             join = tag.get('img_text_joining', ' ')
             if 'imgtag_uninserted' in tag: # was flagged as a trigger match but not inserted
-                logging.info(f'''"{tag['matched_trigger']}" not found in the image prompt. Appending rather than inserting.''')
+                logging.info(f'''[TAGS] "{tag['matched_trigger']}" not found in the image prompt. Appending rather than inserting.''')
                 updated_positive_prompt = updated_positive_prompt + ", " + tag['positive_prompt']
             if 'positive_prompt_prefix' in tag:
                 updated_positive_prompt = tag['positive_prompt_prefix'] + join + updated_positive_prompt
