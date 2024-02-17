@@ -446,7 +446,7 @@ async def update_client_profile(change_username, change_avatar, char_name):
                 await client.user.edit(avatar=picture)
         update_last_change() # Store the current datetime in bot.db
     except Exception as e:
-        logging.error("Error while changing character username or avatar:", e)
+        logging.error(f"Error while changing character username or avatar: {e}")
 
 async def character_loader(source):
     try:
@@ -488,7 +488,7 @@ async def character_loader(source):
         # Data for saving to activesettings.yaml (skipped in on_ready())
         return char_llmcontext, char_behavior, char_llmstate
     except Exception as e:
-        logging.error("Error getting character information during character change:", e)
+        logging.error(f"Error loading character. Check spelling and file structure. Use bot cmd '/character' to try again. {e}")
 
 def update_last_change():
     try:
@@ -620,7 +620,7 @@ async def auto_announce_imgmodel(selected_imgmodel, selected_imgmodel_name):
                 else:
                     await channel.send(f"Updated imgmodel settings to: {selected_imgmodel_name}")
     except Exception as e:
-        logging.error("Error announcing automatically selected imgmodel:", e)
+        logging.error(f"Error announcing automatically selected imgmodel: {e}")
 
 # Select imgmodel based on mode, while avoid repeating current imgmodel
 async def auto_select_imgmodel(current_imgmodel_name, imgmodel_names, mode='random'):   
@@ -646,7 +646,7 @@ async def auto_select_imgmodel(current_imgmodel_name, imgmodel_names, mode='rand
                 logging.info("The previous imgmodel name was not matched in list of fetched imgmodels, so cannot 'cycle'. New imgmodel was instead picked at random.")
         return selected_imgmodel
     except Exception as e:
-        logging.error("Error automatically selecting image model:", e)
+        logging.error(f"Error automatically selecting image model: {e}")
 
 # Task to auto-select an imgmodel at user defined interval
 async def auto_update_imgmodel_task(mode='random'):
@@ -698,7 +698,7 @@ async def voice_channel(vc_setting):
             else:
                 logging.warning(f'Character "use_voice_channel" = True, and "voice channel" is specified in config.py, but no "tts_client" is specified in config.py')
         except Exception as e:
-            logging.error(f"An error occurred while connecting to voice channel:", e)
+            logging.error(f"An error occurred while connecting to voice channel: {e}")
     # Stop voice client if explicitly deactivated in character settings
     if voice_client and voice_client.is_connected():
         try:
@@ -707,7 +707,7 @@ async def voice_channel(vc_setting):
                 await voice_client.disconnect()
                 voice_client = None
         except Exception as e:
-            logging.error(f"An error occurred while disconnecting from voice channel:", e)
+            logging.error(f"An error occurred while disconnecting from voice channel: {e}")
 
 last_extension_params = {}
 
@@ -735,7 +735,7 @@ async def update_extensions(params):
             logging.warning(f'** No extension params for this character. Reloading extensions with initial values. **')            
         extensions_module.load_extensions()  # Load Extensions (again)
     except Exception as e:
-        logging.error(f"An error occurred while updating character extension settings:", e)
+        logging.error(f"An error occurred while updating character extension settings: {e}")
 
 # Initialize in chat mode
 async def load_chat():
@@ -757,13 +757,13 @@ async def load_chat():
                         logging.info(f'Initializing with character "{source}". Use "/character" for changing characters.')                            
                         break  # Character loaded successfully, exit the loop
                 except Exception as e:
-                    logging.error("Error loading character for chat mode:", e)
+                    logging.error(f"Error loading character for chat mode: {e}")
             if not char_name:
                 logging.error(f"Character not found in '/characters'. Tried files: {sources}")
         # Load character, but don't save it's settings to activesettings (Only user actions will result in modifications)
         await character_loader(source)
     except Exception as e:
-        logging.error("Error initializing in chat mode:", e)
+        logging.error(f"Error initializing in chat mode: {e}")
 
 # Initialize in instruct mode
 async def load_instruct():
@@ -779,7 +779,7 @@ async def load_instruct():
             else:
                 logging.warning(f'The metadata for model "{shared.model_name}" does not include an instruction template. Using default.')    
     except Exception as e:
-        logging.error("Error initializing in instruct mode:", e)
+        logging.error(f"Error initializing in instruct mode: {e}")
 
 # If first time bot script is run
 async def first_run():
@@ -796,7 +796,7 @@ async def first_run():
         if str(e).startswith("403"):
             logging.warning("The bot tried to send a welcome message, but probably does not have access/permissions to your default channel (probably #General)")
         else:
-            logging.error(f"An error occurred while welcoming user to the bot:", e)
+            logging.error(f"An error occurred while welcoming user to the bot: {e}")
     finally:
         conn = sqlite3.connect('bot.db')
         c = conn.cursor()
@@ -833,7 +833,7 @@ async def update_tags(tags):
         updated_tags = await expand_triggers(updated_tags) # expand any simplified trigger phrases
         return updated_tags
     except Exception as e:
-        logging.error("Error loading tag presets:", e)
+        logging.error(f"Error loading tag presets: {e}")
 
 async def update_client_base_tags():
     try:
@@ -842,7 +842,7 @@ async def update_client_base_tags():
         base_tags = copy.deepcopy(base_tags_data)
         client.settings['tags'] = await update_tags(base_tags)
     except Exception as e:
-        logging.error("Error updating client base tags:", e)
+        logging.error(f"Error updating client base tags: {e}")
 
 # Function to overwrite default settings with activesettings
 async def update_client_settings():
@@ -862,7 +862,7 @@ async def update_client_settings():
         client.behavior.update_behavior_dict(behavior)
         await update_client_base_tags() # base tags from dict_tags.yaml
     except Exception as e:
-        logging.error("Error updating client settings:", e)
+        logging.error(f"Error updating client settings: {e}")
 
 ## On Ready
 @client.event
@@ -891,7 +891,7 @@ async def on_ready():
         client.fresh = True
         logging.info("Bot is ready")
     except Exception as e:
-        logging.error("Error with on_ready:", e)
+        logging.error(f"Error with on_ready: {e}")
 
 async def a1111_online(i):
     try:
@@ -1203,7 +1203,7 @@ async def process_llm_payload_tags(user_name, llm_payload, llm_prompt, matches):
                             llm_payload['state']['context'] = context
                         await fix_llm_payload(llm_payload) # Add any missing required information
                 except Exception as e:
-                    logging.error(f"An error occurred while loading the YAML file for swap_character:", e)
+                    logging.error(f"An error occurred while loading the YAML file for swap_character: {e}")
                 print_content += f"Swap Character: {swap_character}"
             else: print_content += f"Swap Character: {llm_payload['state']['name2']}"
             # Instruction handling
@@ -1225,7 +1225,7 @@ async def process_llm_payload_tags(user_name, llm_payload, llm_prompt, matches):
             logging.info(print_content)
         return llm_payload, llm_prompt
     except Exception as e:
-        logging.error("Error processing LLM tags:", e)
+        logging.error(f"Error processing LLM tags: {e}")
 
 def process_prompt_tags(prompt, tags):
     try:
@@ -1263,7 +1263,7 @@ def process_prompt_tags(prompt, tags):
         tags['matches'] = updated_matches
         return prompt, tags
     except Exception as e:
-        logging.error("Error processing LLM prompt tags:", e)
+        logging.error(f"Error processing LLM prompt tags: {e}")
 
 def process_matched_tags(matches):
     try:
@@ -1291,7 +1291,7 @@ def process_matched_tags(matches):
                 new_matches.append(tag)
         return new_matches
     except Exception as e:
-        logging.error("Error processing matched tags:", e)
+        logging.error(f"Error processing matched tags: {e}")
         return matches  # return original matches if error occurs
 
 def match_tags(search_text, tags):
@@ -1341,7 +1341,7 @@ def match_tags(search_text, tags):
             del unmatched['user'] # Remove after first phase. Controls the 'llm' tag processing at function start.
         return updated_tags
     except Exception as e:
-        logging.error("Error matching tags:", e)
+        logging.error(f"Error matching tags: {e}")
 
 def sort_tags(all_tags):
     try:
@@ -1354,7 +1354,7 @@ def sort_tags(all_tags):
                 logging.warning(f"Ignoring unknown search_mode: {search_mode}")
         return sorted_tags
     except Exception as e:
-        logging.error("Error sorting tags:", e)
+        logging.error(f"Error sorting tags: {e}")
 
 async def expand_triggers(all_tags):
     try:
@@ -1382,7 +1382,7 @@ async def expand_triggers(all_tags):
                 tag['trigger'] = expand_value(tag['trigger'])
         return all_tags
     except Exception as e:
-        logging.error("Error expanding tags:", e)
+        logging.error(f"Error expanding tags: {e}")
 
 def get_tags():
     try:
@@ -1393,7 +1393,7 @@ def get_tags():
         sorted_tags = sort_tags(all_tags) # sort tags into phases (user / llm / userllm)
         return sorted_tags
     except Exception as e:
-        logging.error("Error getting tags:", e)
+        logging.error(f"Error getting tags: {e}")
 
 async def replace_character_names(text, name1, name2):
     user = config.replace_char_names.get('replace_user', '')
@@ -1575,7 +1575,7 @@ def apply_lrctl(matches):
                                     logging.info(f'''[TAGS] loractl applied: "{lora_match}" > "{updated_lora_match}"''') 
         return matches
     except Exception as e:
-        logging.error("Error processing lrctl:", e)
+        logging.error(f"Error processing lrctl: {e}")
 
 def process_img_prompt_tags(img_payload, tags):
     try:
@@ -1605,7 +1605,7 @@ def process_img_prompt_tags(img_payload, tags):
         img_payload['negative_prompt'] = updated_negative_prompt
         return img_payload
     except Exception as e:
-        logging.error("Error processing Img prompt tags:", e)
+        logging.error(f"Error processing Img prompt tags: {e}")
         
 def random_value_from_range(value_range):
     if isinstance(value_range, tuple) and len(value_range) == 2:
@@ -1679,7 +1679,7 @@ def process_face(img_payload, face_value):
             logging.error(f"File not found '{face_file_path}'.")
         return img_payload
     except Exception as e:
-        logging.error("Error processing face swap for Reactor:", e)
+        logging.error(f"Error processing face swap for Reactor: {e}")
 
 def process_img_payload_tags(img_payload, matches):
     try:
@@ -1715,7 +1715,7 @@ def process_img_payload_tags(img_payload, matches):
         img_payload.update(override_settings_mods)
         return img_payload
     except Exception as e:
-        logging.error("Error processing Img tags:", e)
+        logging.error(f"Error processing Img tags: {e}")
 
 def match_img_tags(img_prompt, tags):
     try:
@@ -1737,7 +1737,7 @@ def match_img_tags(img_prompt, tags):
         tags['matches'] = matches
         return tags
     except Exception as e:
-        logging.error("Error matching tags for img phase:", e)
+        logging.error(f"Error matching tags for img phase: {e}")
 
 async def pic(i, text, tags, img_prompt, tts_resp=None, neg_prompt=None, size=None, face_swap=None, controlnet=None):
     global busy_drawing
@@ -2032,7 +2032,7 @@ def merge_base(newsettings, basekey):
         deep_update(current_dict, newsettings) # Recursively update the dictionary
         return current_dict
     except Exception as e:
-        logging.error(f"Error loading ad_discordbot/dict_base_settings.yaml ({basekey}):", e)
+        logging.error(f"Error loading ad_discordbot/dict_base_settings.yaml ({basekey}): {e}")
         return None
 
 def get_active_setting(key):
@@ -2043,7 +2043,7 @@ def get_active_setting(key):
         else:
             return None
     except Exception as e:
-        logging.error(f"Error loading ad_discordbot/activesettings.yaml ({key}):", e)
+        logging.error(f"Error loading ad_discordbot/activesettings.yaml ({key}): {e}")
         return None
 
 def generate_characters():
@@ -2063,7 +2063,7 @@ def generate_characters():
                     cards.append(character)
         return cards
     except Exception as e:
-        logging.error(f"Error collecting character items for /character menu:", e)
+        logging.error(f"Error collecting character items for /character menu: {e}")
 
 class CharacterDropdown(discord.ui.Select):
     def __init__(self, i):
@@ -2099,7 +2099,7 @@ async def update_active_settings(selected_item, active_settings_key):
         update_dict(target_settings, selected_item)
         save_yaml_file('ad_discordbot/activesettings.yaml', active_settings)
     except Exception as e:
-        logging.error(f"Error updating ad_discordbot/activesettings.yaml ({active_settings_key}):", e)
+        logging.error(f"Error updating ad_discordbot/activesettings.yaml ({active_settings_key}): {e}")
 
 # Post settings to dedicated channel
 async def post_active_settings():
@@ -2138,7 +2138,7 @@ async def main(i):
         client.database = Database()
         await i.reply(action_message)
     except Exception as e:
-        logging.error("Error toggling main channel setting:", e)
+        logging.error(f"Error toggling main channel setting: {e}")
 
 @client.hybrid_command(description="Display help menu")
 async def helpmenu(i):
@@ -2189,7 +2189,7 @@ async def filter_imgmodels(imgmodels):
             ]
         return imgmodels
     except Exception as e:
-        logging.error("Error filtering image model list:", e)
+        logging.error(f"Error filtering image model list: {e}")
 
 # Build list of imgmodels depending on user preference (user .yaml / A1111 API)
 async def fetch_imgmodels():
@@ -2211,13 +2211,13 @@ async def fetch_imgmodels():
                             return ''
                             logging.error(f"Error fetching image models from the API (response: '{response.status}')")
             except Exception as e:
-                logging.error("Error fetching image models via API:", e)
+                logging.error(f"Error fetching image models via API: {e}")
                 return ''     
         if imgmodels:
             imgmodels = await filter_imgmodels(imgmodels)
             return imgmodels
     except Exception as e:
-        logging.error("Error fetching image models:", e)
+        logging.error(f"Error fetching image models: {e}")
 
 async def a1111_load_imgmodel(options):
     try:
@@ -2228,7 +2228,7 @@ async def a1111_load_imgmodel(options):
                 else:
                     logging.error(f"Error loading image model in A1111 API (response: '{response.status}')")
     except Exception as e:
-        logging.error("Error loading image model in A1111:", e) 
+        logging.error(f"Error loading image model in A1111: {e}")
 
 # Announce imgmodel change as configured
 async def imgmodel_announce(selected_imgmodel, selected_imgmodel_name):
@@ -2250,7 +2250,7 @@ async def imgmodel_announce(selected_imgmodel, selected_imgmodel_name):
             reply = f"{reply_prefix}{selected_imgmodel_name}"
         return reply
     except Exception as e:
-        logging.error("Error announcing imgmodel:", e)
+        logging.error(f"Error announcing imgmodel: {e}")
 
 # Update channel topic with new imgmodel info as configured
 async def imgmodel_update_topic(channel, selected_imgmodel, selected_imgmodel_name):
@@ -2265,7 +2265,7 @@ async def imgmodel_update_topic(channel, selected_imgmodel, selected_imgmodel_na
             new_topic = f"{topic_prefix}{selected_imgmodel_name}"
         await channel.edit(topic=new_topic)
     except Exception as e:
-        logging.error("Error updating channel topic:", e)
+        logging.error(f"Error updating channel topic: {e}")
 
 async def process_imgmodel_announce(i, selected_imgmodel, selected_imgmodel_name):
     try:
@@ -2280,7 +2280,7 @@ async def process_imgmodel_announce(i, selected_imgmodel, selected_imgmodel_name
             else:
                 await i.send(f"Updated imgmodel settings to: {selected_imgmodel_name}")
     except Exception as e:
-        logging.error("Error announcing imgmodel:", e)
+        logging.error(f"Error announcing imgmodel: {e}")
 
 async def update_imgmodel(selected_imgmodel, selected_imgmodel_name, selected_imgmodel_tags):
     try:
@@ -2294,7 +2294,7 @@ async def update_imgmodel(selected_imgmodel, selected_imgmodel_name, selected_im
         # Update size options for /image command
         await task_queue.put(update_size_options(active_settings.get('imgmodel').get('payload').get('width'),active_settings.get('imgmodel').get('payload').get('height')))
     except Exception as e:
-        logging.error("Error updating settings with the selected imgmodel data:", e)
+        logging.error(f"Error updating settings with the selected imgmodel data: {e}")
 
 # Check filesize of selected imgmodel to assume resolution / tags
 async def guess_model_res(selected_imgmodel_filename):
@@ -2310,7 +2310,7 @@ async def guess_model_res(selected_imgmodel_filename):
                 break
         return matched_preset
     except Exception as e:
-        logging.error("Error guessing selected imgmodel resolution:", e)
+        logging.error(f"Error guessing selected imgmodel resolution: {e}")
 
 async def merge_imgmodel_data(selected_imgmodel):
     try:
@@ -2342,7 +2342,7 @@ async def merge_imgmodel_data(selected_imgmodel):
         selected_imgmodel_tags = await update_tags(selected_imgmodel_tags)
         return selected_imgmodel, selected_imgmodel_name, selected_imgmodel_tags
     except Exception as e:
-        logging.error("Error merging selected imgmodel data with base imgmodel data:", e)
+        logging.error(f"Error merging selected imgmodel data with base imgmodel data: {e}")
 
 async def get_selected_imgmodel_data(selected_imgmodel_value):
     try:
@@ -2361,7 +2361,7 @@ async def get_selected_imgmodel_data(selected_imgmodel_value):
                     break
         return selected_imgmodel
     except Exception as e:
-        logging.error("Error getting selected imgmodel data:", e)
+        logging.error(f"Error getting selected imgmodel data: {e}")
 
 async def process_imgmodel(i, selected_imgmodel_value):
     try:
@@ -2374,7 +2374,7 @@ async def process_imgmodel(i, selected_imgmodel_value):
         await process_imgmodel_announce(i, selected_imgmodel, selected_imgmodel_name)
         logging.info(f"Updated imgmodel settings to: {selected_imgmodel_name}")
     except Exception as e:
-        logging.error("Error processing selected imgmodel from /image command:", e)
+        logging.error(f"Error processing selected imgmodel from /image command: {e}")
     if config.discord['post_active_settings']['enabled']:
         await task_queue.put(post_active_settings())
 
@@ -2462,7 +2462,7 @@ async def load_llmmodel():
         if shared.args.lora:
             add_lora_to_model([shared.args.lora])
     except Exception as e:
-        logging.error("Error loading selected LLM model:", e)
+        logging.error(f"Error loading selected LLM model: {e}")
 
 # Process selected LLM model
 async def process_llmmodel(i, selected_llmmodel):
@@ -2477,7 +2477,7 @@ async def process_llmmodel(i, selected_llmmodel):
         await i.send(f"Changed LLM model to: {selected_llmmodel}")
         await task_queue.put(load_llmmodel())
     except Exception as e:
-        logging.error("Error processing /llmmodel command:", e)
+        logging.error(f"Error processing /llmmodel command: {e}")
 
 if all_llmmodels:
     llmmodel_options = [app_commands.Choice(name=llmmodel, value=llmmodel) for llmmodel in all_llmmodels[:25]]
@@ -2698,7 +2698,7 @@ async def fetch_speak_options():
         all_voices.sort() # Sort alphabetically
         return ext, lang_list, all_voices
     except Exception as e:
-        logging.error(f'Error building options for "/speak" command: {e}')
+        logging.error(f"Error building options for '/speak' command: {e}")
 
 if tts_client and tts_client in supported_tts_clients:
     ext, lang_list, all_voices = asyncio.run(fetch_speak_options())
