@@ -1733,8 +1733,8 @@ def process_img_payload_tags(img_payload, matches):
                 param_variances = tag['img_param_variances']
                 img_payload = process_img_param_variances(img_payload, param_variances)
                 processed_once.add('img_param_variances')
-        img_payload.update(payload_mods)
-        img_payload.update(override_settings_mods)
+        update_dict(img_payload, payload_mods)
+        update_dict(img_payload, override_settings_mods)
         return img_payload
     except Exception as e:
         logging.error(f"Error processing Img tags: {e}")
