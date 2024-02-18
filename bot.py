@@ -1346,6 +1346,12 @@ def sort_tags(all_tags):
     try:
         sorted_tags = {'matches': [], 'unmatched': {'user': [], 'llm': [], 'userllm': []}}
         for tag in all_tags:
+            if 'random' in tag:
+                if not isinstance(tag['random'], (int, float)):
+                    logging.error("Error: Value for 'random' in tags should be float value (ex: 0.8).")
+                    continue # Skip this tag
+                if not random.random() < tag['random']:
+                    continue # Skip this tag
             search_mode = tag.get('search_mode', 'userllm')  # Default to 'userllm' if 'search_mode' is not present
             if search_mode in sorted_tags['unmatched']:
                 sorted_tags['unmatched'][search_mode].append({k: v for k, v in tag.items() if k != 'search_mode'})

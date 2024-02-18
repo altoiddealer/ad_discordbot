@@ -82,6 +82,7 @@ tag_presets:
 # Relevant to all tags:
 #   search_mode: userllm              Search method for trigger matching. 'user' = user prompt only / 'llm' = bot reply only / 'userllm' = search both for matches
 #   trigger: 'trigger,another one'    Recommended for most tags (except 'global_tag_keys' and 'tag_preset_name').
+#   random: 0.5                       Chance for tag to process. 0.0 = 0% chance and 1.0 = 100% chance.
 #   case_sensitive: (true/false)      If the triggers are case sensitive
 #   on_prefix_only: (true/false)      If triggers must be matched at beginning of the searched text
 #
