@@ -378,7 +378,6 @@ def update_dict_matched_keys(d, u):
             d[k] = v
     return d
 
-
 def load_file(file_path):
     try:
         file_suffix = Path(file_path).suffix.lower()
@@ -1650,33 +1649,56 @@ def process_img_param_variances(img_payload, presets_list):
 # Process Reactor (face swap)
 def process_face(img_payload, face_value):
     try:
-        base_path = f'ad_discordbot/swap_faces/'
-        if any(ext in face_value for ext in (".txt", ".png", ".jpg")): # extension included in value
-            face_file_path = os.path.join(base_path, face_value)
+        base_path = os.path.join("ad_discordbot", "swap_faces")
+        full_path = os.path.join(base_path, face_value)
+        face_method = ''
+        # If value was a directory to choose random image from
+        if os.path.isdir(full_path):
+            cwd_path = os.getcwd()
+            face_dir = os.path.join(cwd_path, full_path)
+            img_payload['alwayson_scripts']['reactor']['args'][0] = None
+            img_payload['alwayson_scripts']['reactor']['args'][22] = 2 # Randomly select image from path
+            img_payload['alwayson_scripts']['reactor']['args'][24] = face_dir # Path to face dir
+            face_method = 'Random from folder'
+        # If face_value is a face model file in ReActor
+        elif ".safetensors" in face_value:
+            img_payload['alwayson_scripts']['reactor']['args'][0] = None
+            img_payload['alwayson_scripts']['reactor']['args'][22] = 1
+            img_payload['alwayson_scripts']['reactor']['args'][23] = face_value
+            face_method = 'Face model'
+        # If face_value contains valid image extension
         else:
-            for ext in (".txt", ".png", ".jpg"):
-                temp_path = os.path.join(base_path, face_value + ext)
-                if os.path.exists(temp_path):
-                    face_file_path = temp_path
-                    break
+            face_file_path = None
+            if any(ext in face_value for ext in (".txt", ".png", ".jpg")): # extension included in value
+                face_file_path = os.path.join(base_path, face_value)
+            # If face_value does not specify an extension, but is not a directory
             else:
-                raise FileNotFoundError(f"File '{face_value}' not found with supported extensions (.txt, .png, .jpg)")
-        if os.path.isfile(face_file_path):
-            if face_file_path.endswith((".txt", ".png", ".jpg")):
-                if face_file_path.endswith(".txt"):
-                    with open(face_file_path, "r") as txt_file:
-                        img_payload['alwayson_scripts']['reactor']['args'][0] = txt_file.read()
+                for ext in (".txt", ".png", ".jpg"):
+                    temp_path = os.path.join(base_path, face_value + ext)
+                    if os.path.exists(temp_path):
+                        face_file_path = temp_path
+                        break
                 else:
-                    with open(face_file_path, "rb") as image_file:
-                        image_data = image_file.read()
-                        faceswapimg = base64.b64encode(image_data).decode('utf-8')
-                        img_payload['alwayson_scripts']['reactor']['args'][0] = faceswapimg
-                img_payload['alwayson_scripts']['reactor']['args'][1] = True
-                logging.info(f'[TAGS] Face swap was triggered and applied "{face_value}"')
+                    raise FileNotFoundError(f"File '{face_value}' not found with supported extensions (.txt, .png, .jpg)")
+            if face_file_path and os.path.isfile(face_file_path):
+                if face_file_path.endswith((".txt", ".png", ".jpg")):
+                    if face_file_path.endswith(".txt"):
+                        with open(face_file_path, "r") as txt_file:
+                            img_payload['alwayson_scripts']['reactor']['args'][0] = txt_file.read()
+                            face_method = 'base64'
+                    else:
+                        with open(face_file_path, "rb") as image_file:
+                            image_data = image_file.read()
+                            faceswapimg = base64.b64encode(image_data).decode('utf-8')
+                            img_payload['alwayson_scripts']['reactor']['args'][0] = faceswapimg
+                            face_method = 'Face image'
+                else:
+                    logging.error("Invalid value for face swap input (must be .txt, .png, or .jpg).")
             else:
-                logging.error("Invalid value for face swap input (must be .txt, .png, or .jpg).")
-        else:
-            logging.error(f"File not found '{face_file_path}'.")
+                logging.error(f"File not found '{face_file_path}'.")
+        if face_method:
+            img_payload['alwayson_scripts']['reactor']['args'][1] = True # enable extension
+            logging.info(f'[TAGS] Face swap was triggered and applied "{face_value}" ({face_method}).')
         return img_payload
     except Exception as e:
         logging.error(f"Error processing face swap for Reactor: {e}")
