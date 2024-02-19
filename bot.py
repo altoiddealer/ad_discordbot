@@ -2373,6 +2373,10 @@ async def merge_imgmodel_data(selected_imgmodel):
                     # Check filesize of selected imgmodel to assume resolution and tags 
                     matched_preset = await guess_model_res(selected_imgmodel_filename)
                     if matched_preset:
+                        if 'tags' in matched_preset:
+                            selected_imgmodel_tags = matched_preset['tags']
+                            del matched_preset['tags']
+                        # Deprecated code
                         if 'tag_preset_name' in matched_preset:
                             selected_imgmodel_tags = [{'tag_preset_name': matched_preset['tag_preset_name']}]
                             del matched_preset['tag_preset_name']

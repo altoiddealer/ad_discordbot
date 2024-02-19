@@ -57,10 +57,16 @@ imgmodels = {
         'presets': [                # Defininitions for if 'guess_model_res' = True.  Add presets as desired, sorted in ascending order.
             {'max_filesize': 6.0,                               # 'max_filesize' expressed in GB.
                 'width': 512, 'height': 512, 'enable_hr': True, # Any defined 'payload' options will be updated.
-                'tag_preset_name': 'SD15 Tags'},                # If you specify a tag_preset_name from 'dict_tags.yaml', those will also be swapped in.
+                'tags': [                                       # Any number of tags can be applied as well! (*each 'tag' is a comma-separated dictionary in the 'tags' list*)
+                    {'tag_preset_name': 'SD15 Tags'}              # Using a tag_preset_name from 'dict_tags.yaml' is a great idea!
+                ]
+            },
             {'max_filesize': 100.0,
-                'width': 1024, 'height': 1024, 'enable_hr': False, 
-                'tag_preset_name': 'SDXL Tags'}
+                'width': 1024, 'height': 1024, 'enable_hr': False,
+                'tags': [
+                    {'tag_preset_name': 'SDXL Tags'}
+                ]
+            }
         ]
     },
 
