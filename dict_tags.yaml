@@ -21,9 +21,15 @@ global_tag_keys:
 base_tags:
   - time_message: "It is now {}\n"  # datetime is inserted at {}. Bot will not be told the current date/time unless a tag is active with 'time_message' or 'time_offset'
     time_offset: 0.0                # 0 = today's date (system time). -0.5 shifts the current date to be 12 hours ago. (UOM = days)
-#  - img_param_variances: {cfg_scale: (-2,4), steps: (-20,20), hr_scale: (-0.50,0.15)} # A1111 payload parameters can be randomized within your specified ranges. Must be formatted as a dictionary.
+
+# A1111 payload and textgen-webui params can be randomly modified within specified ranges, or a list of strings (ex: sampler names), or from a boolean value. Must be formatted as a dictionary.
+# These examples are commented out by default - you should uncomment and experiment :D
+#  - img_param_variances: {cfg_scale: [-2,4], steps: [-5,5], hr_scale: [-0.50,0.15], hr_enable: false, sampler_name: ['Euler A', 'DPM++ 2M Karras', 'DPM++ 2M']}
+#  - llm_param_variances: {repetition_penalty: [-0.25,0.25], temperature_last: false}
+
   - trigger: 'nude,erotic'
     img_censoring: 0            # 0 = disabled / 1 = blur image / 2 = block image from being generated
+
   - trigger: 'draw,generate'
     search_mode: user           # Only search user's prompt
     on_prefix_only: true        # Only triggers if matched at very beginning
@@ -33,10 +39,12 @@ base_tags:
     insert_text_method: replace
     load_history: -1            # 0 = default (all history included) / -1 = prompt excludes chat history / > 1 = llm only sees this many recent exchanges.
     save_history: false         # Whether to save this interaction to history or not.
+
   - trigger: 'take a photo,take {a|another} picture'
     search_mode: user
     image_response: true
     instruct: '''[SYSTEM] You have been tasked with generating an image: "{}". Describe the image in vivid detail as if you were describing it to a blind person. The description in your response will be sent to an image generation API.'''
+
   - trigger: 'selfie,self portrait'
     search_mode: user
     image_response: true
@@ -51,28 +59,37 @@ tag_presets:
     tags:                         # Tag presets must have their tag definitions nested under a 'tags' key
       - trigger: 'vertical,selfie,self {photo|portrait}'
         payload: {width: 896, height: 1152} # A1111 payload can be modified using 'payload'. Must be formatted as a dictionary.
+        
       - trigger: 'horizontal,landscape'
         payload: {width: 1152, height: 896}
+
       - trigger: 'plain'
-        override_settings: {CLIP_stop_at_last_layers: 2} # A1111 override_settings can also be modified. Must be formatted as a dictionary.
+        payload: {override_settings: {CLIP_stop_at_last_layers: 2}} # Nested payload dictionary settings can also be modified. Must be formatted as a dictionary.
+
       - trigger: 'grimace'
         positive_prompt: '<lora:PE_Grimace_v1.0:0.75>'
+
       - trigger: '{ps1|playstation} {style|art|graphics},style of {ps1|playstation}'
         positive_prompt: 'ps1 style <lora:ps1_style_SDXL_v2:1.0>'
         negative_prompt: 'blurry' # 'negative_prompt' = inserted at the end of the negative prompt (does not behave like 'positive_prompt' which is relative to the matched text)
         trumps: 'low poly' # If any other matched tag has a trigger phrase matching a 'trump' phrase, it will not be used. (*can be comma separated to trump multiple tags*)
+
       - trigger: 'low {poly|polygon}'
         positive_prompt: '<lora:LowpolySDXL_v1.0:1.0>'
         negative_prompt: 'blurry'
+
   - tag_preset_name: SD15 Tags
     tags:
       - positive_prompt_prefix: 'masterpiece, detailed, ' # '_prefix' makes this inserted at the beginning of the image prompt
         positive_prompt_suffix: ' <lora:more_details:0.5> <lora:epiNoiseoffset_v2Pynoise:0.5>' # '_suffix' makes this inserted at the end of the image prompt
         negative_prompt_prefix: '<kkw-Extreme-Neg:0.5>, <negative_hand-neg:0.5>, by <bad-artist:0.5>, ' # same logic as positive_prompt. Can similarly use '_suffix' (or just 'negative_prompt')
+
       - trigger: 'selfie,self photo'
         positive_prompt: '(taking a selfie:1.2), (arms outstretched:1.1)'
+
       - trigger: 'gta,gta4,grand theft auto,archer style'
         positive_prompt: 'GtaSA2004 cartoon <lora:GTA_Style:1.0>'
+
       - trigger: 'gigachad'
         positive_prompt: '<lora:Gigachadv1:0.8>'
 

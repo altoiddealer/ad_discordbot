@@ -369,6 +369,28 @@ def update_dict(d, u):
         u[k] = d[k]
     return u
 
+# Updates matched keys, AND adds missing keys, BUT sums together number values
+
+def sum_update_dict(d, u):
+    def get_decimal_places(value):
+        # Function to get the number of decimal places in a float.
+        if isinstance(value, float):
+            return len(str(value).split('.')[1])
+        else:
+            return 0
+    for k, v in u.items():
+        if isinstance(v, dict):
+            d[k] = sum_update_dict(d.get(k, {}), v)
+        elif isinstance(v, (int, float)) and not isinstance(v, bool):
+            current_value = d.get(k, 0)
+            max_decimal_places = max(get_decimal_places(current_value), get_decimal_places(v))
+            d[k] = round(current_value + v, max_decimal_places)
+        else:
+            d[k] = v
+    for k in d.keys() - u.keys():
+        u[k] = d[k]
+    return u
+
 # Updates matched keys, but DOES NOT add missing keys
 def update_dict_matched_keys(d, u):
     for k, v in u.items():
@@ -1167,6 +1189,7 @@ async def process_llm_payload_tags(user_name, llm_payload, llm_prompt, matches):
         instruct = None
         load_history = None
         save_history = None
+        param_variances = None
         for tag in matches:
             # Values that will only apply from the first tag matches.
             if 'swap_character' in tag and swap_character is None:
@@ -1178,7 +1201,9 @@ async def process_llm_payload_tags(user_name, llm_payload, llm_prompt, matches):
             if 'save_history' in tag and save_history is None:
                 save_history = tag['save_history']
                 llm_payload['save_history'] = tag['save_history']
-        if swap_character or instruct or load_history or save_history:
+            if 'llm_param_variances' in tag:
+                param_variances = tag['llm_param_variances']
+        if swap_character or instruct or load_history or save_history or param_variances:
             print_content = f"[TAGS] LLM behavior was modified ("
             # Swap Character handling:
             if swap_character:
@@ -1219,6 +1244,10 @@ async def process_llm_payload_tags(user_name, llm_payload, llm_prompt, matches):
                     llm_payload['state']['history']['internal'] = session_history['internal'][-num_to_retain:]
                     llm_payload['state']['history']['visible'] = session_history['visible'][-num_to_retain:]
                 print_content += f" | History: {llm_payload['state']['history']['visible']}"
+            if param_variances:
+                processed_params = process_param_variances(param_variances)
+                print_content += f" | Param Variances: {processed_params}"
+                sum_update_dict(llm_payload['state'], processed_params)
             # Print results
             print_content += ")"
             logging.info(print_content)
@@ -1613,44 +1642,45 @@ def process_img_prompt_tags(img_payload, tags):
         logging.error(f"Error processing Img prompt tags: {e}")
         
 def random_value_from_range(value_range):
-    if isinstance(value_range, tuple) and len(value_range) == 2:
+    if isinstance(value_range, (list, tuple)) and len(value_range) == 2:
         start, end = value_range
         if isinstance(start, (int, float)) and isinstance(end, (int, float)):
             num_digits = max(len(str(start).split('.')[-1]), len(str(end).split('.')[-1]))
             value = random.uniform(start, end) if isinstance(start, float) or isinstance(end, float) else random.randint(start, end)
             value = round(value, num_digits)
             return value
-    logging.warning(f'Invalid lrctl range "{value_range}". Defaulting to "0".')
+    logging.warning(f'Invalid value range "{value_range}". Defaulting to "0".')
     return 0
 
 def convert_lists_to_tuples(dictionary):
     for key, value in dictionary.items():
-        if isinstance(value, list):
+        if isinstance(value, list) and len(value) == 2 and all(isinstance(item, (int, float)) for item in value) and not any(isinstance(item, bool) for item in value):
             dictionary[key] = tuple(value)
     return dictionary
 
-def process_img_param_variances(img_payload, presets_list):
-    presets_list = convert_lists_to_tuples(presets_list)
-    presets_list = [presets_list]
-    processed_variances = []
-    for presets in presets_list:
-        processed_presets = {}
-        for key, value in presets.items():
-            if isinstance(value, dict):
-                processed_presets[key] = process_param_variances([value])
-            elif isinstance(value, (list, tuple)):
-                if isinstance(value, tuple):
-                    processed_presets[key] = random_value_from_range(value)
-                elif isinstance(value, (int, float)):
-                    processed_presets[key] = value
-                else:
-                    logging.warning(f'Invalid params "{key}", "{value}".')
-        processed_variances.append(processed_presets)
-    for processed_params in processed_variances:
-        for key, value in processed_params.items():
-            if key in img_payload:
-                img_payload[key] += value
-    return img_payload
+def process_param_variances(param_variances):
+    param_variances = convert_lists_to_tuples(param_variances) # Only converts lists containing ints and floats (not strings or bools) 
+    processed_params = copy.deepcopy(param_variances)
+    for key, value in param_variances.items():
+        # unpack dictionaries assuming they contain variances
+        if isinstance(value, dict):
+            processed_params[key] = process_param_variances(value)
+        elif isinstance(value, tuple):
+            processed_params[key] = random_value_from_range(value)
+        elif isinstance(value, bool):
+            processed_params[key] = random.choice([True, False])
+        elif isinstance(value, list):
+            if all(isinstance(item, str) for item in value):
+                processed_params[key] = random.choice(value)
+            elif all(isinstance(item, bool) for item in value):
+                processed_params[key] = random.choice(value)
+            else:
+                logging.warning(f'Invalid params "{key}", "{value}" will not be applied.')
+                processed_params.pop(key)  # Remove invalid key
+        else:
+            logging.warning(f'Invalid params "{key}", "{value}" will not be applied.')
+            processed_params.pop(key)  # Remove invalid key
+    return processed_params
 
 # Process Reactor (face swap)
 def process_face(img_payload, face_value):
@@ -1711,36 +1741,25 @@ def process_face(img_payload, face_value):
 
 def process_img_payload_tags(img_payload, matches):
     try:
-        payload_mods = {}
-        override_settings_mods = {}
-        processed_once = set()
         for tag in matches:
             if isinstance(tag, tuple):
                 tag = tag[0] # For tags with prompt insertion indexes
             if 'payload' in tag:
-                if isinstance(tag['payload'], dict):  
-                    for key, value in tag['payload'].items():
-                        payload_mods[key] = value
+                if isinstance(tag['payload'], dict):
+                    logging.info(f"[TAGS] Payload values were updated: '{tag['payload']}'.")
+                    update_dict(img_payload, tag['payload'])
                 else:
                     logging.warning("A tag was matched with invalid 'payload'; must be a dictionary.")
-            if 'override_settings' in tag:
-                if isinstance(tag['override_settings'], dict):  
-                    for key, value in tag['override_settings'].items():
-                        override_settings_mods[key] = value
-                else:
-                    logging.warning("A tag was matched with invalid 'override_settings'; must be a dictionary.")
             if tag.get('face_swap'):
                 img_payload = process_face(img_payload, tag['face_swap'])
             # Process these keys only once
-            if 'img_censoring' in tag and tag['img_censoring'] > 0 and 'img_censoring' not in processed_once:
+            if 'img_censoring' in tag and tag['img_censoring'] > 0:
                 img_payload['img_censoring'] = tag['img_censoring']
-                processed_once.add('img_censoring')
-            if 'img_param_variances' in tag and 'img_param_variances' not in processed_once:
+            if 'img_param_variances' in tag:
                 param_variances = tag['img_param_variances']
-                img_payload = process_img_param_variances(img_payload, param_variances)
-                processed_once.add('img_param_variances')
-        update_dict(img_payload, payload_mods)
-        update_dict(img_payload, override_settings_mods)
+                processed_params = process_param_variances(param_variances)
+                logging.info(f'[TAGS] Applied img param variances: "{processed_params}".')
+                sum_update_dict(img_payload, processed_params)
         return img_payload
     except Exception as e:
         logging.error(f"Error processing Img tags: {e}")
