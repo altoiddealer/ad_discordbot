@@ -1121,31 +1121,21 @@ async def llm_gen(i, queues):
         if tts_resp: await task_queue.put(process_tts_resp(i, tts_resp)) # Process this in background
         blocking = False
 
-def determine_date(matches):
+def get_time(offset=0.0, time_format='%Y-%m-%d %H:%M:%S'):
     try:
-        message = {}
-        offset = ''
-        current_time = ''
-        for tag in matches:
-            if 'time_message' in tag:
-                message = tag.get('time_message', '')                   
-            if 'time_offset' in tag:
-                offset = tag.get('time_offset', 0.0)
-        if message or offset:
-            if offset == 0.0:
-                current_time = datetime.now()
-            elif isinstance(coffset, int):
-                current_time = datetime.now() + timedelta(days=offset)
-            elif isinstance(offset, float):
-                days = math.floor(offset)
-                hours = (offset - days) * 24
-                current_time = datetime.now() + timedelta(days=days, hours=hours)
-            current_time = current_time.strftime("%Y-%m-%d %H:%M:%S")
-        if current_time:
-            current_time = message.format(current_time)
-        return current_time
+        time_for_llm = ''
+        if offset == 0.0:
+            time_for_llm = datetime.now()
+        elif isinstance(coffset, int):
+            time_for_llm = datetime.now() + timedelta(days=offset)
+        elif isinstance(offset, float):
+            days = math.floor(offset)
+            hours = (offset - days) * 24
+            time_for_llm = datetime.now() + timedelta(days=days, hours=hours)
+        time_for_llm = time_for_llm.strftime(time_format)
+        return time_for_llm
     except Exception as e:
-        logging.error(f"Error when getting current time for triggered tag: {e}")
+        logging.error(f"Error when getting time: {e}")
 
 def user_asks_for_image(i, text, matches):
     try:
@@ -1160,10 +1150,9 @@ def user_asks_for_image(i, text, matches):
     except Exception as e:
         logging.error(f"An error occurred while checking if bot should reply with image: {e}")
 
-async def create_img_prompt(i, llm_payload, llm_prompt, current_time):
+async def create_img_prompt(i, llm_payload, llm_prompt):
     try:
         llm_payload['text'] = llm_prompt
-        llm_payload['state']['context'] = current_time + llm_payload['state']['context']
         last_resp, tts_resp = await chatbot_wrapper_wrapper(llm_payload)
         if len(last_resp) > 2000: last_resp = last_resp[:2000]
         logging.info("reply sent: \"" + i.author.mention + ": {'text': '" + llm_prompt + "', 'response': '" + last_resp + "'}\"")
@@ -1171,9 +1160,8 @@ async def create_img_prompt(i, llm_payload, llm_prompt, current_time):
     except Exception as e:
         logging.error(f"An error occurred while processing image prompt: {e}")
 
-async def create_prompt_for_llm(i, llm_payload, llm_prompt, current_time):
+async def create_prompt_for_llm(i, llm_payload, llm_prompt):
     llm_payload['text'] = llm_prompt
-    llm_payload['state']['context'] = current_time + llm_payload['state']['context']
     num = check_num_in_queue(i)
     if num >=10:
         await i.channel.send(f'{i.author.mention} You have 10 items in queue, please allow your requests to finish before adding more to the queue.')
@@ -1189,7 +1177,9 @@ async def process_llm_payload_tags(user_name, llm_payload, llm_prompt, matches):
         instruct = None
         load_history = None
         save_history = None
-        param_variances = None
+        param_variances = {}
+        time_offset = 0.0
+        time_format = '%Y-%m-%d %H:%M:%S'
         for tag in matches:
             # Values that will only apply from the first tag matches.
             if 'swap_character' in tag and swap_character is None:
@@ -1202,7 +1192,15 @@ async def process_llm_payload_tags(user_name, llm_payload, llm_prompt, matches):
                 save_history = tag['save_history']
                 llm_payload['save_history'] = tag['save_history']
             if 'llm_param_variances' in tag:
-                param_variances = tag['llm_param_variances']
+                param_variances.update(tag['llm_param_variances']) # Allow multiple to accumulate.
+            if 'time_offset' in tag:
+                time_offset = tag['time_offset']
+            if 'time_format' in tag:
+                time_format = tag['time_format']
+        # Format time if defined
+        time_for_llm = get_time(time_offset, time_format)
+        llm_prompt = llm_prompt.replace('{time}', time_for_llm)
+        # Process the tag matches
         if swap_character or instruct or load_history or save_history or param_variances:
             print_content = f"[TAGS] LLM behavior was modified ("
             # Swap Character handling:
@@ -1255,7 +1253,7 @@ async def process_llm_payload_tags(user_name, llm_payload, llm_prompt, matches):
     except Exception as e:
         logging.error(f"Error processing LLM tags: {e}")
 
-def process_prompt_tags(prompt, tags):
+def process_tag_insertions(prompt, tags):
     try:
         updated_matches = []
         matches = tags['matches']
@@ -1293,7 +1291,7 @@ def process_prompt_tags(prompt, tags):
     except Exception as e:
         logging.error(f"Error processing LLM prompt tags: {e}")
 
-def process_matched_tags(matches):
+def process_tag_trumps(matches):
     try:
         # Collect all 'trump' parameters for all matched tags
         trump_params = set()
@@ -1307,7 +1305,7 @@ def process_matched_tags(matches):
         # Remove duplicates from the trump_params set
         trump_params = set(trump_params)
         # Iterate over all tags in 'matches' and remove 'trumped' tags
-        new_matches = []
+        untrumped_matches = []
         for tag in matches:
             if isinstance(tag, tuple):
                 tag_dict = tag[0]  # get tag value if tuple
@@ -1316,8 +1314,8 @@ def process_matched_tags(matches):
             if any(trigger.strip().lower() == trump.strip().lower() for trigger in tag_dict.get('trigger', '').split(',') for trump in trump_params):
                 logging.info(f'''[TAGS] Tag with triggers "{tag_dict['trigger']}" was trumped by another tag.''')
             else:
-                new_matches.append(tag)
-        return new_matches
+                untrumped_matches.append(tag)
+        return untrumped_matches
     except Exception as e:
         logging.error(f"Error processing matched tags: {e}")
         return matches  # return original matches if error occurs
@@ -1362,7 +1360,7 @@ def match_tags(search_text, tags):
                             tag['imgtag_uninserted'] = True
                             matches.append(tag)
         if matches:
-            updated_tags['matches'] = process_matched_tags(matches) # sort and trump tags
+            updated_tags['matches'] = process_tag_trumps(matches) # trump tags
         # Adjust the return value depending on which phase match_tags() was called on
         unmatched['llm'] = llm_tags
         if 'user' in unmatched:
@@ -1480,16 +1478,14 @@ async def on_message(i):
         # match tags labeled for user / userllm.
         tags = match_tags(llm_prompt, tags)
         # apply tags to prompt
-        llm_prompt, tags = process_prompt_tags(llm_prompt, tags)
+        llm_prompt, tags = process_tag_insertions(llm_prompt, tags)
         matches = tags['matches']
         # apply tags relevant to LLM
         llm_payload, llm_prompt = await process_llm_payload_tags(i.author.display_name, llm_payload, llm_prompt, matches)
-        # apply datetime to prompt
-        current_time = determine_date(matches)
         # save a global copy of text/llm_prompt for /regen cmd
         retain_last_user_message(text, llm_prompt)
         if not user_asks_for_image(i, text, matches):
-            await create_prompt_for_llm(i, llm_payload, llm_prompt, current_time)
+            await create_prompt_for_llm(i, llm_payload, llm_prompt)
         else:
             busy_drawing = True
             if await a1111_online(i):
@@ -1497,7 +1493,7 @@ async def on_message(i):
                 info_embed.description = " "
                 picture_frame = await i.reply(embed=info_embed)
                 async with i.channel.typing():
-                    img_prompt, tts_resp = await create_img_prompt(i, llm_payload, llm_prompt, current_time)
+                    img_prompt, tts_resp = await create_img_prompt(i, llm_payload, llm_prompt)
                     await picture_frame.delete()
                     await pic(i, text, tags, img_prompt, tts_resp, neg_prompt=None, size=None, face_swap=None, controlnet=None)
                     await i.channel.send(img_prompt)
@@ -1613,7 +1609,7 @@ def apply_lrctl(matches):
 
 def process_img_prompt_tags(img_payload, tags):
     try:
-        img_prompt, tags = process_prompt_tags(img_payload['prompt'], tags)
+        img_prompt, tags = process_tag_insertions(img_payload['prompt'], tags)
         updated_positive_prompt = copy.copy(img_prompt)
         updated_negative_prompt = copy.copy(img_payload['negative_prompt'])
         matches = tags['matches']

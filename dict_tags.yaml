@@ -19,8 +19,9 @@ global_tag_keys:
 
 # 'base_tags' are always in effect. Base tags have lower priority than tags defined anywhere else.
 base_tags:
-  - time_message: "It is now {}\n"  # datetime is inserted at {}. Bot will not be told the current date/time unless a tag is active with 'time_message' or 'time_offset'
-    time_offset: 0.0                # 0 = today's date (system time). -0.5 shifts the current date to be 12 hours ago. (UOM = days)
+    # Use '{time}' written anywhere in your prompts which will be replaced with the current time. The tags 'offset' and 'time_format' will apply to the result.
+  - time_offset: 0.0                  # 0 = today's date (system time). -0.5 shifts the current date to be 12 hours ago. (UOM = days).
+    time_format: '%Y-%m-%d %H:%M:%S'  # Examples: '%Y-%m-%d' (YYYY-MM-DD), '%H:%M:%S' (HH:MM:SS), '%A, %B %d, %Y' (DayName, MonthName DD, YYYY)
 
 # A1111 payload and textgen-webui params can be randomly modified within specified ranges, or a list of strings (ex: sampler names), or from a boolean value. Must be formatted as a dictionary.
 # These examples are commented out by default - you should uncomment and experiment :D
@@ -117,8 +118,9 @@ tag_presets:
 #   on_prefix_only: (true/false)      If triggers must be matched at beginning of the searched text
 #
 # Relevant to text generation (LLM):
-#   time_message: "It is now {}\n"    datetime is inserted at {}. Bot will not be told the current date/time unless a tag is active with 'time_message' or 'time_offset'
+
 #   time_offset: 0.0                  0 = today's date (system time). -0.5 shifts the current date to be 12 hours ago. (UOM = days)
+#   time_format: '%Y-%m-%d %H:%M:%S'  Examples: '%Y-%m-%d' (YYYY-MM-DD), '%H:%M:%S' (HH:MM:SS), '%A, %B %d, %Y' (DayName, MonthName DD, YYYY)
 #   instruct: 'string with a {}'      Useful for adding text before and/or after your prompt to the LLM.
 #   insert_text: ''                   Text you may want to insert relative to the matched search text.
 #   insert_text_method: replace       Relevant in tags with key 'pinsert_text'. 'after' = insert value after matched text / 'before' = before text / 'replace' = replace text
