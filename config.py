@@ -57,23 +57,25 @@ imgmodels = {
         'presets': [                # 'guess_model_data' definitions. Add presets as desired, sorted in ascending order for 'max_filesize'.
             # For SD 1.5 models
             {'max_filesize': 6.0, 'exclude': ['xl'],    # filter methods: 'max_filesize' expressed in GB / 'filter' must be in filename / 'exclude' must not be in filename
+                'width': 512, 'height': 512,            # width and height MUST be specified for each preset. They do not have to be 1:1 ratio (square).
                 'tags': [                               # Any number of 'tags' can be applied! (*each 'tag' is a comma-separated dictionary in the 'tags' list*)
-                    {'tag_preset_name': 'SD15 Tags'},   # Using a 'tag_preset_name' from 'dict_tags.yaml' is a great idea!
-                    {'payload': {'width': 512, 'height': 512, 'cfg_scale': 7, 'steps': 25, 'sampler_name': 'DPM++ 2M Karras', 'enable_hr': True, 'hr_scale': 1.5, 'denoise_strength': 0.5}}
+                    {'tag_preset_name': 'SD15 Tags'}    # Using a 'tag_preset_name' from 'dict_tags.yaml' is a great idea!
                 ]
             },
             # For SDXL Turbo models
             {'max_filesize': 100.0, 'filter': ['turbo'],
+                'width': 1024, 'height': 1024,
                 'tags': [
-                    {'tag_preset_name': 'SDXL Tags'},
-                    {'payload': {'width': 1024, 'height': 1024, 'cfg_scale': 2, 'steps': 5, 'sampler_name': 'DPM++ SDE Karras', 'enable_hr': False}}
+                    {'tag_preset_name': 'SDXL Turbo Payload'},
+                    {'tag_preset_name': 'SDXL Tags'}
                 ]
             },
             # For SDXL 1.0 models
             {'max_filesize': 100.0, 'exclude': ['turbo'],
+                'width': 1024, 'height': 1024,
                 'tags': [
-                    {'tag_preset_name': 'SDXL Tags'},
-                    {'payload': {'width': 1024, 'height': 1024, 'cfg_scale': 7, 'steps': 25, 'sampler_name': 'DPM++ 2M Karras', 'enable_hr': False}}
+                    {'tag_preset_name': 'SDXL Payload'},
+                    {'tag_preset_name': 'SDXL Tags'}
                 ]
             }
         ]

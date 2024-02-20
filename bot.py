@@ -684,7 +684,7 @@ async def auto_update_imgmodel_task(mode='random'):
             # Merge selected imgmodel/tag data with base settings
             selected_imgmodel, selected_imgmodel_name, selected_imgmodel_tags = await merge_imgmodel_data(selected_imgmodel)
             # Commit all the settings
-            await update_imgmodel(selected_imgmodel, selected_imgmodel_name, selected_imgmodel_tags)
+            await update_imgmodel(selected_imgmodel, selected_imgmodel_tags)
             # Set the topic of the channel and announce imgmodel as configured
             await auto_announce_imgmodel(selected_imgmodel, selected_imgmodel_name)
             logging.info(f"Automatically updated imgmodel settings to: {selected_imgmodel_name}")
@@ -1741,6 +1741,7 @@ def process_face(img_payload, face_value):
 
 def process_img_payload_tags(img_payload, matches):
     try:
+        matches.reverse()
         for tag in matches:
             if isinstance(tag, tuple):
                 tag = tag[0] # For tags with prompt insertion indexes
@@ -2329,7 +2330,7 @@ async def process_imgmodel_announce(i, selected_imgmodel, selected_imgmodel_name
     except Exception as e:
         logging.error(f"Error announcing imgmodel: {e}")
 
-async def update_imgmodel(selected_imgmodel, selected_imgmodel_name, selected_imgmodel_tags):
+async def update_imgmodel(selected_imgmodel, selected_imgmodel_tags):
     try:
         active_settings = load_file('ad_discordbot/activesettings.yaml')
         active_settings['imgmodel'] = selected_imgmodel
@@ -2337,7 +2338,8 @@ async def update_imgmodel(selected_imgmodel, selected_imgmodel_name, selected_im
         save_yaml_file('ad_discordbot/activesettings.yaml', active_settings)
         await update_client_settings() # Sync updated user settings to client
         # Load the imgmodel and VAE via A1111 API
-        await task_queue.put(a1111_load_imgmodel(active_settings['imgmodel']['override_settings'])) # Process this in the background
+        model_data = active_settings['imgmodel'].get('override_settings', None) or active_settings['imgmodel']['payload'].get('override_settings')
+        await task_queue.put(a1111_load_imgmodel(model_data)) # Process this in the background
         # Update size options for /image command
         await task_queue.put(update_size_options(active_settings.get('imgmodel').get('payload').get('width'),active_settings.get('imgmodel').get('payload').get('height')))
     except Exception as e:
@@ -2427,7 +2429,7 @@ async def process_imgmodel(i, selected_imgmodel_value):
         # Merge selected imgmodel/tag data with base settings
         selected_imgmodel, selected_imgmodel_name, selected_imgmodel_tags = await merge_imgmodel_data(selected_imgmodel)
         # Commit all the settings
-        await update_imgmodel(selected_imgmodel, selected_imgmodel_name, selected_imgmodel_tags)
+        await update_imgmodel(selected_imgmodel, selected_imgmodel_tags)
         # Set the topic of the channel and announce imgmodel as configured
         await process_imgmodel_announce(i, selected_imgmodel, selected_imgmodel_name)
         logging.info(f"Updated imgmodel settings to: {selected_imgmodel_name}")
@@ -2887,7 +2889,7 @@ class ImgModel:
                     'args': [{'enabled': False, 'input_image': 'none', 'lowvram': True, 'model': 'none', 'module': 'none', 'pixel_perfect': True}]
                 },
                 'reactor': {
-                    'args': ['', False, '0', '0', 'inswapper_128.onnx', 'CodeFormer', 1, True, '4x_NMKD-Superscale-SP_178000_G', 1.5, 1, False, True, 1, 0, 0, False, 0.8, False, False, 'CUDA', True, 0, '', '']
+                    'args': ['', False, '0', '0', 'inswapper_128.onnx', 'CodeFormer', 1, True, '4x_NMKD-Superscale-SP_178000_G', 1.5, 1, False, True, 1, 0, 0, False, 0.8, False, False, 'CUDA', True, 0, '', '', None, True, True, 0.6, 2]
                 }
             }
         }

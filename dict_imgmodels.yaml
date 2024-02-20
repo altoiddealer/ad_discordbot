@@ -5,29 +5,20 @@
 # You can safely ommit options (omitted items will not delete default values)
 - imgmodel_name: (SDXL) Base Model v1.0, 0.9 VAE
   imgmodel_url: 'https://huggingface.co/stabilityai/stable-diffusion-xl-base-0.9' # For announcements
+  payload: {height: 896, width: 1152}    # 'width', 'height' and 'override_settings' are the minimum required params needed to be defined outside of 'tags'.
+  override_settings: {sd_model_checkpoint: "sdxl\\sd_xl_base_1.0_0.9vae.safetensors [e6bb9ea85b]", sd_vae: "Automatic", CLIP_stop_at_last_layers: 1}
   tags:
-    - tag_preset_name: SDXL Tags  # tag presets should be single list items (prefixed by a hyphen -) / not grouped with any other tags
-    - payload: {
-      override_settings: {
-        sd_model_checkpoint: "sdxl\\sd_xl_base_1.0_0.9vae.safetensors [e6bb9ea85b]",
-        sd_vae: "Automatic",
-        CLIP_stop_at_last_layers: 1
-        },
-      restore_faces: False,
-      sampler_name: "DPM++ 2M Karras",
-      steps: 30,
-      cfg_scale: 7,
-      height: 896,
-      width: 1152,
-      enable_hr: False,
-      hr_upscaler: "Latent",
-      denoising_strength: 0.5,
-      hr_scale: 2,
-      hr_second_pass_steps: 0,
-      # Refiner is disabled if refiner_switch_at: 0.0 or refiner_checkpoint: ''
-      refiner_checkpoint: '', # 'sd_xl_refiner_1.0_0.9vae.safetensors [8d0ce6c016]'
-      refiner_switch_at: 0.8
-      }
-    
+    - tag_preset_name: SDXL Tags    # tag presets should be single list items (prefixed by a hyphen -) / not grouped with any other tags
+    - tag_preset_name: SDXL Payload
+
+- imgmodel_name: (SDXL) RealVisXL
+  imgmodel_url: 'https://civitai.com/models/128607'
+  payload: {height: 896, width: 1152}
+  override_settings: {sd_model_checkpoint: "sdxl\\realvisxlV30_v30Bakedvae.safetensors [364cecf630]", sd_vae: "Automatic", CLIP_stop_at_last_layers: 1}
+  tags:
+    - tag_preset_name: SDXL Tags
+    - tag_preset_name: SDXL Payload
+    - negative_prompt_prefix: '(worst quality, low quality, illustration, 3d, 2d, painting, cartoons, sketch), open mouth'
+
     # You may load multiple tag presets (again, as separate list items)
     # You may define additional imgmodel specific tags such as a special 'negative_prompt', 'positive_prompt_prefix', etc.
