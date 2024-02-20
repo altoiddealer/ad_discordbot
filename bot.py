@@ -2224,9 +2224,9 @@ async def sync(interaction: discord.Interaction):
 # Apply user defined filters to imgmodel list
 async def filter_imgmodels(imgmodels):
     try:
-        if config.imgmodels['filter'] or config.imgmodels['exclude']:
-            filter_list = config.imgmodels['filter']
-            exclude_list = config.imgmodels['exclude']
+        filter_list = config.imgmodels.get('filter', None)
+        exclude_list = config.imgmodels.get('exclude', None)
+        if filter_list or exclude_list:
             imgmodels = [
                 imgmodel for imgmodel in imgmodels
                 if (
@@ -2344,20 +2344,33 @@ async def update_imgmodel(selected_imgmodel, selected_imgmodel_name, selected_im
         logging.error(f"Error updating settings with the selected imgmodel data: {e}")
 
 # Check filesize of selected imgmodel to assume resolution / tags
-async def guess_model_res(selected_imgmodel_filename):
+async def guess_model_data(selected_imgmodel):
     try:
-        file_size_bytes = os.path.getsize(selected_imgmodel_filename)
+        filename = selected_imgmodel.get('filename', None)
+        if not filename:
+            return ''
+        # Check filesize of selected imgmodel to assume resolution and tags 
+        file_size_bytes = os.path.getsize(filename)
         file_size_gb = file_size_bytes / (1024 ** 3)  # 1 GB = 1024^3 bytes
         presets = copy.deepcopy(config.imgmodels['get_imgmodels_via_api']['presets'])
-        matched_preset = ''
+        match_counts = []
         for preset in presets:
-            if preset['max_filesize'] > file_size_gb:
-                matched_preset = preset
-                del matched_preset['max_filesize']
-                break
+            filter_list = preset.pop('filter', [])
+            exclude_list = preset.pop('exclude', [])            
+            match_count = 0
+            if (filter_list or exclude_list) and \
+                ((not filter_list or all(re.search(re.escape(filter_text), filename, re.IGNORECASE) for filter_text in filter_list)) and \
+                (not exclude_list or not any(re.search(re.escape(exclude_text), filename, re.IGNORECASE) for exclude_text in exclude_list))):
+                match_count += 1
+            if 'max_filesize' in preset and preset['max_filesize'] > file_size_gb:
+                match_count += 1
+                del preset['max_filesize']
+            match_counts.append((preset, match_count))
+        match_counts.sort(key=lambda x: x[1], reverse=True)  # Sort presets based on match counts
+        matched_preset = match_counts[0][0] if match_counts else ''
         return matched_preset
     except Exception as e:
-        logging.error(f"Error guessing selected imgmodel resolution: {e}")
+        logging.error(f"Error guessing selected imgmodel data: {e}")
 
 async def merge_imgmodel_data(selected_imgmodel):
     try:
@@ -2367,21 +2380,15 @@ async def merge_imgmodel_data(selected_imgmodel):
         # Create proper dictionary if A1111 API method
         if config.imgmodels['get_imgmodels_via_api']['enabled']:
             imgmodel_settings = {'payload': {}, 'override_settings': {}}
-            if config.imgmodels['get_imgmodels_via_api']['guess_model_res']:
-                selected_imgmodel_filename = selected_imgmodel.get('filename')
-                if selected_imgmodel_filename is not None:
-                    # Check filesize of selected imgmodel to assume resolution and tags 
-                    matched_preset = await guess_model_res(selected_imgmodel_filename)
-                    if matched_preset:
-                        if 'tags' in matched_preset:
-                            selected_imgmodel_tags = matched_preset['tags']
-                            del matched_preset['tags']
-                        # Deprecated code
-                        if 'tag_preset_name' in matched_preset:
-                            selected_imgmodel_tags = [{'tag_preset_name': matched_preset['tag_preset_name']}]
-                            del matched_preset['tag_preset_name']
-                        # Add user defined payload mods for API method
-                        imgmodel_settings['payload'] = matched_preset
+            if config.imgmodels['get_imgmodels_via_api'].get('guess_model_data') or config.imgmodels['get_imgmodels_via_api'].get('guess_model_res'):
+                matched_preset = await guess_model_data(selected_imgmodel)
+                if matched_preset:
+                    selected_imgmodel_tags = matched_preset.pop('tags', None)
+                    # Deprecated code
+                    if 'tag_preset_name' in matched_preset:
+                        selected_imgmodel_tags = [{'tag_preset_name': matched_preset['tag_preset_name']}]
+                        del matched_preset['tag_preset_name']
+                    imgmodel_settings['payload'] = matched_preset # Deprecated code
             imgmodel_settings['override_settings']['sd_model_checkpoint'] = selected_imgmodel['sd_model_checkpoint']
             imgmodel_settings['imgmodel_name'] = selected_imgmodel_name
             imgmodel_settings['imgmodel_url'] = ''

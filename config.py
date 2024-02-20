@@ -53,18 +53,27 @@ imgmodels = {
     # There are 2 methods: A1111 API (simple, less customization), or 'dict_imgmodels.yaml' (high customization)
     'get_imgmodels_via_api': {      # Settings for A1111 API method
         'enabled': True,            # True = get models via A1111 API (simple, less customization). False = use 'dict_imgmodels.yaml' (high customization).
-        'guess_model_res': True,    # Option to update payload size based on selected imgmodel filesize.
-        'presets': [                # Defininitions for if 'guess_model_res' = True.  Add presets as desired, sorted in ascending order.
-            {'max_filesize': 6.0,                               # 'max_filesize' expressed in GB.
-                'width': 512, 'height': 512, 'enable_hr': True, # Any defined 'payload' options will be updated.
-                'tags': [                                       # Any number of tags can be applied as well! (*each 'tag' is a comma-separated dictionary in the 'tags' list*)
-                    {'tag_preset_name': 'SD15 Tags'}              # Using a tag_preset_name from 'dict_tags.yaml' is a great idea!
+        'guess_model_res': True,    # Option to update imgmodel data using filesize and/or filtering text in filename.
+        'presets': [                # 'guess_model_data' definitions. Add presets as desired, sorted in ascending order for 'max_filesize'.
+            # For SD 1.5 models
+            {'max_filesize': 6.0, 'exclude': ['xl'],    # filter methods: 'max_filesize' expressed in GB / 'filter' must be in filename / 'exclude' must not be in filename
+                'tags': [                               # Any number of 'tags' can be applied! (*each 'tag' is a comma-separated dictionary in the 'tags' list*)
+                    {'tag_preset_name': 'SD15 Tags'},   # Using a 'tag_preset_name' from 'dict_tags.yaml' is a great idea!
+                    {'payload': {'width': 512, 'height': 512, 'cfg_scale': 7, 'steps': 25, 'sampler_name': 'DPM++ 2M Karras', 'enable_hr': True, 'hr_scale': 0.5}}
                 ]
             },
-            {'max_filesize': 100.0,
-                'width': 1024, 'height': 1024, 'enable_hr': False,
+            # For SDXL Turbo models
+            {'max_filesize': 100.0, 'filter': ['turbo'],
                 'tags': [
-                    {'tag_preset_name': 'SDXL Tags'}
+                    {'tag_preset_name': 'SDXL Tags'},
+                    {'payload': {'width': 1024, 'height': 1024, 'cfg_scale': 2, 'steps': 5, 'sampler_name': 'DPM++ SDE Karras', 'enable_hr': False}}
+                ]
+            },
+            # For SDXL 1.0 models
+            {'max_filesize': 100.0, 'exclude': ['turbo'],
+                'tags': [
+                    {'tag_preset_name': 'SDXL Tags'},
+                    {'payload': {'width': 1024, 'height': 1024, 'cfg_scale': 7, 'steps': 25, 'sampler_name': 'DPM++ 2M Karras', 'enable_hr': False}}
                 ]
             }
         ]
