@@ -59,7 +59,7 @@ imgmodels = {
             {'max_filesize': 6.0, 'exclude': ['xl'],    # filter methods: 'max_filesize' expressed in GB / 'filter' must be in filename / 'exclude' must not be in filename
                 'tags': [                               # Any number of 'tags' can be applied! (*each 'tag' is a comma-separated dictionary in the 'tags' list*)
                     {'tag_preset_name': 'SD15 Tags'},   # Using a 'tag_preset_name' from 'dict_tags.yaml' is a great idea!
-                    {'payload': {'width': 512, 'height': 512, 'cfg_scale': 7, 'steps': 25, 'sampler_name': 'DPM++ 2M Karras', 'enable_hr': True, 'hr_scale': 0.5}}
+                    {'payload': {'width': 512, 'height': 512, 'cfg_scale': 7, 'steps': 25, 'sampler_name': 'DPM++ 2M Karras', 'enable_hr': True, 'hr_scale': 1.5, 'denoise_strength': 0.5}}
                 ]
             },
             # For SDXL Turbo models
