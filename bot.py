@@ -340,6 +340,7 @@ queues = []
 blocking = False
 busy_drawing = False
 reply_count = 0
+previous_user_id = ''
 
 # Start a task processing loop
 task_queue = asyncio.Queue()
@@ -914,7 +915,7 @@ async def on_ready():
     except Exception as e:
         logging.error(f"Error with on_ready: {e}")
 
-async def a1111_online(i):
+async def a1111_online(channel):
     try:
         r = requests.get(f'{A1111}/')
         status = r.raise_for_status()
@@ -924,7 +925,7 @@ async def a1111_online(i):
         logging.warning(exc)
         info_embed.title = f"A1111 api is not running at {A1111}"
         info_embed.description = "Launch Automatic1111 with the `--api` commandline argument\nRead more [here](https://github.com/AUTOMATIC1111/stable-diffusion-webui/wiki/API)"
-        await i.reply(embed=info_embed)        
+        await channel.send(embed=info_embed)        
         return False
 
 ## Starboard feature
@@ -1001,14 +1002,14 @@ async def play_in_voice_channel(file):
         source = discord.FFmpegPCMAudio(file)
         voice_client.play(source, after=lambda e: after_playback(file, e))
 
-async def upload_tts_file(i, tts_resp):
+async def upload_tts_file(channel, tts_resp):
     filename = os.path.basename(tts_resp)
     directory = os.path.dirname(tts_resp)
     wav_size = os.path.getsize(tts_resp)
     if wav_size <= 8388608:  # Discord's maximum file size for audio (8 MB)
         with open(tts_resp, "rb") as file:
             tts_file = File(file, filename=filename)
-        await i.channel.send(file=tts_file) # lossless .wav output
+        await channel.send(file=tts_file) # lossless .wav output
     else: # convert to mp3
         bit_rate = int(config.discord['tts_settings'].get('mp3_bit_rate', 128))
         mp3_filename = os.path.splitext(filename)[0] + '.mp3'
@@ -1019,28 +1020,19 @@ async def upload_tts_file(i, tts_resp):
         if mp3_size <= 8388608:  # Discord's maximum file size for audio (8 MB)
             with open(mp3_path, "rb") as file:
                 mp3_file = File(file, filename=mp3_filename)
-            await i.channel.send(file=mp3_file)
+            await channel.send(file=mp3_file)
         else:
-            await i.channel.send("The audio file exceeds Discord limitation even after conversion.")
+            await channel.send("The audio file exceeds Discord limitation even after conversion.")
         # if save_mode > 0: os.remove(mp3_path) # currently broken
 
-async def process_tts_resp(i, tts_resp):
+async def process_tts_resp(channel, tts_resp):
     play_mode = int(config.discord.get('tts_settings', {}).get('play_mode', 0))
     # Upload to interaction channel
     if play_mode > 0:
-        await upload_tts_file(i, tts_resp)
+        await upload_tts_file(channel, tts_resp)
     # Play in voice channel
     if play_mode != 1:
         await play_in_voice_channel(tts_resp) # run task in background
-
-async def fix_llm_payload(llm_payload):
-    # Fix llm_payload by adding any missing required settings
-    defaults = Settings() # Create an instance of the default settings
-    defaults = defaults.settings_to_dict() # Convert instance to dict
-    default_state = defaults['llmstate']['state']
-    current_state = llm_payload['state']
-    llm_payload['state'] = fix_dict(current_state, default_state)
-    return llm_payload
 
 async def extra_stopping_strings(llm_payload):
     name1_value = llm_payload['state']['name1']
@@ -1063,7 +1055,6 @@ async def extra_stopping_strings(llm_payload):
     return llm_payload
 
 async def chatbot_wrapper_wrapper(llm_payload):
-    # await fix_llm_payload(llm_payload)
     llm_payload = await extra_stopping_strings(llm_payload)
     loop = asyncio.get_event_loop()
 
@@ -1096,30 +1087,66 @@ async def chatbot_wrapper_wrapper(llm_payload):
 
     return last_resp, tts_resp
 
-async def llm_gen(i, queues):
-    global blocking
-    global reply_count
-    previous_user_id = None
-    while len(queues) > 0:
-        if blocking:
-            await asyncio.sleep(1)
-            continue
-        blocking = True
-        reply_count += 1
-        llm_payload = queues.pop(0)
-        mention = list(llm_payload.keys())[0]
-        llm_payload = llm_payload[mention]
-        last_resp, tts_resp = await chatbot_wrapper_wrapper(llm_payload)
-        if len(queues) >= 1:
-            next_in_queue = queues[0]
-            next_mention = list(next_in_queue.keys())[0]
-            if mention != previous_user_id or mention != next_mention:
-                last_resp = f"{mention} " + last_resp
-        previous_user_id = mention  # Update the current user ID for the next iteration
-        logging.info("reply sent: \"" + mention + ": {'text': '" + llm_payload["text"] + "', 'response': '" + last_resp + "'}\"")
-        await send_long_message(i.channel, last_resp)
-        if tts_resp: await task_queue.put(process_tts_resp(i, tts_resp)) # Process this in background
-        blocking = False
+def queue(i, source, text, llm_payload, tags):
+    user_id = i.author.mention
+    channel = i.channel
+    # Capture all details for task queue
+    queues.append({'user_id': user_id, 'channel': channel, 'source': source, 'text': text, 'llm_payload': llm_payload, 'tags': tags})
+    if source == 'on_message':
+        logging.info(f'reply requested: "{user_id} asks {llm_payload["state"]["name2"]}: {llm_payload["text"]}"')
+
+def check_num_in_queue(i):
+    user_id = i.author.mention
+    user_list_in_que = [list(i.keys())[0] for i in queues]
+    return user_list_in_que.count(user_id)
+
+async def ai_generate(i, source, text, llm_payload, tags=None):
+    try:
+        num = check_num_in_queue(i)
+        if num >=10:
+            await i.channel.send(f'{i.author.mention} You have 10 items in queue, please allow your requests to finish before adding more to the queue.')
+        else:
+            queue(i, source, text, llm_payload, tags)
+            global blocking
+            global reply_count
+            global previous_user_id
+            while len(queues) > 0:
+                if blocking:
+                    await asyncio.sleep(1)
+                    continue
+                blocking = True
+                reply_count += 1
+                queued_item = queues.pop(0)
+                user_id = queued_item['user_id']
+                channel = queued_item['channel']
+                source = queued_item['source']
+                text = queued_item['text']
+                llm_payload = queued_item['llm_payload']
+                tags = queued_item['tags']
+                async with channel.typing():
+                    should_draw = user_asks_for_image(tags)
+                    if should_draw:
+                        if await a1111_online(channel):
+                            info_embed.title = "Prompting ..."
+                            info_embed.description = " "
+                            picture_frame = await channel.send(embed=info_embed)
+                    last_resp, tts_resp = await chatbot_wrapper_wrapper(llm_payload)
+                    img_prompt = copy.copy(last_resp)
+                    mention_resp = copy.copy(last_resp)                    
+                    if user_id != previous_user_id:
+                        mention_resp = f"{user_id} {last_resp}" # @mention for different user
+                    previous_user_id = user_id  # Update the current user ID for the next iteration
+                    if should_draw:
+                        await picture_frame.delete()
+                        if len(img_prompt) > 1800: img_prompt = img_prompt[:1800] # arbitrarily shorten it for img purposes
+                        await pic(channel, text, img_prompt, tags, imgcmd=None)
+                    else:
+                        if tts_resp: await task_queue.put(process_tts_resp(channel, tts_resp)) # Process this in background
+                    logging.info("reply sent: \"" + user_id + ": {'text': '" + llm_payload["text"] + "', 'response': '" + last_resp + "'}\"")
+                    await send_long_message(channel, mention_resp)
+                    blocking = False
+    except Exception as e:
+        logging.error(f"An error occurred while processing prompt for LLM: {e}")
 
 def get_time(offset=0.0, time_format='%Y-%m-%d %H:%M:%S'):
     try:
@@ -1137,12 +1164,13 @@ def get_time(offset=0.0, time_format='%Y-%m-%d %H:%M:%S'):
     except Exception as e:
         logging.error(f"Error when getting time: {e}")
 
-def user_asks_for_image(i, text, matches):
+def user_asks_for_image(tags):
     try:
-        # Check config for image trigger settings
-        for tag in matches:
-            if 'image_response' in tag:
-                return tag.get('image_response', False)
+        if tags:
+            matches = tags['matches']
+            for tag in matches:
+                if 'image_response' in tag:
+                    return tag.get('image_response', False)
         # Last method to trigger an image response
         if random.random() < client.behavior.reply_with_image:
             return True
@@ -1150,26 +1178,14 @@ def user_asks_for_image(i, text, matches):
     except Exception as e:
         logging.error(f"An error occurred while checking if bot should reply with image: {e}")
 
-async def create_img_prompt(i, llm_payload, llm_prompt):
-    try:
-        llm_payload['text'] = llm_prompt
-        last_resp, tts_resp = await chatbot_wrapper_wrapper(llm_payload)
-        if len(last_resp) > 2000: last_resp = last_resp[:2000]
-        logging.info("reply sent: \"" + i.author.mention + ": {'text': '" + llm_prompt + "', 'response': '" + last_resp + "'}\"")
-        return last_resp, tts_resp
-    except Exception as e:
-        logging.error(f"An error occurred while processing image prompt: {e}")
-
-async def create_prompt_for_llm(i, llm_payload, llm_prompt):
-    llm_payload['text'] = llm_prompt
-    num = check_num_in_queue(i)
-    if num >=10:
-        await i.channel.send(f'{i.author.mention} You have 10 items in queue, please allow your requests to finish before adding more to the queue.')
-    else:
-        queue(i, llm_payload)
-        #pprint.pp(llm_payload)
-        async with i.channel.typing():
-            await llm_gen(i, queues)
+async def fix_llm_payload(llm_payload):
+    # Fix llm_payload by adding any missing required settings
+    defaults = Settings() # Create an instance of the default settings
+    defaults = defaults.settings_to_dict() # Convert instance to dict
+    default_state = defaults['llmstate']['state']
+    current_state = llm_payload['state']
+    llm_payload['state'] = fix_dict(current_state, default_state)
+    return llm_payload
 
 async def process_llm_payload_tags(user_name, llm_payload, llm_prompt, matches):
     try:
@@ -1459,10 +1475,10 @@ async def on_message(i):
         ctx = Context(message=i,prefix=None,bot=client,view=None)
         text = await commands.clean_content().convert(ctx, i.content)
         if not client.behavior.bot_should_reply(i, text): return # Check that bot should reply or not
-        global busy_drawing
-        if busy_drawing:
-            await i.channel.send("(busy generating an image, please try again after image generation is completed)")
-            return
+        # global busy_drawing
+        # if busy_drawing:
+        #     await i.channel.send("(busy generating an image, please try again after image generation is completed)")
+        #     return
         if not client.database.main_channels and client.user.mentioned_in(i): await main(i) # if None, set channel as main
         # if @ mentioning bot, remove the @ mention from user prompt
         if text.startswith(f"@{client.user.display_name} "):
@@ -1484,27 +1500,17 @@ async def on_message(i):
         llm_payload, llm_prompt = await process_llm_payload_tags(i.author.display_name, llm_payload, llm_prompt, matches)
         # save a global copy of text/llm_prompt for /regen cmd
         retain_last_user_message(text, llm_prompt)
-        if not user_asks_for_image(i, text, matches):
-            await create_prompt_for_llm(i, llm_payload, llm_prompt)
-        else:
-            busy_drawing = True
-            if await a1111_online(i):
-                info_embed.title = "Prompting ..."
-                info_embed.description = " "
-                picture_frame = await i.reply(embed=info_embed)
-                async with i.channel.typing():
-                    img_prompt, tts_resp = await create_img_prompt(i, llm_payload, llm_prompt)
-                    await picture_frame.delete()
-                    await pic(i, text, tags, img_prompt, tts_resp, neg_prompt=None, size=None, face_swap=None, controlnet=None)
-                    await i.channel.send(img_prompt)
-        busy_drawing = False       
+        # start generating everything
+        llm_payload['text'] = llm_prompt
+        await ai_generate(i, 'on_message', text, llm_payload, tags)
+        # busy_drawing = False       
         return
     except Exception as e:
         logging.error(f"An error occurred in on_message: {e}")
 
 #----BEGIN IMAGE PROCESSING----#
 
-async def process_image_gen(img_payload, picture_frame, i):
+async def process_image_gen(img_payload, picture_frame, channel):
     try:
         censor_mode = None
         do_censor = False
@@ -1513,13 +1519,13 @@ async def process_image_gen(img_payload, picture_frame, i):
             do_censor = True
             if censor_mode == 2:
                 info_embed.title = "Image prompt was flagged as inappropriate."
-                await i.channel.send("Image prompt was flagged as inappropriate.")
+                await channel.send("Image prompt was flagged as inappropriate.")
                 await picture_frame.delete()
                 return
-        images = await a1111_txt2img(img_payload, picture_frame)
+        images, r = await a1111_txt2img(img_payload, picture_frame)
         if not images:
             info_embed.title = "No images generated"
-            await i.channel.send("No images were generated.")
+            await channel.send(f"No images were generated: {r}")
             await picture_frame.edit(delete_after=5)
         else:
             client.fresh = False
@@ -1527,8 +1533,11 @@ async def process_image_gen(img_payload, picture_frame, i):
             output_dir = 'ad_discordbot/sd_outputs/'
             os.makedirs(output_dir, exist_ok=True)
             # If the censor mode is 1 (blur), prefix the image file with "SPOILER_"
-            image_files = [discord.File(f'temp_img_{idx}.png', filename=f'SPOILER_temp_img_{idx}.png') if do_censor and censor_mode == 1 else discord.File(f'temp_img_{idx}.png') for idx in range(len(images))]
-            await i.channel.send(files=image_files)
+            file_prefix = 'temp_img_'
+            if do_censor and censor_mode == 1:
+                file_prefix = 'SPOILER_temp_img_'
+            image_files = [discord.File(f'temp_img_{idx}.png', filename=f'{file_prefix}{idx}.png') for idx in range(len(images))]
+            await channel.send(files=image_files)
             # Save the image at index 0 with the date/time naming convention
             os.rename(f'temp_img_0.png', f'{output_dir}/{datetime.now().strftime("%Y-%m-%d_%H-%M-%S")}_0.png')
             # Delete temporary image files except for the one at index 0
@@ -1537,7 +1546,7 @@ async def process_image_gen(img_payload, picture_frame, i):
             await picture_frame.delete()
     except asyncio.TimeoutError:
         info_embed.title = "Timeout error"
-        await i.channel.send("Timeout error")
+        await channel.send("Timeout error")
         await picture_frame.edit(delete_after=5)
 
 def clean_img_payload(img_payload):
@@ -1606,6 +1615,20 @@ def apply_lrctl(matches):
         return matches
     except Exception as e:
         logging.error(f"Error processing lrctl: {e}")
+
+def apply_imgcmd(img_payload, imgcmd):
+    try:
+        size = imgcmd.get('size', None) if imgcmd else None
+        face_swap = imgcmd.get('face_swap', None) if imgcmd else None
+        controlnet = imgcmd.get('controlnet', None) if imgcmd else None
+        if size: img_payload.update(size)
+        if face_swap:
+            img_payload['alwayson_scripts']['reactor']['args'][0] = face_swap # image in base64 format
+            img_payload['alwayson_scripts']['reactor']['args'][1] = True # Enable
+        if controlnet: img_payload['alwayson_scripts']['controlnet']['args'][0].update(controlnet)
+        return img_payload
+    except Exception as e:
+        logging.error(f"Error initializing img payload: {e}")
 
 def process_img_prompt_tags(img_payload, tags):
     try:
@@ -1761,6 +1784,18 @@ def process_img_payload_tags(img_payload, matches):
     except Exception as e:
         logging.error(f"Error processing Img tags: {e}")
 
+def initialize_img_payload(img_prompt, neg_prompt):
+    try:
+        # Initialize img_payload settings
+        img_payload = {"prompt": img_prompt, "negative_prompt": neg_prompt if neg_prompt else '', "width": 512, "height": 512, "steps": 20}
+        # Apply settings from imgmodel configuration
+        imgmodel_img_payload = copy.deepcopy(client.settings['imgmodel'].get('payload', {}))
+        img_payload.update(imgmodel_img_payload)
+        img_payload['override_settings'] = copy.deepcopy(client.settings['imgmodel'].get('override_settings', {}))
+        return img_payload
+    except Exception as e:
+        logging.error(f"Error initializing img payload: {e}")
+
 def match_img_tags(img_prompt, tags):
     try:
         # Unmatch any previously matched tags which try to insert text into the img_prompt
@@ -1783,48 +1818,38 @@ def match_img_tags(img_prompt, tags):
     except Exception as e:
         logging.error(f"Error matching tags for img phase: {e}")
 
-async def pic(i, text, tags, img_prompt, tts_resp=None, neg_prompt=None, size=None, face_swap=None, controlnet=None):
+async def pic(channel, text, img_prompt, tags, imgcmd=None):
     global busy_drawing
     busy_drawing = True
     try:
-        if await a1111_online(i):
-            info_embed.title = "Processing"
-            info_embed.description = " ... "  # await check_a1111_progress()
-            if client.fresh:
-                info_embed.description = "First request tends to take a long time, please be patient"
-            picture_frame = await i.channel.send(embed=info_embed)
-            info_embed.title = "Sending prompt to A1111 ..."
-            # match tags labeled for llm / userllm.
-            tags = match_img_tags(img_prompt, tags)
-            matches = tags['matches']
-            # Initialize img_payload settings
-            img_payload = {"prompt": img_prompt, "negative_prompt": neg_prompt if neg_prompt else '', "width": 512, "height": 512, "steps": 20}
-            # Apply settings from imgmodel configuration
-            imgmodel_img_payload = copy.deepcopy(client.settings['imgmodel'].get('payload', {}))
-            img_payload.update(imgmodel_img_payload)
-            img_payload['override_settings'] = copy.deepcopy(client.settings['imgmodel'].get('override_settings', {}))
-            # Apply tags relevant to Img gen
-            img_payload = process_img_payload_tags(img_payload, matches)
-            # Process lrctl
-            if config.sd['extensions'].get('lrctl', {}).get('enabled', False): matches = apply_lrctl(matches)
-            # Apply tags relevant to Img prompts
-            img_payload = process_img_prompt_tags(img_payload, tags)
-            # Apply menu selections from /image command
-            if size: img_payload.update(size)
-            if face_swap:
-                img_payload['alwayson_scripts']['reactor']['args'][0] = face_swap # image in base64 format
-                img_payload['alwayson_scripts']['reactor']['args'][1] = True # Enable
-            if controlnet: img_payload['alwayson_scripts']['controlnet']['args'][0].update(controlnet)
-            # Clean anything up that gets messy
-            clean_img_payload(img_payload)
-            # Send to A1111
-            await process_image_gen(img_payload, picture_frame, i)
-            # Play tts response
-            if tts_resp is not None:
-                await task_queue.put(process_tts_resp(i, tts_resp)) # Process this in background
+        info_embed.title = "Processing"
+        info_embed.description = " ... "  # await check_a1111_progress()
+        if client.fresh: info_embed.description = "First image request tends to take more time, please be patient"
+        picture_frame = await channel.send(embed=info_embed)
+        info_embed.title = "Sending prompt to A1111 ..."
+        # match tags labeled for llm / userllm.
+        tags = match_img_tags(img_prompt, tags)
+        matches = tags['matches']
+        # Initialize img_payload
+        neg_prompt = imgcmd.get('neg_prompt', '') if imgcmd else ''
+        img_payload = initialize_img_payload(img_prompt, neg_prompt)
+        # Apply tags relevant to Img gen
+        img_payload = process_img_payload_tags(img_payload, matches)
+        # Process lrctl
+        if config.sd['extensions'].get('lrctl', {}).get('enabled', False): matches = apply_lrctl(matches)
+        # Apply tags relevant to Img prompts
+        img_payload = process_img_prompt_tags(img_payload, tags)
+        # Apply menu selections from /image command
+        img_payload = apply_imgcmd(img_payload, imgcmd)
+        # Clean anything up that gets messy
+        clean_img_payload(img_payload)
+        # Send to A1111
+        await process_image_gen(img_payload, picture_frame, channel)
+        busy_drawing = False
+        return
     except Exception as e:
         logging.error(f"An error occurred in pic(): {e}")
-    busy_drawing = False
+        busy_drawing = False
 
 ## Code pertaining to /image command
 # Function to update size options
@@ -1930,12 +1955,16 @@ async def image(
     cnet_map: typing.Optional[app_commands.Choice[str]]
     ):
 
+    if not await a1111_online(i.channel):
+        return
+
     global busy_drawing
     if busy_drawing:
         await i.channel.send("(busy generating an image, please try again after image generation is completed)")
         return
     busy_drawing = True
     try:
+
         text = copy.copy(prompt)
         neg_style_prompt = ""
         size_dict = {}
@@ -1986,7 +2015,6 @@ async def image(
                     controlnet_dict['weight'] = selected_cnet_option.get('weight')
                     controlnet_dict['enabled'] = True
                 message_content += f" | **ControlNet:** Model: {cnet_model.value}"
-
             if cnet_input:
                 if cnet_input.content_type and cnet_input.content_type.startswith("image/"):
                     imgurl = cnet_input.url
@@ -2007,22 +2035,22 @@ async def image(
                     message_content += f", Map Input: {cnet_map.value}"
                 else:
                     message_content += f", Module: {controlnet_dict['module']}"
-
                 if (cnet_model and not cnet_input) or (cnet_input and not cnet_model):
                     await i.send("ControlNet feature requires **both** selecting a model (cnet_model) and attaching an image (cnet_input).",ephemeral=True)
                     return
 
-        await i.send(message_content)
         logging.info(f'''{i.author} used /image: "{prompt}"''')
-        await pic(
-            i,
-            text,
-            tags,
-            img_prompt=prompt,
-            neg_prompt=neg_style_prompt,
-            size=size_dict if size_dict else None,
-            face_swap=faceswapimg if face_swap else None,
-            controlnet=controlnet_dict if controlnet_dict else None)
+        channel = i.channel
+        
+        neg_prompt=neg_style_prompt
+        size=size_dict if size_dict else None
+        face_swap=faceswapimg if face_swap else None
+        controlnet=controlnet_dict if controlnet_dict else None
+
+        imgcmd = {'neg_prompt': neg_prompt, 'size': size, 'face_swap': face_swap, 'controlnet': controlnet}
+
+        await pic(channel, text, img_prompt, tags, imgcmd)
+        await channel.send(message_content)
     except Exception as e:
         logging.error(f"An error occurred in image(): {e}")
     busy_drawing = False
@@ -2198,8 +2226,9 @@ async def regen(i):
     llm_payload['regenerate'] = True
     llm_payload['save_history'] = False
     last_resp, tts_resp = await chatbot_wrapper_wrapper(llm_payload)
-    await send_long_message(i.channel, last_resp)
-    if tts_resp: await task_queue.put(process_tts_resp(i, tts_resp)) # Process this in background
+    channel = i.channel
+    await send_long_message(channel, last_resp)
+    if tts_resp: await task_queue.put(process_tts_resp(channel, tts_resp)) # Process this in background
 
 @client.hybrid_command(description="Continue the generation")
 async def cont(i):
@@ -2210,8 +2239,9 @@ async def cont(i):
     llm_payload['_continue'] = True
     llm_payload['save_history'] = False
     last_resp, tts_resp = await chatbot_wrapper_wrapper(llm_payload)
+    channel = i.channel
     await delete_last_message(i)
-    await send_long_message(i.channel, last_resp)
+    await send_long_message(channel, last_resp)
 
 @client.hybrid_command(description="Update dropdown menus without restarting bot script.")
 async def sync(interaction: discord.Interaction):
@@ -2718,11 +2748,11 @@ async def process_speak(i, input_text, selected_voice=None, lang=None, voice_inp
         llm_payload['state']['history'] = {'internal': [[input_text, input_text]], 'visible': [[input_text, input_text]]}
         llm_payload['save_history'] = False
         await update_extensions(tts_args) # Update tts_client extension settings
+        #await ai_generate(i, 'speak', input_text, llm_payload, tags=None)
         _, tts_resp = await chatbot_wrapper_wrapper(llm_payload)
         if tts_resp: await task_queue.put(process_tts_resp(i, tts_resp)) # Process this in background
         await update_extensions(client.settings['llmcontext'].get('extensions', {})) # Restore character specific extension settings
         if user_voice: os.remove(user_voice)
-       # await i.send(f'**{i.author} requested text to speech:**\n{input_text}')
         await send_long_message(i.channel, (f'**{i.author} requested text to speech:**\n{input_text}'))
         await message.delete()
     except Exception as e:
@@ -3050,16 +3080,6 @@ def probability_to_reply(probability):
     # Determine if the bot should reply based on a probability
     return random.random() < probability
 
-def queue(i, llm_payload):
-    user_id = i.author.mention
-    queues.append({user_id:llm_payload})
-    logging.info(f'reply requested: "{user_id} asks {llm_payload["state"]["name2"]}: {llm_payload["text"]}"')
-
-def check_num_in_queue(i):
-    user = i.author.mention
-    user_list_in_que = [list(i.keys())[0] for i in queues]
-    return user_list_in_que.count(user)
-
 async def a1111_txt2img(img_payload, picture_frame):
     try:
         async def save_images_and_return():
@@ -3075,7 +3095,7 @@ async def a1111_txt2img(img_payload, picture_frame):
                         pnginfo.add_text("parameters", response2.json().get("info"))
                         image.save(f'temp_img_{len(images)}.png', pnginfo=pnginfo)
                         images.append(image)
-                    return images
+                    return images, r
 
         async def track_progress():
             await check_a1111_progress(picture_frame)
@@ -3087,7 +3107,8 @@ async def a1111_txt2img(img_payload, picture_frame):
         # Wait for both tasks to complete
         await asyncio.gather(images_task, progress_task)
 
-        images = await images_task  # Get the list of images after both tasks are done
+        # Get the list of images after both tasks are done
+        images = await images_task
 
         return images
     except Exception as e:
