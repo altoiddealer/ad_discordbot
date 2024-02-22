@@ -1237,7 +1237,6 @@ async def process_llm_payload_tags(user_name, llm_payload, llm_prompt, matches):
                             llm_payload['state']['character_menu'] = name2
                         if char_data.get('context', ''):
                             context = char_data['context']
-                            context = await replace_character_names(context, name1, name2)
                             llm_payload['state']['context'] = context
                         await fix_llm_payload(llm_payload) # Add any missing required information
                 except Exception as e:
@@ -1443,20 +1442,12 @@ def get_tags():
     except Exception as e:
         logging.error(f"Error getting tags: {e}")
 
-async def replace_character_names(text, name1, name2):
-    user = config.replace_char_names.get('replace_user', '')
-    char = config.replace_char_names.get('replace_char', '')
-    if user: text = text.replace(f'{user}', name1)
-    if char: text = text.replace(f'{char}', name2)
-    return text
-
 async def initialize_llm_payload(i, text):
     llm_payload = copy.deepcopy(client.settings['llmstate'])
     llm_payload['text'] = text
     name1 = i.author.display_name
     name2 = client.settings['llmcontext']['name']
     context = client.settings['llmcontext']['context']
-    context = await replace_character_names(context, name1, name2)
     llm_payload['state']['name1'] = name1
     llm_payload['state']['name2'] = name2
     llm_payload['state']['name1_instruct'] = name1
@@ -2148,9 +2139,8 @@ class CharacterDropdown(discord.ui.Select):
         await change_character(self.i, character)
         greeting = client.settings['llmcontext']['greeting']
         if greeting:
-            name1 = 'You'
-            name2 = character
-            greeting = await replace_character_names(greeting, name1, name2)
+            greeting = greeting.replace('{{user}}', 'user')
+            greeting = greeting.replace('{{char}}', character)
         else:
             greeting = f'**{character}** has entered the chat"'
         await interaction.response.send_message(greeting)

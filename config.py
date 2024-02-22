@@ -42,12 +42,6 @@ sd = {
     }
 }
 
-# Former default behavior of textgen-webui (but not anymore). Use this setting to update 'context' + 'greeting'.
-replace_char_names = {
-    'replace_user': '{{user}}', # replace every instance with user's username
-    'replace_char': '{{char}}'   # replace every instance with bot's character name
-}
-
 # Imgmodels can be switched by using /imgmodels command, or enabling 'auto_change_models' (or manually updating activesettings.yaml)
 imgmodels = {
     # There are 2 methods: A1111 API (simple, less customization), or 'dict_imgmodels.yaml' (high customization)
