@@ -132,7 +132,7 @@ def update_model_parameters(state, initial=False):
         else:
             shared.args.gpu_memory = None
 
-#Load Extensions   
+#Load Extensions
 shared.args.extensions = []
 extensions_module.available_extensions = utils.get_available_extensions()
 
@@ -347,6 +347,19 @@ async def process_tasks_in_background():
 async def delete_message_after(message, delay):
     await asyncio.sleep(delay)
     await message.delete()
+
+# Send message response to user's interaction command
+async def ireply(i, process):
+    try:
+        if blocking: # If a queued item is processing
+            ireply = await i.reply(f'Your {process} request was added to the generation queue', ephemeral=True)
+            del_time = 5
+        else:
+            ireply = await i.reply("Processing your request", ephemeral=True)
+            del_time = 1
+        asyncio.create_task(delete_message_after(ireply, del_time))
+    except Exception as e:
+        logging.error(f"Error sending message response to user's interaction command: {e}")
 
 # Adds missing keys/values
 def fix_dict(set, req):
@@ -1116,9 +1129,9 @@ def unpack_queue_item(queue_item):
     imgcmd = queue_item.get('imgcmd', {})    
     if source == 'on_message':
         logging.info(f'reply requested: {user} asks {llm_payload["state"]["name2"]}: "{llm_payload["text"]}"')
-    if source == '/image':
+    if source == 'image':
         logging.info(f'{user} used "/image": "{img_prompt}"')
-    if source == '/speak':
+    if source == 'speak':
         logging.info(f'{user} used "/speak": "{text}"')
     if source == 'cont':
         logging.info(f'{user} used "Continue"')
@@ -1155,16 +1168,16 @@ async def ai_generate(user_id, channel, queue_item):
                 queue_item = queues.pop(0)
                 user, user_id, channel, source, text, img_prompt, llm_payload, tags, speak, message, imgcmd = unpack_queue_item(queue_item)
                 async with channel.typing():
-                    if speak:
+                    if source == 'speak':
                         await speak_gen(channel, user, user_id, text, llm_payload, speak)
                         blocking = False
                         continue
-                    if imgcmd:
+                    if source == 'image':
                         await img_gen(channel, img_prompt, tags, imgcmd)
                         await channel.send(imgcmd['message'])
                         blocking = False
                         continue
-                    if message:
+                    if source == 'cont' or source == 'regen':
                         await cont_regen_gen(user, channel, llm_payload, source, message)
                         blocking = False
                         continue
@@ -2074,10 +2087,9 @@ async def image(
 
         imgcmd = {'neg_prompt': neg_prompt, 'size': size, 'face_swap': face_swap, 'controlnet': controlnet, 'message': message}
 
+        await ireply(i, 'image') # send a response msg to the user
         # offload to ai_gen queue
-        ireply = await i.reply("Your image request was added to the generation queue", ephemeral=True)
-        asyncio.create_task(delete_message_after(ireply, 5))
-        queue_item = {'user': i.author, 'user_id': i.author.mention, 'channel': i.channel, 'source': '/image', 'img_prompt': prompt, 'tags': tags, 'imgcmd': imgcmd}
+        queue_item = {'user': i.author, 'user_id': i.author.mention, 'channel': i.channel, 'source': 'image', 'img_prompt': prompt, 'tags': tags, 'imgcmd': imgcmd}
         await ai_generate(i.author, i.channel, queue_item)
     except Exception as e:
         logging.error(f"An error occurred in image(): {e}")
@@ -2249,9 +2261,8 @@ async def regen_llm_gen(i: discord.Interaction, message: discord.Message):
     llm_payload = await initialize_llm_payload(i.user.display_name, text)
     llm_payload['regenerate'] = True
     llm_payload['save_history'] = False
+    await ireply(i, 'regenerate') # send a response msg to the user
     # offload to ai_gen queue
-    ireply = await i.response.send_message('Request to "regenerate" was added to the generation queue', ephemeral=True)
-    asyncio.create_task(delete_message_after(ireply, 5))
     queue_item = {'user': i.user.display_name, 'channel': i.channel, 'source': 'regen', 'text': text, 'llm_payload': llm_payload, 'message': message.id}
     await ai_generate(i.user, i.channel, queue_item) 
 
@@ -2261,9 +2272,8 @@ async def continue_llm_gen(i: discord.Interaction, message: discord.Message):
     llm_payload = await initialize_llm_payload(i.user.display_name, text)
     llm_payload['_continue'] = True
     llm_payload['save_history'] = False
+    await ireply(i, 'continue') # send a response msg to the user
     # offload to ai_gen queue
-    ireply = await i.response.send_message('Request to "continue" was added to the generation queue', ephemeral=True)
-    asyncio.create_task(delete_message_after(ireply, 5))
     queue_item = {'user': i.user.display_name, 'channel': i.channel, 'source': 'cont', 'text': text, 'llm_payload': llm_payload, 'message': message.id}
     await ai_generate(i.user, i.channel, queue_item) 
 
@@ -2497,28 +2507,30 @@ if all_imgmodels:
             imgmodel['imgmodel_name'] = imgmodel.pop('model_name')
 
     imgmodel_options = [app_commands.Choice(name=imgmodel["imgmodel_name"], value=imgmodel["imgmodel_name"]) for imgmodel in all_imgmodels[:25]]
-    first_imgmodel_options = imgmodel_options[0].name[0].lower() # Letter for options description
-    last_imgmodel_options = imgmodel_options[-1].name[0].lower() # Letter for options description
+    imgmodel_options_label = f'{imgmodel_options[0].name[0]}-{imgmodel_options[-1].name[0]}'.lower()
     if len(all_imgmodels) > 25:
         imgmodel_options1 = [app_commands.Choice(name=imgmodel["imgmodel_name"], value=imgmodel["imgmodel_name"]) for imgmodel in all_imgmodels[25:50]]
-        first_imgmodel_options1 = imgmodel_options1[0].name[0].lower() # Letter for options description
-        last_imgmodel_options1 = imgmodel_options1[-1].name[0].lower() # Letter for options description
+        imgmodel_options1_label = f'{imgmodel_options1[0].name[0]}-{imgmodel_options1[-1].name[0]}'.lower()
+        if imgmodel_options1_label == imgmodel_options_label:
+            imgmodel_options1_label = f'{imgmodel_options1_label}_1'
         if len(all_imgmodels) > 50:
             imgmodel_options2 = [app_commands.Choice(name=imgmodel["imgmodel_name"], value=imgmodel["imgmodel_name"]) for imgmodel in all_imgmodels[50:75]]
-            first_imgmodel_options2 = imgmodel_options2[0].name[0].lower() # Letter for options description
-            last_imgmodel_options2 = imgmodel_options2[-1].name[0].lower() # Letter for options description
+            imgmodel_options2_label = f'{imgmodel_options2[0].name[0]}-{imgmodel_options2[-1].name[0]}'.lower()
+            if imgmodel_options2_label == imgmodel_options_label or imgmodel_options2_label == imgmodel_options1_label:
+                imgmodel_options2_label = f'{imgmodel_options2_label}_2'
             if len(all_imgmodels) > 75:
                 imgmodel_options3 = [app_commands.Choice(name=imgmodel["imgmodel_name"], value=imgmodel["imgmodel_name"]) for imgmodel in all_imgmodels[75:100]]
-                first_imgmodel_options3 = imgmodel_options3[0].name[0].lower() # Letter for options description
-                last_imgmodel_options3 = imgmodel_options3[-1].name[0].lower() # Letter for options description
+                imgmodel_options3_label = f'{imgmodel_options3[0].name[0]}-{imgmodel_options3[-1].name[0]}'.lower()
+                if imgmodel_options3_label == imgmodel_options_label or imgmodel_options3_label == imgmodel_options1_label or imgmodel_options3_label == imgmodel_options2_label:
+                    imgmodel_options3_label = f'{imgmodel_options2_label}_3'
                 if len(all_imgmodels) > 100:
                     all_imgmodels = all_imgmodels[:100]
                     logging.warning("'/imgmodel' command only allows up to 100 image models. Some models were omitted.")
 
     if len(all_imgmodels) <= 25:
         @client.hybrid_command(name="imgmodel", description='Choose an imgmodel')
-        @app_commands.rename(imgmodels=f'imgmodels_{first_imgmodel_options}-{last_imgmodel_options}')
-        @app_commands.describe(imgmodels=f'Imgmodels {(first_imgmodel_options).capitalize()}-{(last_imgmodel_options).capitalize()}')
+        @app_commands.rename(imgmodels=f'imgmodels_{imgmodel_options_label}')
+        @app_commands.describe(imgmodels=f'Imgmodels {imgmodel_options_label.capitalize()}')
         @app_commands.choices(imgmodels=imgmodel_options)
         async def imgmodel(i: discord.Interaction, imgmodels: typing.Optional[app_commands.Choice[str]]):
             selected_imgmodel = imgmodels.value if imgmodels is not None else ''
@@ -2526,11 +2538,11 @@ if all_imgmodels:
 
     elif 25 < len(all_imgmodels) <= 50:
         @client.hybrid_command(name="imgmodel", description='Choose an imgmodel (pick only one)')
-        @app_commands.rename(models_1=f'imgmodels_{first_imgmodel_options}-{last_imgmodel_options}')
-        @app_commands.describe(models_1=f'Imgmodels {(first_imgmodel_options).capitalize()}-{(last_imgmodel_options).capitalize()}')
+        @app_commands.rename(models_1=f'imgmodels_{imgmodel_options_label}')
+        @app_commands.describe(models_1=f'Imgmodels {imgmodel_options_label.capitalize()}')
         @app_commands.choices(models_1=imgmodel_options)
-        @app_commands.rename(models_2=f'imgmodels_{first_imgmodel_options1}-{last_imgmodel_options1}')
-        @app_commands.describe(models_2=f'Imgmodels {(first_imgmodel_options1).capitalize()}-{(last_imgmodel_options1).capitalize()}')
+        @app_commands.rename(models_2=f'imgmodels_{imgmodel_options1_label}')
+        @app_commands.describe(models_2=f'Imgmodels {imgmodel_options1_label.capitalize()}')
         @app_commands.choices(models_2=imgmodel_options1)
         async def imgmodel(i: discord.Interaction, models_1: typing.Optional[app_commands.Choice[str]], models_2: typing.Optional[app_commands.Choice[str]]):
             if models_1 and models_2:
@@ -2540,14 +2552,14 @@ if all_imgmodels:
 
     elif 50 < len(all_imgmodels) <= 75:
         @client.hybrid_command(name="imgmodel", description='Choose an imgmodel (pick only one)')
-        @app_commands.rename(models_1=f'imgmodels_{first_imgmodel_options}-{last_imgmodel_options}')
-        @app_commands.describe(models_1=f'Imgmodels {(first_imgmodel_options).capitalize()}-{(last_imgmodel_options).capitalize()}')
+        @app_commands.rename(models_1=f'imgmodels_{imgmodel_options_label}')
+        @app_commands.describe(models_1=f'Imgmodels {imgmodel_options_label.capitalize()}')
         @app_commands.choices(models_1=imgmodel_options)
-        @app_commands.rename(models_2=f'imgmodels_{first_imgmodel_options1}-{last_imgmodel_options1}')
-        @app_commands.describe(models_2=f'Imgmodels {(first_imgmodel_options1).capitalize()}-{(last_imgmodel_options1).capitalize()}')
+        @app_commands.rename(models_2=f'imgmodels_{imgmodel_options1_label}')
+        @app_commands.describe(models_2=f'Imgmodels {imgmodel_options1_label.capitalize()}')
         @app_commands.choices(models_2=imgmodel_options1)
-        @app_commands.rename(models_3=f'imgmodels_{first_imgmodel_options2}-{last_imgmodel_options2}')
-        @app_commands.describe(models_3=f'Imgmodels {(first_imgmodel_options2).capitalize()}-{(last_imgmodel_options2).capitalize()}')
+        @app_commands.rename(models_3=f'imgmodels_{imgmodel_options2_label}')
+        @app_commands.describe(models_3=f'Imgmodels {imgmodel_options2_label.capitalize()}')
         @app_commands.choices(models_3=imgmodel_options2)
         async def imgmodel(i: discord.Interaction, models_1: typing.Optional[app_commands.Choice[str]], models_2: typing.Optional[app_commands.Choice[str]], models_3: typing.Optional[app_commands.Choice[str]]):
             if sum(1 for v in (models_1, models_2, models_3) if v) > 1:
@@ -2557,17 +2569,17 @@ if all_imgmodels:
 
     elif 75 < len(all_imgmodels) <= 100:
         @client.hybrid_command(name="imgmodel", description='Choose an imgmodel (pick only one)')
-        @app_commands.rename(models_1=f'imgmodels_{first_imgmodel_options}-{last_imgmodel_options}')
-        @app_commands.describe(models_1=f'Imgmodels {(first_imgmodel_options).capitalize()}-{(last_imgmodel_options).capitalize()}')
+        @app_commands.rename(models_1=f'imgmodels_{imgmodel_options_label}')
+        @app_commands.describe(models_1=f'Imgmodels {imgmodel_options_label.capitalize()}')
         @app_commands.choices(models_1=imgmodel_options)
-        @app_commands.rename(models_2=f'imgmodels_{first_imgmodel_options1}-{last_imgmodel_options1}')
-        @app_commands.describe(models_2=f'Imgmodels {(first_imgmodel_options1).capitalize()}-{(last_imgmodel_options1).capitalize()}')
+        @app_commands.rename(models_2=f'imgmodels_{imgmodel_options1_label}')
+        @app_commands.describe(models_2=f'Imgmodels {imgmodel_options1_label.capitalize()}')
         @app_commands.choices(models_2=imgmodel_options1)
-        @app_commands.rename(models_3=f'imgmodels_{first_imgmodel_options2}-{last_imgmodel_options2}')
-        @app_commands.describe(models_3=f'Imgmodels {(first_imgmodel_options2).capitalize()}-{(last_imgmodel_options2).capitalize()}')
+        @app_commands.rename(models_3=f'imgmodels_{imgmodel_options2_label}')
+        @app_commands.describe(models_3=f'Imgmodels {imgmodel_options2_label.capitalize()}')
         @app_commands.choices(models_3=imgmodel_options2)
-        @app_commands.rename(models_4=f'imgmodels_{first_imgmodel_options3}-{last_imgmodel_options3}')
-        @app_commands.describe(models_4=f'Imgmodels {(first_imgmodel_options3).capitalize()}-{(last_imgmodel_options3).capitalize()}')
+        @app_commands.rename(models_4=f'imgmodels_{imgmodel_options3_label}')
+        @app_commands.describe(models_4=f'Imgmodels {imgmodel_options3_label.capitalize()}')
         @app_commands.choices(models_4=imgmodel_options3)
         async def imgmodel(i: discord.Interaction, models_1: typing.Optional[app_commands.Choice[str]], models_2: typing.Optional[app_commands.Choice[str]], models_3: typing.Optional[app_commands.Choice[str]], models_4: typing.Optional[app_commands.Choice[str]]):
             if sum(1 for v in (models_1, models_2, models_3, models_4) if v) > 1:
@@ -2603,28 +2615,30 @@ async def process_llmmodel(i, selected_llmmodel):
 
 if all_llmmodels:
     llmmodel_options = [app_commands.Choice(name=llmmodel, value=llmmodel) for llmmodel in all_llmmodels[:25]]
-    first_llmmodel_options = llmmodel_options[0].name[0].lower() # Letter for options description
-    last_llmmodel_options = llmmodel_options[-1].name[0].lower() # Letter for options description
+    llmmodel_options_label = f'{llmmodel_options[0].name[0]}-{llmmodel_options[-1].name[0]}'.lower()
     if len(all_llmmodels) > 25:
         llmmodel_options1 = [app_commands.Choice(name=llmmodel, value=llmmodel) for llmmodel in all_llmmodels[25:50]]
-        first_llmmodel_options1 = llmmodel_options1[0].name[0].lower() # Letter for options description
-        last_llmmodel_options1 = llmmodel_options1[-1].name[0].lower() # Letter for options description
+        llmmodel_options1_label = f'{llmmodel_options1[0].name[0]}-{llmmodel_options1[-1].name[0]}'.lower()
+        if llmmodel_options1_label == llmmodel_options_label:
+            llmmodel_options1_label = f'{llmmodel_options1_label}_1'
         if len(all_llmmodels) > 50:
             llmmodel_options2 = [app_commands.Choice(name=llmmodel, value=llmmodel) for llmmodel in all_llmmodels[50:75]]
-            first_llmmodel_options2 = llmmodel_options2[0].name[0].lower() # Letter for options description
-            last_llmmodel_options2 = llmmodel_options2[-1].name[0].lower() # Letter for options description
+            llmmodel_options2_label = f'{llmmodel_options2[0].name[0]}-{llmmodel_options2[-1].name[0]}'.lower()
+            if llmmodel_options2_label == llmmodel_options_label or llmmodel_options2_label == llmmodel_options1_label:
+                llmmodel_options2_label = f'{llmmodel_options2_label}_2'
             if len(all_llmmodels) > 75:
                 llmmodel_options3 = [app_commands.Choice(name=llmmodel, value=llmmodel) for llmmodel in all_llmmodels[75:100]]
-                first_llmmodel_options3 = llmmodel_options3[0].name[0].lower() # Letter for options description
-                last_llmmodel_options3 = llmmodel_options3[-1].name[0].lower() # Letter for options description
+                llmmodel_options3_label = f'{llmmodel_options3[0].name[0]}-{llmmodel_options3[-1].name[0]}'.lower()
+                if llmmodel_options3_label == llmmodel_options_label or llmmodel_options3_label == llmmodel_options1_label or llmmodel_options3_label == llmmodel_options2_label:
+                    llmmodel_options3_label = f'{llmmodel_options3_label}_3'
                 if len(all_llmmodels) > 100:
                     all_llmmodels = all_llmmodels[:100]
                     logging.warning("'/llmmodel' command only allows up to 100 LLM models. Some models were omitted.")
 
     if len(all_llmmodels) <= 25:
         @client.hybrid_command(name="llmmodel", description='Choose an LLM model')
-        @app_commands.rename(llmmodels=f'llm-models_{first_llmmodel_options}-{last_llmmodel_options}')
-        @app_commands.describe(llmmodels=f'LLM models {(first_llmmodel_options).capitalize()}-{(last_llmmodel_options).capitalize()}')
+        @app_commands.rename(llmmodels=f'llm-models_{llmmodel_options_label}')
+        @app_commands.describe(llmmodels=f'LLM models {llmmodel_options_label.capitalize()}')
         @app_commands.choices(llmmodels=llmmodel_options)
         async def llmmodel(i: discord.Interaction, llmmodels: typing.Optional[app_commands.Choice[str]]):
             selected_llmmodel = llmmodels.value if llmmodels is not None else ''
@@ -2632,11 +2646,11 @@ if all_llmmodels:
 
     elif 25 < len(all_llmmodels) <= 50:
         @client.hybrid_command(name="llmmodel", description='Choose an LLM model (pick only one)')
-        @app_commands.rename(models_1=f'llm-models_{first_llmmodel_options}-{last_llmmodel_options}')
-        @app_commands.describe(models_1=f'LLM models {(first_llmmodel_options).capitalize()}-{(last_llmmodel_options).capitalize()}')
+        @app_commands.rename(models_1=f'llm-models_{llmmodel_options_label}')
+        @app_commands.describe(models_1=f'LLM models {llmmodel_options_label.capitalize()}')
         @app_commands.choices(models_1=llmmodel_options)
-        @app_commands.rename(models_2=f'llm-models_{first_llmmodel_options1}-{last_llmmodel_options1}')
-        @app_commands.describe(models_2=f'LLM models {(first_llmmodel_options1).capitalize()}-{(last_llmmodel_options1).capitalize()}')
+        @app_commands.rename(models_2=f'llm-models_{llmmodel_options1_label}')
+        @app_commands.describe(models_2=f'LLM models {llmmodel_options1_label.capitalize()}')
         @app_commands.choices(models_2=llmmodel_options1)
         async def llmmodel(i: discord.Interaction, models_1: typing.Optional[app_commands.Choice[str]], models_2: typing.Optional[app_commands.Choice[str]]):
             if models_1 and models_2:
@@ -2646,14 +2660,14 @@ if all_llmmodels:
 
     elif 50 < len(all_llmmodels) <= 75:
         @client.hybrid_command(name="llmmodel", description='Choose an LLM model (pick only one)')
-        @app_commands.rename(models_1=f'llm-models_{first_llmmodel_options}-{last_llmmodel_options}')
-        @app_commands.describe(models_1=f'LLM models {(first_llmmodel_options).capitalize()}-{(last_llmmodel_options).capitalize()}')
+        @app_commands.rename(models_1=f'llm-models_{llmmodel_options_label}')
+        @app_commands.describe(models_1=f'LLM models {llmmodel_options_label.capitalize()}')
         @app_commands.choices(models_1=llmmodel_options)
-        @app_commands.rename(models_2=f'llm-models_{first_llmmodel_options1}-{last_llmmodel_options1}')
-        @app_commands.describe(models_2=f'LLM models {(first_llmmodel_options1).capitalize()}-{(last_llmmodel_options1).capitalize()}')
+        @app_commands.rename(models_2=f'llm-models_{llmmodel_options1_label}')
+        @app_commands.describe(models_2=f'LLM models {llmmodel_options1_label.capitalize()}')
         @app_commands.choices(models_2=llmmodel_options1)
-        @app_commands.rename(models_3=f'llm-models_{first_llmmodel_options2}-{last_llmmodel_options2}')
-        @app_commands.describe(models_3=f'LLM models {(first_llmmodel_options2).capitalize()}-{(last_llmmodel_options2).capitalize()}')
+        @app_commands.rename(models_3=f'llm-models_{llmmodel_options2_label}')
+        @app_commands.describe(models_3=f'LLM models {llmmodel_options2_label.capitalize()}')
         @app_commands.choices(models_3=llmmodel_options2)
         async def llmmodel(i: discord.Interaction, models_1: typing.Optional[app_commands.Choice[str]], models_2: typing.Optional[app_commands.Choice[str]], models_3: typing.Optional[app_commands.Choice[str]]):
             if sum(1 for v in (models_1, models_2, models_3) if v) > 1:
@@ -2663,17 +2677,17 @@ if all_llmmodels:
 
     elif 75 < len(all_llmmodels) <= 100:
         @client.hybrid_command(name="llmmodel", description='Choose an LLM model (pick only one)')
-        @app_commands.rename(models_1=f'llm-models_{first_llmmodel_options}-{last_llmmodel_options}')
-        @app_commands.describe(models_1=f'LLM models {(first_llmmodel_options).capitalize()}-{(last_llmmodel_options).capitalize()}')
+        @app_commands.rename(models_1=f'llm-models_{llmmodel_options_label}')
+        @app_commands.describe(models_1=f'LLM models {llmmodel_options_label.capitalize()}')
         @app_commands.choices(models_1=llmmodel_options)
-        @app_commands.rename(models_2=f'llm-models_{first_llmmodel_options1}-{last_llmmodel_options1}')
-        @app_commands.describe(models_2=f'LLM models {(first_llmmodel_options1).capitalize()}-{(last_llmmodel_options1).capitalize()}')
+        @app_commands.rename(models_2=f'llm-models_{llmmodel_options1_label}')
+        @app_commands.describe(models_2=f'LLM models {llmmodel_options1_label.capitalize()}')
         @app_commands.choices(models_2=llmmodel_options1)
-        @app_commands.rename(models_3=f'llm-models_{first_llmmodel_options2}-{last_llmmodel_options2}')
-        @app_commands.describe(models_3=f'LLM models {(first_llmmodel_options2).capitalize()}-{(last_llmmodel_options2).capitalize()}')
+        @app_commands.rename(models_3=f'llm-models_{llmmodel_options2_label}')
+        @app_commands.describe(models_3=f'LLM models {llmmodel_options2_label.capitalize()}')
         @app_commands.choices(models_3=llmmodel_options2)
-        @app_commands.rename(models_4=f'llm-models_{first_llmmodel_options3}-{last_llmmodel_options3}')
-        @app_commands.describe(models_4=f'LLM models {(first_llmmodel_options3).capitalize()}-{(last_llmmodel_options3).capitalize()}')
+        @app_commands.rename(models_4=f'llm-models_{llmmodel_options3_label}')
+        @app_commands.describe(models_4=f'LLM models {llmmodel_options3_label.capitalize()}')
         @app_commands.choices(models_4=llmmodel_options3)
         async def llmmodel(i: discord.Interaction, models_1: typing.Optional[app_commands.Choice[str]], models_2: typing.Optional[app_commands.Choice[str]], models_3: typing.Optional[app_commands.Choice[str]], models_4: typing.Optional[app_commands.Choice[str]]):
             if sum(1 for v in (models_1, models_2, models_3, models_4) if v) > 1:
@@ -2792,10 +2806,9 @@ async def process_speak(i, input_text, selected_voice=None, lang=None, voice_inp
         llm_payload['state']['min_length'] = 0
         llm_payload['state']['history'] = {'internal': [[input_text, input_text]], 'visible': [[input_text, input_text]]}
         llm_payload['save_history'] = False
+        await ireply(i, 'tts') # send a response msg to the user
         # offload to ai_gen queue
-        ireply = await i.reply("Your tts request was added to the generation queue", ephemeral=True)
-        asyncio.create_task(delete_message_after(ireply, 5))
-        queue_item = {'user': i.author, 'user_id': i.author.mention, 'channel': i.channel, 'source': '/speak', 'text': input_text, 'llm_payload': llm_payload, 'speak': {'tts:args': tts_args, 'user_voice': user_voice}}
+        queue_item = {'user': i.author, 'user_id': i.author.mention, 'channel': i.channel, 'source': 'speak', 'text': input_text, 'llm_payload': llm_payload, 'speak': {'tts_args': tts_args, 'user_voice': user_voice}}
         await ai_generate(i.author, i.channel, queue_item)
     except Exception as e:
         logging.error(f"Error processing tts request: {e}")
@@ -2803,15 +2816,15 @@ async def process_speak(i, input_text, selected_voice=None, lang=None, voice_inp
 
 async def fetch_speak_options():
     try:
-        ext = ''
         lang_list = []
         all_voicess = []
         if tts_client == 'coqui_tts' or tts_client == 'alltalk_tts':
-            ext = '.wav'
             lang_list = ['Arabic', 'Chinese', 'Czech', 'Dutch', 'English', 'French', 'German', 'Hungarian', 'Italian', 'Japanese', 'Korean', 'Polish', 'Portuguese', 'Russian', 'Spanish', 'Turkish']
-            tts_voices_dir = f'extensions/{tts_client}/voices'
-            if os.path.exists(tts_voices_dir) and os.path.isdir(tts_voices_dir):
-                all_voices = [voice_name[:-4] for voice_name in os.listdir(tts_voices_dir) if voice_name.endswith(".wav")]
+            if tts_client == 'coqui_tts':
+                from extensions.coqui_tts.script import get_available_voices
+            elif tts_client == 'alltalk_tts':
+                from extensions.alltalk_tts.script import get_available_voices
+            all_voices = get_available_voices()
         elif tts_client == 'silero_tts':
             lang_list = ['English', 'Spanish', 'French', 'German', 'Russian', 'Tatar', 'Ukranian', 'Uzbek', 'English (India)', 'Avar', 'Bashkir', 'Bulgarian', 'Chechen', 'Chuvash', 'Kalmyk', 'Karachay-Balkar', 'Kazakh', 'Khakas', 'Komi-Ziryan', 'Mari', 'Nogai', 'Ossetic', 'Tuvinian', 'Udmurt', 'Yakut']
             logging.warning('''There's too many Voice/language permutations to make them all selectable in "/speak" command. Loading a bunch of English options. Non-English languages will automatically play using respective default speaker.''')
@@ -2824,23 +2837,24 @@ async def fetch_speak_options():
                 update_api_key(tts_api_key)
             all_voices = refresh_voices()
         all_voices.sort() # Sort alphabetically
-        return ext, lang_list, all_voices
+        return lang_list, all_voices
     except Exception as e:
         logging.error(f"Error building options for '/speak' command: {e}")
 
 if tts_client and tts_client in supported_tts_clients:
-    ext, lang_list, all_voices = asyncio.run(fetch_speak_options())
-    voice_options = [app_commands.Choice(name=voice_name.replace('_', ' ').title(), value=f'{voice_name}{ext}') for voice_name in all_voices[:25]]
-    first_voice_options = voice_options[0].name[0].lower() # Letter for options description
-    last_voice_options = voice_options[-1].name[0].lower() # Letter for options description
+    lang_list, all_voices = asyncio.run(fetch_speak_options())
+    voice_options = [app_commands.Choice(name=voice_name.replace('_', ' ').title(), value=f'{voice_name}') for voice_name in all_voices[:25]]
+    voice_options_label = f'{voice_options[0].name[0]}-{voice_options[-1].name[0]}'.lower()
     if len(all_voices) > 25:
-        voice_options1 = [app_commands.Choice(name=voice_name.replace('_', ' ').title(), value=f'{voice_name}{ext}') for voice_name in all_voices[25:50]]
-        first_voice_options1 = voice_options1[0].name[0].lower() # Letter for options description
-        last_voice_options1 = voice_options1[-1].name[0].lower() # Letter for options description
+        voice_options1 = [app_commands.Choice(name=voice_name.replace('_', ' ').title(), value=f'{voice_name}') for voice_name in all_voices[25:50]]
+        voice_options1_label = f'{voice_options1[0].name[0]}-{voice_options1[-1].name[0]}'.lower()
+        if voice_options1_label == voice_options_label:
+            voice_options1_label = f'{voice_options1_label}_1'
         if len(all_voices) > 50:
-            voice_options2 = [app_commands.Choice(name=voice_name.replace('_', ' ').title(), value=f'{voice_name}{ext}') for voice_name in all_voices[50:75]]
-            first_voice_options2 = voice_options2[0].name[0].lower() # Letter for options description
-            last_voice_options2 = voice_options2[-1].name[0].lower() # Letter for options description
+            voice_options2 = [app_commands.Choice(name=voice_name.replace('_', ' ').title(), value=f'{voice_name}') for voice_name in all_voices[50:75]]
+            voice_options2_label = f'{voice_options2[0].name[0]}-{voice_options2[-1].name[0]}'.lower()
+            if voice_options2_label == voice_options_label or voice_options2_label == voice_options1_label:
+                voice_options2_label = f'{voice_options2_label}_2'
             if len(all_voices) > 75:
                 all_voices = all_voices[:75]
                 logging.warning("'/speak' command only allows up to 75 voices. Some voices were omitted.")
@@ -2849,8 +2863,8 @@ if tts_client and tts_client in supported_tts_clients:
 
     if len(all_voices) <= 25:
         @client.hybrid_command(name="speak", description='AI will speak your text using a selected voice')
-        @app_commands.rename(voice=f'voices_{first_voice_options}-{last_voice_options}')
-        @app_commands.describe(voice=f'Voices {(first_voice_options).capitalize()}-{(last_voice_options).capitalize()}')
+        @app_commands.rename(voice=f'voices_{voice_options_label}')
+        @app_commands.describe(voice=f'Voices {voice_options_label.capitalize()}')
         @app_commands.choices(voice=voice_options)
         @app_commands.choices(lang=lang_options)
         async def speak(i: discord.Interaction, input_text: str, voice: typing.Optional[app_commands.Choice[str]], lang: typing.Optional[app_commands.Choice[str]], voice_input: typing.Optional[discord.Attachment]):
@@ -2861,11 +2875,11 @@ if tts_client and tts_client in supported_tts_clients:
 
     elif 25 < len(all_voices) <= 50:
         @client.hybrid_command(name="speak", description='AI will speak your text using a selected voice (pick only one)')
-        @app_commands.rename(voice_1=f'voices_{first_voice_options}-{last_voice_options}')
-        @app_commands.describe(voice_1=f'Voices {(first_voice_options).capitalize()}-{(last_voice_options).capitalize()}')
+        @app_commands.rename(voice_1=f'voices_{voice_options_label}')
+        @app_commands.describe(voice_1=f'Voices {voice_options_label.capitalize()}')
         @app_commands.choices(voice_1=voice_options)
-        @app_commands.rename(voice_2=f'voices_{first_voice_options1}-{last_voice_options1}')
-        @app_commands.describe(voice_2=f'Voices {(first_voice_options1).capitalize()}-{(last_voice_options1).capitalize()}')
+        @app_commands.rename(voice_2=f'voices_{voice_options1_label}')
+        @app_commands.describe(voice_2=f'Voices {voice_options1_label.capitalize()}')
         @app_commands.choices(voice_2=voice_options1)
         @app_commands.choices(lang=lang_options)
         async def speak(i: discord.Interaction, input_text: str, voice_1: typing.Optional[app_commands.Choice[str]], voice_2: typing.Optional[app_commands.Choice[str]], lang: typing.Optional[app_commands.Choice[str]], voice_input: typing.Optional[discord.Attachment]):
@@ -2878,14 +2892,14 @@ if tts_client and tts_client in supported_tts_clients:
 
     elif 50 < len(all_voices) <= 75:
         @client.hybrid_command(name="speak", description='AI will speak your text using a selected voice (pick only one)')
-        @app_commands.rename(voice_1=f'voices_{first_voice_options}-{last_voice_options}')
-        @app_commands.describe(voice_1=f'Voices {(first_voice_options).capitalize()}-{(last_voice_options).capitalize()}')
+        @app_commands.rename(voice_1=f'voices_{voice_options_label}')
+        @app_commands.describe(voice_1=f'Voices {voice_options_label.capitalize()}')
         @app_commands.choices(voice_1=voice_options)
-        @app_commands.rename(voice_2=f'voices_{first_voice_options1}-{last_voice_options1}')
-        @app_commands.describe(voice_2=f'Voices {(first_voice_options1).capitalize()}-{(last_voice_options1).capitalize()}')
+        @app_commands.rename(voice_2=f'voices_{voice_options1_label}')
+        @app_commands.describe(voice_2=f'Voices {voice_options1_label.capitalize()}')
         @app_commands.choices(voice_2=voice_options1)
-        @app_commands.rename(voice_3=f'voices_{first_voice_options2}-{last_voice_options2}')
-        @app_commands.describe(voice_3=f'Voices {(first_voice_options2).capitalize()}-{(last_voice_options2).capitalize()}')
+        @app_commands.rename(voice_3=f'voices_{voice_options2_label}')
+        @app_commands.describe(voice_3=f'Voices {voice_options2_label.capitalize()}')
         @app_commands.choices(voice_3=voice_options2)
         @app_commands.choices(lang=lang_options)
         async def speak(i: discord.Interaction, input_text: str, voice_1: typing.Optional[app_commands.Choice[str]], voice_2: typing.Optional[app_commands.Choice[str]], voice_3: typing.Optional[app_commands.Choice[str]], lang: typing.Optional[app_commands.Choice[str]], voice_input: typing.Optional[discord.Attachment]):
