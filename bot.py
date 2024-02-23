@@ -32,8 +32,6 @@ from pydub import AudioSegment
 import copy
 
 session_history = {'internal': [], 'visible': []}
-last_user_message = {'text': [], 'llm_prompt': []}
-last_bot_message = {}
 
 ### Replace TOKEN with discord bot token, update A1111 address if necessary.
 from ad_discordbot import config
@@ -336,11 +334,6 @@ client = commands.Bot(command_prefix=".", intents=intents)
 # client_attributes = [attr for attr in dir(client) if not callable(getattr(client, attr)) and not attr.startswith("__")]
 # print("client_attributes", client_attributes)
 
-queues = []
-blocking = False
-busy_drawing = False
-reply_count = 0
-previous_user_id = ''
 
 # Start a task processing loop
 task_queue = asyncio.Queue()
@@ -349,6 +342,11 @@ async def process_tasks_in_background():
     while True:
         task = await task_queue.get()
         await task
+
+# Function to delete a message after a certain time
+async def delete_message_after(message, delay):
+    await asyncio.sleep(delay)
+    await message.delete()
 
 # Adds missing keys/values
 def fix_dict(set, req):
@@ -423,7 +421,6 @@ def load_file(file_path):
         logging.error(f"An error occurred while reading {file_path}: {str(e)}")
         return None
 
-
 def save_yaml_file(file_path, data):
     try:
         with open(file_path, 'w') as file:
@@ -435,25 +432,6 @@ def save_yaml_file(file_path, data):
 def reset_session_history():
     global session_history
     session_history = {'internal': [], 'visible': []}
-
-def retain_last_user_message(text, llm_prompt):
-    global last_user_message
-    last_user_message['text'] = text
-    last_user_message['llm_prompt'] = llm_prompt
-
-async def delete_last_message(i):
-    try:
-        message_ids = last_bot_message.get(i.channel.id, [])
-        if message_ids:
-            for message_id in message_ids:
-                message = await i.channel.fetch_message(message_id)
-                if message:
-                    await message.delete()
-            logging.info('Bot message(s) were deleted successfully.')
-        else:
-            logging.error('No matching bot message(s) found to delete in this channel.')
-    except Exception as e:
-        logging.error(e)
 
 async def update_client_profile(change_username, change_avatar, char_name):
     try:
@@ -566,8 +544,6 @@ async def change_character(i, char_name):
 
 async def send_long_message(channel, message_text):
     """ Splits a longer message into parts while preserving sentence boundaries and code blocks """
-    global last_bot_message
-    bot_messages = []  # List to store message IDs to be deleted by cont or regen function
     activelang = ''
     # Helper function to ensure even pairs of code block markdown
     def ensure_even_code_blocks(chunk_text, code_block_inserted):
@@ -593,7 +569,6 @@ async def send_long_message(channel, message_text):
         return chunk_text, code_block_inserted
     if len(message_text) <= 1980:
         sent_message = await channel.send(message_text)
-        bot_messages.append(sent_message.id)
     else:
         code_block_inserted = False  # Initialize code_block_inserted to False
         while message_text:
@@ -615,16 +590,12 @@ async def send_long_message(channel, message_text):
             chunk_text = message_text[:chunk_length]
             chunk_text, code_block_inserted = ensure_even_code_blocks(chunk_text, code_block_inserted)
             sent_message = await channel.send(chunk_text)
-            bot_messages.append(sent_message.id)
             message_text = message_text[chunk_length:]
             if len(message_text) <= 1980:
                 # Send the remaining text as a single chunk if it's shorter than or equal to 2000 characters
                 chunk_text, code_block_inserted = ensure_even_code_blocks(message_text, code_block_inserted)
                 sent_message = await channel.send(chunk_text)
-                bot_messages.append(sent_message.id)
                 break
-    # Store the list of message IDs in the global dictionary
-    last_bot_message[channel.id] = bot_messages
 
 ## Function to automatically change image models
 # Set the topic of the channel and announce imgmodel as configured
@@ -1054,7 +1025,7 @@ async def extra_stopping_strings(llm_payload):
 
     return llm_payload
 
-async def chatbot_wrapper_wrapper(llm_payload):
+async def llm_gen(llm_payload):
     llm_payload = await extra_stopping_strings(llm_payload)
     loop = asyncio.get_event_loop()
 
@@ -1087,62 +1058,138 @@ async def chatbot_wrapper_wrapper(llm_payload):
 
     return last_resp, tts_resp
 
-def queue(i, source, text, llm_payload, tags):
-    user_id = i.author.mention
-    channel = i.channel
-    # Capture all details for task queue
-    queues.append({'user_id': user_id, 'channel': channel, 'source': source, 'text': text, 'llm_payload': llm_payload, 'tags': tags})
-    if source == 'on_message':
-        logging.info(f'reply requested: "{user_id} asks {llm_payload["state"]["name2"]}: {llm_payload["text"]}"')
+async def cont_regen_gen(user, channel, llm_payload, source, message):
+    try:
+        cmd = 'Continuing' if source == 'cont' else 'Regenerating'
+        info_embed.title = f'{cmd} text for {user} ... '
+        info_embed.description = ""
+        embed = await channel.send(embed=info_embed)
+        last_resp, tts_resp = await llm_gen(llm_payload)
+        if tts_resp: await task_queue.put(process_tts_resp(channel, tts_resp)) # Process this in background
+        logging.info("reply sent: \"" + user + ": {'text': '" + llm_payload["text"] + "', 'response': '" + last_resp + "'}\"")
+        await embed.delete()
+        fetched_message = await channel.fetch_message(message)
+        await fetched_message.delete()
+        await send_long_message(channel, last_resp)
+    except Exception as e:
+        try: await embed.delete()
+        except: pass
+        logging.error(f'An error occurred while "{cmd}": {e}')
 
-def check_num_in_queue(i):
-    user_id = i.author.mention
-    user_list_in_que = [list(i.keys())[0] for i in queues]
+async def speak_gen(channel, user, user_id, text, llm_payload, speak):
+    try:
+        info_embed.title = f"{user} requested tts ... "
+        info_embed.description = ""
+        message = await channel.send(embed=info_embed)
+        await update_extensions(speak.get('tts_args', {}))
+        _, tts_resp = await llm_gen(llm_payload)
+        if tts_resp: await task_queue.put(process_tts_resp(channel, tts_resp)) # Process this in background
+        await update_extensions(client.settings['llmcontext'].get('extensions', {})) # Restore character specific extension settings
+        if speak.get('user_voice'): os.remove(speak['user_voice'])
+        mention_resp = update_mention(user_id, text)
+        await message.delete()
+        await send_long_message(channel, mention_resp)
+    except Exception as e:
+        logging.error(f"An error occurred while generating tts for '/speak': {e}")
+
+def update_mention(user_id, last_resp):
+    global previous_user_id
+    mention_resp = copy.copy(last_resp)                    
+    if user_id != previous_user_id:
+        mention_resp = f"{user_id} {last_resp}"
+    previous_user_id = user_id
+    return mention_resp
+
+def unpack_queue_item(queue_item):
+    global reply_count
+    reply_count += 1
+    user = queue_item.get('user', None)
+    user_id = queue_item.get('user_id', None)
+    channel = queue_item.get('channel', None)
+    source = queue_item.get('source', None)
+    text = queue_item.get('text', None)
+    img_prompt = queue_item.get('img_prompt', None)
+    llm_payload = queue_item.get('llm_payload', {})
+    tags = queue_item.get('tags', {})
+    speak = queue_item.get('speak', {})
+    message = queue_item.get('message', None)
+    imgcmd = queue_item.get('imgcmd', {})    
+    if source == 'on_message':
+        logging.info(f'reply requested: {user} asks {llm_payload["state"]["name2"]}: "{llm_payload["text"]}"')
+    if source == '/image':
+        logging.info(f'{user} used "/image": "{img_prompt}"')
+    if source == '/speak':
+        logging.info(f'{user} used "/speak": "{text}"')
+    if source == 'cont':
+        logging.info(f'{user} used "Continue"')
+    if source == 'regen':
+        logging.info(f'{user} used "Regenerate"')
+
+    return user, user_id, channel, source, text, img_prompt, llm_payload, tags, speak, message, imgcmd
+
+def check_num_in_queue(user_id):
+    user_id = user_id.mention
+    user_list_in_que = [list(user_id.keys())[0] for user_id in queues]
     return user_list_in_que.count(user_id)
 
-async def ai_generate(i, source, text, llm_payload, tags=None):
+queues = []
+blocking = False
+reply_count = 0
+previous_user_id = ''
+
+async def ai_generate(user_id, channel, queue_item):
     try:
-        num = check_num_in_queue(i)
+        num = check_num_in_queue(user_id)
         if num >=10:
-            await i.channel.send(f'{i.author.mention} You have 10 items in queue, please allow your requests to finish before adding more to the queue.')
+            await channel.send(f'{user_id.mention} You have 10 items in queue, please allow your requests to finish before adding more to the queue.')
         else:
-            queue(i, source, text, llm_payload, tags)
+            queues.append(queue_item)
             global blocking
-            global reply_count
             global previous_user_id
             while len(queues) > 0:
                 if blocking:
                     await asyncio.sleep(1)
                     continue
                 blocking = True
-                reply_count += 1
-                queued_item = queues.pop(0)
-                user_id = queued_item['user_id']
-                channel = queued_item['channel']
-                source = queued_item['source']
-                text = queued_item['text']
-                llm_payload = queued_item['llm_payload']
-                tags = queued_item['tags']
+                # Unpack the next queue item, process depending on its truthy values
+                queue_item = queues.pop(0)
+                user, user_id, channel, source, text, img_prompt, llm_payload, tags, speak, message, imgcmd = unpack_queue_item(queue_item)
                 async with channel.typing():
+                    if speak:
+                        await speak_gen(channel, user, user_id, text, llm_payload, speak)
+                        blocking = False
+                        continue
+                    if imgcmd:
+                        await img_gen(channel, img_prompt, tags, imgcmd)
+                        await channel.send(imgcmd['message'])
+                        blocking = False
+                        continue
+                    if message:
+                        await cont_regen_gen(user, channel, llm_payload, source, message)
+                        blocking = False
+                        continue
+                    # make a 'Prompting...' embed when generating text for an image
                     should_draw = user_asks_for_image(tags)
+                    picture_frame = None
                     if should_draw:
                         if await a1111_online(channel):
                             info_embed.title = "Prompting ..."
                             info_embed.description = " "
                             picture_frame = await channel.send(embed=info_embed)
-                    last_resp, tts_resp = await chatbot_wrapper_wrapper(llm_payload)
-                    img_prompt = copy.copy(last_resp)
-                    mention_resp = copy.copy(last_resp)                    
-                    if user_id != previous_user_id:
-                        mention_resp = f"{user_id} {last_resp}" # @mention for different user
-                    previous_user_id = user_id  # Update the current user ID for the next iteration
+                    # process textgen-webui
+                    if llm_payload:
+                        last_resp, tts_resp = await llm_gen(llm_payload)
+                        logging.info("reply sent: \"" + user_id + ": {'text': '" + llm_payload["text"] + "', 'response': '" + last_resp + "'}\"")
+                    # process image generation (A1111 / Forge)
+                    tags = match_img_tags(last_resp, tags)
+                    should_draw = user_asks_for_image(tags)
                     if should_draw:
-                        await picture_frame.delete()
-                        if len(img_prompt) > 1800: img_prompt = img_prompt[:1800] # arbitrarily shorten it for img purposes
-                        await pic(channel, text, img_prompt, tags, imgcmd=None)
-                    else:
-                        if tts_resp: await task_queue.put(process_tts_resp(channel, tts_resp)) # Process this in background
-                    logging.info("reply sent: \"" + user_id + ": {'text': '" + llm_payload["text"] + "', 'response': '" + last_resp + "'}\"")
+                        if picture_frame:
+                            await picture_frame.delete()
+                        if len(last_resp) > 1800: last_resp = last_resp[:1800] # arbitrarily shorten it for img purposes
+                        await img_gen(channel, last_resp, tags, imgcmd)
+                    if tts_resp: await task_queue.put(process_tts_resp(channel, tts_resp)) # Process this in background
+                    mention_resp = update_mention(user_id, last_resp) # @mention non-consecutive users
                     await send_long_message(channel, mention_resp)
                     blocking = False
     except Exception as e:
@@ -1442,10 +1489,10 @@ def get_tags():
     except Exception as e:
         logging.error(f"Error getting tags: {e}")
 
-async def initialize_llm_payload(i, text):
+async def initialize_llm_payload(user, text):
     llm_payload = copy.deepcopy(client.settings['llmstate'])
     llm_payload['text'] = text
-    name1 = i.author.display_name
+    name1 = user
     name2 = client.settings['llmcontext']['name']
     context = client.settings['llmcontext']['context']
     llm_payload['state']['name1'] = name1
@@ -1466,10 +1513,6 @@ async def on_message(i):
         ctx = Context(message=i,prefix=None,bot=client,view=None)
         text = await commands.clean_content().convert(ctx, i.content)
         if not client.behavior.bot_should_reply(i, text): return # Check that bot should reply or not
-        # global busy_drawing
-        # if busy_drawing:
-        #     await i.channel.send("(busy generating an image, please try again after image generation is completed)")
-        #     return
         if not client.database.main_channels and client.user.mentioned_in(i): await main(i) # if None, set channel as main
         # if @ mentioning bot, remove the @ mention from user prompt
         if text.startswith(f"@{client.user.display_name} "):
@@ -1479,7 +1522,7 @@ async def on_message(i):
         # make working copy of user's request (without @ mention)
         llm_prompt = copy.copy(text)
         # build llm_payload with defaults
-        llm_payload = await initialize_llm_payload(i, text)
+        llm_payload = await initialize_llm_payload(i.author.display_name, text)
         # collects all tags, sorted into sub-lists by phase (user / llm / userllm)
         tags = get_tags()
         # match tags labeled for user / userllm.
@@ -1489,13 +1532,10 @@ async def on_message(i):
         matches = tags['matches']
         # apply tags relevant to LLM
         llm_payload, llm_prompt = await process_llm_payload_tags(i.author.display_name, llm_payload, llm_prompt, matches)
-        # save a global copy of text/llm_prompt for /regen cmd
-        retain_last_user_message(text, llm_prompt)
-        # start generating everything
+        # offload to ai_gen queue
         llm_payload['text'] = llm_prompt
-        await ai_generate(i, 'on_message', text, llm_payload, tags)
-        # busy_drawing = False       
-        return
+        queue_item = {'user': i.author, 'user_id': i.author.mention, 'channel': i.channel, 'source': 'on_message', 'text': text, 'llm_payload': llm_payload, 'tags': tags}
+        await ai_generate(i.author, i.channel, queue_item)    
     except Exception as e:
         logging.error(f"An error occurred in on_message: {e}")
 
@@ -1512,29 +1552,17 @@ async def process_image_gen(img_payload, picture_frame, channel):
                 info_embed.title = "Image prompt was flagged as inappropriate."
                 await channel.send("Image prompt was flagged as inappropriate.")
                 await picture_frame.delete()
-                return
+                return None, None
         images, r = await a1111_txt2img(img_payload, picture_frame)
         if not images:
             info_embed.title = "No images generated"
             await channel.send(f"No images were generated: {r}")
             await picture_frame.edit(delete_after=5)
+            return None, None
         else:
             client.fresh = False
-            # Ensure the output directory exists
-            output_dir = 'ad_discordbot/sd_outputs/'
-            os.makedirs(output_dir, exist_ok=True)
-            # If the censor mode is 1 (blur), prefix the image file with "SPOILER_"
-            file_prefix = 'temp_img_'
-            if do_censor and censor_mode == 1:
-                file_prefix = 'SPOILER_temp_img_'
-            image_files = [discord.File(f'temp_img_{idx}.png', filename=f'{file_prefix}{idx}.png') for idx in range(len(images))]
-            await channel.send(files=image_files)
-            # Save the image at index 0 with the date/time naming convention
-            os.rename(f'temp_img_0.png', f'{output_dir}/{datetime.now().strftime("%Y-%m-%d_%H-%M-%S")}_0.png')
-            # Delete temporary image files except for the one at index 0
-            for idx in range(1, len(images)):
-                os.remove(f'temp_img_{idx}.png')
             await picture_frame.delete()
+            return images, do_censor
     except asyncio.TimeoutError:
         info_embed.title = "Timeout error"
         await channel.send("Timeout error")
@@ -1638,13 +1666,13 @@ def process_img_prompt_tags(img_payload, tags):
                 updated_positive_prompt += join + tag['positive_prompt_suffix']
             if 'negative_prompt_prefix' in tag:
                 join = join if updated_negative_prompt else ''
-                updated_negative_prompt = tag['negative_prompt'] + join + updated_negative_prompt
+                updated_negative_prompt = tag['negative_prompt_prefix'] + join + updated_negative_prompt
             if 'negative_prompt' in tag:
                 join = join if updated_negative_prompt else ''
                 updated_negative_prompt += join + tag['negative_prompt']
             if 'negative_prompt_suffix' in tag:
                 join = join if updated_negative_prompt else ''
-                updated_negative_prompt += join + tag['negative_prompt']
+                updated_negative_prompt += join + tag['negative_prompt_suffix']
         img_payload['prompt'] = updated_positive_prompt
         img_payload['negative_prompt'] = updated_negative_prompt
         return img_payload
@@ -1778,7 +1806,7 @@ def process_img_payload_tags(img_payload, matches):
 def initialize_img_payload(img_prompt, neg_prompt):
     try:
         # Initialize img_payload settings
-        img_payload = {"prompt": img_prompt, "negative_prompt": neg_prompt if neg_prompt else '', "width": 512, "height": 512, "steps": 20}
+        img_payload = {"prompt": img_prompt, "negative_prompt": neg_prompt, "width": 512, "height": 512, "steps": 20}
         # Apply settings from imgmodel configuration
         imgmodel_img_payload = copy.deepcopy(client.settings['imgmodel'].get('payload', {}))
         img_payload.update(imgmodel_img_payload)
@@ -1809,20 +1837,35 @@ def match_img_tags(img_prompt, tags):
     except Exception as e:
         logging.error(f"Error matching tags for img phase: {e}")
 
-async def pic(channel, text, img_prompt, tags, imgcmd=None):
-    global busy_drawing
-    busy_drawing = True
+async def send_images(channel, img_prompt, images, do_censor):
+    try:
+        # Ensure the output directory exists
+        output_dir = 'ad_discordbot/sd_outputs/'
+        os.makedirs(output_dir, exist_ok=True)
+        # If the censor mode is 1 (blur), prefix the image file with "SPOILER_"
+        file_prefix = 'temp_img_'
+        if do_censor and censor_mode == 1:
+            file_prefix = 'SPOILER_temp_img_'
+        image_files = [discord.File(f'temp_img_{idx}.png', filename=f'{file_prefix}{idx}.png') for idx in range(len(images))]
+        await channel.send(files=image_files)
+        # Save the image at index 0 with the date/time naming convention
+        os.rename(f'temp_img_0.png', f'{output_dir}/{datetime.now().strftime("%Y-%m-%d_%H-%M-%S")}_0.png')
+        # Delete temporary image files except for the one at index 0
+        for idx in range(1, len(images)):
+            os.remove(f'temp_img_{idx}.png')
+    except Exception as e:
+        logging.error(f"An error occurred when sending generated images: {e}")
+
+async def img_gen(channel, img_prompt, tags, imgcmd):
     try:
         info_embed.title = "Processing"
         info_embed.description = " ... "  # await check_a1111_progress()
         if client.fresh: info_embed.description = "First image request tends to take more time, please be patient"
         picture_frame = await channel.send(embed=info_embed)
         info_embed.title = "Sending prompt to A1111 ..."
-        # match tags labeled for llm / userllm.
-        tags = match_img_tags(img_prompt, tags)
         matches = tags['matches']
         # Initialize img_payload
-        neg_prompt = imgcmd.get('neg_prompt', '') if imgcmd else ''
+        neg_prompt = imgcmd.get('neg_prompt', '')
         img_payload = initialize_img_payload(img_prompt, neg_prompt)
         # Apply tags relevant to Img gen
         img_payload = process_img_payload_tags(img_payload, matches)
@@ -1834,13 +1877,12 @@ async def pic(channel, text, img_prompt, tags, imgcmd=None):
         img_payload = apply_imgcmd(img_payload, imgcmd)
         # Clean anything up that gets messy
         clean_img_payload(img_payload)
-        # Send to A1111
-        await process_image_gen(img_payload, picture_frame, channel)
-        busy_drawing = False
-        return
+        # Generate images
+        images, do_censor = await process_image_gen(img_payload, picture_frame, channel)
+        # Send images
+        if images: await send_images(channel, img_prompt, images, do_censor)        
     except Exception as e:
-        logging.error(f"An error occurred in pic(): {e}")
-        busy_drawing = False
+        logging.error(f"An error occurred in img_gen(): {e}")
 
 ## Code pertaining to /image command
 # Function to update size options
@@ -1949,26 +1991,19 @@ async def image(
     if not await a1111_online(i.channel):
         return
 
-    global busy_drawing
-    if busy_drawing:
-        await i.channel.send("(busy generating an image, please try again after image generation is completed)")
-        return
-    busy_drawing = True
     try:
-
-        text = copy.copy(prompt)
         neg_style_prompt = ""
         size_dict = {}
         faceswapimg = ''
         controlnet_dict = {}
-        tags = get_tags() # gather tags to be matched later in pic() function
+        tags = get_tags() # gather tags to be matched later in img_gen() function
         if 'user' in tags['unmatched']: del tags['unmatched']['user'] # Tags intended for pre-LLM processing should be removed
 
-        message_content = f">>> **Prompt:** {prompt}"
+        message = f">>> **Prompt:** {prompt}"
 
         if neg_prompt:
             neg_style_prompt = f"{neg_prompt}, {neg_style_prompt}"
-            message_content += f" | **Negative Prompt:** {neg_prompt}"
+            message += f" | **Negative Prompt:** {neg_prompt}"
 
         if style:
             selected_style_option = next((option for option in style_options if option['name'] == style.value), None)
@@ -1976,14 +2011,14 @@ async def image(
             if selected_style_option:
                 prompt = selected_style_option.get('positive').format(prompt)
                 neg_style_prompt = selected_style_option.get('negative')
-            message_content += f" | **Style:** {style.value}"
+            message += f" | **Style:** {style.value}"
 
         if size:
             selected_size_option = next((option for option in size_options if option['name'] == size.value), None)
             if selected_size_option:
                 size_dict['width'] = selected_size_option.get('width')
                 size_dict['height'] = selected_size_option.get('height')
-            message_content += f" | **Size:** {size.value}"
+            message += f" | **Size:** {size.value}"
 
         if config.sd['extensions']['reactor_enabled']:
             if face_swap:
@@ -1991,7 +2026,7 @@ async def image(
                     imgurl = face_swap.url
                     attached_img = await face_swap.read()
                     faceswapimg = base64.b64encode(attached_img).decode('utf-8')
-                    message_content += f" | **Face Swap:** Image Provided"
+                    message += f" | **Face Swap:** Image Provided"
                 else:
                     await i.send("Please attach a valid image to use for Face Swap.",ephemeral=True)
                     return
@@ -2005,7 +2040,7 @@ async def image(
                     controlnet_dict['guidance_end'] = selected_cnet_option.get('guidance_end')
                     controlnet_dict['weight'] = selected_cnet_option.get('weight')
                     controlnet_dict['enabled'] = True
-                message_content += f" | **ControlNet:** Model: {cnet_model.value}"
+                message += f" | **ControlNet:** Model: {cnet_model.value}"
             if cnet_input:
                 if cnet_input.content_type and cnet_input.content_type.startswith("image/"):
                     imgurl = cnet_input.url
@@ -2022,15 +2057,14 @@ async def image(
                         controlnet_dict['module'] = "none"
                     if cnet_map.value == "invert_map":
                         controlnet_dict['module'] = "invert (from white bg & black line)"
-                    message_content += f", Module: {controlnet_dict['module']}"
-                    message_content += f", Map Input: {cnet_map.value}"
+                    message += f", Module: {controlnet_dict['module']}"
+                    message += f", Map Input: {cnet_map.value}"
                 else:
-                    message_content += f", Module: {controlnet_dict['module']}"
+                    message += f", Module: {controlnet_dict['module']}"
                 if (cnet_model and not cnet_input) or (cnet_input and not cnet_model):
                     await i.send("ControlNet feature requires **both** selecting a model (cnet_model) and attaching an image (cnet_input).",ephemeral=True)
                     return
 
-        logging.info(f'''{i.author} used /image: "{prompt}"''')
         channel = i.channel
         
         neg_prompt=neg_style_prompt
@@ -2038,13 +2072,15 @@ async def image(
         face_swap=faceswapimg if face_swap else None
         controlnet=controlnet_dict if controlnet_dict else None
 
-        imgcmd = {'neg_prompt': neg_prompt, 'size': size, 'face_swap': face_swap, 'controlnet': controlnet}
+        imgcmd = {'neg_prompt': neg_prompt, 'size': size, 'face_swap': face_swap, 'controlnet': controlnet, 'message': message}
 
-        await pic(channel, text, img_prompt, tags, imgcmd)
-        await channel.send(message_content)
+        # offload to ai_gen queue
+        ireply = await i.reply("Your image request was added to the generation queue", ephemeral=True)
+        asyncio.create_task(delete_message_after(ireply, 5))
+        queue_item = {'user': i.author, 'user_id': i.author.mention, 'channel': i.channel, 'source': '/image', 'img_prompt': prompt, 'tags': tags, 'imgcmd': imgcmd}
+        await ai_generate(i.author, i.channel, queue_item)
     except Exception as e:
         logging.error(f"An error occurred in image(): {e}")
-    busy_drawing = False
 
 #----END IMAGE PROCESSING----#
 
@@ -2133,7 +2169,7 @@ class CharacterDropdown(discord.ui.Select):
         options = [discord.SelectOption(label=character["name"], value=character["filename"], description=character["bot_description"], emoji=character["bot_emoji"]) for character in generate_characters()]
         super().__init__(placeholder='', min_values=1, max_values=1, options=options)
         self.i = i
-    async def callback(self, interaction: discord.Interaction):
+    async def callback(self, i: discord.Interaction):
         character_filename = self.values[0]
         character = Path(character_filename).stem
         await change_character(self.i, character)
@@ -2143,7 +2179,7 @@ class CharacterDropdown(discord.ui.Select):
             greeting = greeting.replace('{{char}}', character)
         else:
             greeting = f'**{character}** has entered the chat"'
-        await interaction.response.send_message(greeting)
+        await i.response.send_message(greeting)
         logging.info(f'Loaded new character: "{character}".')
         return
 
@@ -2207,34 +2243,32 @@ async def helpmenu(i):
     info_embed = discord.Embed().from_dict(info_embed_json)
     await i.send(embed=info_embed)
 
-@client.hybrid_command(description="Regenerate the bot's last reply")
-async def regen(i):
-    info_embed.title = f"Regenerating ... "
-    info_embed.description = ""
-    await i.reply(embed=info_embed)
-    llm_payload = await initialize_llm_payload(i, text=last_user_message['llm_prompt'])
+@client.tree.context_menu(name="regenerate")
+async def regen_llm_gen(i: discord.Interaction, message: discord.Message):
+    text = message.content
+    llm_payload = await initialize_llm_payload(i.user.display_name, text)
     llm_payload['regenerate'] = True
     llm_payload['save_history'] = False
-    last_resp, tts_resp = await chatbot_wrapper_wrapper(llm_payload)
-    channel = i.channel
-    await send_long_message(channel, last_resp)
-    if tts_resp: await task_queue.put(process_tts_resp(channel, tts_resp)) # Process this in background
+    # offload to ai_gen queue
+    ireply = await i.response.send_message('Request to "regenerate" was added to the generation queue', ephemeral=True)
+    asyncio.create_task(delete_message_after(ireply, 5))
+    queue_item = {'user': i.user.display_name, 'channel': i.channel, 'source': 'regen', 'text': text, 'llm_payload': llm_payload, 'message': message.id}
+    await ai_generate(i.user, i.channel, queue_item) 
 
-@client.hybrid_command(description="Continue the generation")
-async def cont(i):
-    info_embed.title = f"Continuing ... "
-    info_embed.description = ""
-    await i.reply(embed=info_embed)
-    llm_payload = await initialize_llm_payload(i, text=last_user_message['llm_prompt'])
+@client.tree.context_menu(name="continue")
+async def continue_llm_gen(i: discord.Interaction, message: discord.Message):
+    text = message.content
+    llm_payload = await initialize_llm_payload(i.user.display_name, text)
     llm_payload['_continue'] = True
     llm_payload['save_history'] = False
-    last_resp, tts_resp = await chatbot_wrapper_wrapper(llm_payload)
-    channel = i.channel
-    await delete_last_message(i)
-    await send_long_message(channel, last_resp)
+    # offload to ai_gen queue
+    ireply = await i.response.send_message('Request to "continue" was added to the generation queue', ephemeral=True)
+    asyncio.create_task(delete_message_after(ireply, 5))
+    queue_item = {'user': i.user.display_name, 'channel': i.channel, 'source': 'cont', 'text': text, 'llm_payload': llm_payload, 'message': message.id}
+    await ai_generate(i.user, i.channel, queue_item) 
 
 @client.hybrid_command(description="Update dropdown menus without restarting bot script.")
-async def sync(interaction: discord.Interaction):
+async def sync(i: discord.Interaction):
     await task_queue.put(client.tree.sync()) # Process this in the background
 
 ## /imgmodel command
@@ -2463,25 +2497,28 @@ if all_imgmodels:
             imgmodel['imgmodel_name'] = imgmodel.pop('model_name')
 
     imgmodel_options = [app_commands.Choice(name=imgmodel["imgmodel_name"], value=imgmodel["imgmodel_name"]) for imgmodel in all_imgmodels[:25]]
-    last_imgmodel_options = imgmodel_options[-1].name[0].capitalize() # Letter for options description
+    first_imgmodel_options = imgmodel_options[0].name[0].lower() # Letter for options description
+    last_imgmodel_options = imgmodel_options[-1].name[0].lower() # Letter for options description
     if len(all_imgmodels) > 25:
         imgmodel_options1 = [app_commands.Choice(name=imgmodel["imgmodel_name"], value=imgmodel["imgmodel_name"]) for imgmodel in all_imgmodels[25:50]]
-        first_imgmodel_options1 = imgmodel_options1[0].name[0].capitalize() # Letter for options description
-        last_imgmodel_options1 = imgmodel_options1[-1].name[0].capitalize() # Letter for options description
+        first_imgmodel_options1 = imgmodel_options1[0].name[0].lower() # Letter for options description
+        last_imgmodel_options1 = imgmodel_options1[-1].name[0].lower() # Letter for options description
         if len(all_imgmodels) > 50:
             imgmodel_options2 = [app_commands.Choice(name=imgmodel["imgmodel_name"], value=imgmodel["imgmodel_name"]) for imgmodel in all_imgmodels[50:75]]
-            first_imgmodel_options2 = imgmodel_options2[0].name[0].capitalize() # Letter for options description
-            last_imgmodel_options2 = imgmodel_options2[-1].name[0].capitalize() # Letter for options description
+            first_imgmodel_options2 = imgmodel_options2[0].name[0].lower() # Letter for options description
+            last_imgmodel_options2 = imgmodel_options2[-1].name[0].lower() # Letter for options description
             if len(all_imgmodels) > 75:
                 imgmodel_options3 = [app_commands.Choice(name=imgmodel["imgmodel_name"], value=imgmodel["imgmodel_name"]) for imgmodel in all_imgmodels[75:100]]
-                first_imgmodel_options3 = imgmodel_options3[0].name[0].capitalize() # Letter for options description
+                first_imgmodel_options3 = imgmodel_options3[0].name[0].lower() # Letter for options description
+                last_imgmodel_options3 = imgmodel_options3[-1].name[0].lower() # Letter for options description
                 if len(all_imgmodels) > 100:
                     all_imgmodels = all_imgmodels[:100]
                     logging.warning("'/imgmodel' command only allows up to 100 image models. Some models were omitted.")
 
     if len(all_imgmodels) <= 25:
         @client.hybrid_command(name="imgmodel", description='Choose an imgmodel')
-        @app_commands.describe(imgmodels='Imgmodels A-Z')
+        @app_commands.rename(imgmodels=f'imgmodels_{first_imgmodel_options}-{last_imgmodel_options}')
+        @app_commands.describe(imgmodels=f'Imgmodels {(first_imgmodel_options).capitalize()}-{(last_imgmodel_options).capitalize()}')
         @app_commands.choices(imgmodels=imgmodel_options)
         async def imgmodel(i: discord.Interaction, imgmodels: typing.Optional[app_commands.Choice[str]]):
             selected_imgmodel = imgmodels.value if imgmodels is not None else ''
@@ -2489,9 +2526,11 @@ if all_imgmodels:
 
     elif 25 < len(all_imgmodels) <= 50:
         @client.hybrid_command(name="imgmodel", description='Choose an imgmodel (pick only one)')
-        @app_commands.describe(models_1=f'Imgmodels A-{last_imgmodel_options}')
+        @app_commands.rename(models_1=f'imgmodels_{first_imgmodel_options}-{last_imgmodel_options}')
+        @app_commands.describe(models_1=f'Imgmodels {(first_imgmodel_options).capitalize()}-{(last_imgmodel_options).capitalize()}')
         @app_commands.choices(models_1=imgmodel_options)
-        @app_commands.describe(models_2=f'Imgmodels {first_imgmodel_options1}-Z')
+        @app_commands.rename(models_2=f'imgmodels_{first_imgmodel_options1}-{last_imgmodel_options1}')
+        @app_commands.describe(models_2=f'Imgmodels {(first_imgmodel_options1).capitalize()}-{(last_imgmodel_options1).capitalize()}')
         @app_commands.choices(models_2=imgmodel_options1)
         async def imgmodel(i: discord.Interaction, models_1: typing.Optional[app_commands.Choice[str]], models_2: typing.Optional[app_commands.Choice[str]]):
             if models_1 and models_2:
@@ -2501,11 +2540,14 @@ if all_imgmodels:
 
     elif 50 < len(all_imgmodels) <= 75:
         @client.hybrid_command(name="imgmodel", description='Choose an imgmodel (pick only one)')
-        @app_commands.describe(models_1=f'Imgmodels A-{last_imgmodel_options}')
+        @app_commands.rename(models_1=f'imgmodels_{first_imgmodel_options}-{last_imgmodel_options}')
+        @app_commands.describe(models_1=f'Imgmodels {(first_imgmodel_options).capitalize()}-{(last_imgmodel_options).capitalize()}')
         @app_commands.choices(models_1=imgmodel_options)
-        @app_commands.describe(models_2=f'Imgmodels {first_imgmodel_options1}-{last_imgmodel_options1}')
+        @app_commands.rename(models_2=f'imgmodels_{first_imgmodel_options1}-{last_imgmodel_options1}')
+        @app_commands.describe(models_2=f'Imgmodels {(first_imgmodel_options1).capitalize()}-{(last_imgmodel_options1).capitalize()}')
         @app_commands.choices(models_2=imgmodel_options1)
-        @app_commands.describe(models_3=f'Imgmodels {first_imgmodel_options2}-Z')
+        @app_commands.rename(models_3=f'imgmodels_{first_imgmodel_options2}-{last_imgmodel_options2}')
+        @app_commands.describe(models_3=f'Imgmodels {(first_imgmodel_options2).capitalize()}-{(last_imgmodel_options2).capitalize()}')
         @app_commands.choices(models_3=imgmodel_options2)
         async def imgmodel(i: discord.Interaction, models_1: typing.Optional[app_commands.Choice[str]], models_2: typing.Optional[app_commands.Choice[str]], models_3: typing.Optional[app_commands.Choice[str]]):
             if sum(1 for v in (models_1, models_2, models_3) if v) > 1:
@@ -2515,13 +2557,17 @@ if all_imgmodels:
 
     elif 75 < len(all_imgmodels) <= 100:
         @client.hybrid_command(name="imgmodel", description='Choose an imgmodel (pick only one)')
-        @app_commands.describe(models_1=f'Imgmodels A-{last_imgmodel_options}')
+        @app_commands.rename(models_1=f'imgmodels_{first_imgmodel_options}-{last_imgmodel_options}')
+        @app_commands.describe(models_1=f'Imgmodels {(first_imgmodel_options).capitalize()}-{(last_imgmodel_options).capitalize()}')
         @app_commands.choices(models_1=imgmodel_options)
-        @app_commands.describe(models_2=f'Imgmodels {first_imgmodel_options1}-{last_imgmodel_options1}')
+        @app_commands.rename(models_2=f'imgmodels_{first_imgmodel_options1}-{last_imgmodel_options1}')
+        @app_commands.describe(models_2=f'Imgmodels {(first_imgmodel_options1).capitalize()}-{(last_imgmodel_options1).capitalize()}')
         @app_commands.choices(models_2=imgmodel_options1)
-        @app_commands.describe(models_3=f'Imgmodels {first_imgmodel_options2}-{last_imgmodel_options2}')
+        @app_commands.rename(models_3=f'imgmodels_{first_imgmodel_options2}-{last_imgmodel_options2}')
+        @app_commands.describe(models_3=f'Imgmodels {(first_imgmodel_options2).capitalize()}-{(last_imgmodel_options2).capitalize()}')
         @app_commands.choices(models_3=imgmodel_options2)
-        @app_commands.describe(models_4=f'Imgmodels {first_imgmodel_options3}-Z')
+        @app_commands.rename(models_4=f'imgmodels_{first_imgmodel_options3}-{last_imgmodel_options3}')
+        @app_commands.describe(models_4=f'Imgmodels {(first_imgmodel_options3).capitalize()}-{(last_imgmodel_options3).capitalize()}')
         @app_commands.choices(models_4=imgmodel_options3)
         async def imgmodel(i: discord.Interaction, models_1: typing.Optional[app_commands.Choice[str]], models_2: typing.Optional[app_commands.Choice[str]], models_3: typing.Optional[app_commands.Choice[str]], models_4: typing.Optional[app_commands.Choice[str]]):
             if sum(1 for v in (models_1, models_2, models_3, models_4) if v) > 1:
@@ -2557,25 +2603,28 @@ async def process_llmmodel(i, selected_llmmodel):
 
 if all_llmmodels:
     llmmodel_options = [app_commands.Choice(name=llmmodel, value=llmmodel) for llmmodel in all_llmmodels[:25]]
-    last_llmmodel_options = llmmodel_options[-1].name[0].capitalize() # Letter for options description
+    first_llmmodel_options = llmmodel_options[0].name[0].lower() # Letter for options description
+    last_llmmodel_options = llmmodel_options[-1].name[0].lower() # Letter for options description
     if len(all_llmmodels) > 25:
         llmmodel_options1 = [app_commands.Choice(name=llmmodel, value=llmmodel) for llmmodel in all_llmmodels[25:50]]
-        first_llmmodel_options1 = llmmodel_options1[0].name[0].capitalize() # Letter for options description
-        last_llmmodel_options1 = llmmodel_options1[-1].name[0].capitalize() # Letter for options description
+        first_llmmodel_options1 = llmmodel_options1[0].name[0].lower() # Letter for options description
+        last_llmmodel_options1 = llmmodel_options1[-1].name[0].lower() # Letter for options description
         if len(all_llmmodels) > 50:
             llmmodel_options2 = [app_commands.Choice(name=llmmodel, value=llmmodel) for llmmodel in all_llmmodels[50:75]]
-            first_llmmodel_options2 = llmmodel_options2[0].name[0].capitalize() # Letter for options description
-            last_llmmodel_options2 = llmmodel_options2[-1].name[0].capitalize() # Letter for options description
+            first_llmmodel_options2 = llmmodel_options2[0].name[0].lower() # Letter for options description
+            last_llmmodel_options2 = llmmodel_options2[-1].name[0].lower() # Letter for options description
             if len(all_llmmodels) > 75:
                 llmmodel_options3 = [app_commands.Choice(name=llmmodel, value=llmmodel) for llmmodel in all_llmmodels[75:100]]
-                first_llmmodel_options3 = llmmodel_options3[0].name[0].capitalize() # Letter for options description
+                first_llmmodel_options3 = llmmodel_options3[0].name[0].lower() # Letter for options description
+                last_llmmodel_options3 = llmmodel_options3[-1].name[0].lower() # Letter for options description
                 if len(all_llmmodels) > 100:
                     all_llmmodels = all_llmmodels[:100]
                     logging.warning("'/llmmodel' command only allows up to 100 LLM models. Some models were omitted.")
 
     if len(all_llmmodels) <= 25:
         @client.hybrid_command(name="llmmodel", description='Choose an LLM model')
-        @app_commands.describe(llmmodels='LLM models A-Z')
+        @app_commands.rename(llmmodels=f'llm-models_{first_llmmodel_options}-{last_llmmodel_options}')
+        @app_commands.describe(llmmodels=f'LLM models {(first_llmmodel_options).capitalize()}-{(last_llmmodel_options).capitalize()}')
         @app_commands.choices(llmmodels=llmmodel_options)
         async def llmmodel(i: discord.Interaction, llmmodels: typing.Optional[app_commands.Choice[str]]):
             selected_llmmodel = llmmodels.value if llmmodels is not None else ''
@@ -2583,9 +2632,11 @@ if all_llmmodels:
 
     elif 25 < len(all_llmmodels) <= 50:
         @client.hybrid_command(name="llmmodel", description='Choose an LLM model (pick only one)')
-        @app_commands.describe(models_1=f'LLM models A-{last_llmmodel_options}')
+        @app_commands.rename(models_1=f'llm-models_{first_llmmodel_options}-{last_llmmodel_options}')
+        @app_commands.describe(models_1=f'LLM models {(first_llmmodel_options).capitalize()}-{(last_llmmodel_options).capitalize()}')
         @app_commands.choices(models_1=llmmodel_options)
-        @app_commands.describe(models_2=f'LLM models {first_llmmodel_options1}-Z')
+        @app_commands.rename(models_2=f'llm-models_{first_llmmodel_options1}-{last_llmmodel_options1}')
+        @app_commands.describe(models_2=f'LLM models {(first_llmmodel_options1).capitalize()}-{(last_llmmodel_options1).capitalize()}')
         @app_commands.choices(models_2=llmmodel_options1)
         async def llmmodel(i: discord.Interaction, models_1: typing.Optional[app_commands.Choice[str]], models_2: typing.Optional[app_commands.Choice[str]]):
             if models_1 and models_2:
@@ -2595,11 +2646,14 @@ if all_llmmodels:
 
     elif 50 < len(all_llmmodels) <= 75:
         @client.hybrid_command(name="llmmodel", description='Choose an LLM model (pick only one)')
-        @app_commands.describe(models_1=f'LLM models A-{last_llmmodel_options}')
+        @app_commands.rename(models_1=f'llm-models_{first_llmmodel_options}-{last_llmmodel_options}')
+        @app_commands.describe(models_1=f'LLM models {(first_llmmodel_options).capitalize()}-{(last_llmmodel_options).capitalize()}')
         @app_commands.choices(models_1=llmmodel_options)
-        @app_commands.describe(models_2=f'LLM models {first_llmmodel_options1}-{last_llmmodel_options1}')
+        @app_commands.rename(models_2=f'llm-models_{first_llmmodel_options1}-{last_llmmodel_options1}')
+        @app_commands.describe(models_2=f'LLM models {(first_llmmodel_options1).capitalize()}-{(last_llmmodel_options1).capitalize()}')
         @app_commands.choices(models_2=llmmodel_options1)
-        @app_commands.describe(models_3=f'LLM models {first_llmmodel_options2}-Z')
+        @app_commands.rename(models_3=f'llm-models_{first_llmmodel_options2}-{last_llmmodel_options2}')
+        @app_commands.describe(models_3=f'LLM models {(first_llmmodel_options2).capitalize()}-{(last_llmmodel_options2).capitalize()}')
         @app_commands.choices(models_3=llmmodel_options2)
         async def llmmodel(i: discord.Interaction, models_1: typing.Optional[app_commands.Choice[str]], models_2: typing.Optional[app_commands.Choice[str]], models_3: typing.Optional[app_commands.Choice[str]]):
             if sum(1 for v in (models_1, models_2, models_3) if v) > 1:
@@ -2609,13 +2663,17 @@ if all_llmmodels:
 
     elif 75 < len(all_llmmodels) <= 100:
         @client.hybrid_command(name="llmmodel", description='Choose an LLM model (pick only one)')
-        @app_commands.describe(models_1=f'LLM models A-{last_llmmodel_options}')
+        @app_commands.rename(models_1=f'llm-models_{first_llmmodel_options}-{last_llmmodel_options}')
+        @app_commands.describe(models_1=f'LLM models {(first_llmmodel_options).capitalize()}-{(last_llmmodel_options).capitalize()}')
         @app_commands.choices(models_1=llmmodel_options)
-        @app_commands.describe(models_2=f'LLM models {first_llmmodel_options1}-{last_llmmodel_options1}')
+        @app_commands.rename(models_2=f'llm-models_{first_llmmodel_options1}-{last_llmmodel_options1}')
+        @app_commands.describe(models_2=f'LLM models {(first_llmmodel_options1).capitalize()}-{(last_llmmodel_options1).capitalize()}')
         @app_commands.choices(models_2=llmmodel_options1)
-        @app_commands.describe(models_3=f'LLM models {first_llmmodel_options2}-{last_llmmodel_options2}')
+        @app_commands.rename(models_3=f'llm-models_{first_llmmodel_options2}-{last_llmmodel_options2}')
+        @app_commands.describe(models_3=f'LLM models {(first_llmmodel_options2).capitalize()}-{(last_llmmodel_options2).capitalize()}')
         @app_commands.choices(models_3=llmmodel_options2)
-        @app_commands.describe(models_4=f'LLM models {first_llmmodel_options3}-Z')
+        @app_commands.rename(models_4=f'llm-models_{first_llmmodel_options3}-{last_llmmodel_options3}')
+        @app_commands.describe(models_4=f'LLM models {(first_llmmodel_options3).capitalize()}-{(last_llmmodel_options3).capitalize()}')
         @app_commands.choices(models_4=llmmodel_options3)
         async def llmmodel(i: discord.Interaction, models_1: typing.Optional[app_commands.Choice[str]], models_2: typing.Optional[app_commands.Choice[str]], models_3: typing.Optional[app_commands.Choice[str]], models_4: typing.Optional[app_commands.Choice[str]]):
             if sum(1 for v in (models_1, models_2, models_3, models_4) if v) > 1:
@@ -2728,23 +2786,17 @@ async def process_speak(i, input_text, selected_voice=None, lang=None, voice_inp
     try:
         user_voice = await process_user_voice(i, voice_input)
         tts_args = await process_speak_args(i, selected_voice, lang, user_voice)
-        info_embed.title = f"Generating speach from text ... "
-        info_embed.description = ""
-        message = await i.reply(embed=info_embed)
-        llm_payload = await initialize_llm_payload(i, text=input_text)
+        llm_payload = await initialize_llm_payload(i.author.display_name, text=input_text)
         llm_payload['_continue'] = True
         llm_payload['state']['max_new_tokens'] = 1
         llm_payload['state']['min_length'] = 0
         llm_payload['state']['history'] = {'internal': [[input_text, input_text]], 'visible': [[input_text, input_text]]}
         llm_payload['save_history'] = False
-        await update_extensions(tts_args) # Update tts_client extension settings
-        #await ai_generate(i, 'speak', input_text, llm_payload, tags=None)
-        _, tts_resp = await chatbot_wrapper_wrapper(llm_payload)
-        if tts_resp: await task_queue.put(process_tts_resp(i, tts_resp)) # Process this in background
-        await update_extensions(client.settings['llmcontext'].get('extensions', {})) # Restore character specific extension settings
-        if user_voice: os.remove(user_voice)
-        await send_long_message(i.channel, (f'**{i.author} requested text to speech:**\n{input_text}'))
-        await message.delete()
+        # offload to ai_gen queue
+        ireply = await i.reply("Your tts request was added to the generation queue", ephemeral=True)
+        asyncio.create_task(delete_message_after(ireply, 5))
+        queue_item = {'user': i.author, 'user_id': i.author.mention, 'channel': i.channel, 'source': '/speak', 'text': input_text, 'llm_payload': llm_payload, 'speak': {'tts:args': tts_args, 'user_voice': user_voice}}
+        await ai_generate(i.author, i.channel, queue_item)
     except Exception as e:
         logging.error(f"Error processing tts request: {e}")
         await i.send(f"Error processing tts request: {e}", ephemeral=True)
@@ -2779,14 +2831,16 @@ async def fetch_speak_options():
 if tts_client and tts_client in supported_tts_clients:
     ext, lang_list, all_voices = asyncio.run(fetch_speak_options())
     voice_options = [app_commands.Choice(name=voice_name.replace('_', ' ').title(), value=f'{voice_name}{ext}') for voice_name in all_voices[:25]]
-    last_voice_options = voice_options[-1].name[0].capitalize() # Letter for options description
+    first_voice_options = voice_options[0].name[0].lower() # Letter for options description
+    last_voice_options = voice_options[-1].name[0].lower() # Letter for options description
     if len(all_voices) > 25:
         voice_options1 = [app_commands.Choice(name=voice_name.replace('_', ' ').title(), value=f'{voice_name}{ext}') for voice_name in all_voices[25:50]]
-        first_voice_options1 = voice_options1[0].name[0].capitalize() # Letter for options description
-        last_voice_options1 = voice_options1[-1].name[0].capitalize() # Letter for options description
+        first_voice_options1 = voice_options1[0].name[0].lower() # Letter for options description
+        last_voice_options1 = voice_options1[-1].name[0].lower() # Letter for options description
         if len(all_voices) > 50:
             voice_options2 = [app_commands.Choice(name=voice_name.replace('_', ' ').title(), value=f'{voice_name}{ext}') for voice_name in all_voices[50:75]]
-            first_voice_options2 = voice_options2[0].name[0].capitalize() # Letter for options description
+            first_voice_options2 = voice_options2[0].name[0].lower() # Letter for options description
+            last_voice_options2 = voice_options2[-1].name[0].lower() # Letter for options description
             if len(all_voices) > 75:
                 all_voices = all_voices[:75]
                 logging.warning("'/speak' command only allows up to 75 voices. Some voices were omitted.")
@@ -2795,7 +2849,8 @@ if tts_client and tts_client in supported_tts_clients:
 
     if len(all_voices) <= 25:
         @client.hybrid_command(name="speak", description='AI will speak your text using a selected voice')
-        @app_commands.describe(voice='Voices A-Z')
+        @app_commands.rename(voice=f'voices_{first_voice_options}-{last_voice_options}')
+        @app_commands.describe(voice=f'Voices {(first_voice_options).capitalize()}-{(last_voice_options).capitalize()}')
         @app_commands.choices(voice=voice_options)
         @app_commands.choices(lang=lang_options)
         async def speak(i: discord.Interaction, input_text: str, voice: typing.Optional[app_commands.Choice[str]], lang: typing.Optional[app_commands.Choice[str]], voice_input: typing.Optional[discord.Attachment]):
@@ -2806,9 +2861,11 @@ if tts_client and tts_client in supported_tts_clients:
 
     elif 25 < len(all_voices) <= 50:
         @client.hybrid_command(name="speak", description='AI will speak your text using a selected voice (pick only one)')
-        @app_commands.describe(voice_1=f'Voices A-{last_voice_options}')
+        @app_commands.rename(voice_1=f'voices_{first_voice_options}-{last_voice_options}')
+        @app_commands.describe(voice_1=f'Voices {(first_voice_options).capitalize()}-{(last_voice_options).capitalize()}')
         @app_commands.choices(voice_1=voice_options)
-        @app_commands.describe(voice_2=f'Voices {first_voice_options1}-Z')
+        @app_commands.rename(voice_2=f'voices_{first_voice_options1}-{last_voice_options1}')
+        @app_commands.describe(voice_2=f'Voices {(first_voice_options1).capitalize()}-{(last_voice_options1).capitalize()}')
         @app_commands.choices(voice_2=voice_options1)
         @app_commands.choices(lang=lang_options)
         async def speak(i: discord.Interaction, input_text: str, voice_1: typing.Optional[app_commands.Choice[str]], voice_2: typing.Optional[app_commands.Choice[str]], lang: typing.Optional[app_commands.Choice[str]], voice_input: typing.Optional[discord.Attachment]):
@@ -2821,11 +2878,14 @@ if tts_client and tts_client in supported_tts_clients:
 
     elif 50 < len(all_voices) <= 75:
         @client.hybrid_command(name="speak", description='AI will speak your text using a selected voice (pick only one)')
-        @app_commands.describe(voice_1=f'Voices A-{last_voice_options}')
+        @app_commands.rename(voice_1=f'voices_{first_voice_options}-{last_voice_options}')
+        @app_commands.describe(voice_1=f'Voices {(first_voice_options).capitalize()}-{(last_voice_options).capitalize()}')
         @app_commands.choices(voice_1=voice_options)
-        @app_commands.describe(voice_2=f'Voices {first_voice_options1}-{last_voice_options1}')
+        @app_commands.rename(voice_2=f'voices_{first_voice_options1}-{last_voice_options1}')
+        @app_commands.describe(voice_2=f'Voices {(first_voice_options1).capitalize()}-{(last_voice_options1).capitalize()}')
         @app_commands.choices(voice_2=voice_options1)
-        @app_commands.describe(voice_3=f'Voices {first_voice_options2}-Z')
+        @app_commands.rename(voice_3=f'voices_{first_voice_options2}-{last_voice_options2}')
+        @app_commands.describe(voice_3=f'Voices {(first_voice_options2).capitalize()}-{(last_voice_options2).capitalize()}')
         @app_commands.choices(voice_3=voice_options2)
         @app_commands.choices(lang=lang_options)
         async def speak(i: discord.Interaction, input_text: str, voice_1: typing.Optional[app_commands.Choice[str]], voice_2: typing.Optional[app_commands.Choice[str]], voice_3: typing.Optional[app_commands.Choice[str]], lang: typing.Optional[app_commands.Choice[str]], voice_input: typing.Optional[discord.Attachment]):
