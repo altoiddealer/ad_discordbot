@@ -75,7 +75,6 @@ warnings.filterwarnings("ignore", category=UserWarning, message="TypedStorage is
 warnings.filterwarnings("ignore", category=UserWarning, message="You have modified the pretrained model configuration to control generation")
 
 import modules.extensions as extensions_module
-from modules.extensions import apply_extensions
 from modules.chat import chatbot_wrapper, load_character
 from modules import shared
 from modules import chat, utils
@@ -278,15 +277,39 @@ if settings_file is not None:
     else:
         logging.error("Failed to load local llm settings file.")
 
+def load_extensions(extensions, available_extensions):
+    extensions_module.state = {}
+    for i, name in enumerate(shared.args.extensions):
+        if name in available_extensions:
+            if name != 'api':
+                logging.info(f'Loading the extension "{name}"')
+            try:
+                try:
+                    exec(f"import extensions.{name}.script")
+                except ModuleNotFoundError:
+                    logging.error(f"Could not import the requirements for '{name}'. Make sure to install the requirements for the extension.\n\nLinux / Mac:\n\npip install -r extensions/{name}/requirements.txt --upgrade\n\nWindows:\n\npip install -r extensions\\{name}\\requirements.txt --upgrade\n\nIf you used the one-click installer, paste the command above in the terminal window opened after launching the cmd script for your OS.")
+                    raise
+                extension = getattr(extensions, name).script
+                extensions_module.apply_settings(extension, name)
+                if hasattr(extension, "setup"):
+                    print(f'Extension "{name}" is flagged as needing setup. Set it up in native textgen-webui and try again. Skipping {name}.')
+                    continue
+                extensions_module.state[name] = [True, i]
+            except:
+                logging.error(f'Failed to load the extension "{name}".')
+
 # Default extensions
-extensions_module.available_extensions = get_available_extensions()
+available_extensions = get_available_extensions()
 for extension in shared.settings["default_extensions"]:
     shared.args.extensions = shared.args.extensions or []
     if extension not in shared.args.extensions:
         shared.args.extensions.append(extension)
 
+# monkey patch load_extensions behavior from pre-commit b3fc2cd
+extensions_module.load_extensions = load_extensions
+
 if shared.args.extensions and len(shared.args.extensions) > 0:
-    extensions_module.load_extensions()
+    extensions_module.load_extensions(extensions_module.extensions, extensions_module.available_extensions)
 
 all_llmmodels = get_llmmodels()
 
@@ -739,7 +762,7 @@ async def update_extensions(params):
                 shared.settings.update({'{}-{}'.format(param, key): value for key, value in listed_param.items()})
         else:
             logging.warning(f'** No extension params for this character. Reloading extensions with initial values. **')            
-        extensions_module.load_extensions()  # Load Extensions (again)
+        extensions_module.load_extensions(extensions_module.extensions, extensions_module.available_extensions)  # Load Extensions (again)
     except Exception as e:
         logging.error(f"An error occurred while updating character extension settings: {e}")
 
