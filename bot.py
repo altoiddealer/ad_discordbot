@@ -378,7 +378,7 @@ async def ireply(i, process):
             ireply = await i.reply(f'Your {process} request was added to the generation queue', ephemeral=True)
             del_time = 5
         else:
-            ireply = await i.reply("Processing your request", ephemeral=True)
+            ireply = await i.reply(f'Processing your {process} request', ephemeral=True)
             del_time = 1
         asyncio.create_task(delete_message_after(ireply, del_time))
     except Exception as e:
@@ -634,23 +634,6 @@ async def send_long_message(channel, message_text):
                 break
 
 ## Function to automatically change image models
-# Set the topic of the channel and announce imgmodel as configured
-async def auto_announce_imgmodel(selected_imgmodel, selected_imgmodel_name):
-    try:
-        # Set the topic of the channel and announce imgmodel as configured
-        if config.imgmodels['auto_change_imgmodels'].get('channel_announce', ''):
-            channel = client.get_channel(config.imgmodels['auto_change_imgmodels']['channel_announce'])
-            if config.imgmodels['update_topic'].get('enabled', False):
-                await imgmodel_update_topic(channel, selected_imgmodel, selected_imgmodel_name)
-            if config.imgmodels['announce_in_chat'].get('enabled', False):
-                reply = await imgmodel_announce(selected_imgmodel, selected_imgmodel_name)
-                if reply:
-                    await channel.send(reply)
-                else:
-                    await channel.send(f"Updated imgmodel settings to: {selected_imgmodel_name}")
-    except Exception as e:
-        logging.error(f"Error announcing automatically selected imgmodel: {e}")
-
 # Select imgmodel based on mode, while avoid repeating current imgmodel
 async def auto_select_imgmodel(current_imgmodel_name, imgmodel_names, mode='random'):   
     try:
@@ -682,23 +665,21 @@ async def auto_update_imgmodel_task(mode='random'):
     while True:
         frequency = config.imgmodels['auto_change_imgmodels'].get('frequency', 1.0)
         duration = frequency*3600 # 3600 = 1 hour
-        await asyncio.sleep(duration)
+        #await asyncio.sleep(duration)
         try:
             active_settings = load_file('ad_discordbot/activesettings.yaml')
             current_imgmodel_name = active_settings.get('imgmodel', {}).get('imgmodel_name', '')
             imgmodel_names = [imgmodel.get('imgmodel_name', '') for imgmodel in all_imgmodels]           
             # Select an imgmodel automatically
             selected_imgmodel = await auto_select_imgmodel(current_imgmodel_name, imgmodel_names, mode)
-            # Merge selected imgmodel/tag data with base settings
-            selected_imgmodel, selected_imgmodel_name, selected_imgmodel_tags = await merge_imgmodel_data(selected_imgmodel)
-            # Commit all the settings
-            await update_imgmodel(selected_imgmodel, selected_imgmodel_tags)
-            # Set the topic of the channel and announce imgmodel as configured
-            await auto_announce_imgmodel(selected_imgmodel, selected_imgmodel_name)
-            logging.info(f"Automatically updated imgmodel settings to: {selected_imgmodel_name}")
+            channel = config.imgmodels['auto_change_imgmodels'].get('channel_announce', None)
+            if channel: channel = client.get_channel(channel)
+            # offload to ai_gen queue
+            queue_item = {'user': 'auto', 'channel': channel, 'source': 'imgmodel', 'params': {'imgmodel': selected_imgmodel}}
+            await ai_generate('auto', channel, queue_item)
         except Exception as e:
             logging.error(f"Error automatically updating image model: {e}")
-        #await asyncio.sleep(duration)
+        await asyncio.sleep(duration)
 
 imgmodel_update_task = None # Global variable allows process to be cancelled and restarted (reset sleep timer)
 
@@ -1094,11 +1075,60 @@ async def llm_gen(llm_payload):
 
     return last_resp, tts_resp
 
+async def change_imgmodel_task(user, channel, params):
+    try:
+        imgmodel = params.get('imgmodel', {})
+        if channel:
+            info_embed.title = 'Changing Img model ... '
+            info_embed.description = f"Changing to {imgmodel}"
+            embed = await channel.send(embed=info_embed)
+        # Merge selected imgmodel/tag data with base settings
+        imgmodel, imgmodel_name, imgmodel_tags = await merge_imgmodel_data(imgmodel)
+        # Commit all the settings
+        await update_imgmodel(imgmodel, imgmodel_tags)
+        # Announce from /imgmodel
+        if channel:
+            reply = f"Changed Img model to: {imgmodel_name}"
+            url = imgmodel.get('imgmodel_url', None)
+            if url: reply += " <" + url + ">"
+            await embed.delete()
+            await channel.send(reply)
+        logging.info(f"Updated Img model settings to: {imgmodel_name}")
+        if config.discord['post_active_settings']['enabled']:
+            await task_queue.put(post_active_settings())
+    except Exception as e:
+        logging.error(f"Error changing Img model: {e}")
+
+# Process selected LLM model
+async def change_llmmodel_task(user, channel, params):
+    try:
+        llmmodel = params.get('llmmodel', {})
+        info_embed.title = 'Changing LLM model ... '
+        info_embed.description = f"Changing to {llmmodel}"
+        embed = await channel.send(embed=info_embed)
+        # Unload the current LLM model
+        if shared.model_name != "None":
+            unload_model() # Unload current LLM model
+        # Assign values for selected LLM model
+        shared.model_name = llmmodel
+        model_settings = get_model_specific_settings(shared.model_name)
+        shared.settings.update(model_settings)
+        update_model_parameters(model_settings, initial=True)
+        # Load the selected LLM model
+        shared.model, shared.tokenizer = load_model(shared.model_name)
+        if shared.args.lora: add_lora_to_model([shared.args.lora])
+        await embed.delete()
+        await channel.send(f"Changed LLM model to: {llmmodel}")
+    except Exception as e:
+        try: await embed.delete()
+        except: pass
+        logging.error(f"Error changing LLM Model from /llmmodel command: {e}")
+
 async def cont_regen_gen(user, channel, llm_payload, source, message):
     try:
         cmd = 'Continuing' if source == 'cont' else 'Regenerating'
-        info_embed.title = f'{cmd} text for {user} ... '
-        info_embed.description = ""
+        info_embed.title = f'{cmd} ... '
+        info_embed.description = f'{cmd} text for {user}'
         embed = await channel.send(embed=info_embed)
         last_resp, tts_resp = await llm_gen(llm_payload)
         if tts_resp: await task_queue.put(process_tts_resp(channel, tts_resp)) # Process this in background
@@ -1112,20 +1142,22 @@ async def cont_regen_gen(user, channel, llm_payload, source, message):
         except: pass
         logging.error(f'An error occurred while "{cmd}": {e}')
 
-async def speak_gen(channel, user, user_id, text, llm_payload, speak):
+async def speak_gen(channel, user, user_id, text, llm_payload, params):
     try:
         info_embed.title = f"{user} requested tts ... "
         info_embed.description = ""
         message = await channel.send(embed=info_embed)
-        await update_extensions(speak.get('tts_args', {}))
+        await update_extensions(params.get('tts_args', {}))
         _, tts_resp = await llm_gen(llm_payload)
         if tts_resp: await task_queue.put(process_tts_resp(channel, tts_resp)) # Process this in background
         await update_extensions(client.settings['llmcontext'].get('extensions', {})) # Restore character specific extension settings
-        if speak.get('user_voice'): os.remove(speak['user_voice'])
+        if params.get('user_voice'): os.remove(params['user_voice'])
         mention_resp = update_mention(user_id, text)
         await message.delete()
         await send_long_message(channel, mention_resp)
     except Exception as e:
+        try: await embed.delete()
+        except: pass
         logging.error(f"An error occurred while generating tts for '/speak': {e}")
 
 def update_mention(user_id, last_resp):
@@ -1147,9 +1179,8 @@ def unpack_queue_item(queue_item):
     img_prompt = queue_item.get('img_prompt', None)
     llm_payload = queue_item.get('llm_payload', {})
     tags = queue_item.get('tags', {})
-    speak = queue_item.get('speak', {})
     message = queue_item.get('message', None)
-    imgcmd = queue_item.get('imgcmd', {})    
+    params = queue_item.get('params', {})    
     if source == 'on_message':
         logging.info(f'reply requested: {user} asks {llm_payload["state"]["name2"]}: "{llm_payload["text"]}"')
     if source == 'image':
@@ -1160,10 +1191,16 @@ def unpack_queue_item(queue_item):
         logging.info(f'{user} used "Continue"')
     if source == 'regen':
         logging.info(f'{user} used "Regenerate"')
-
-    return user, user_id, channel, source, text, img_prompt, llm_payload, tags, speak, message, imgcmd
+    if source == 'llmmodel':
+        logging.info(f'{user} used "/llmmodel"')
+    if source == 'imgmodel':
+        if user == 'auto': logging.info("Automatically updated imgmodel settings")
+        else: logging.info(f'{user} used "/imgmodel"')
+    return user, user_id, channel, source, text, img_prompt, llm_payload, tags, message, params
 
 def check_num_in_queue(user_id):
+    if isinstance(user_id, str):
+        return 0 # Not initiated by user
     user_id = user_id.mention
     user_list_in_que = [list(user_id.keys())[0] for user_id in queues]
     return user_list_in_que.count(user_id)
@@ -1189,19 +1226,32 @@ async def ai_generate(user_id, channel, queue_item):
                 blocking = True
                 # Unpack the next queue item, process depending on its truthy values
                 queue_item = queues.pop(0)
-                user, user_id, channel, source, text, img_prompt, llm_payload, tags, speak, message, imgcmd = unpack_queue_item(queue_item)
+                user, user_id, channel, source, text, img_prompt, llm_payload, tags, message, params = unpack_queue_item(queue_item)
+                if channel is None:
+                    if source == 'imgmodel':
+                        await change_imgmodel_task(user, channel, params)
+                        blocking = False
+                        continue
                 async with channel.typing():
                     if source == 'speak':
-                        await speak_gen(channel, user, user_id, text, llm_payload, speak)
+                        await speak_gen(channel, user, user_id, text, llm_payload, params)
                         blocking = False
                         continue
                     if source == 'image':
-                        await img_gen(channel, img_prompt, tags, imgcmd)
-                        await channel.send(imgcmd['message'])
+                        await img_gen(channel, img_prompt, tags, params)
+                        await channel.send(params['message'])
                         blocking = False
                         continue
                     if source == 'cont' or source == 'regen':
                         await cont_regen_gen(user, channel, llm_payload, source, message)
+                        blocking = False
+                        continue
+                    if source == 'llmmodel':
+                        await change_llmmodel_task(user, channel, params)
+                        blocking = False
+                        continue
+                    if source == 'imgmodel':
+                        await change_imgmodel_task(user, channel, params)
                         blocking = False
                         continue
                     # make a 'Prompting...' embed when generating text for an image
@@ -1223,7 +1273,7 @@ async def ai_generate(user_id, channel, queue_item):
                         if picture_frame:
                             await picture_frame.delete()
                         if len(last_resp) > 1800: last_resp = last_resp[:1800] # arbitrarily shorten it for img purposes
-                        await img_gen(channel, last_resp, tags, imgcmd)
+                        await img_gen(channel, last_resp, tags, params)
                     if tts_resp: await task_queue.put(process_tts_resp(channel, tts_resp)) # Process this in background
                     mention_resp = update_mention(user_id, last_resp) # @mention non-consecutive users
                     await send_long_message(channel, mention_resp)
@@ -1671,11 +1721,11 @@ def apply_lrctl(matches):
     except Exception as e:
         logging.error(f"Error processing lrctl: {e}")
 
-def apply_imgcmd(img_payload, imgcmd):
+def apply_imgcmd_params(img_payload, params):
     try:
-        size = imgcmd.get('size', None) if imgcmd else None
-        face_swap = imgcmd.get('face_swap', None) if imgcmd else None
-        controlnet = imgcmd.get('controlnet', None) if imgcmd else None
+        size = params.get('size', None) if params else None
+        face_swap = params.get('face_swap', None) if params else None
+        controlnet = params.get('controlnet', None) if params else None
         if size: img_payload.update(size)
         if face_swap:
             img_payload['alwayson_scripts']['reactor']['args'][0] = face_swap # image in base64 format
@@ -1892,7 +1942,7 @@ async def send_images(channel, img_prompt, images, do_censor):
     except Exception as e:
         logging.error(f"An error occurred when sending generated images: {e}")
 
-async def img_gen(channel, img_prompt, tags, imgcmd):
+async def img_gen(channel, img_prompt, tags, params):
     try:
         info_embed.title = "Processing"
         info_embed.description = " ... "  # await check_a1111_progress()
@@ -1901,7 +1951,7 @@ async def img_gen(channel, img_prompt, tags, imgcmd):
         info_embed.title = "Sending prompt to A1111 ..."
         matches = tags['matches']
         # Initialize img_payload
-        neg_prompt = imgcmd.get('neg_prompt', '')
+        neg_prompt = params.get('neg_prompt', '')
         img_payload = initialize_img_payload(img_prompt, neg_prompt)
         # Apply tags relevant to Img gen
         img_payload = process_img_payload_tags(img_payload, matches)
@@ -1910,7 +1960,7 @@ async def img_gen(channel, img_prompt, tags, imgcmd):
         # Apply tags relevant to Img prompts
         img_payload = process_img_prompt_tags(img_payload, tags)
         # Apply menu selections from /image command
-        img_payload = apply_imgcmd(img_payload, imgcmd)
+        img_payload = apply_imgcmd_params(img_payload, params)
         # Clean anything up that gets messy
         clean_img_payload(img_payload)
         # Generate images
@@ -2108,11 +2158,11 @@ async def image(
         face_swap=faceswapimg if face_swap else None
         controlnet=controlnet_dict if controlnet_dict else None
 
-        imgcmd = {'neg_prompt': neg_prompt, 'size': size, 'face_swap': face_swap, 'controlnet': controlnet, 'message': message}
+        params = {'neg_prompt': neg_prompt, 'size': size, 'face_swap': face_swap, 'controlnet': controlnet, 'message': message}
 
         await ireply(i, 'image') # send a response msg to the user
         # offload to ai_gen queue
-        queue_item = {'user': i.author, 'user_id': i.author.mention, 'channel': i.channel, 'source': 'image', 'img_prompt': prompt, 'tags': tags, 'imgcmd': imgcmd}
+        queue_item = {'user': i.author, 'user_id': i.author.mention, 'channel': i.channel, 'source': 'image', 'img_prompt': prompt, 'tags': tags, 'params': params}
         await ai_generate(i.author, i.channel, queue_item)
     except Exception as e:
         logging.error(f"An error occurred in image(): {e}")
@@ -2361,58 +2411,6 @@ async def a1111_load_imgmodel(options):
     except Exception as e:
         logging.error(f"Error loading image model in A1111: {e}")
 
-# Announce imgmodel change as configured
-async def imgmodel_announce(selected_imgmodel, selected_imgmodel_name):
-    try:
-        reply = ''
-        reply_prefix = config.imgmodels['announce_in_chat']['reply_prefix']
-        # Process .yaml method
-        if not config.imgmodels['get_imgmodels_via_api']['enabled']:
-            reply = f"{reply_prefix}{selected_imgmodel.get('imgmodel_name')}"
-            if config.imgmodels['announce_in_chat']['include_url']:
-                reply += " <" + selected_imgmodel.get('imgmodel_url', {}) + ">"
-            if config.imgmodels['announce_in_chat']['include_params']:
-                selected_imgmodel_override_settings_info = ", ".join(
-                    f"{key}: {value}" for key, value in selected_imgmodel_override_settings.imgmodels())
-                selected_imgmodel_img_payload_info = ", ".join(
-                    f"{key}: {value}" for key, value in selected_imgmodel_img_payload.imgmodels())
-                reply += f"\n```{selected_imgmodel_override_settings_info}, {selected_imgmodel_img_payload_info}```"
-        else: # Process A1111 API method
-            reply = f"{reply_prefix}{selected_imgmodel_name}"
-        return reply
-    except Exception as e:
-        logging.error(f"Error announcing imgmodel: {e}")
-
-# Update channel topic with new imgmodel info as configured
-async def imgmodel_update_topic(channel, selected_imgmodel, selected_imgmodel_name):
-    try:
-        topic_prefix = config.imgmodels['update_topic']['topic_prefix']
-        # Process .yaml method
-        if not config.imgmodels['get_imgmodels_via_api']['enabled']:
-            new_topic = f"{topic_prefix}{selected_imgmodel.get('imgmodel_name')}"
-            if config.imgmodels['update_topic']['include_url']:
-                new_topic += " " + selected_imgmodel.get('imgmodel_url', {})
-        else: # Process A1111 API method
-            new_topic = f"{topic_prefix}{selected_imgmodel_name}"
-        await channel.edit(topic=new_topic)
-    except Exception as e:
-        logging.error(f"Error updating channel topic: {e}")
-
-async def process_imgmodel_announce(i, selected_imgmodel, selected_imgmodel_name):
-    try:
-        # Set the topic of the channel and announce imgmodel as configured
-        if config.imgmodels['update_topic']['enabled']:
-            channel = i.channel
-            await imgmodel_update_topic(channel, selected_imgmodel, selected_imgmodel_name)
-        if config.imgmodels['announce_in_chat']['enabled']:
-            reply = await imgmodel_announce(selected_imgmodel, selected_imgmodel_name)
-            if reply:
-                await i.send(reply)
-            else:
-                await i.send(f"Updated imgmodel settings to: {selected_imgmodel_name}")
-    except Exception as e:
-        logging.error(f"Error announcing imgmodel: {e}")
-
 async def update_imgmodel(selected_imgmodel, selected_imgmodel_tags):
     try:
         active_settings = load_file('ad_discordbot/activesettings.yaml')
@@ -2422,7 +2420,7 @@ async def update_imgmodel(selected_imgmodel, selected_imgmodel_tags):
         await update_client_settings() # Sync updated user settings to client
         # Load the imgmodel and VAE via A1111 API
         model_data = active_settings['imgmodel'].get('override_settings', None) or active_settings['imgmodel']['payload'].get('override_settings')
-        await task_queue.put(a1111_load_imgmodel(model_data)) # Process this in the background
+        await a1111_load_imgmodel(model_data)
         # Update size options for /image command
         await task_queue.put(update_size_options(active_settings.get('imgmodel').get('payload').get('width'),active_settings.get('imgmodel').get('payload').get('height')))
     except Exception as e:
@@ -2509,17 +2507,12 @@ async def get_selected_imgmodel_data(selected_imgmodel_value):
 async def process_imgmodel(i, selected_imgmodel_value):
     try:
         selected_imgmodel = await get_selected_imgmodel_data(selected_imgmodel_value)
-        # Merge selected imgmodel/tag data with base settings
-        selected_imgmodel, selected_imgmodel_name, selected_imgmodel_tags = await merge_imgmodel_data(selected_imgmodel)
-        # Commit all the settings
-        await update_imgmodel(selected_imgmodel, selected_imgmodel_tags)
-        # Set the topic of the channel and announce imgmodel as configured
-        await process_imgmodel_announce(i, selected_imgmodel, selected_imgmodel_name)
-        logging.info(f"Updated imgmodel settings to: {selected_imgmodel_name}")
+        await ireply(i, 'Img model change') # send a response msg to the user
+        # offload to ai_gen queue
+        queue_item = {'user': i.author, 'user_id': i.author.mention, 'channel': i.channel, 'source': 'imgmodel', 'params': {'imgmodel': selected_imgmodel}}
+        await ai_generate(i.author, i.channel, queue_item)
     except Exception as e:
-        logging.error(f"Error processing selected imgmodel from /image command: {e}")
-    if config.discord['post_active_settings']['enabled']:
-        await task_queue.put(post_active_settings())
+        logging.error(f"Error processing selected imgmodel from /imgmodel command: {e}")
 
 all_imgmodels = []
 all_imgmodels = asyncio.run(fetch_imgmodels())
@@ -2611,28 +2604,13 @@ if all_imgmodels:
             await process_imgmodel(i, selected_imgmodel)
 
 ## /llmmodel command
-# Load the selected LLM model
-async def load_llmmodel():
-    try:
-        # Load the selected LLM model
-        shared.model, shared.tokenizer = load_model(shared.model_name)
-        if shared.args.lora:
-            add_lora_to_model([shared.args.lora])
-    except Exception as e:
-        logging.error(f"Error loading selected LLM model: {e}")
-
 # Process selected LLM model
 async def process_llmmodel(i, selected_llmmodel):
     try:
-        if shared.model_name != "None":
-            unload_model() # Unload current LLM model
-        # Assign values for selected LLM model
-        shared.model_name = selected_llmmodel
-        model_settings = get_model_specific_settings(shared.model_name)
-        shared.settings.update(model_settings)
-        update_model_parameters(model_settings, initial=True)
-        await i.send(f"Changed LLM model to: {selected_llmmodel}")
-        await task_queue.put(load_llmmodel())
+        await ireply(i, 'LLM model change') # send a response msg to the user
+        # offload to ai_gen queue
+        queue_item = {'user': i.author, 'user_id': i.author.mention, 'channel': i.channel, 'source': 'llmmodel', 'params': {'llmmodel': selected_llmmodel}}
+        await ai_generate(i.author, i.channel, queue_item)
     except Exception as e:
         logging.error(f"Error processing /llmmodel command: {e}")
 
@@ -2831,7 +2809,7 @@ async def process_speak(i, input_text, selected_voice=None, lang=None, voice_inp
         llm_payload['save_history'] = False
         await ireply(i, 'tts') # send a response msg to the user
         # offload to ai_gen queue
-        queue_item = {'user': i.author, 'user_id': i.author.mention, 'channel': i.channel, 'source': 'speak', 'text': input_text, 'llm_payload': llm_payload, 'speak': {'tts_args': tts_args, 'user_voice': user_voice}}
+        queue_item = {'user': i.author, 'user_id': i.author.mention, 'channel': i.channel, 'source': 'speak', 'text': input_text, 'llm_payload': llm_payload, 'params': {'tts_args': tts_args, 'user_voice': user_voice}}
         await ai_generate(i.author, i.channel, queue_item)
     except Exception as e:
         logging.error(f"Error processing tts request: {e}")

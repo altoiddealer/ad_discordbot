@@ -86,16 +86,5 @@ imgmodels = {
         'mode': 'random',       # 'random' = picks model at random / 'cycle' = sequential order
         'frequency': 2.0,       # How often to change models in hours. 0.5 = 30 minutes
         'channel_announce': ''  # If a channel is specified, it will announce/update as configured below. '' = Don't announce/update topic.
-    },
-    'update_topic': {
-        'enabled': True,
-        'topic_prefix': "**Current Image Model:** ",
-        'include_url': True         # URL only applies if 'get_imgmodels_via_api': False
-    },
-    'announce_in_chat': {
-        'enabled': True,
-        'reply_prefix': "**Model Loaded:** ",
-        'include_url': True,        # URL only applies if 'get_imgmodels_via_api': False
-        'include_params': False     # If True, lists all the current A1111 parameters
     }
 }
