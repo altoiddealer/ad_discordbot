@@ -539,26 +539,26 @@ def update_last_change():
     except Exception as e:
         logging.error(f"An error occurred while logging time of profile update to bot.db: {e}")
 
-async def check_last_change(i, char_name):
+async def check_last_change(channel, char_name):
     try:
         change_username = config.discord.get('change_username_with_character', '')
         change_avatar = config.discord.get('change_avatar_with_character', '')
-        if i and client.user.display_name != char_name:
+        if channel and client.user.display_name != char_name:
             # Check for cooldown before allowing profile change
             if change_username or change_avatar:
                 last_change = client.database.last_change
                 if last_change and datetime.now() < last_change + timedelta(minutes=10):
                     remaining_cooldown = last_change + timedelta(minutes=10) - datetime.now()
                     seconds = int(remaining_cooldown.total_seconds())
-                    await i.channel.send(f'Please wait {seconds} before changing character again')
+                    await channel.send(f'Please wait {seconds} before changing character again')
         return change_username, change_avatar
     except Exception as e:
         logging.error(f"An error occurred while checking time of last discord profile update: {e}")
 
-async def change_character(i, char_name):
+async def change_character(channel, char_name):
     try:
         # Check last time username / avatar were changed
-        change_username, change_avatar = await check_last_change(i, char_name)
+        change_username, change_avatar = await check_last_change(channel, char_name)
         # Load the character
         char_llmcontext, char_behavior, char_llmstate = await character_loader(char_name)
         # Update discord username / avatar
@@ -574,7 +574,7 @@ async def change_character(i, char_name):
         # Clear chat history
         reset_session_history()
     except Exception as e:
-        await i.channel.send(f"An error occurred while changing character: {e}")
+        await channel.send(f"An error occurred while changing character: {e}")
         logging.error(f"An error occurred while changing character: {e}")
     return
 
@@ -665,7 +665,7 @@ async def auto_update_imgmodel_task(mode='random'):
     while True:
         frequency = config.imgmodels['auto_change_imgmodels'].get('frequency', 1.0)
         duration = frequency*3600 # 3600 = 1 hour
-        #await asyncio.sleep(duration)
+        await asyncio.sleep(duration)
         try:
             active_settings = load_file('ad_discordbot/activesettings.yaml')
             current_imgmodel_name = active_settings.get('imgmodel', {}).get('imgmodel_name', '')
@@ -679,7 +679,7 @@ async def auto_update_imgmodel_task(mode='random'):
             await ai_generate('auto', channel, queue_item)
         except Exception as e:
             logging.error(f"Error automatically updating image model: {e}")
-        await asyncio.sleep(duration)
+        #await asyncio.sleep(duration)
 
 imgmodel_update_task = None # Global variable allows process to be cancelled and restarted (reset sleep timer)
 
@@ -1078,9 +1078,10 @@ async def llm_gen(llm_payload):
 async def change_imgmodel_task(user, channel, params):
     try:
         imgmodel = params.get('imgmodel', {})
+        imgmodel_name = imgmodel.get('imgmodel_name', '')
         if channel:
             info_embed.title = 'Changing Img model ... '
-            info_embed.description = f"Changing to {imgmodel}"
+            info_embed.description = f"Changing to {imgmodel_name}"
             embed = await channel.send(embed=info_embed)
         # Merge selected imgmodel/tag data with base settings
         imgmodel, imgmodel_name, imgmodel_tags = await merge_imgmodel_data(imgmodel)
@@ -1098,6 +1099,8 @@ async def change_imgmodel_task(user, channel, params):
             await task_queue.put(post_active_settings())
     except Exception as e:
         logging.error(f"Error changing Img model: {e}")
+        try: await embed.delete()
+        except: pass
 
 # Process selected LLM model
 async def change_llmmodel_task(user, channel, params):
@@ -1120,9 +1123,9 @@ async def change_llmmodel_task(user, channel, params):
         await embed.delete()
         await channel.send(f"Changed LLM model to: {llmmodel}")
     except Exception as e:
+        logging.error(f"Error changing LLM Model from /llmmodel command: {e}")
         try: await embed.delete()
         except: pass
-        logging.error(f"Error changing LLM Model from /llmmodel command: {e}")
 
 async def cont_regen_gen(user, channel, llm_payload, source, message):
     try:
@@ -1138,27 +1141,53 @@ async def cont_regen_gen(user, channel, llm_payload, source, message):
         await fetched_message.delete()
         await send_long_message(channel, last_resp)
     except Exception as e:
+        logging.error(f'An error occurred while "{cmd}": {e}')
         try: await embed.delete()
         except: pass
-        logging.error(f'An error occurred while "{cmd}": {e}')
 
-async def speak_gen(channel, user, user_id, text, llm_payload, params):
+async def speak_gen(user, channel, user_id, text, llm_payload, params):
     try:
         info_embed.title = f"{user} requested tts ... "
         info_embed.description = ""
-        message = await channel.send(embed=info_embed)
+        embed = await channel.send(embed=info_embed)
         await update_extensions(params.get('tts_args', {}))
         _, tts_resp = await llm_gen(llm_payload)
         if tts_resp: await task_queue.put(process_tts_resp(channel, tts_resp)) # Process this in background
         await update_extensions(client.settings['llmcontext'].get('extensions', {})) # Restore character specific extension settings
         if params.get('user_voice'): os.remove(params['user_voice'])
         mention_resp = update_mention(user_id, text)
-        await message.delete()
+        await embed.delete()
         await send_long_message(channel, mention_resp)
     except Exception as e:
+        logging.error(f"An error occurred while generating tts for '/speak': {e}")
         try: await embed.delete()
         except: pass
-        logging.error(f"An error occurred while generating tts for '/speak': {e}")
+
+async def change_char_task(user, channel, source, params):
+    try:
+        char_name = params.get('char_name', {})
+        if source == 'character':
+            info_embed.title = "Changing character ... "
+            info_embed.description = f'{user} requested character change: "{char_name}"'
+        else:
+            info_embed.title = "Resetting character ... "
+            info_embed.description = f'{user} requested character reset: "{char_name}"'
+        embed = await channel.send(embed=info_embed)
+        await change_character(channel, char_name)
+        greeting = client.settings['llmcontext']['greeting']
+        if greeting:
+            greeting = greeting.replace('{{user}}', 'user')
+            greeting = greeting.replace('{{char}}', char_name)
+        else:
+            greeting = f'**{char_name}** has entered the chat"'
+        await embed.delete()
+        await channel.send(greeting)
+    except Exception as e:
+        logging.error(f"An error occurred while changing character for /character: {e}")
+        try: await embed.delete()
+        except: pass
+
+previous_user_id = ''
 
 def update_mention(user_id, last_resp):
     global previous_user_id
@@ -1169,8 +1198,6 @@ def update_mention(user_id, last_resp):
     return mention_resp
 
 def unpack_queue_item(queue_item):
-    global reply_count
-    reply_count += 1
     user = queue_item.get('user', None)
     user_id = queue_item.get('user_id', None)
     channel = queue_item.get('channel', None)
@@ -1180,9 +1207,12 @@ def unpack_queue_item(queue_item):
     llm_payload = queue_item.get('llm_payload', {})
     tags = queue_item.get('tags', {})
     message = queue_item.get('message', None)
-    params = queue_item.get('params', {})    
+    params = queue_item.get('params', {})
+    info = params.get('llmmodel', '') or params.get('imgmodel', {}).get('imgmodel_name', '') or params.get('char_name', '')
     if source == 'on_message':
         logging.info(f'reply requested: {user} asks {llm_payload["state"]["name2"]}: "{llm_payload["text"]}"')
+    if source == 'character' or source == 'reset':
+        logging.info(f'{user} used "/{source}": "{info}"')
     if source == 'image':
         logging.info(f'{user} used "/image": "{img_prompt}"')
     if source == 'speak':
@@ -1192,94 +1222,87 @@ def unpack_queue_item(queue_item):
     if source == 'regen':
         logging.info(f'{user} used "Regenerate"')
     if source == 'llmmodel':
-        logging.info(f'{user} used "/llmmodel"')
+        logging.info(f'{user} used "/llmmodel": "{info}"')
     if source == 'imgmodel':
         if user == 'auto': logging.info("Automatically updated imgmodel settings")
-        else: logging.info(f'{user} used "/imgmodel"')
+        else: logging.info(f'{user} used "/imgmodel": "{info}"')
     return user, user_id, channel, source, text, img_prompt, llm_payload, tags, message, params
-
-def check_num_in_queue(user_id):
-    if isinstance(user_id, str):
-        return 0 # Not initiated by user
-    user_id = user_id.mention
-    user_list_in_que = [list(user_id.keys())[0] for user_id in queues]
-    return user_list_in_que.count(user_id)
 
 queues = []
 blocking = False
-reply_count = 0
-previous_user_id = ''
 
 async def ai_generate(user_id, channel, queue_item):
     try:
-        num = check_num_in_queue(user_id)
-        if num >=10:
-            await channel.send(f'{user_id.mention} You have 10 items in queue, please allow your requests to finish before adding more to the queue.')
-        else:
-            queues.append(queue_item)
-            global blocking
-            global previous_user_id
-            while len(queues) > 0:
-                if blocking:
-                    await asyncio.sleep(1)
-                    continue
-                blocking = True
-                # Unpack the next queue item, process depending on its truthy values
-                queue_item = queues.pop(0)
-                user, user_id, channel, source, text, img_prompt, llm_payload, tags, message, params = unpack_queue_item(queue_item)
-                if channel is None:
-                    if source == 'imgmodel':
-                        await change_imgmodel_task(user, channel, params)
-                        blocking = False
-                        continue
-                async with channel.typing():
-                    if source == 'speak':
-                        await speak_gen(channel, user, user_id, text, llm_payload, params)
-                        blocking = False
-                        continue
-                    if source == 'image':
-                        await img_gen(channel, img_prompt, tags, params)
-                        await channel.send(params['message'])
-                        blocking = False
-                        continue
-                    if source == 'cont' or source == 'regen':
-                        await cont_regen_gen(user, channel, llm_payload, source, message)
-                        blocking = False
-                        continue
-                    if source == 'llmmodel':
-                        await change_llmmodel_task(user, channel, params)
-                        blocking = False
-                        continue
-                    if source == 'imgmodel':
-                        await change_imgmodel_task(user, channel, params)
-                        blocking = False
-                        continue
-                    # make a 'Prompting...' embed when generating text for an image
-                    should_draw = user_asks_for_image(tags)
-                    picture_frame = None
-                    if should_draw:
-                        if await a1111_online(channel):
-                            info_embed.title = "Prompting ..."
-                            info_embed.description = " "
-                            picture_frame = await channel.send(embed=info_embed)
-                    # process textgen-webui
-                    if llm_payload:
-                        last_resp, tts_resp = await llm_gen(llm_payload)
-                        logging.info("reply sent: \"" + user_id + ": {'text': '" + llm_payload["text"] + "', 'response': '" + last_resp + "'}\"")
-                    # process image generation (A1111 / Forge)
-                    tags = match_img_tags(last_resp, tags)
-                    should_draw = user_asks_for_image(tags)
-                    if should_draw:
-                        if picture_frame:
-                            await picture_frame.delete()
-                        if len(last_resp) > 1800: last_resp = last_resp[:1800] # arbitrarily shorten it for img purposes
-                        await img_gen(channel, last_resp, tags, params)
-                    if tts_resp: await task_queue.put(process_tts_resp(channel, tts_resp)) # Process this in background
-                    mention_resp = update_mention(user_id, last_resp) # @mention non-consecutive users
-                    await send_long_message(channel, mention_resp)
+        queues.append(queue_item)
+        global blocking
+        while len(queues) > 0:
+            if blocking:
+                await asyncio.sleep(1)
+                continue
+            blocking = True
+            # Unpack the next queue item, process depending on its truthy values
+            queue_item = queues.pop(0)
+            user, user_id, channel, source, text, img_prompt, llm_payload, tags, message, params = unpack_queue_item(queue_item)
+            if channel is None:
+                if source == 'imgmodel':
+                    await change_imgmodel_task(user, channel, params)
                     blocking = False
+                    continue
+            if source == 'character' or source == 'reset':
+                await change_char_task(user, channel, source, params)
+                blocking = False
+                continue
+            if source == 'llmmodel':
+                await change_llmmodel_task(user, channel, params)
+                blocking = False
+                continue
+            if source == 'imgmodel':
+                await change_imgmodel_task(user, channel, params)
+                blocking = False
+                continue
+            # Things we want to simulate typing for
+            async with channel.typing():
+                if source == 'speak':
+                    await speak_gen(user, channel, user_id, text, llm_payload, params)
+                    blocking = False
+                    continue
+                if source == 'image':
+                    await img_gen(channel, img_prompt, tags, params)
+                    await channel.send(params['message'])
+                    blocking = False
+                    continue
+                if source == 'cont' or source == 'regen':
+                    await cont_regen_gen(user, channel, llm_payload, source, message)
+                    blocking = False
+                    continue
+                # make a 'Prompting...' embed when generating text for an image response
+                should_draw = user_asks_for_image(tags)
+                picture_frame = None
+                if should_draw:
+                    if await a1111_online(channel):
+                        info_embed.title = "Prompting ..."
+                        info_embed.description = " "
+                        picture_frame = await channel.send(embed=info_embed)
+                # process textgen-webui
+                if llm_payload:
+                    last_resp, tts_resp = await llm_gen(llm_payload)
+                    logging.info("reply sent: \"" + user_id + ": {'text': '" + llm_payload["text"] + "', 'response': '" + last_resp + "'}\"")
+                # process image generation (A1111 / Forge)
+                tags = match_img_tags(last_resp, tags)
+                if not should_draw:
+                    should_draw = user_asks_for_image(tags) # Check again post-LLM
+                if should_draw:
+                    if picture_frame: await picture_frame.delete()
+                    if len(last_resp) > 1800: last_resp = last_resp[:1800] # arbitrarily shorten it for img purposes
+                    await img_gen(channel, last_resp, tags, params)
+                if tts_resp: await task_queue.put(process_tts_resp(channel, tts_resp)) # Process this in background
+                mention_resp = update_mention(user_id, last_resp) # @mention non-consecutive users
+                await send_long_message(channel, mention_resp)
+                blocking = False
     except Exception as e:
-        logging.error(f"An error occurred while processing prompt for LLM: {e}")
+        logging.error(f"An error occurred while processing a generative task: {e}")
+        if picture_frame: await picture_frame.delete()
+        blocking = False
 
 def get_time(offset=0.0, time_format='%Y-%m-%d %H:%M:%S'):
     try:
@@ -2171,18 +2194,14 @@ async def image(
 
 @client.hybrid_command(description="Reset the conversation")
 async def reset(i):
-    global reply_count
-    user = i.author.display_name
-    char_name = client.user.display_name
-    reply_count = 0
-    shared.stop_everything = True
-    reset_session_history()  # Reset conversation
-    await change_character(i, char_name)
-    prompt = client.settings['llmcontext']['context']
-    info_embed.title = f"{user} reset the conversation with {char_name}"
-    info_embed.description = ""
-    await i.reply(embed=info_embed)    
-    logging.info("conversation reset: {'replies': " + str(reply_count) + ", 'user': '" + user + "', 'character': '" + char_name + "', 'prompt': '" + prompt + "'}")
+    try:
+        shared.stop_everything = True
+        await ireply(i, 'character reset') # send a response msg to the user
+        # offload to ai_gen queue
+        queue_item = {'user': i.author, 'user_id': i.author.mention, 'channel': i.channel, 'source': 'reset', 'params': {'char_name': client.user.display_name}}
+        await ai_generate(i.author, i.channel, queue_item)
+    except Exception as e:
+        logging.error(f"Error with /reset: {e}")
 
 @client.hybrid_command(description="Check the status of your reply queue position and wait time")
 async def status(i):
@@ -2255,18 +2274,18 @@ class CharacterDropdown(discord.ui.Select):
         super().__init__(placeholder='', min_values=1, max_values=1, options=options)
         self.i = i
     async def callback(self, i: discord.Interaction):
-        character_filename = self.values[0]
-        character = Path(character_filename).stem
-        await change_character(self.i, character)
-        greeting = client.settings['llmcontext']['greeting']
-        if greeting:
-            greeting = greeting.replace('{{user}}', 'user')
-            greeting = greeting.replace('{{char}}', character)
-        else:
-            greeting = f'**{character}** has entered the chat"'
-        await i.response.send_message(greeting)
-        logging.info(f'Loaded new character: "{character}".')
-        return
+        try:
+            character_filename = self.values[0]
+            char_name = Path(character_filename).stem
+            if blocking: # If a queued item is processing
+                ireply = await i.response.send_message(f'Character change request for {self.i.author} was added to the queue ...')
+            else:
+                ireply = await i.response.send_message(f'Processing character change request for {self.i.author} ...')
+            # offload to ai_gen queue
+            queue_item = {'user': self.i.author, 'user_id': self.i.author.mention, 'channel': self.i.channel, 'source': 'character', 'params': {'char_name': char_name}}
+            await ai_generate(self.i.author, self.i.channel, queue_item)
+        except Exception as e:
+            logging.error(f"Error with /character: {e}")
 
 @client.hybrid_command(description="Choose Character")
 async def character(i):
