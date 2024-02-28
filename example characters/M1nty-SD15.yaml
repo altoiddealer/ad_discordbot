@@ -21,9 +21,6 @@ context: |
  {{char}}: portrait photo, Jesus Christ, sitting at wooden table, white robes, crown of thorns, bearded, smiling, holding up glass of beer, raised arm, medieval tavern, dimly lit, warm glow photography, HDR, macro sharpness, Sony Alpha a7R IV
 
 ## Optional bot settings
-# Used by discord character selection dropdown. 
-bot_description: "AI art generator"
-bot_emoji: 🟣
 
 ## You can safely ommit options (omitted items will not delete default values)
 

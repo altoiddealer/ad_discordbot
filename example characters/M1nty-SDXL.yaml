@@ -41,9 +41,6 @@ context: |
  {{char}}: a charming and hyper-realistic image of a skull, adorned with soft and cheerful flock of butterflies, hypnotic and uplifting atmosphere, masterfully rendered skull with intricate details, filled with fluttering and vibrant coloured butterflies, Rosanna Jones, Nick Brandt, highly detailed, natural outdoor environment, UHD resolution.
  
 ## Optional bot settings
-# Used by discord character selection dropdown. 
-bot_description: "AI art generator"
-bot_emoji: 🟣
 
 ## You can safely ommit options (omitted items will not delete default values)
 

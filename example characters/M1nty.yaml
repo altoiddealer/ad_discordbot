@@ -18,10 +18,6 @@ context: |
 
 ## ad_discordbot Optional settings. ** Use /character command and select the character to apply changes **
 
-# Used by discord character selection dropdown. 
-bot_description: friendly AI chatbot
-bot_emoji: 🟣
-
 # Will make character connect/disconnect from voice channel (vc channel ID must be in config.py to connect)
 use_voice_channel: True  # Toggle voice channel connectivity
 
