@@ -51,6 +51,9 @@ base_tags:
     image_response: true
     instruct: '''[SYSTEM] You have been tasked with taking a selfie: "{}". Include your appearance, your current state of clothing, your surroundings and what you are doing right now.'''
 
+  - trigger: 'calculate,define'
+    on_prefix_only: true
+    state: {preset: 'Divine Intellect'} # Update values for textgen-webui state parameters. Must be formatted as a dictionary.
 
 # 'tag_presets' are not in effect by default - they will be imported anywhere you use a 'tag_preset_name' tag.
 # Useful for when you want to use the same set of tags for mulitple uses (a few characters, a few imgmodels, etc).
@@ -128,6 +131,7 @@ tag_presets:
 #   swap_character: 'string'          Filename of character in /characters (do not include extension). That character's name, context, and state parameters will be used in LLM payload.
 #   load_history: 0                   0 = default (all history included) / -1 = prompt excludes chat history / > 1 = llm only sees this many recent exchanges.
 #   save_history: (true/false)        Whether to save this interaction to history or not.
+#   state: {dictionary}               Update values for textgen-webui state parameters. Must be formatted as a dictionary.
 #   llm_param_variances: {dictionary} Randomization ranges for textgen-webui state parameters. Must be formatted as a dictionary.
 
 # Relevant to img generation (A1111):

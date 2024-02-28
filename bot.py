@@ -975,6 +975,7 @@ async def process_llm_payload_tags(user_name, llm_payload, llm_prompt, matches):
         load_history = None
         save_history = None
         param_variances = {}
+        state = {}
         time_offset = 0.0
         time_format = '%Y-%m-%d %H:%M:%S'
         for tag in matches:
@@ -990,6 +991,8 @@ async def process_llm_payload_tags(user_name, llm_payload, llm_prompt, matches):
                 llm_payload['save_history'] = tag['save_history']
             if 'llm_param_variances' in tag:
                 param_variances.update(tag['llm_param_variances']) # Allow multiple to accumulate.
+            if 'state' in tag:
+                state.update(tag['state']) # Allow multiple to accumulate.
             if 'time_offset' in tag:
                 time_offset = tag['time_offset']
             if 'time_format' in tag:
@@ -998,7 +1001,7 @@ async def process_llm_payload_tags(user_name, llm_payload, llm_prompt, matches):
         time_for_llm = get_time(time_offset, time_format)
         llm_prompt = llm_prompt.replace('{time}', time_for_llm)
         # Process the tag matches
-        if swap_character or instruct or load_history or save_history or param_variances:
+        if swap_character or instruct or load_history or save_history or param_variances or state:
             print_content = f"[TAGS] LLM behavior was modified ("
             # Swap Character handling:
             if swap_character:
@@ -1042,6 +1045,9 @@ async def process_llm_payload_tags(user_name, llm_payload, llm_prompt, matches):
                 processed_params = process_param_variances(param_variances)
                 print_content += f" | Param Variances: {processed_params}"
                 sum_update_dict(llm_payload['state'], processed_params)
+            if state:
+                print_content += f" | State: {state}"
+                update_dict(llm_payload['state'], state)
             # Print results
             print_content += ")"
             logging.info(print_content)
@@ -2437,7 +2443,7 @@ async def process_character(i, selected_character_value):
         queue_item = {'user': i.author, 'user_id': i.author.mention, 'channel': i.channel, 'source': 'character', 'params': {'char_name': char_name}}
         await ai_generate(i.author, i.channel, queue_item)
     except Exception as e:
-        logging.error(f"Error processing selected imgmodel from /imgmodel command: {e}")
+        logging.error(f"Error processing selected character from /character command: {e}")
 
 all_characters = []
 
