@@ -41,7 +41,7 @@ imgmodel:
       controlnet:
         args:
           - enabled: false
-            input_image: 'none'
+            image: 'none'
             lowvram: true
             model: 'none'
             module: 'none'

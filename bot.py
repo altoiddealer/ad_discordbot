@@ -2193,7 +2193,7 @@ async def image(
                     imgurl = cnet_input.url
                     attached_img = await cnet_input.read()
                     cnetimage = base64.b64encode(attached_img).decode('utf-8')
-                    controlnet_dict['input_image'] = cnetimage
+                    controlnet_dict['image'] = cnetimage
                 else:
                     await i.send("Invalid image. Please attach a valid image.",ephemeral=True)
                     return
@@ -3166,7 +3166,7 @@ class ImgModel:
         self.img_payload = {
             'alwayson_scripts': {
                 'controlnet': {
-                    'args': [{'enabled': False, 'input_image': 'none', 'lowvram': True, 'model': 'none', 'module': 'none', 'pixel_perfect': True}]
+                    'args': [{'enabled': False, 'image': 'none', 'lowvram': True, 'model': 'none', 'module': 'none', 'pixel_perfect': True}]
                 },
                 'reactor': {
                     'args': ['', False, '0', '0', 'inswapper_128.onnx', 'CodeFormer', 1, True, '4x_NMKD-Superscale-SP_178000_G', 1.5, 1, False, True, 1, 0, 0, False, 0.8, False, False, 'CUDA', True, 0, '', '', None, True, True, 0.6, 2]
