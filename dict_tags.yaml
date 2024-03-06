@@ -80,6 +80,11 @@ tag_presets:
       - trigger: 'plain'
         payload: {override_settings: {CLIP_stop_at_last_layers: 2}} # Nested payload dictionary settings can also be modified. Must be formatted as a dictionary.
 
+      - trigger: '{no|without|clear|empty|transparent} {bg|background}'
+        layerdiffuse: true  # enables 'layerdiffuse' extension (must also be enabled in config.py)
+      #  Use 'payload' tag if you need more complex triggered settings for layerdiffuse
+      #  payload: {'alwayson_scripts': {'layerdiffuse': {'args': [true,'Only Generate Transparent Image (Attention Injection)',0.2,1.0,null,null,null,'Crop and Resize']}}}
+
       - trigger: 'grimace'
         positive_prompt: '<lora:PE_Grimace_v1.0:0.75>'
 
@@ -137,6 +142,7 @@ tag_presets:
 # Relevant to img generation (A1111):
 #   image_response: (true/false)      If LLM's reply should include A1111 img generation
 #   img_censoring: 0                  0 = disabled / 1 = blur image / 2 = block image from being generated
+#   layerdiffuse: (true/false)        enables 'layerdiffuse' extension (must also be enabled in config.py)
 #   face_swap: 'string'               Face image to be used with Reactor extension. Valid options: Image in 'swap_faces' (png/jpg/txt in base64) -OR- Directory name in 'swap_faces' (Picks a random face) -OR- Face model in '{A111}\models\reactor\faces' example 'Minty.safetensors'
 #   positive_prompt: 'string'         Text you may want to insert relative to the matched text in the image prompt.
 #   positive_prompt_method: after     Relevant to 'positive_prompt'. 'after' = insert value after matched text / 'before' = before text / 'replace' = replace text

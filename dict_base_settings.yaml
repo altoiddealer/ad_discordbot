@@ -46,6 +46,16 @@ imgmodel:
             model: 'none'
             module: 'none'
             pixel_perfect: true
+      layerdiffuse:
+        args:                   # layerdiffuse extension arguments
+          - false               # Enable layerdiffuse
+          - 'Only Generate Transparent Image (Attention Injection)' # Method
+          - 1.0                 # Weight of alpha channel (0.0 - 1.0)
+          - 1.0                 # Stop at (0.0 - 1.0)
+          - null                # Foreground setting (if foreground method)
+          - null                # Background setting (if background method)
+          - null                # Blending (for foreground/background methods)
+          - 'Crop and Resize'   # Resize mode
       reactor:                  # Reactor extension arguments
         args:                   # ** These defaults can be customized. It's OK if missing from here - the bot will fall back to default values in bot.py **
           - ''                  #0 source face image in base64

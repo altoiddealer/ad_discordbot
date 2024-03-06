@@ -1731,6 +1731,8 @@ def clean_img_payload(img_payload):
             del img_payload['alwayson_scripts']['controlnet'] # Delete all 'controlnet' keys if disabled by config
         if not config.sd['extensions'].get('reactor_enabled', False):
             del img_payload['alwayson_scripts']['reactor'] # Delete all 'reactor' keys if disabled by config
+        if not config.sd['extensions'].get('layerdiffuse_enabled', False):
+            del img_payload['alwayson_scripts']['layerdiffuse'] # Delete all 'layerdiffuse' keys if disabled by config
     # Workaround for denoising strength A1111 bug
     if not img_payload.get('enable_hr', False):
         img_payload['denoising_strength'] = None
@@ -1936,6 +1938,9 @@ def process_img_payload_tags(img_payload, matches):
                     logging.warning("A tag was matched with invalid 'payload'; must be a dictionary.")
             if tag.get('face_swap'):
                 img_payload = process_face(img_payload, tag['face_swap'])
+            if tag.get('layerdiffuse'):
+                img_payload['alwayson_scripts']['layerdiffuse']['args'][0] = True # enable layerdiffuse
+                logging.info('[TAGS] layerdiffuse was triggered (transparency).')
             # Process these keys only once
             if 'img_censoring' in tag and tag['img_censoring'] > 0:
                 img_payload['img_censoring'] = tag['img_censoring']
@@ -3167,6 +3172,9 @@ class ImgModel:
             'alwayson_scripts': {
                 'controlnet': {
                     'args': [{'enabled': False, 'image': 'none', 'lowvram': True, 'model': 'none', 'module': 'none', 'pixel_perfect': True}]
+                },
+                'layerdiffuse': {
+                    'args': [False, 'Only Generate Transparent Image (Attention Injection)', 1.0, 1.0, None, None, None, 'Crop and Resize']
                 },
                 'reactor': {
                     'args': ['', False, '0', '0', 'inswapper_128.onnx', 'CodeFormer', 1, True, '4x_NMKD-Superscale-SP_178000_G', 1.5, 1, False, True, 1, 0, 0, False, 0.8, False, False, 'CUDA', True, 0, '', '', None, True, True, 0.6, 2]
