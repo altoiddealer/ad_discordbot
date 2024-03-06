@@ -1560,6 +1560,7 @@ async def ai_generate(user_id, channel, queue_item):
                     blocking = False
                     continue
                 if source == 'image':
+                    tags = match_img_tags(img_prompt, tags)
                     await img_gen(channel, img_prompt, tags, params)
                     await channel.send(params['message'])
                     blocking = False
