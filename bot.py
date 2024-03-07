@@ -1621,15 +1621,18 @@ async def a1111_txt2img(img_payload, picture_frame):
                 async with session.post(url=f'{A1111}/sdapi/v1/txt2img', json=img_payload) as response:
                     r = await response.json()
                     images = []
-                    for img_data in r['images']:
+                    pnginfo = None
+                    for i, img_data in enumerate(r['images']):
                         image = Image.open(io.BytesIO(base64.b64decode(img_data.split(",", 1)[0])))
                         png_payload = {"image": "data:image/png;base64," + img_data}
                         response2 = requests.post(url=f'{A1111}/sdapi/v1/png-info', json=png_payload)
-                        pnginfo = PngImagePlugin.PngInfo()
-                        pnginfo.add_text("parameters", response2.json().get("info"))
+                        png_info_data = response2.json().get("info")
+                        if i == 0:  # Only capture pnginfo from the first img_data
+                            pnginfo = PngImagePlugin.PngInfo()
+                            pnginfo.add_text("parameters", png_info_data)
                         image.save(f'temp_img_{len(images)}.png', pnginfo=pnginfo)
                         images.append(image)
-                    return images, r
+                    return images, response.status, pnginfo
 
         async def track_progress():
             await check_a1111_progress(picture_frame)
@@ -1642,9 +1645,33 @@ async def a1111_txt2img(img_payload, picture_frame):
         await asyncio.gather(images_task, progress_task)
 
         # Get the list of images after both tasks are done
-        images = await images_task
+        images, r, pnginfo = await images_task
 
-        return images
+        # Workaround for layerdiffuse PNG infoReActor + layerdiffuse combination
+        layerdiffuse = img_payload['alwayson_scripts'].get('layerdiffuse', {})
+        reactor = img_payload['alwayson_scripts'].get('reactor', {})
+        if len(images) > 1 and layerdiffuse and layerdiffuse['args'][0]:
+            # Workaround for layerdiffuse PNG infoReActor + layerdiffuse combination
+            if reactor and reactor['args'][1]:
+                img0 = Image.open(f'temp_img_0.png') # Open the first image
+                # presumably the last item in the list
+                if not images[-1].mode == 'RGBA':
+                    print("Failed to find layerdiffuse output image")
+                else:
+                    img1 = images.pop() # presumably the last item in the list
+                    # Extract alpha channel from layerdiffuse output
+                    _, _, _, alpha = img1.split()
+                    # Open ReActor output, convert to RGBA, apply alpha
+                    img0 = img0.convert('RGBA')
+                    img0.putalpha(alpha)
+            else:
+                if len(images) == 2:
+                    img0 = images.pop(1)
+                else:
+                    img0 = images[-1]
+            img0.save('temp_img_0.png', pnginfo=pnginfo) # Save the image with correct pnginfo
+            images[0] = img0
+        return images, r
     except Exception as e:
         logging.error(f'Error processing images in txt2img API module: {e}')
 
