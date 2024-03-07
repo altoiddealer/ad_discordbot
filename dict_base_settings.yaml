@@ -41,10 +41,10 @@ imgmodel:
       controlnet:
         args:
           - enabled: false
-            image: 'none'
+            image: null
             lowvram: true
-            model: 'none'
-            module: 'none'
+            model: 'None'
+            module: 'None'
             pixel_perfect: true
       layerdiffuse:
         args:                   # layerdiffuse extension arguments

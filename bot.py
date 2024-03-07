@@ -3172,7 +3172,7 @@ class ImgModel:
         self.img_payload = {
             'alwayson_scripts': {
                 'controlnet': {
-                    'args': [{'enabled': False, 'image': 'none', 'lowvram': True, 'model': 'none', 'module': 'none', 'pixel_perfect': True}]
+                    'args': [{'enabled': False, 'image': None, 'lowvram': True, 'model': 'None', 'module': 'None', 'pixel_perfect': True}]
                 },
                 'layerdiffuse': {
                     'args': [False, 'Only Generate Transparent Image (Attention Injection)', 1.0, 1.0, None, None, None, 'Crop and Resize']
