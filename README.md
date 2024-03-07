@@ -1,43 +1,101 @@
-**02/13/2024: Major update introducing the Tags feature. Take care migrating your existing settings**
-
-**12/11/2023: New "/speak" command! Silero and ElevenLabs TTS extensions now supported!**
-
-**12/8/2023: TTS Support, and Character Specific Extension Settings now added!**
-
-If you manually apply updates to your existing config.py, dict .yaml files, etc, please carefully [compare the changes](https://github.com/altoiddealer/ad_discordbot/commit/96ff8e6698e98b25cd00837f529278275ecb6c51).
-
-
 # altoiddealer's Discord Bot
 
-A Discord Bot for chatting with LLMs using txt-generation-webui API.
+### Uniting LLM ([text-generation-webui](https://github.com/oobabooga/text-generation-webui)) and Img Gen ([A1111](https://github.com/AUTOMATIC1111/stable-diffusion-webui) / [Forge](https://github.com/lllyasviel/stable-diffusion-webui-forge)) for chat & professional use.
+
+---
 
 <img width="560" alt="Screenshot 2023-09-22 224716" src="https://github.com/altoiddealer/ad_discordbot/assets/1613484/5ffb5037-29d2-4a2f-9966-3ef6bd35b1f9">
 
+---
 
-This bot stands apart from many other ones due to a variety of custom features:
+**[What's new](#whats-new)   |   [Features](#features)   |   [Installation](#installation)   |   [Usage](#usage)   |   [Updating](#updating)**
 
--"Tags", activated by user configured trigger phrases (or immediately when trigger omitted) to manipulate bot behavior including handling image response, swapping character, modifying llm state settings, modifying the user's promopt and/or LLM's reply, alter history handling, seemingly endless possibilites.
+---
 
--All settings can be modified on-the-fly in active_settings.yaml. Settings changed via commands are immediately reflected in active_settings.yaml.
+## What's new:
 
--Plenty of customization due to a variety of Settings commands paired with easy to manage .yaml dictionaries.
+<details>
+  <summary>click to expand</summary>
+   
+   **03/07/2024:** [layerdiffuse](https://github.com/layerdiffusion/sd-forge-layerdiffuse) support added to Tags feature!
 
--Continue and Regenerate responses with /cont and /regen commands - both work fluidly with very long messages exceeding Discords message size limitation.
+   <img width="603" alt="Screenshot 2024-03-07 104132" src="https://github.com/altoiddealer/ad_discordbot/assets/1613484/30975294-d8b4-4ae1-a53d-7f3616d8a22c">
 
--Send your image prompt directly to A1111 with powerful /image command that includes support for ControlNet and Reactor (face swap)
+   ---
+   
+   **02/13/2024:** Major update introducing the Tags feature. Take care migrating your existing settings
 
--Change image models and relavent payload settings via /imgmodel command
+   <img width="1403" alt="Screenshot 2024-03-07 104231" src="https://github.com/altoiddealer/ad_discordbot/assets/1613484/89aae51f-2abe-43c2-bade-a2ea395be2da">
 
--Simple Starboard feature, easy to set up.
+   ---
+   
+   **12/11/2023:** New "/speak" command! Silero and ElevenLabs TTS extensions now supported!
 
--Feature to include current settings in a dedicated channel
+   <img width="595" alt="Screenshot 2024-03-07 104326" src="https://github.com/altoiddealer/ad_discordbot/assets/1613484/c7b42c39-c29f-4d69-af25-fff5a4d9dbcf">
 
--AND MORE.
+   ---
+   
+   **12/8/2023:** TTS Support, and Character Specific Extension Settings now added!
+
+   <img width="1152" alt="Screenshot 2024-03-07 104503" src="https://github.com/altoiddealer/ad_discordbot/assets/1613484/5bbd15bc-f181-4f49-bece-b633bdc7412d">
+   
+</details>
+
+## Features:
+
+- **Robust "Tags" system to manipulate bot behavior persistently or via trigger phrases, including:**
+  - Trigger Text and/or Image response
+  - Image censoring settings (None / Spoiler / Block)
+  - Face swap (built in [ReActor](https://github.com/Gourieff/sd-webui-reactor) support)
+  - Generate images with transparency (built in [layerdiffuse](https://github.com/layerdiffusion/sd-forge-layerdiffuse) support)
+  - Swapping LLM characters (ei: "draw... " can trigger character tailored for image prompting)
+  - Modifying LLM state (temperature, repetition penalty, etc)
+  - Modifying image gen settings (width, height, cfg scale, etc)
+  - Keep things spicy by factoring random variations to LLM state / img gen settings.
+  - Modifying the user's prompt and/or LLM's reply (delete/insert/replace text, img LORAs, etc)
+  - Manipulate LLM history (Suppress history, limit history, save or do-no-save reply, etc)
+  - New features being added frequently and easily due to the framework of the "Tags" system
+
+- **TTS Support!**
+  - [alltalk_tts](https://github.com/erew123/alltalk_tts), coqui_tts, silero_tts, and elevenlabs_tts
+  - Bot can speak on Voice channel, upload copy of audio file, or both!
+  - Per-character TTS settings! Give each character a unique voice!
+
+- **Sophisticated function to send text responses over Discord's 2,000 character limit**
+  - "chunks" messages by looking back to nearest line break or sentence completion.
+  - Preserves syntax between chunks such as **bold**, *italic*, and even `code formatting`
+
+- **Commands!**
+  - **/helpmenu** - Display information message
+  - **/character** - Change character
+  - **/main** - Toggle if Bot always replies, per channel
+  - **/image** - Allows more controlled image prompting (positive prompt, neg prompt, Size settings, **ControlNet**, **ReActor**)
+  - **/speak** - Bot can speak any text, using any voices (including user attach .mp3 or .wav for alltalk_tts)!
+  - **/imgmodel** - Change A1111 model & img_payload settings
+
+- **Dynamic settings handling:**
+  - Core bot settings managed in `config.py` (bot behavior, discord features, extensions, etc.)
+  - The "Tags" system is configured in `dict_tags.yaml` (global Tags, default Tag params, Tag presets, etc.)
+  - Foundational layer of user settings configured in `base_settings.yaml`.
+  - Character files can include custom Tags, TTS settings, LLM state parameters, and special behaviors, which prioritize over basesettings.
+  - Custom Image models settings defined in `dict_imgmodels.yaml` (Tags, payload params) which prioritize over basesettings.
+  - All user settings commit to `activesettings.yaml`, which serves as a dashboard or for manually testing new settings on-the-fly.
+
+- **Continue and Regenerate text replies via Context Menu (right click on the reply)**
+
+- **Built in Starboard feature**
+
+- **Feature to post current settings in a dedicated channel**
+
+- **ALWAYS MORE TO COME**
+
+---
 
 <img width="817" alt="Screenshot 2023-09-22 220802" src="https://github.com/altoiddealer/ad_discordbot/assets/1613484/b2f2bd96-ed12-4eed-b842-68171c62a8e5">
 
+---
 
-# Installation
+## Installation
 
 1. **Install oobabooga's [text-generation-webui](https://github.com/oobabooga/text-generation-webui)**
 
@@ -60,8 +118,9 @@ This bot stands apart from many other ones due to a variety of custom features:
    ```
    pip install discord
    ```
+---
 
-# Running the bot
+### Running the bot
 
 1. **Run the .cmd file** in text-generation-webui directory (**ex: cmd_windows.bat**)
    ```
@@ -74,7 +133,62 @@ This bot stands apart from many other ones due to a variety of custom features:
    ```
 2. Use [command](https://github.com/altoiddealer/ad_discordbot/wiki/commands) **/character** to choose a character.
 
-# Updating the bot
+---
+
+## Usage:
+
+### Getting responses from the bot:
+
+* @ mention the bot
+
+* Use [command](https://github.com/altoiddealer/ad_discordbot/wiki/commands) **/main** to set a main channel. **The bot won't need to be @ mentioned in main channels.**
+
+* If you enclose your text in parenthesis (like this), the bot will not respond.
+
+### Getting image responses from the bot
+
+* @ mention it including a trigger phrase defined in config.py, and the bot will reply with a Stable Diffusion prompt and image based on your prompt.
+
+* Use **/image** command to use your own prompt with advanced options
+
+### Getting TTS responses from the bot (Tested: alltalk_tts, coqui_tts, silero_tts, elevenlabs_tts)
+
+1. **Run the .cmd file** in text-generation-webui directory (**ex: cmd_windows.bat**), and performing the following commands:
+   
+   Required for bot to join a discord voice channel:
+   ```
+   pip install pynacl
+   ```
+
+2. **Install your TTS extension**.
+
+   **Follow the specific instructions for your TTS extension!!**
+  
+   Example instructions for **coqui_tts**:
+   
+   **Run the .cmd file** in text-generation-webui directory (**ex: cmd_windows.bat**), and performing the following commands:
+   
+   Linux / Mac:
+   ```
+   pip install -r extensions/coqui_tts/requirements.txt
+   ```
+   
+   Windows:
+   ```
+   pip install -r extensions\coqui_tts\requirements.txt
+   ```
+
+5. Ensure that your bot has sufficient permissions to use the Voice channel and/or upload files (From your bot invite/Discord Developer portal, and your Discord server/channel settings)
+
+6. Configure **config.py** in the section **discord** > **tts_settings**
+
+7. If necessary, model file(s) should download on first launch of the bot.  If not, then first launch textgen-webui normally and enable the extension.
+
+8. **Your characters can have their own settings including voices!  See example character M1nty for usage**
+
+---
+
+## Updating
 
 1. **Open a cmd window** in **/ad_discordbot/** and **git pull**
    ```
@@ -102,48 +216,3 @@ This bot stands apart from many other ones due to a variety of custom features:
    * Update your existing config.py with the new feature, OR
      
    * Update the new config.py with your settings.
-
-# Getting responses from the bot
-
-* @ mention the bot
-
-* Use [command](https://github.com/altoiddealer/ad_discordbot/wiki/commands) **/main** to set a main channel. **The bot won't need to be @ mentioned in main channels.**
-
-* If you enclose your text in parenthesis (like this), the bot will not respond.
-
-# Getting image responses from the bot
-
-* @ mention it including a trigger phrase defined in config.py, and the bot will reply with a Stable Diffusion prompt and image based on your prompt.
-
-* Use **/image** command to use your own prompt with advanced options
-
-# Getting TTS responses from the bot (Tested: coqui_tts, silero_tts, elevenlabs_tts)
-
-1. **Run the .cmd file** in text-generation-webui directory (**ex: cmd_windows.bat**), and performing the following commands:
-   
-   Required for bot to join a discord voice channel:
-   ```
-   pip install pynacl
-   ```
-
-2. **Install your TTS extension**. Example instructions for **coqui_tts**:
-   
-   **Run the .cmd file** in text-generation-webui directory (**ex: cmd_windows.bat**), and performing the following commands:
-   
-   Linux / Mac:
-   ```
-   pip install -r extensions/coqui_tts/requirements.txt
-   ```
-   
-   Windows:
-   ```
-   pip install -r extensions\coqui_tts\requirements.txt
-   ```
-
-3. Ensure that your bot has sufficient permissions to use the Voice channel and/or upload files
-
-4. Configure **config.py** in the section **discord** > **tts_settings**
-
-5. The necessary model file(s) should download on first launch of the bot.  If not, then first launch textgen-webui normally and enable the extension.
-
-6. **Your characters can have their own settings including voices!  See example character M1nty for usage**
