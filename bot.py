@@ -565,8 +565,8 @@ async def auto_update_imgmodel_task(mode='random'):
             channel = config.imgmodels['auto_change_imgmodels'].get('channel_announce', None)
             if channel: channel = client.get_channel(channel)
             # offload to ai_gen queue
-            queue_item = {'user': 'auto', 'channel': channel, 'source': 'imgmodel', 'params': {'imgmodel': selected_imgmodel}}
-            await ai_generate('auto', channel, queue_item)
+            queue_item = {'user': 'Automatically', 'channel': channel, 'source': 'imgmodel', 'params': {'imgmodel': selected_imgmodel}}
+            await ai_generate('Automatically', channel, queue_item)
         except Exception as e:
             logging.error(f"Error automatically updating image model: {e}")
         #await asyncio.sleep(duration)
@@ -1367,18 +1367,25 @@ async def speak_gen(user, channel, user_id, text, llm_payload, params):
         info_embed.title = f"{user} requested tts ... "
         info_embed.description = ""
         embed = await channel.send(embed=info_embed)
-        await update_extensions(params.get('tts_args', {}))
+        tts_args = params.get('tts_args', {})
+        await update_extensions(tts_args)
         _, tts_resp = await llm_gen(llm_payload)
         if tts_resp: await task_queue.put(process_tts_resp(channel, tts_resp)) # Process this in background
         await update_extensions(client.settings['llmcontext'].get('extensions', {})) # Restore character specific extension settings
         if params.get('user_voice'): os.remove(params['user_voice'])
-        mention_resp = update_mention(user_id, text)
         await embed.delete()
-        await send_long_message(channel, mention_resp)
+        info_embed.title = f"{user} requested tts"
+        # remove api key (don't want to share this to the world!)
+        for sub_dict in tts_args.values():
+            if 'api_key' in sub_dict:
+                sub_dict.pop('api_key')
+        info_embed.description = f"**Params:** {tts_args}\n**Text:** {text}"
+        embed = await channel.send(embed=info_embed)
     except Exception as e:
         logging.error(f"An error occurred while generating tts for '/speak': {e}")
-        try: await embed.delete()
-        except: pass
+        info_embed.title = "An error occurred while generating tts for '/speak'"
+        info_embed.description = e
+        await embed.edit(embed=info_embed)
 
 #################################################################
 ###################### QUEUED MODEL CHANGE ######################
@@ -1398,17 +1405,20 @@ async def change_imgmodel_task(user, channel, params):
         await update_imgmodel(imgmodel, imgmodel_tags)
         # Announce from /imgmodel
         if channel:
-            reply = f"**Changed Img model to**: {imgmodel_name}"
-            url = imgmodel.get('imgmodel_url', None)
-            if url: reply += " <" + url + ">"
             await embed.delete()
-            await channel.send(reply)
-        logging.info(f"Changed Image model to: {imgmodel_name}")
+            info_embed.title = f"{user} Changed Img model:"
+            url = imgmodel.get('imgmodel_url', '')
+            if url: url = " <" + url + ">"
+            info_embed.description = f'{imgmodel_name}{url}'
+            embed = await channel.send(embed=info_embed)
+        logging.info(f"{user} Changed Image model to: {imgmodel_name}")
         if config.discord['post_active_settings']['enabled']:
             await task_queue.put(post_active_settings())
     except Exception as e:
         logging.error(f"Error changing Img model: {e}")
-        try: await embed.delete()
+        info_embed.title = "An error occurred while changing Img model"
+        info_embed.description = e
+        try: await embed.edit(embed=info_embed)
         except: pass
 
 # Process selected LLM model
@@ -1430,11 +1440,14 @@ async def change_llmmodel_task(user, channel, params):
         shared.model, shared.tokenizer = load_model(shared.model_name)
         if shared.args.lora: add_lora_to_model([shared.args.lora])
         await embed.delete()
-        await channel.send(f"**Changed LLM model to**: {llmmodel}")
+        info_embed.title = f"{user} Changed LLM model:"
+        info_embed.description = f'{llmmodel}'
+        embed = await channel.send(embed=info_embed)
     except Exception as e:
-        logging.error(f"Error changing LLM Model from /llmmodel command: {e}")
-        try: await embed.delete()
-        except: pass
+        logging.error(f"An error occurred while gchanging LLM Model from '/llmmodel': {e}")
+        info_embed.title = "An error occurred while gchanging LLM Model from '/llmmodel'"
+        info_embed.description = e
+        await embed.edit(embed=info_embed)
 
 #################################################################
 #################### QUEUED CHARACTER CHANGE ####################
@@ -1517,7 +1530,7 @@ def unpack_queue_item(queue_item):
     if source == 'llmmodel':
         logging.info(f'{user} used "/llmmodel": "{info}"')
     if source == 'imgmodel':
-        if user == 'auto': logging.info("Automatically updated imgmodel settings")
+        if user == 'Automatically': logging.info("Automatically updated imgmodel settings")
         else: logging.info(f'{user} used "/imgmodel": "{info}"')
     return user, user_id, channel, source, text, img_prompt, llm_payload, tags, message, params
 
@@ -1562,7 +1575,9 @@ async def ai_generate(user_id, channel, queue_item):
                 if source == 'image':
                     tags = match_img_tags(img_prompt, tags)
                     await img_gen(channel, img_prompt, tags, params)
-                    await channel.send(params['message'])
+                    info_embed.title = f"{user} requested an image:"
+                    info_embed.description = params['message']
+                    await channel.send(embed=info_embed)
                     blocking = False
                     continue
                 if source == 'cont' or source == 'regen':
@@ -1614,7 +1629,34 @@ async def a1111_online(channel):
         await channel.send(embed=info_embed)        
         return False
 
-async def a1111_txt2img(img_payload, picture_frame):
+async def layerdiffuse_hack(temp_dir, img_payload, images, pnginfo):
+    try:
+        ld_output = None
+        for i, image in enumerate(images):
+            if image.mode == 'RGBA':
+                if i == 0:
+                    return images
+                ld_output = images.pop(i)
+                break
+        if ld_output is None:
+            print("Failed to find layerdiffuse output image")
+            return images
+        # Workaround for layerdiffuse PNG infoReActor + layerdiffuse combination
+        reactor = img_payload['alwayson_scripts'].get('reactor', {})
+        if reactor and reactor['args'][1]:          # if ReActor was enabled:
+            _, _, _, alpha = ld_output.split()      # Extract alpha channel from layerdiffuse output
+            img0 = Image.open(f'{temp_dir}/temp_img_0.png') # Open first image (with ReActor output)
+            img0 = img0.convert('RGBA')             # Convert it to RGBA 
+            img0.putalpha(alpha)                    # apply alpha from layerdiffuse output
+        else:                           # if ReActor was not enabled:
+            img0 = ld_output            # Just replace first image with layerdiffuse output
+        img0.save(f'{temp_dir}/temp_img_0.png', pnginfo=pnginfo) # Save the local image with correct pnginfo
+        images[0] = img0 # Update images list
+        return images
+    except Exception as e:
+        logging.error(f'Error processing layerdiffuse images: {e}')    
+
+async def a1111_txt2img(temp_dir, img_payload, picture_frame):
     try:
         async def save_images_and_return():
             async with aiohttp.ClientSession() as session:
@@ -1627,53 +1669,34 @@ async def a1111_txt2img(img_payload, picture_frame):
                         png_payload = {"image": "data:image/png;base64," + img_data}
                         response2 = requests.post(url=f'{A1111}/sdapi/v1/png-info', json=png_payload)
                         png_info_data = response2.json().get("info")
-                        if i == 0:  # Only capture pnginfo from the first img_data
+                        if i == 0:  # Only capture pnginfo from the first png_img_data
                             pnginfo = PngImagePlugin.PngInfo()
                             pnginfo.add_text("parameters", png_info_data)
-                        image.save(f'temp_img_{len(images)}.png', pnginfo=pnginfo)
-                        images.append(image)
+                        image.save(f'{temp_dir}/temp_img_{i}.png', pnginfo=pnginfo) # save image to temp directory
+                        images.append(image) # collect a list of PIL images
                     return images, response.status, pnginfo
 
         async def track_progress():
             await check_a1111_progress(picture_frame)
 
-        # Start both tasks concurrently
+        # Start progress task and generation task concurrently
         images_task = asyncio.create_task(save_images_and_return())
         progress_task = asyncio.create_task(track_progress())
-
         # Wait for both tasks to complete
         await asyncio.gather(images_task, progress_task)
-
         # Get the list of images after both tasks are done
         images, r, pnginfo = await images_task
 
-        # Workaround for layerdiffuse PNG infoReActor + layerdiffuse combination
+        # Workaround for layerdiffuse output
         layerdiffuse = img_payload['alwayson_scripts'].get('layerdiffuse', {})
-        reactor = img_payload['alwayson_scripts'].get('reactor', {})
         if len(images) > 1 and layerdiffuse and layerdiffuse['args'][0]:
-            # Workaround for layerdiffuse PNG infoReActor + layerdiffuse combination
-            if reactor and reactor['args'][1]:
-                img0 = Image.open(f'temp_img_0.png') # Open the first image
-                # presumably the last item in the list
-                if not images[-1].mode == 'RGBA':
-                    print("Failed to find layerdiffuse output image")
-                else:
-                    img1 = images.pop() # presumably the last item in the list
-                    # Extract alpha channel from layerdiffuse output
-                    _, _, _, alpha = img1.split()
-                    # Open ReActor output, convert to RGBA, apply alpha
-                    img0 = img0.convert('RGBA')
-                    img0.putalpha(alpha)
-            else:
-                if len(images) == 2:
-                    img0 = images.pop(1)
-                else:
-                    img0 = images[-1]
-            img0.save('temp_img_0.png', pnginfo=pnginfo) # Save the image with correct pnginfo
-            images[0] = img0
+            images = await layerdiffuse_hack(temp_dir, img_payload, images, pnginfo)
+
         return images, r
     except Exception as e:
         logging.error(f'Error processing images in txt2img API module: {e}')
+        info_embed.title = f'Error processing images: {e}'
+        await picture_frame.edit(embed=info_embed)
 
 def progress_bar(value, length=20):
     filled_length = int(length * value)
@@ -1724,23 +1747,35 @@ async def process_image_gen(img_payload, picture_frame, channel):
             do_censor = True
             if censor_mode == 2:
                 info_embed.title = "Image prompt was flagged as inappropriate."
-                await channel.send("Image prompt was flagged as inappropriate.")
-                await picture_frame.delete()
-                return None, None
-        images, r = await a1111_txt2img(img_payload, picture_frame)
+                await picture_frame.edit(embed=info_embed)
+                return
+        # Ensure the necessary directories exist
+        output_dir = 'ad_discordbot/sd_outputs/'
+        os.makedirs(output_dir, exist_ok=True)
+        temp_dir = 'ad_discordbot/temp/'
+        os.makedirs(temp_dir, exist_ok=True)
+        # Generate images, save locally
+        images, r = await a1111_txt2img(temp_dir, img_payload, picture_frame)
         if not images:
-            info_embed.title = "No images generated"
-            await channel.send(f"No images were generated: {r}")
-            await picture_frame.edit(delete_after=5)
-            return None, None
-        else:
-            client.fresh = False
-            await picture_frame.delete()
-            return images, do_censor
-    except asyncio.TimeoutError:
-        info_embed.title = "Timeout error"
-        await channel.send("Timeout error")
-        await picture_frame.edit(delete_after=5)
+            await channel.send(f"No images were generated. Response code: {r}")
+            return
+        # Send images to discord
+        client.fresh = False
+        await picture_frame.delete()
+        # If the censor mode is 1 (blur), prefix the image file with "SPOILER_"
+        file_prefix = 'temp_img_'
+        if do_censor and censor_mode == 1:
+            file_prefix = 'SPOILER_temp_img_'
+        image_files = [discord.File(f'{temp_dir}/temp_img_{idx}.png', filename=f'{file_prefix}{idx}.png') for idx in range(len(images))]
+        await channel.send(files=image_files)
+        # Save the image at index 0 with the date/time naming convention
+        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        os.rename(f'{temp_dir}/temp_img_0.png', f'{output_dir}/{timestamp}.png')
+        # Delete temporary image files
+        for tempfile in os.listdir(temp_dir):
+            os.remove(os.path.join(temp_dir, tempfile))
+    except Exception as e:
+        logging.error(f"An error occurred when processing image generation: {e}")
 
 def clean_img_payload(img_payload):
     # Remove duplicate negative prompts
@@ -2015,25 +2050,6 @@ def match_img_tags(img_prompt, tags):
     except Exception as e:
         logging.error(f"Error matching tags for img phase: {e}")
 
-async def send_images(channel, img_prompt, images, do_censor):
-    try:
-        # Ensure the output directory exists
-        output_dir = 'ad_discordbot/sd_outputs/'
-        os.makedirs(output_dir, exist_ok=True)
-        # If the censor mode is 1 (blur), prefix the image file with "SPOILER_"
-        file_prefix = 'temp_img_'
-        if do_censor and censor_mode == 1:
-            file_prefix = 'SPOILER_temp_img_'
-        image_files = [discord.File(f'temp_img_{idx}.png', filename=f'{file_prefix}{idx}.png') for idx in range(len(images))]
-        await channel.send(files=image_files)
-        # Save the image at index 0 with the date/time naming convention
-        os.rename(f'temp_img_0.png', f'{output_dir}/{datetime.now().strftime("%Y-%m-%d_%H-%M-%S")}_0.png')
-        # Delete temporary image files except for the one at index 0
-        for idx in range(1, len(images)):
-            os.remove(f'temp_img_{idx}.png')
-    except Exception as e:
-        logging.error(f"An error occurred when sending generated images: {e}")
-
 async def img_gen(channel, img_prompt, tags, params):
     try:
         info_embed.title = "Processing"
@@ -2055,10 +2071,8 @@ async def img_gen(channel, img_prompt, tags, params):
         img_payload = apply_imgcmd_params(img_payload, params)
         # Clean anything up that gets messy
         clean_img_payload(img_payload)
-        # Generate images
-        images, do_censor = await process_image_gen(img_payload, picture_frame, channel)
-        # Send images
-        if images: await send_images(channel, img_prompt, images, do_censor)        
+        # Generate and send images
+        await process_image_gen(img_payload, picture_frame, channel)      
     except Exception as e:
         logging.error(f"An error occurred in img_gen(): {e}")
 
@@ -2179,7 +2193,7 @@ async def image(
         tags = get_tags() # gather tags to be matched later in img_gen() function
         if 'user' in tags['unmatched']: del tags['unmatched']['user'] # Tags intended for pre-LLM processing should be removed
 
-        message = f">>> **Prompt:** {prompt}"
+        message = f"**Prompt:** {prompt}"
 
         if neg_prompt:
             neg_style_prompt = f"{neg_prompt}, {neg_style_prompt}"
