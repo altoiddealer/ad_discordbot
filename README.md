@@ -76,12 +76,12 @@
   - **/llmmodel** - Change LLM model
 
 - **Dynamic settings handling:**
-  - Core bot settings managed in `config.py` (bot behavior, discord features, extensions, etc.)
-  - The "Tags" system is configured in `dict_tags.yaml` (global Tags, default Tag params, Tag presets, etc.)
-  - Foundational layer of user settings configured in `base_settings.yaml`.
+  - Core bot settings managed in **`config.py`** (bot behavior, discord features, extensions, etc.)
+  - The "Tags" system is configured in **`dict_tags.yaml`** (global Tags, default Tag params, Tag presets, etc.)
+  - Foundational layer of user settings configured in **`base_settings.yaml`**.
   - Character files can include custom Tags, TTS settings, LLM state parameters, and special behaviors, which prioritize over basesettings.
-  - Custom Image models settings defined in `dict_imgmodels.yaml` (Tags, payload params) which prioritize over basesettings.
-  - All user settings commit to `activesettings.yaml`, which serves as a dashboard or for manually testing new settings on-the-fly.
+  - Custom Image models settings defined in **`dict_imgmodels.yaml`** (Tags, payload params) which prioritize over basesettings.
+  - All user settings commit to **`activesettings.yaml`**, which serves as a dashboard or for manually testing new settings on-the-fly.
 
 - **Automatic Img model changing:**
   - Adjustable duration and mode (random / cycle)
@@ -155,7 +155,9 @@
 
 ### Getting image responses from the bot
 
-* @ mention it including a trigger phrase defined in config.py, and the bot will reply with a Stable Diffusion prompt and image based on your prompt.
+(**A1111 or sd-webui-forge must be running!**)
+
+* By default, starting your request with "draw " or "generate " will trigger an image response via the Tags system (see **`dict_tags.yaml`**)
 
 * Use **/image** command to use your own prompt with advanced options
 
