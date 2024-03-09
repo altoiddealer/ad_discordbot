@@ -73,6 +73,7 @@
   - **/image** - Allows more controlled image prompting (positive prompt, neg prompt, Size settings, **ControlNet**, **ReActor**)
   - **/speak** - Bot can speak any text, using any voices (including user attach .mp3 or .wav for alltalk_tts)!
   - **/imgmodel** - Change A1111 model & img_payload settings
+  - **/llmmodel** - Change LLM model
 
 - **Dynamic settings handling:**
   - Core bot settings managed in `config.py` (bot behavior, discord features, extensions, etc.)
@@ -82,8 +83,14 @@
   - Custom Image models settings defined in `dict_imgmodels.yaml` (Tags, payload params) which prioritize over basesettings.
   - All user settings commit to `activesettings.yaml`, which serves as a dashboard or for manually testing new settings on-the-fly.
 
+- **Automatic Img model changing:**
+  - Adjustable duration and mode (random / cycle)
+  - Smart filters and settings to auto-update relavent settings (SD1.5, SDXL, Turbo, etc)
+
 - **Continue and Regenerate text replies via Context Menu (right click on the reply)**
 
+- **All tasks queue up and process elagently - go ahead, spam it with requests!**
+- 
 - **Built in Starboard feature**
 
 - **Feature to post current settings in a dedicated channel**
