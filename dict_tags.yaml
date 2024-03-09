@@ -81,7 +81,7 @@ tag_presets:
         payload: {override_settings: {CLIP_stop_at_last_layers: 2}} # Nested payload dictionary settings can also be modified. Must be formatted as a dictionary.
 
       - trigger: '{no|without|clear|empty|transparent} {bg|background}'
-        layerdiffuse: true  # enables 'layerdiffuse' extension (must also be enabled in config.py)
+        layerdiffuse: '(SDXL) Only Generate Transparent Image (Attention Injection)'  # enables 'layerdiffuse' extension while applying specified method. See tag references at bottom for list of methods.
       #  Use 'payload' tag if you need more complex triggered settings for layerdiffuse
       #  payload: {'alwayson_scripts': {'layerdiffuse': {'args': [true,'Only Generate Transparent Image (Attention Injection)',0.2,1.0,null,null,null,'Crop and Resize']}}}
 
@@ -153,3 +153,4 @@ tag_presets:
 #   img_text_joining: ', '            Relevant to all insertion methods except "replace"
 #   payload: {dictionary}             Replacements for A1111 payload. Must be formatted as a dictionary.
 #   img_param_variances: {dictionary} Randomization ranges for A1111 payload parameters. Must be formatted as a dictionary.
+#   layerdiffuse: 'string'            enables 'layerdiffuse' extension with specified method. Valid: "(SD1.5) Only Generate Transparent Image (Attention Injection)", "(SD1.5) From Foreground to Background (need batch size 2)", "(SD1.5) From Background to Foreground (need batch size 2)", "(SD1.5) Generate Everything Together (need batch size 3)", "(SDXL) Only Generate Transparent Image (Attention Injection)", "(SDXL) Only Generate Transparent Image (Conv Injection)", "(SDXL) From Foreground to Blending", "(SDXL) From Foreground and Blending to Background", "(SDXL) From Background to Blending", "(SDXL) From Background and Blending to Foreground"

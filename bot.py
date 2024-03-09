@@ -2002,7 +2002,9 @@ def process_img_payload_tags(img_payload, matches):
             if tag.get('face_swap'):
                 img_payload = process_face(img_payload, tag['face_swap'])
             if tag.get('layerdiffuse'):
-                img_payload['alwayson_scripts']['layerdiffuse']['args'][0] = True # enable layerdiffuse
+                img_payload['alwayson_scripts']['layerdiffuse']['args'][0] = True   # enable layerdiffuse
+                if isinstance(tag['layerdiffuse'], str):                            # backwards compatibility check
+                    img_payload['alwayson_scripts']['layerdiffuse']['args'][1] = tag['layerdiffuse'] # Update the method
                 logging.info('[TAGS] layerdiffuse was triggered (transparency).')
             # Process these keys only once
             if 'img_censoring' in tag and tag['img_censoring'] > 0:
@@ -3216,7 +3218,7 @@ class ImgModel:
                     'args': [{'enabled': False, 'image': None, 'lowvram': True, 'model': 'None', 'module': 'None', 'pixel_perfect': True}]
                 },
                 'layerdiffuse': {
-                    'args': [False, 'Only Generate Transparent Image (Attention Injection)', 1.0, 1.0, None, None, None, 'Crop and Resize']
+                    'args': [False, '(SDXL) Only Generate Transparent Image (Attention Injection)', 1.0, 1.0, None, None, None, 'Crop and Resize', False, '', '', '']
                 },
                 'reactor': {
                     'args': ['', False, '0', '0', 'inswapper_128.onnx', 'CodeFormer', 1, True, '4x_NMKD-Superscale-SP_178000_G', 1.5, 1, False, True, 1, 0, 0, False, 0.8, False, False, 'CUDA', True, 0, '', '', None, True, True, 0.6, 2]
