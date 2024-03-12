@@ -28,14 +28,14 @@ import aiohttp
 import math
 import time
 from itertools import product
+from threading import Lock, Thread
 from pydub import AudioSegment
 import copy
 
 #################################################################
-################ DISCORD / TEXTGENWEBUI STARTUP #################
+####################### DISCORD STARTUP #########################
 #################################################################
-# Import config.py
-from ad_discordbot import config
+from ad_discordbot import config # Import config.py
 
 TOKEN = config.discord['TOKEN'] 
 A1111 = config.sd['A1111']
@@ -76,130 +76,19 @@ os.environ["BITSANDBYTES_NOWELCOME"] = "1"
 warnings.filterwarnings("ignore", category=UserWarning, message="TypedStorage is deprecated")
 warnings.filterwarnings("ignore", category=UserWarning, message="You have modified the pretrained model configuration to control generation")
 
+#################################################################
+##################### TEXTGENWEBUI STARTUP ######################
+#################################################################
 import modules.extensions as extensions_module
 from modules.chat import chatbot_wrapper, load_character
 from modules import shared
 from modules import chat, utils
-shared.args.chat = True
 from modules.LoRA import add_lora_to_model
 from modules.models import load_model, unload_model
-from modules.models_settings import get_model_metadata
-from threading import Lock, Thread
+from modules.models_settings import get_model_metadata, update_model_parameters
+
+shared.args.chat = True
 shared.generation_lock = Lock()
-
-# Update the command-line arguments based on the interface values
-def update_model_parameters(state, initial=False):
-    elements = ui.list_model_elements()  # the names of the parameters
-    gpu_memories = []
-
-    for i, element in enumerate(elements):
-        if element not in state:
-            continue
-
-        value = state[element]
-        if element.startswith('gpu_memory'):
-            gpu_memories.append(value)
-            continue
-
-        if initial and vars(shared.args)[element] != vars(shared.args_defaults)[element]:
-            continue
-
-        # Setting null defaults
-        if element in ['wbits', 'groupsize', 'model_type'] and value == 'None':
-            value = vars(shared.args_defaults)[element]
-        elif element in ['cpu_memory'] and value == 0:
-            value = vars(shared.args_defaults)[element]
-
-        # Making some simple conversions
-        if element in ['wbits', 'groupsize', 'pre_layer']:
-            value = int(value)
-        elif element == 'cpu_memory' and value is not None:
-            value = f"{value}MiB"
-
-        if element in ['pre_layer']:
-            value = [value] if value > 0 else None
-
-        setattr(shared.args, element, value)
-
-    found_positive = False
-    for i in gpu_memories:
-        if i > 0:
-            found_positive = True
-            break
-
-    if not (initial and vars(shared.args)['gpu_memory'] != vars(shared.args_defaults)['gpu_memory']):
-        if found_positive:
-            shared.args.gpu_memory = [f"{i}MiB" for i in gpu_memories]
-        else:
-            shared.args.gpu_memory = None
-
-# Load text-generation-webui
-# Define functions
-def get_llmmodels():
-    return sorted([re.sub(".pth$", "", item.name) for item in list(Path(f"{shared.args.model_dir}/").glob("*")) if not item.name.endswith((".txt", "-np", ".pt", ".json", ".yaml"))], key=str.lower)
-
-def get_available_extensions():
-    return sorted(set(map(lambda x: x.parts[1], Path("extensions").glob("*/script.py"))), key=str.lower)
-
-def get_model_specific_settings(model):
-    settings = shared.model_config
-    model_settings = {}
-
-    for pat in settings:
-        if re.match(pat.lower(), model.lower()):
-            for k in settings[pat]:
-                model_settings[k] = settings[pat][k]
-
-    return model_settings
-
-def list_model_elements():
-    elements = ["cpu_memory", "auto_devices", "disk", "cpu", "bf16", "load_in_8bit", "wbits", "groupsize", "model_type", "pre_layer"]
-    for i in range(torch.cuda.device_count()):
-        elements.append(f"gpu_memory_{i}")
-    return elements
-
-# Update the command-line arguments based on the interface values
-def update_model_parameters(state, initial=False):
-    elements = list_model_elements()  # the names of the parameters
-    gpu_memories = []
-
-    for i, element in enumerate(elements):
-        if element not in state:
-            continue
-
-        value = state[element]
-        if element.startswith("gpu_memory"):
-            gpu_memories.append(value)
-            continue
-
-        if initial and vars(shared.args)[element] != vars(shared.args_defaults)[element]:
-            continue
-
-        # Setting null defaults
-        if element in ["wbits", "groupsize", "model_type"] and value == "None":
-            value = vars(shared.args_defaults)[element]
-        elif element in ["cpu_memory"] and value == 0:
-            value = vars(shared.args_defaults)[element]
-
-        # Making some simple conversions
-        if element in ["wbits", "groupsize", "pre_layer"]:
-            value = int(value)
-        elif element == "cpu_memory" and value is not None:
-            value = f"{value}MiB"
-
-        setattr(shared.args, element, value)
-
-    found_positive = False
-    for i in gpu_memories:
-        if i > 0:
-            found_positive = True
-            break
-
-    if not (initial and vars(shared.args)["gpu_memory"] != vars(shared.args_defaults)["gpu_memory"]):
-        if found_positive:
-            shared.args.gpu_memory = [f"{i}MiB" for i in gpu_memories]
-        else:
-            shared.args.gpu_memory = None
 
 # Loading custom settings
 settings_file = None
@@ -211,22 +100,11 @@ elif Path("settings.json").exists():
     settings_file = Path("settings.json")
 elif Path("settings.yaml").exists():
     settings_file = Path("settings.yaml")
-elif Path("settings.yml").exists():
-    settings_file = Path("settings.yml")
 if settings_file is not None:
     logging.info(f"Loading settings from {settings_file}...")
-    settings_file_suffix = settings_file.suffix.lower()
-    with open(settings_file, 'r', encoding='utf-8') as file:
-        if settings_file_suffix in [".json"]:
-            new_settings = json.load(file)
-        else:
-            new_settings = yaml.safe_load(file)
-    # Update shared.settings with the loaded settings
-    if new_settings is not None:
-        for item in new_settings:
-            shared.settings[item] = new_settings[item]
-    else:
-        logging.error("Failed to load local llm settings file.")
+    file_contents = open(settings_file, 'r', encoding='utf-8').read()
+    new_settings = json.loads(file_contents) if settings_file.suffix == "json" else yaml.safe_load(file_contents)
+    shared.settings.update(new_settings)
 
 # Load Extensions
 # legacy version which allows extension params to be updated during runtime
@@ -281,7 +159,6 @@ if tts_client:
         shared.args.extensions.append(tts_client)
 
 # Default extensions
-available_extensions = get_available_extensions()
 for extension in shared.settings["default_extensions"]:
     shared.args.extensions = shared.args.extensions or []
     if extension not in shared.args.extensions:
@@ -290,7 +167,8 @@ for extension in shared.settings["default_extensions"]:
 if shared.args.extensions and len(shared.args.extensions) > 0:
     extensions_module.load_extensions(extensions_module.extensions, extensions_module.available_extensions)
 
-all_llmmodels = get_llmmodels()
+# Get list of available models
+all_llmmodels = utils.get_available_models()[1:]
 
 # Model defined through --model
 if shared.args.model is not None:
@@ -317,7 +195,7 @@ elif shared.model_name == "None" or shared.args.model_menu:
 # If any model has been selected, load it
 if shared.model_name != "None":
 
-    model_settings = get_model_specific_settings(shared.model_name)
+    model_settings = get_model_metadata(shared.model_name)
     shared.settings.update(model_settings)  # hijacking the interface defaults
     update_model_parameters(model_settings, initial=True)  # hijacking the command-line arguments
 
@@ -336,11 +214,11 @@ client = commands.Bot(command_prefix=".", intents=intents)
 #################################################################
 ##################### BACKGROUND QUEUE TASK #####################
 #################################################################
-task_queue = asyncio.Queue()
+bg_task_queue = asyncio.Queue()
 
 async def process_tasks_in_background():
     while True:
-        task = await task_queue.get()
+        task = await bg_task_queue.get()
         await task
 
 #################################################################
@@ -376,8 +254,8 @@ async def delete_message_after(message, delay):
 # Send message response to user's interaction command
 async def ireply(i, process):
     try:
-        if blocking: # If a queued item is processing
-            ireply = await i.reply(f'Your {process} request was added to the generation queue', ephemeral=True)
+        if task_event.is_set():  # If a queued item is currently being processed
+            ireply = await i.reply(f'Your {process} request was added to the task queue', ephemeral=True)
             del_time = 5
         else:
             ireply = await i.reply(f'Processing your {process} request', ephemeral=True)
@@ -566,7 +444,7 @@ async def auto_update_imgmodel_task(mode='random'):
             if channel: channel = client.get_channel(channel)
             # offload to ai_gen queue
             queue_item = {'user': 'Automatically', 'channel': channel, 'source': 'imgmodel', 'params': {'imgmodel': selected_imgmodel}}
-            await ai_generate('Automatically', channel, queue_item)
+            await task_queue.put(queue_item)
         except Exception as e:
             logging.error(f"Error automatically updating image model: {e}")
         #await asyncio.sleep(duration)
@@ -745,13 +623,12 @@ async def on_ready():
         # Get character info if not 'instruct'
         if mode != 'instruct':
             await load_chat()
-        # For processing tasks in the background
+        # Create main task processing queue
+        client.loop.create_task(process_tasks())
+        # Create background task processing queue
         client.loop.create_task(process_tasks_in_background())
-        await task_queue.put(client.tree.sync()) # Process this in the background
-        # task to change image models automatically
-        await task_queue.put(start_auto_update_imgmodel_task()) # Process this in the background
-        # For warning about image gen taking longer on first use
-        client.fresh = True
+        await bg_task_queue.put(client.tree.sync()) # Process discord client tree sync in the background
+        await bg_task_queue.put(start_auto_update_imgmodel_task()) # Process task to change image models automatically in the background
         logging.info("Bot is ready")
     except Exception as e:
         logging.error(f"Error with on_ready: {e}")
@@ -938,7 +815,7 @@ async def process_tts_resp(channel, tts_resp):
         await upload_tts_file(channel, tts_resp)
     # Play in voice channel
     if play_mode != 1:
-        await play_in_voice_channel(tts_resp) # run task in background
+        await bg_task_queue.put(play_in_voice_channel(tts_resp)) # run task in background
 
 #################################################################
 ########################### ON MESSAGE ##########################
@@ -1247,18 +1124,8 @@ async def initialize_llm_payload(user, text):
         llm_payload['state']['history'] = session_history
     return llm_payload
 
-@client.event
-async def on_message(i):
+async def process_request(i, text, source):
     try:
-        ctx = Context(message=i,prefix=None,bot=client,view=None)
-        text = await commands.clean_content().convert(ctx, i.content)
-        if not client.behavior.bot_should_reply(i, text): return # Check that bot should reply or not
-        if not client.database.main_channels and client.user.mentioned_in(i): await main(i) # if None, set channel as main
-        # if @ mentioning bot, remove the @ mention from user prompt
-        if text.startswith(f"@{client.user.display_name} "):
-            text = text.replace(f"@{client.user.display_name} ", "", 1)
-        elif text.startswith(f"@{config.discord['char_name']} "): # may be a default name defined in config.py
-            text = text.replace(f"@{config.discord['char_name']} ","", 1)
         # make working copy of user's request (without @ mention)
         llm_prompt = copy.copy(text)
         # build llm_payload with defaults
@@ -1274,10 +1141,57 @@ async def on_message(i):
         llm_payload, llm_prompt = await process_llm_payload_tags(i.author.display_name, llm_payload, llm_prompt, matches)
         # offload to ai_gen queue
         llm_payload['text'] = llm_prompt
-        queue_item = {'user': i.author, 'user_id': i.author.mention, 'channel': i.channel, 'source': 'on_message', 'text': text, 'llm_payload': llm_payload, 'tags': tags}
-        await ai_generate(i.author, i.channel, queue_item)    
+        queue_item = {'user': i.author, 'user_id': i.author.mention, 'channel': i.channel, 'source': source, 'text': text, 'llm_payload': llm_payload, 'tags': tags}
+        await task_queue.put(queue_item)
+    except Exception as e:
+        logging.error(f"An error occurred processing on_message request: {e}")
+
+@client.event
+async def on_message(i):
+    try:
+        ctx = Context(message=i,prefix=None,bot=client,view=None)
+        text = await commands.clean_content().convert(ctx, i.content)
+        if not client.behavior.bot_should_reply(i, text): return # Check that bot should reply or not
+        if not client.database.main_channels and client.user.mentioned_in(i): await main(i) # if None, set channel as main
+        # if @ mentioning bot, remove the @ mention from user prompt
+        if text.startswith(f"@{client.user.display_name} "):
+            text = text.replace(f"@{client.user.display_name} ", "", 1)
+        elif text.startswith(f"@{config.discord['char_name']} "): # may be a default name defined in config.py
+            text = text.replace(f"@{config.discord['char_name']} ","", 1)
+        await process_request(i, text, 'on_message')  
     except Exception as e:
         logging.error(f"An error occurred in on_message: {e}")
+
+#################################################################
+###################### QUEUED ON MESSAGE# #######################
+#################################################################
+async def on_message_gen(user, user_id, channel, source, tags, llm_payload, params):
+    try:
+        # make a 'Prompting...' embed when generating text for an image response
+        should_draw = user_asks_for_image(tags)
+        embed = None
+        if should_draw:
+            if await a1111_online(channel):
+                info_embed = discord.Embed(title="Prompting ...", description="")
+                embed = await channel.send(embed=info_embed)
+        # process textgen-webui
+        last_resp, tts_resp = await llm_gen(llm_payload)
+        logging.info("reply sent: \"" + user_id + ": {'text': '" + llm_payload["text"] + "', 'response': '" + last_resp + "'}\"")
+        # process image generation (A1111 / Forge)
+        tags = match_img_tags(last_resp, tags)
+        if not should_draw:
+            should_draw = user_asks_for_image(tags) # Check again post-LLM
+        if should_draw:
+            if embed: await embed.delete()
+            await img_gen(user, channel, source, last_resp, tags, params)
+        if tts_resp: await process_tts_resp(channel, tts_resp)
+        mention_resp = update_mention(user_id, last_resp) # @mention non-consecutive users
+        await send_long_message(channel, mention_resp)
+    except Exception as e:
+        logging.error(f'An error occurred while processing "on_message" request: {e}')
+        info_embed = discord.Embed(title='An error occurred while processing "on_message" request', description=e)
+        if embed: await embed.edit(embed=info_embed)
+        else: await channel.send(embed=info_embed)
 
 #################################################################
 ##################### QUEUED LLM GENERATION #####################
@@ -1347,44 +1261,41 @@ async def llm_gen(llm_payload):
 async def cont_regen_gen(user, channel, llm_payload, source, message):
     try:
         cmd = 'Continuing' if source == 'cont' else 'Regenerating'
-        info_embed.title = f'{cmd} ... '
-        info_embed.description = f'{cmd} text for {user}'
+        info_embed = discord.Embed(title=f'{cmd} ... ', description=f'{cmd} text for {user}')
         embed = await channel.send(embed=info_embed)
         last_resp, tts_resp = await llm_gen(llm_payload)
-        if tts_resp: await task_queue.put(process_tts_resp(channel, tts_resp)) # Process this in background
         logging.info("reply sent: \"" + user + ": {'text': '" + llm_payload["text"] + "', 'response': '" + last_resp + "'}\"")
         await embed.delete()
         fetched_message = await channel.fetch_message(message)
         await fetched_message.delete()
+        if tts_resp: await process_tts_resp(channel, tts_resp)
         await send_long_message(channel, last_resp)
     except Exception as e:
         logging.error(f'An error occurred while "{cmd}": {e}')
-        try: await embed.delete()
-        except: pass
+        embed = discord.Embed(title=f'An error occurred while processing "{cmd}"', description=e)
+        if embed: await embed.edit(embed=info_embed)
+        else: await channel.send(embed=info_embed)
 
 async def speak_gen(user, channel, user_id, text, llm_payload, params):
     try:
-        info_embed.title = f"{user} requested tts ... "
-        info_embed.description = ""
+        info_embed = discord.Embed(title=f"{user} requested tts ... ", description="")
         embed = await channel.send(embed=info_embed)
         tts_args = params.get('tts_args', {})
         await update_extensions(tts_args)
         _, tts_resp = await llm_gen(llm_payload)
-        if tts_resp: await task_queue.put(process_tts_resp(channel, tts_resp)) # Process this in background
-        await update_extensions(client.settings['llmcontext'].get('extensions', {})) # Restore character specific extension settings
-        if params.get('user_voice'): os.remove(params['user_voice'])
+        await process_tts_resp(channel, tts_resp)
         await embed.delete()
-        info_embed.title = f"{user} requested tts"
         # remove api key (don't want to share this to the world!)
         for sub_dict in tts_args.values():
             if 'api_key' in sub_dict:
                 sub_dict.pop('api_key')
-        info_embed.description = f"**Params:** {tts_args}\n**Text:** {text}"
-        embed = await channel.send(embed=info_embed)
+        info_embed = discord.Embed(title=f"{user} requested tts", description=f"**Params:** {tts_args}\n**Text:** {text}")
+        await channel.send(embed=info_embed)
+        await update_extensions(client.settings['llmcontext'].get('extensions', {})) # Restore character specific extension settings
+        if params.get('user_voice'): os.remove(params['user_voice'])
     except Exception as e:
         logging.error(f"An error occurred while generating tts for '/speak': {e}")
-        info_embed.title = "An error occurred while generating tts for '/speak'"
-        info_embed.description = e
+        info_embed = discord.Embed(title="An error occurred while generating tts for '/speak'", description=e)
         await embed.edit(embed=info_embed)
 
 #################################################################
@@ -1406,14 +1317,14 @@ async def change_imgmodel_task(user, channel, params):
         # Announce from /imgmodel
         if channel:
             await embed.delete()
-            info_embed.title = f"{user} Changed Img model:"
+            info_embed.title = f"{user} changed Img model:"
             url = imgmodel.get('imgmodel_url', '')
             if url: url = " <" + url + ">"
-            info_embed.description = f'{imgmodel_name}{url}'
-            embed = await channel.send(embed=info_embed)
-        logging.info(f"{user} Changed Image model to: {imgmodel_name}")
+            info_embed.description = f'**{imgmodel_name}**{url}'
+            await channel.send(embed=info_embed)
+        logging.info(f"Image model changed to: {imgmodel_name}")
         if config.discord['post_active_settings']['enabled']:
-            await task_queue.put(post_active_settings())
+            await bg_task_queue.put(post_active_settings())
     except Exception as e:
         logging.error(f"Error changing Img model: {e}")
         info_embed.title = "An error occurred while changing Img model"
@@ -1433,16 +1344,16 @@ async def change_llmmodel_task(user, channel, params):
             unload_model() # Unload current LLM model
         # Assign values for selected LLM model
         shared.model_name = llmmodel
-        model_settings = get_model_specific_settings(shared.model_name)
+        model_settings = get_model_metadata(shared.model_name)
         shared.settings.update(model_settings)
         update_model_parameters(model_settings, initial=True)
         # Load the selected LLM model
         shared.model, shared.tokenizer = load_model(shared.model_name)
         if shared.args.lora: add_lora_to_model([shared.args.lora])
         await embed.delete()
-        info_embed.title = f"{user} Changed LLM model:"
-        info_embed.description = f'{llmmodel}'
-        embed = await channel.send(embed=info_embed)
+        info_embed.title = f"{user} changed LLM model:"
+        info_embed.description = f'**{llmmodel}**'
+        await channel.send(embed=info_embed)
     except Exception as e:
         logging.error(f"An error occurred while gchanging LLM Model from '/llmmodel': {e}")
         info_embed.title = "An error occurred while gchanging LLM Model from '/llmmodel'"
@@ -1470,14 +1381,18 @@ async def change_char_task(user, channel, source, params):
         else:
             greeting = f'**{char_name}** has entered the chat"'
         await embed.delete()
+        info_embed.title = f"{user} Changed character:"
+        info_embed.description = f'**{char_name}**'
+        await channel.send(embed=info_embed)
         await channel.send(greeting)
     except Exception as e:
         logging.error(f"An error occurred while changing character for /character: {e}")
-        try: await embed.delete()
-        except: pass
+        info_embed.title = "An error occurred while changing character"
+        info_embed.description = e
+        await embed.edit(embed=info_embed)
 
 #################################################################
-######################## GENERATION QUEUE #######################
+######################## MAIN TASK QUEUE ########################
 #################################################################
 def user_asks_for_image(tags):
     try:
@@ -1534,84 +1449,44 @@ def unpack_queue_item(queue_item):
         else: logging.info(f'{user} used "/imgmodel": "{info}"')
     return user, user_id, channel, source, text, img_prompt, llm_payload, tags, message, params
 
-queues = []
-blocking = False
+task_event = asyncio.Event()
+task_queue = asyncio.Queue()
 
-async def ai_generate(user_id, channel, queue_item):
+async def process_tasks():
     try:
-        queues.append(queue_item)
-        global blocking
-        while len(queues) > 0:
-            if blocking:
-                await asyncio.sleep(1)
-                continue
-            blocking = True
-            # Unpack the next queue item, process depending on its truthy values
-            queue_item = queues.pop(0)
+        while True:
+            # Fetch item from the queue
+            queue_item = await task_queue.get()
+            task_event.set() # Flag function is processing a task. Check with 'if task_event.is_set():'
+            # Unpack the next queue item
             user, user_id, channel, source, text, img_prompt, llm_payload, tags, message, params = unpack_queue_item(queue_item)
-            if channel is None:
-                if source == 'imgmodel':
-                    await change_imgmodel_task(user, channel, params)
-                    blocking = False
-                    continue
+            # Process unpacked queue item accordingly
             if source == 'character' or source == 'reset':
                 await change_char_task(user, channel, source, params)
-                blocking = False
-                continue
-            if source == 'llmmodel':
-                await change_llmmodel_task(user, channel, params)
-                blocking = False
-                continue
-            if source == 'imgmodel':
+            elif source == 'imgmodel':
                 await change_imgmodel_task(user, channel, params)
-                blocking = False
-                continue
-            # Things we want to simulate typing for
-            async with channel.typing():
-                if source == 'speak':
-                    await speak_gen(user, channel, user_id, text, llm_payload, params)
-                    blocking = False
-                    continue
-                if source == 'image':
-                    tags = match_img_tags(img_prompt, tags)
-                    await img_gen(channel, img_prompt, tags, params)
-                    info_embed.title = f"{user} requested an image:"
-                    info_embed.description = params['message']
-                    await channel.send(embed=info_embed)
-                    blocking = False
-                    continue
-                if source == 'cont' or source == 'regen':
-                    await cont_regen_gen(user, channel, llm_payload, source, message)
-                    blocking = False
-                    continue
-                # make a 'Prompting...' embed when generating text for an image response
-                should_draw = user_asks_for_image(tags)
-                picture_frame = None
-                if should_draw:
-                    if await a1111_online(channel):
-                        info_embed.title = "Prompting ..."
-                        info_embed.description = " "
-                        picture_frame = await channel.send(embed=info_embed)
-                # process textgen-webui
-                if llm_payload:
-                    last_resp, tts_resp = await llm_gen(llm_payload)
-                    logging.info("reply sent: \"" + user_id + ": {'text': '" + llm_payload["text"] + "', 'response': '" + last_resp + "'}\"")
-                # process image generation (A1111 / Forge)
-                tags = match_img_tags(last_resp, tags)
-                if not should_draw:
-                    should_draw = user_asks_for_image(tags) # Check again post-LLM
-                if should_draw:
-                    if picture_frame: await picture_frame.delete()
-                    if len(last_resp) > 1800: last_resp = last_resp[:1800] # arbitrarily shorten it for img purposes
-                    await img_gen(channel, last_resp, tags, params)
-                if tts_resp: await task_queue.put(process_tts_resp(channel, tts_resp)) # Process this in background
-                mention_resp = update_mention(user_id, last_resp) # @mention non-consecutive users
-                await send_long_message(channel, mention_resp)
-                blocking = False
+            elif source == 'llmmodel':
+                await change_llmmodel_task(user, channel, params)
+            else:
+                # Tasks which should simulate typing
+                async with channel.typing():
+                    if source == 'speak': # from '/speak' command
+                        await speak_gen(user, channel, user_id, text, llm_payload, params)
+                    elif source == 'image': # from '/image' command
+                        tags = match_img_tags(img_prompt, tags)
+                        await img_gen(user, channel, source, img_prompt, tags, params)
+                    elif source == 'cont' or source == 'regen':
+                        await cont_regen_gen(user, channel, llm_payload, source, message)
+                    elif source == 'on_message':
+                        await on_message_gen(user, user_id, channel, source, tags, llm_payload, params)
+                    else:
+                        print(f'Unexpectedly received an invalid task. Source: {source}')
+            task_event.clear() # Flag function is no longer processing a task
+            task_queue.task_done() # Accept next task
     except Exception as e:
-        logging.error(f"An error occurred while processing a generative task: {e}")
-        if picture_frame: await picture_frame.delete()
-        blocking = False
+        logging.error(f"An error occurred while processing a main task: {e}")
+        task_event.clear()
+        task_queue.task_done()
 
 #################################################################
 #################### QUEUED IMAGE GENERATION ####################
@@ -1656,7 +1531,7 @@ async def layerdiffuse_hack(temp_dir, img_payload, images, pnginfo):
     except Exception as e:
         logging.error(f'Error processing layerdiffuse images: {e}')    
 
-async def a1111_txt2img(temp_dir, img_payload, picture_frame):
+async def a1111_txt2img(temp_dir, img_payload, embed):
     try:
         async def save_images_and_return():
             async with aiohttp.ClientSession() as session:
@@ -1677,7 +1552,7 @@ async def a1111_txt2img(temp_dir, img_payload, picture_frame):
                     return images, response.status, pnginfo
 
         async def track_progress():
-            await check_a1111_progress(picture_frame)
+            await check_a1111_progress(embed)
 
         # Start progress task and generation task concurrently
         images_task = asyncio.create_task(save_images_and_return())
@@ -1695,15 +1570,16 @@ async def a1111_txt2img(temp_dir, img_payload, picture_frame):
         return images, r
     except Exception as e:
         logging.error(f'Error processing images in txt2img API module: {e}')
-        info_embed.title = f'Error processing images: {e}'
-        await picture_frame.edit(embed=info_embed)
+        info_embed.title = 'Error processing images'
+        info_embed.description = e
+        await embed.edit(embed=info_embed)
 
 def progress_bar(value, length=20):
     filled_length = int(length * value)
     bar = ':white_large_square:' * filled_length + ':white_square_button:' * (length - filled_length)
     return f'{bar}'
 
-async def check_a1111_progress(picture_frame):
+async def check_a1111_progress(embed):
     async with aiohttp.ClientSession() as session:
         progress_data = {"progress":0}
         while progress_data['progress'] == 0:
@@ -1713,7 +1589,7 @@ async def check_a1111_progress(picture_frame):
                     progress = progress_data['progress']
                     #print(f'Progress: {progress}%')
                     info_embed.title = 'Waiting for response from A1111 ...'
-                    await picture_frame.edit(embed=info_embed)                    
+                    await embed.edit(embed=info_embed)                    
                     await asyncio.sleep(1)
             except aiohttp.client_exceptions.ClientConnectionError:
                 logging.warning('Connection closed, retrying in 1 seconds')
@@ -1727,18 +1603,18 @@ async def check_a1111_progress(picture_frame):
                     if progress == 0 :
                         info_embed.title = f'Generating image: 100%'
                         info_embed.description = progress_bar(1)
-                        await picture_frame.edit(embed=info_embed)
+                        await embed.edit(embed=info_embed)
                         break
                     #print(f'Progress: {progress}%')
                     info_embed.title = f'Generating image: {progress:.0f}%'
                     info_embed.description = progress_bar(progress_data['progress'])
-                    await picture_frame.edit(embed=info_embed)
+                    await embed.edit(embed=info_embed)
                     await asyncio.sleep(1)
             except aiohttp.client_exceptions.ClientConnectionError:
                 logging.warning('Connection closed, retrying in 1 seconds')
                 await asyncio.sleep(1)
 
-async def process_image_gen(img_payload, picture_frame, channel):
+async def process_image_gen(img_payload, embed, channel):
     try:
         censor_mode = None
         do_censor = False
@@ -1747,7 +1623,7 @@ async def process_image_gen(img_payload, picture_frame, channel):
             do_censor = True
             if censor_mode == 2:
                 info_embed.title = "Image prompt was flagged as inappropriate."
-                await picture_frame.edit(embed=info_embed)
+                await embed.edit(embed=info_embed)
                 return
         # Ensure the necessary directories exist
         output_dir = 'ad_discordbot/sd_outputs/'
@@ -1755,13 +1631,12 @@ async def process_image_gen(img_payload, picture_frame, channel):
         temp_dir = 'ad_discordbot/temp/'
         os.makedirs(temp_dir, exist_ok=True)
         # Generate images, save locally
-        images, r = await a1111_txt2img(temp_dir, img_payload, picture_frame)
+        images, r = await a1111_txt2img(temp_dir, img_payload, embed)
         if not images:
             await channel.send(f"No images were generated. Response code: {r}")
             return
         # Send images to discord
-        client.fresh = False
-        await picture_frame.delete()
+        await embed.delete()
         # If the censor mode is 1 (blur), prefix the image file with "SPOILER_"
         file_prefix = 'temp_img_'
         if do_censor and censor_mode == 1:
@@ -2052,12 +1927,11 @@ def match_img_tags(img_prompt, tags):
     except Exception as e:
         logging.error(f"Error matching tags for img phase: {e}")
 
-async def img_gen(channel, img_prompt, tags, params):
+async def img_gen(user, channel, source, img_prompt, tags, params):
     try:
         info_embed.title = "Processing"
         info_embed.description = " ... "  # await check_a1111_progress()
-        if client.fresh: info_embed.description = "First image request tends to take more time, please be patient"
-        picture_frame = await channel.send(embed=info_embed)
+        embed = await channel.send(embed=info_embed)
         info_embed.title = "Sending prompt to A1111 ..."
         matches = tags['matches']
         # Initialize img_payload
@@ -2074,7 +1948,11 @@ async def img_gen(channel, img_prompt, tags, params):
         # Clean anything up that gets messy
         clean_img_payload(img_payload)
         # Generate and send images
-        await process_image_gen(img_payload, picture_frame, channel)      
+        await process_image_gen(img_payload, embed, channel)  
+        if source == 'image':
+            info_embed.title = f"{user} requested an image:"
+            info_embed.description = params['message']
+            await channel.send(embed=info_embed)    
     except Exception as e:
         logging.error(f"An error occurred in img_gen(): {e}")
 
@@ -2273,7 +2151,7 @@ async def image(
         await ireply(i, 'image') # send a response msg to the user
         # offload to ai_gen queue
         queue_item = {'user': i.author, 'user_id': i.author.mention, 'channel': i.channel, 'source': 'image', 'img_prompt': prompt, 'tags': tags, 'params': params}
-        await ai_generate(i.author, i.channel, queue_item)
+        await task_queue.put(queue_item)
     except Exception as e:
         logging.error(f"An error occurred in image(): {e}")
 
@@ -2306,28 +2184,6 @@ async def main(i):
     except Exception as e:
         logging.error(f"Error toggling main channel setting: {e}")
 
-# Status message embed
-status_embed_json = {
-    "title": "Status",
-    "description": "You don't have a job queued.",
-    "color": 39129,
-    "timestamp": datetime.now().isoformat()
-}
-status_embed = discord.Embed().from_dict(status_embed_json)
-
-@client.hybrid_command(description="Check the status of your reply queue position and wait time")
-async def status(i):
-    total_num_queued_jobs = len(queues)
-    que_user_ids = [list(a.keys())[0] for a in queues]
-    if i.author.mention in que_user_ids:
-        user_position = que_user_ids.index(i.author.mention) + 1
-        msg = f"{i.author.mention} Your job is currently {user_position} out of {total_num_queued_jobs} in the queue. Estimated time until response is ready: {user_position * 20/60} minutes."
-    else:
-        msg = f"{i.author.mention} doesn\'t have a job queued."
-    status_embed.timestamp = datetime.now()
-    status_embed.description = msg
-    await i.send(embed=status_embed)
-
 @client.hybrid_command(description="Update dropdown menus without restarting bot script.")
 async def sync(i: discord.Interaction):
     await task_queue.put(client.tree.sync()) # Process this in the background
@@ -2336,14 +2192,14 @@ async def sync(i: discord.Interaction):
 ######################### LLM COMMANDS ##########################
 #################################################################
 # /reset command - Resets current character
-@client.hybrid_command(description="Reset the conversation")
+@client.hybrid_command(description="Reset the conversation with current character")
 async def reset(i):
     try:
         shared.stop_everything = True
         await ireply(i, 'character reset') # send a response msg to the user
         # offload to ai_gen queue
         queue_item = {'user': i.author, 'user_id': i.author.mention, 'channel': i.channel, 'source': 'reset', 'params': {'char_name': client.user.display_name}}
-        await ai_generate(i.author, i.channel, queue_item)
+        await task_queue.put(queue_item)
     except Exception as e:
         logging.error(f"Error with /reset: {e}")
 
@@ -2357,7 +2213,7 @@ async def regen_llm_gen(i: discord.Interaction, message: discord.Message):
     await ireply(i, 'regenerate') # send a response msg to the user
     # offload to ai_gen queue
     queue_item = {'user': i.user.display_name, 'channel': i.channel, 'source': 'regen', 'text': text, 'llm_payload': llm_payload, 'message': message.id}
-    await ai_generate(i.user, i.channel, queue_item) 
+    await task_queue.put(queue_item)
 
 # Context menu command to Continue last reply
 @client.tree.context_menu(name="continue")
@@ -2369,7 +2225,7 @@ async def continue_llm_gen(i: discord.Interaction, message: discord.Message):
     await ireply(i, 'continue') # send a response msg to the user
     # offload to ai_gen queue
     queue_item = {'user': i.user.display_name, 'channel': i.channel, 'source': 'cont', 'text': text, 'llm_payload': llm_payload, 'message': message.id}
-    await ai_generate(i.user, i.channel, queue_item) 
+    await task_queue.put(queue_item)
 
 # Update bot's discord username / avatar
 async def update_client_profile(change_username, change_avatar, char_name):
@@ -2490,7 +2346,7 @@ async def process_character(i, selected_character_value):
         await ireply(i, 'character change') # send a response msg to the user
         # offload to ai_gen queue
         queue_item = {'user': i.author, 'user_id': i.author.mention, 'channel': i.channel, 'source': 'character', 'params': {'char_name': char_name}}
-        await ai_generate(i.author, i.channel, queue_item)
+        await task_queue.put(queue_item)
     except Exception as e:
         logging.error(f"Error processing selected character from /character command: {e}")
 
@@ -2527,7 +2383,7 @@ if all_characters:
     if len(all_characters) <= 25:
         @client.hybrid_command(name="character", description='Choose an character')
         @app_commands.rename(characters=f'characters_{character_options_label}')
-        @app_commands.describe(characters=f'characters {character_options_label.capitalize()}')
+        @app_commands.describe(characters=f'characters {character_options_label.upper()}')
         @app_commands.choices(characters=character_options)
         async def character(i: discord.Interaction, characters: typing.Optional[app_commands.Choice[str]]):
             selected_character = characters.value if characters is not None else ''
@@ -2536,10 +2392,10 @@ if all_characters:
     elif 25 < len(all_characters) <= 50:
         @client.hybrid_command(name="character", description='Choose an character (pick only one)')
         @app_commands.rename(characters_1=f'characters_{character_options_label}')
-        @app_commands.describe(characters_1=f'characters {character_options_label.capitalize()}')
+        @app_commands.describe(characters_1=f'characters {character_options_label.upper()}')
         @app_commands.choices(characters_1=character_options)
         @app_commands.rename(characters_2=f'characters_{character_options1_label}')
-        @app_commands.describe(characters_2=f'characters {character_options1_label.capitalize()}')
+        @app_commands.describe(characters_2=f'characters {character_options1_label.upper()}')
         @app_commands.choices(characters_2=character_options1)
         async def character(i: discord.Interaction, characters_1: typing.Optional[app_commands.Choice[str]], characters_2: typing.Optional[app_commands.Choice[str]]):
             if characters_1 and characters_2:
@@ -2550,13 +2406,13 @@ if all_characters:
     elif 50 < len(all_characters) <= 75:
         @client.hybrid_command(name="character", description='Choose an character (pick only one)')
         @app_commands.rename(characters_1=f'characters_{character_options_label}')
-        @app_commands.describe(characters_1=f'characters {character_options_label.capitalize()}')
+        @app_commands.describe(characters_1=f'characters {character_options_label.upper()}')
         @app_commands.choices(characters_1=character_options)
         @app_commands.rename(characters_2=f'characters_{character_options1_label}')
-        @app_commands.describe(characters_2=f'characters {character_options1_label.capitalize()}')
+        @app_commands.describe(characters_2=f'characters {character_options1_label.upper()}')
         @app_commands.choices(characters_2=character_options1)
         @app_commands.rename(characters_3=f'characters_{character_options2_label}')
-        @app_commands.describe(characters_3=f'characters {character_options2_label.capitalize()}')
+        @app_commands.describe(characters_3=f'characters {character_options2_label.upper()}')
         @app_commands.choices(characters_3=character_options2)
         async def character(i: discord.Interaction, characters_1: typing.Optional[app_commands.Choice[str]], characters_2: typing.Optional[app_commands.Choice[str]], characters_3: typing.Optional[app_commands.Choice[str]]):
             if sum(1 for v in (characters_1, characters_2, characters_3) if v) > 1:
@@ -2567,16 +2423,16 @@ if all_characters:
     elif 75 < len(all_characters) <= 100:
         @client.hybrid_command(name="character", description='Choose an character (pick only one)')
         @app_commands.rename(characters_1=f'characters_{character_options_label}')
-        @app_commands.describe(characters_1=f'characters {character_options_label.capitalize()}')
+        @app_commands.describe(characters_1=f'characters {character_options_label.upper()}')
         @app_commands.choices(characters_1=character_options)
         @app_commands.rename(characters_2=f'characters_{character_options1_label}')
-        @app_commands.describe(characters_2=f'characters {character_options1_label.capitalize()}')
+        @app_commands.describe(characters_2=f'characters {character_options1_label.upper()}')
         @app_commands.choices(characters_2=character_options1)
         @app_commands.rename(characters_3=f'characters_{character_options2_label}')
-        @app_commands.describe(characters_3=f'characters {character_options2_label.capitalize()}')
+        @app_commands.describe(characters_3=f'characters {character_options2_label.upper()}')
         @app_commands.choices(characters_3=character_options2)
         @app_commands.rename(characters_4=f'characters_{character_options3_label}')
-        @app_commands.describe(characters_4=f'characters {character_options3_label.capitalize()}')
+        @app_commands.describe(characters_4=f'characters {character_options3_label.upper()}')
         @app_commands.choices(characters_4=character_options3)
         async def character(i: discord.Interaction, characters_1: typing.Optional[app_commands.Choice[str]], characters_2: typing.Optional[app_commands.Choice[str]], characters_3: typing.Optional[app_commands.Choice[str]], characters_4: typing.Optional[app_commands.Choice[str]]):
             if sum(1 for v in (characters_1, characters_2, characters_3, characters_4) if v) > 1:
@@ -2654,7 +2510,7 @@ async def update_imgmodel(selected_imgmodel, selected_imgmodel_tags):
         model_data = active_settings['imgmodel'].get('override_settings', None) or active_settings['imgmodel']['payload'].get('override_settings')
         await a1111_load_imgmodel(model_data)
         # Update size options for /image command
-        await task_queue.put(update_size_options(active_settings.get('imgmodel').get('payload').get('width'),active_settings.get('imgmodel').get('payload').get('height')))
+        await bg_task_queue.put(update_size_options(active_settings.get('imgmodel').get('payload').get('width'),active_settings.get('imgmodel').get('payload').get('height')))
     except Exception as e:
         logging.error(f"Error updating settings with the selected imgmodel data: {e}")
 
@@ -2742,7 +2598,7 @@ async def process_imgmodel(i, selected_imgmodel_value):
         await ireply(i, 'Img model change') # send a response msg to the user
         # offload to ai_gen queue
         queue_item = {'user': i.author, 'user_id': i.author.mention, 'channel': i.channel, 'source': 'imgmodel', 'params': {'imgmodel': selected_imgmodel}}
-        await ai_generate(i.author, i.channel, queue_item)
+        await task_queue.put(queue_item)
     except Exception as e:
         logging.error(f"Error processing selected imgmodel from /imgmodel command: {e}")
 
@@ -2778,7 +2634,7 @@ if all_imgmodels:
     if len(all_imgmodels) <= 25:
         @client.hybrid_command(name="imgmodel", description='Choose an imgmodel')
         @app_commands.rename(imgmodels=f'imgmodels_{imgmodel_options_label}')
-        @app_commands.describe(imgmodels=f'Imgmodels {imgmodel_options_label.capitalize()}')
+        @app_commands.describe(imgmodels=f'Imgmodels {imgmodel_options_label.upper()}')
         @app_commands.choices(imgmodels=imgmodel_options)
         async def imgmodel(i: discord.Interaction, imgmodels: typing.Optional[app_commands.Choice[str]]):
             selected_imgmodel = imgmodels.value if imgmodels is not None else ''
@@ -2787,10 +2643,10 @@ if all_imgmodels:
     elif 25 < len(all_imgmodels) <= 50:
         @client.hybrid_command(name="imgmodel", description='Choose an imgmodel (pick only one)')
         @app_commands.rename(models_1=f'imgmodels_{imgmodel_options_label}')
-        @app_commands.describe(models_1=f'Imgmodels {imgmodel_options_label.capitalize()}')
+        @app_commands.describe(models_1=f'Imgmodels {imgmodel_options_label.upper()}')
         @app_commands.choices(models_1=imgmodel_options)
         @app_commands.rename(models_2=f'imgmodels_{imgmodel_options1_label}')
-        @app_commands.describe(models_2=f'Imgmodels {imgmodel_options1_label.capitalize()}')
+        @app_commands.describe(models_2=f'Imgmodels {imgmodel_options1_label.upper()}')
         @app_commands.choices(models_2=imgmodel_options1)
         async def imgmodel(i: discord.Interaction, models_1: typing.Optional[app_commands.Choice[str]], models_2: typing.Optional[app_commands.Choice[str]]):
             if models_1 and models_2:
@@ -2801,13 +2657,13 @@ if all_imgmodels:
     elif 50 < len(all_imgmodels) <= 75:
         @client.hybrid_command(name="imgmodel", description='Choose an imgmodel (pick only one)')
         @app_commands.rename(models_1=f'imgmodels_{imgmodel_options_label}')
-        @app_commands.describe(models_1=f'Imgmodels {imgmodel_options_label.capitalize()}')
+        @app_commands.describe(models_1=f'Imgmodels {imgmodel_options_label.upper()}')
         @app_commands.choices(models_1=imgmodel_options)
         @app_commands.rename(models_2=f'imgmodels_{imgmodel_options1_label}')
-        @app_commands.describe(models_2=f'Imgmodels {imgmodel_options1_label.capitalize()}')
+        @app_commands.describe(models_2=f'Imgmodels {imgmodel_options1_label.upper()}')
         @app_commands.choices(models_2=imgmodel_options1)
         @app_commands.rename(models_3=f'imgmodels_{imgmodel_options2_label}')
-        @app_commands.describe(models_3=f'Imgmodels {imgmodel_options2_label.capitalize()}')
+        @app_commands.describe(models_3=f'Imgmodels {imgmodel_options2_label.upper()}')
         @app_commands.choices(models_3=imgmodel_options2)
         async def imgmodel(i: discord.Interaction, models_1: typing.Optional[app_commands.Choice[str]], models_2: typing.Optional[app_commands.Choice[str]], models_3: typing.Optional[app_commands.Choice[str]]):
             if sum(1 for v in (models_1, models_2, models_3) if v) > 1:
@@ -2818,16 +2674,16 @@ if all_imgmodels:
     elif 75 < len(all_imgmodels) <= 100:
         @client.hybrid_command(name="imgmodel", description='Choose an imgmodel (pick only one)')
         @app_commands.rename(models_1=f'imgmodels_{imgmodel_options_label}')
-        @app_commands.describe(models_1=f'Imgmodels {imgmodel_options_label.capitalize()}')
+        @app_commands.describe(models_1=f'Imgmodels {imgmodel_options_label.upper()}')
         @app_commands.choices(models_1=imgmodel_options)
         @app_commands.rename(models_2=f'imgmodels_{imgmodel_options1_label}')
-        @app_commands.describe(models_2=f'Imgmodels {imgmodel_options1_label.capitalize()}')
+        @app_commands.describe(models_2=f'Imgmodels {imgmodel_options1_label.upper()}')
         @app_commands.choices(models_2=imgmodel_options1)
         @app_commands.rename(models_3=f'imgmodels_{imgmodel_options2_label}')
-        @app_commands.describe(models_3=f'Imgmodels {imgmodel_options2_label.capitalize()}')
+        @app_commands.describe(models_3=f'Imgmodels {imgmodel_options2_label.upper()}')
         @app_commands.choices(models_3=imgmodel_options2)
         @app_commands.rename(models_4=f'imgmodels_{imgmodel_options3_label}')
-        @app_commands.describe(models_4=f'Imgmodels {imgmodel_options3_label.capitalize()}')
+        @app_commands.describe(models_4=f'Imgmodels {imgmodel_options3_label.upper()}')
         @app_commands.choices(models_4=imgmodel_options3)
         async def imgmodel(i: discord.Interaction, models_1: typing.Optional[app_commands.Choice[str]], models_2: typing.Optional[app_commands.Choice[str]], models_3: typing.Optional[app_commands.Choice[str]], models_4: typing.Optional[app_commands.Choice[str]]):
             if sum(1 for v in (models_1, models_2, models_3, models_4) if v) > 1:
@@ -2844,7 +2700,7 @@ async def process_llmmodel(i, selected_llmmodel):
         await ireply(i, 'LLM model change') # send a response msg to the user
         # offload to ai_gen queue
         queue_item = {'user': i.author, 'user_id': i.author.mention, 'channel': i.channel, 'source': 'llmmodel', 'params': {'llmmodel': selected_llmmodel}}
-        await ai_generate(i.author, i.channel, queue_item)
+        await task_queue.put(queue_item)
     except Exception as e:
         logging.error(f"Error processing /llmmodel command: {e}")
 
@@ -2873,7 +2729,7 @@ if all_llmmodels:
     if len(all_llmmodels) <= 25:
         @client.hybrid_command(name="llmmodel", description='Choose an LLM model')
         @app_commands.rename(llmmodels=f'llm-models_{llmmodel_options_label}')
-        @app_commands.describe(llmmodels=f'LLM models {llmmodel_options_label.capitalize()}')
+        @app_commands.describe(llmmodels=f'LLM models {llmmodel_options_label.upper()}')
         @app_commands.choices(llmmodels=llmmodel_options)
         async def llmmodel(i: discord.Interaction, llmmodels: typing.Optional[app_commands.Choice[str]]):
             selected_llmmodel = llmmodels.value if llmmodels is not None else ''
@@ -2882,10 +2738,10 @@ if all_llmmodels:
     elif 25 < len(all_llmmodels) <= 50:
         @client.hybrid_command(name="llmmodel", description='Choose an LLM model (pick only one)')
         @app_commands.rename(models_1=f'llm-models_{llmmodel_options_label}')
-        @app_commands.describe(models_1=f'LLM models {llmmodel_options_label.capitalize()}')
+        @app_commands.describe(models_1=f'LLM models {llmmodel_options_label.upper()}')
         @app_commands.choices(models_1=llmmodel_options)
         @app_commands.rename(models_2=f'llm-models_{llmmodel_options1_label}')
-        @app_commands.describe(models_2=f'LLM models {llmmodel_options1_label.capitalize()}')
+        @app_commands.describe(models_2=f'LLM models {llmmodel_options1_label.upper()}')
         @app_commands.choices(models_2=llmmodel_options1)
         async def llmmodel(i: discord.Interaction, models_1: typing.Optional[app_commands.Choice[str]], models_2: typing.Optional[app_commands.Choice[str]]):
             if models_1 and models_2:
@@ -2896,13 +2752,13 @@ if all_llmmodels:
     elif 50 < len(all_llmmodels) <= 75:
         @client.hybrid_command(name="llmmodel", description='Choose an LLM model (pick only one)')
         @app_commands.rename(models_1=f'llm-models_{llmmodel_options_label}')
-        @app_commands.describe(models_1=f'LLM models {llmmodel_options_label.capitalize()}')
+        @app_commands.describe(models_1=f'LLM models {llmmodel_options_label.upper()}')
         @app_commands.choices(models_1=llmmodel_options)
         @app_commands.rename(models_2=f'llm-models_{llmmodel_options1_label}')
-        @app_commands.describe(models_2=f'LLM models {llmmodel_options1_label.capitalize()}')
+        @app_commands.describe(models_2=f'LLM models {llmmodel_options1_label.upper()}')
         @app_commands.choices(models_2=llmmodel_options1)
         @app_commands.rename(models_3=f'llm-models_{llmmodel_options2_label}')
-        @app_commands.describe(models_3=f'LLM models {llmmodel_options2_label.capitalize()}')
+        @app_commands.describe(models_3=f'LLM models {llmmodel_options2_label.upper()}')
         @app_commands.choices(models_3=llmmodel_options2)
         async def llmmodel(i: discord.Interaction, models_1: typing.Optional[app_commands.Choice[str]], models_2: typing.Optional[app_commands.Choice[str]], models_3: typing.Optional[app_commands.Choice[str]]):
             if sum(1 for v in (models_1, models_2, models_3) if v) > 1:
@@ -2913,16 +2769,16 @@ if all_llmmodels:
     elif 75 < len(all_llmmodels) <= 100:
         @client.hybrid_command(name="llmmodel", description='Choose an LLM model (pick only one)')
         @app_commands.rename(models_1=f'llm-models_{llmmodel_options_label}')
-        @app_commands.describe(models_1=f'LLM models {llmmodel_options_label.capitalize()}')
+        @app_commands.describe(models_1=f'LLM models {llmmodel_options_label.upper()}')
         @app_commands.choices(models_1=llmmodel_options)
         @app_commands.rename(models_2=f'llm-models_{llmmodel_options1_label}')
-        @app_commands.describe(models_2=f'LLM models {llmmodel_options1_label.capitalize()}')
+        @app_commands.describe(models_2=f'LLM models {llmmodel_options1_label.upper()}')
         @app_commands.choices(models_2=llmmodel_options1)
         @app_commands.rename(models_3=f'llm-models_{llmmodel_options2_label}')
-        @app_commands.describe(models_3=f'LLM models {llmmodel_options2_label.capitalize()}')
+        @app_commands.describe(models_3=f'LLM models {llmmodel_options2_label.upper()}')
         @app_commands.choices(models_3=llmmodel_options2)
         @app_commands.rename(models_4=f'llm-models_{llmmodel_options3_label}')
-        @app_commands.describe(models_4=f'LLM models {llmmodel_options3_label.capitalize()}')
+        @app_commands.describe(models_4=f'LLM models {llmmodel_options3_label.upper()}')
         @app_commands.choices(models_4=llmmodel_options3)
         async def llmmodel(i: discord.Interaction, models_1: typing.Optional[app_commands.Choice[str]], models_2: typing.Optional[app_commands.Choice[str]], models_3: typing.Optional[app_commands.Choice[str]], models_4: typing.Optional[app_commands.Choice[str]]):
             if sum(1 for v in (models_1, models_2, models_3, models_4) if v) > 1:
@@ -3046,7 +2902,7 @@ async def process_speak(i, input_text, selected_voice=None, lang=None, voice_inp
         await ireply(i, 'tts') # send a response msg to the user
         # offload to ai_gen queue
         queue_item = {'user': i.author, 'user_id': i.author.mention, 'channel': i.channel, 'source': 'speak', 'text': input_text, 'llm_payload': llm_payload, 'params': {'tts_args': tts_args, 'user_voice': user_voice}}
-        await ai_generate(i.author, i.channel, queue_item)
+        await task_queue.put(queue_item)
     except Exception as e:
         logging.error(f"Error processing tts request: {e}")
         await i.send(f"Error processing tts request: {e}", ephemeral=True)
@@ -3101,7 +2957,7 @@ if tts_client and tts_client in supported_tts_clients:
     if len(all_voices) <= 25:
         @client.hybrid_command(name="speak", description='AI will speak your text using a selected voice')
         @app_commands.rename(voice=f'voices_{voice_options_label}')
-        @app_commands.describe(voice=f'Voices {voice_options_label.capitalize()}')
+        @app_commands.describe(voice=f'Voices {voice_options_label.upper()}')
         @app_commands.choices(voice=voice_options)
         @app_commands.choices(lang=lang_options)
         async def speak(i: discord.Interaction, input_text: str, voice: typing.Optional[app_commands.Choice[str]], lang: typing.Optional[app_commands.Choice[str]], voice_input: typing.Optional[discord.Attachment]):
@@ -3113,10 +2969,10 @@ if tts_client and tts_client in supported_tts_clients:
     elif 25 < len(all_voices) <= 50:
         @client.hybrid_command(name="speak", description='AI will speak your text using a selected voice (pick only one)')
         @app_commands.rename(voice_1=f'voices_{voice_options_label}')
-        @app_commands.describe(voice_1=f'Voices {voice_options_label.capitalize()}')
+        @app_commands.describe(voice_1=f'Voices {voice_options_label.upper()}')
         @app_commands.choices(voice_1=voice_options)
         @app_commands.rename(voice_2=f'voices_{voice_options1_label}')
-        @app_commands.describe(voice_2=f'Voices {voice_options1_label.capitalize()}')
+        @app_commands.describe(voice_2=f'Voices {voice_options1_label.upper()}')
         @app_commands.choices(voice_2=voice_options1)
         @app_commands.choices(lang=lang_options)
         async def speak(i: discord.Interaction, input_text: str, voice_1: typing.Optional[app_commands.Choice[str]], voice_2: typing.Optional[app_commands.Choice[str]], lang: typing.Optional[app_commands.Choice[str]], voice_input: typing.Optional[discord.Attachment]):
@@ -3130,13 +2986,13 @@ if tts_client and tts_client in supported_tts_clients:
     elif 50 < len(all_voices) <= 75:
         @client.hybrid_command(name="speak", description='AI will speak your text using a selected voice (pick only one)')
         @app_commands.rename(voice_1=f'voices_{voice_options_label}')
-        @app_commands.describe(voice_1=f'Voices {voice_options_label.capitalize()}')
+        @app_commands.describe(voice_1=f'Voices {voice_options_label.upper()}')
         @app_commands.choices(voice_1=voice_options)
         @app_commands.rename(voice_2=f'voices_{voice_options1_label}')
-        @app_commands.describe(voice_2=f'Voices {voice_options1_label.capitalize()}')
+        @app_commands.describe(voice_2=f'Voices {voice_options1_label.upper()}')
         @app_commands.choices(voice_2=voice_options1)
         @app_commands.rename(voice_3=f'voices_{voice_options2_label}')
-        @app_commands.describe(voice_3=f'Voices {voice_options2_label.capitalize()}')
+        @app_commands.describe(voice_3=f'Voices {voice_options2_label.upper()}')
         @app_commands.choices(voice_3=voice_options2)
         @app_commands.choices(lang=lang_options)
         async def speak(i: discord.Interaction, input_text: str, voice_1: typing.Optional[app_commands.Choice[str]], voice_2: typing.Optional[app_commands.Choice[str]], voice_3: typing.Optional[app_commands.Choice[str]], lang: typing.Optional[app_commands.Choice[str]], voice_input: typing.Optional[discord.Attachment]):
