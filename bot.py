@@ -33,7 +33,7 @@ from pydub import AudioSegment
 import copy
 
 #################################################################
-####################### DISCORD STARTUP #########################
+#################### DISCORD / BOT STARTUP ######################
 #################################################################
 from ad_discordbot import config # Import config.py
 
@@ -76,6 +76,12 @@ os.environ["BITSANDBYTES_NOWELCOME"] = "1"
 warnings.filterwarnings("ignore", category=UserWarning, message="TypedStorage is deprecated")
 warnings.filterwarnings("ignore", category=UserWarning, message="You have modified the pretrained model configuration to control generation")
 
+intents = discord.Intents.default()
+intents.message_content = True
+intents.reactions = True  # Enable reaction events
+intents.guild_messages = True # Allows updating topic
+client = commands.Bot(command_prefix=".", intents=intents)
+
 #################################################################
 ##################### TEXTGENWEBUI STARTUP ######################
 #################################################################
@@ -83,13 +89,11 @@ import modules.extensions as extensions_module
 from modules.chat import chatbot_wrapper, load_character
 from modules import shared
 from modules import chat, utils
-from modules.LoRA import add_lora_to_model
+from modules import LoRA
 from modules.models import load_model, unload_model
-from modules.models_settings import get_model_metadata, update_model_parameters
+from modules.models_settings import get_model_metadata, update_model_parameters, get_fallback_settings
 
-shared.args.chat = True
-shared.generation_lock = Lock()
-
+## Majority of this code section is copypasta from modules/server.py
 # Loading custom settings
 settings_file = None
 # Check if a settings file is provided and exists
@@ -103,11 +107,15 @@ elif Path("settings.yaml").exists():
 if settings_file is not None:
     logging.info(f"Loading settings from {settings_file}...")
     file_contents = open(settings_file, 'r', encoding='utf-8').read()
-    new_settings = json.loads(file_contents) if settings_file.suffix == "json" else yaml.safe_load(file_contents)
+    new_settings = load_file(file_contents)
     shared.settings.update(new_settings)
 
+# Fallback settings for models
+shared.model_config['.*'] = get_fallback_settings()
+shared.model_config.move_to_end('.*', last=False)  # Move to the beginning
+
 # Load Extensions
-# legacy version which allows extension params to be updated during runtime
+# legacy version of load_extensions() which allows extension params to be updated during runtime
 def load_extensions(extensions, available_extensions):
     extensions_module.state = {}
     for i, name in enumerate(shared.args.extensions):
@@ -135,6 +143,7 @@ extensions_module.load_extensions = load_extensions
 shared.args.extensions = []
 extensions_module.available_extensions = utils.get_available_extensions()
 
+# If any TTS extension defined in config.py, set tts bot vars and add extension to shared.args.extensions
 supported_tts_clients = ['alltalk_tts', 'coqui_tts', 'silero_tts', 'elevenlabs_tts']
 tts_client = config.discord['tts_settings'].get('extension', '') # tts client
 tts_api_key = None
@@ -158,8 +167,8 @@ if tts_client:
     if tts_client not in shared.args.extensions:
         shared.args.extensions.append(tts_client)
 
-# Default extensions
-for extension in shared.settings["default_extensions"]:
+# Activate the extensions
+for extension in shared.settings['default_extensions']:
     shared.args.extensions = shared.args.extensions or []
     if extension not in shared.args.extensions:
         shared.args.extensions.append(extension)
@@ -168,7 +177,7 @@ if shared.args.extensions and len(shared.args.extensions) > 0:
     extensions_module.load_extensions(extensions_module.extensions, extensions_module.available_extensions)
 
 # Get list of available models
-all_llmmodels = utils.get_available_models()[1:]
+all_llmmodels = utils.get_available_models()
 
 # Model defined through --model
 if shared.args.model is not None:
@@ -179,37 +188,39 @@ elif len(all_llmmodels) == 1:
     shared.model_name = all_llmmodels[0]
 
 # Select the model from a command-line menu
-elif shared.model_name == "None" or shared.args.model_menu:
+elif shared.args.model_menu:
     if len(all_llmmodels) == 0:
         logging.error("No LLM models are available! Please download at least one.")
         sys.exit(0)
     else:
-        print("The following LLM models are available:\n")
+        print('The following LLM models are available:\n')
         for i, model in enumerate(all_llmmodels):
-            print(f"{i+1}. {model}")
-        print(f"\nWhich one do you want to load? 1-{len(all_llmmodels)}\n")
+            print(f'{i+1}. {model}')
+
+        print(f'\nWhich one do you want to load? 1-{len(all_llmmodels)}\n')
         i = int(input()) - 1
         print()
+
     shared.model_name = all_llmmodels[i]
 
 # If any model has been selected, load it
-if shared.model_name != "None":
+if shared.model_name != 'None':
+    p = Path(shared.model_name)
+    if p.exists():
+        model_name = p.parts[-1]
+        shared.model_name = model_name
+    else:
+        model_name = shared.model_name
 
-    model_settings = get_model_metadata(shared.model_name)
-    shared.settings.update(model_settings)  # hijacking the interface defaults
-    update_model_parameters(model_settings, initial=True)  # hijacking the command-line arguments
+    model_settings = get_model_metadata(model_name)
+    update_model_parameters(model_settings, initial=True)  # hijack the command-line arguments
 
     # Load the model
-    shared.model, shared.tokenizer = load_model(shared.model_name)
+    shared.model, shared.tokenizer = load_model(model_name)
     if shared.args.lora:
-        add_lora_to_model([shared.args.lora])
+        add_lora_to_model(shared.args.lora)
 
-# Loading the bot
-intents = discord.Intents.default()
-intents.message_content = True
-intents.reactions = True  # Enable reaction events
-intents.guild_messages = True # Allows updating topic
-client = commands.Bot(command_prefix=".", intents=intents)
+shared.generation_lock = Lock()
 
 #################################################################
 ##################### BACKGROUND QUEUE TASK #####################
