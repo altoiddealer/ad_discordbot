@@ -93,29 +93,7 @@ from modules import LoRA
 from modules.models import load_model, unload_model
 from modules.models_settings import get_model_metadata, update_model_parameters, get_fallback_settings
 
-# Function to load .json, .yml or .yaml files
-def load_file(file_path):
-    try:
-        file_suffix = Path(file_path).suffix.lower()
-
-        if file_suffix in [".json", ".yml", ".yaml"]:
-            with open(file_path, 'r', encoding='utf-8') as file:
-                if file_suffix in [".json"]:
-                    data = json.load(file)
-                else:
-                    data = yaml.safe_load(file)
-            return data
-        else:
-            logging.error(f"Unsupported file format: {file_suffix}")
-            return None
-    except FileNotFoundError:
-        logging.error(f"File not found: {file_suffix}")
-        return None
-    except Exception as e:
-        logging.error(f"An error occurred while reading {file_path}: {str(e)}")
-        return None
-
-## Majority of this code section is copypasta from modules/server.py
+## Majority of this code section is copypasta from server.py
 # Loading custom settings
 settings_file = None
 # Check if a settings file is provided and exists
@@ -129,7 +107,7 @@ elif Path("settings.yaml").exists():
 if settings_file is not None:
     logging.info(f"Loading settings from {settings_file}...")
     file_contents = open(settings_file, 'r', encoding='utf-8').read()
-    new_settings = load_file(file_contents)
+    new_settings = json.loads(file_contents) if settings_file.suffix == "json" else yaml.safe_load(file_contents)
     shared.settings.update(new_settings)
 
 # Fallback settings for models
@@ -257,6 +235,28 @@ async def process_tasks_in_background():
 #################################################################
 ######################## MISC FUNCTIONS #########################
 #################################################################
+# Function to load .json, .yml or .yaml files
+def load_file(file_path):
+    try:
+        file_suffix = Path(file_path).suffix.lower()
+
+        if file_suffix in [".json", ".yml", ".yaml"]:
+            with open(file_path, 'r', encoding='utf-8') as file:
+                if file_suffix in [".json"]:
+                    data = json.load(file)
+                else:
+                    data = yaml.safe_load(file)
+            return data
+        else:
+            logging.error(f"Unsupported file format: {file_suffix}")
+            return None
+    except FileNotFoundError:
+        logging.error(f"File not found: {file_suffix}")
+        return None
+    except Exception as e:
+        logging.error(f"An error occurred while reading {file_path}: {str(e)}")
+        return None
+
 def merge_base(newsettings, basekey):
     def deep_update(original, update):
         for key, value in update.items():
