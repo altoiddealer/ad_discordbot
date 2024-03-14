@@ -93,6 +93,28 @@ from modules import LoRA
 from modules.models import load_model, unload_model
 from modules.models_settings import get_model_metadata, update_model_parameters, get_fallback_settings
 
+# Function to load .json, .yml or .yaml files
+def load_file(file_path):
+    try:
+        file_suffix = Path(file_path).suffix.lower()
+
+        if file_suffix in [".json", ".yml", ".yaml"]:
+            with open(file_path, 'r', encoding='utf-8') as file:
+                if file_suffix in [".json"]:
+                    data = json.load(file)
+                else:
+                    data = yaml.safe_load(file)
+            return data
+        else:
+            logging.error(f"Unsupported file format: {file_suffix}")
+            return None
+    except FileNotFoundError:
+        logging.error(f"File not found: {file_suffix}")
+        return None
+    except Exception as e:
+        logging.error(f"An error occurred while reading {file_path}: {str(e)}")
+        return None
+
 ## Majority of this code section is copypasta from modules/server.py
 # Loading custom settings
 settings_file = None
@@ -324,28 +346,6 @@ def update_dict_matched_keys(d, u):
         else:
             d[k] = v
     return d
-
-def load_file(file_path):
-    try:
-        file_suffix = Path(file_path).suffix.lower()
-
-        if file_suffix in [".json", ".yml", ".yaml"]:
-            with open(file_path, 'r', encoding='utf-8') as file:
-                if file_suffix in [".json"]:
-                    data = json.load(file)
-                else:
-                    data = yaml.safe_load(file)
-            return data
-        else:
-            logging.error(f"Unsupported file format: {file_suffix}")
-            return None
-
-    except FileNotFoundError:
-        logging.error(f"File not found: {file_suffix}")
-        return None
-    except Exception as e:
-        logging.error(f"An error occurred while reading {file_path}: {str(e)}")
-        return None
 
 def save_yaml_file(file_path, data):
     try:
