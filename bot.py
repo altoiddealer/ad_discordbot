@@ -93,7 +93,7 @@ from modules import LoRA
 from modules.models import load_model, unload_model
 from modules.models_settings import get_model_metadata, update_model_parameters, get_fallback_settings
 
-## Majority of this code section is copypasta from server.py
+## Majority of this code section is copypasta from modules/server.py
 # Loading custom settings
 settings_file = None
 # Check if a settings file is provided and exists
@@ -203,22 +203,25 @@ elif shared.args.model_menu:
 
     shared.model_name = all_llmmodels[i]
 
-# If any model has been selected, load it
-if shared.model_name != 'None':
-    p = Path(shared.model_name)
-    if p.exists():
-        model_name = p.parts[-1]
-        shared.model_name = model_name
-    else:
-        model_name = shared.model_name
+def load_llm_model():
+    # If any model has been selected, load it
+    if shared.model_name != 'None':
+        p = Path(shared.model_name)
+        if p.exists():
+            model_name = p.parts[-1]
+            shared.model_name = model_name
+        else:
+            model_name = shared.model_name
 
-    model_settings = get_model_metadata(model_name)
-    update_model_parameters(model_settings, initial=True)  # hijack the command-line arguments
+        model_settings = get_model_metadata(model_name)
+        update_model_parameters(model_settings, initial=True)  # hijack the command-line arguments
 
-    # Load the model
-    shared.model, shared.tokenizer = load_model(model_name)
-    if shared.args.lora:
-        add_lora_to_model(shared.args.lora)
+        # Load the model
+        shared.model, shared.tokenizer = load_model(model_name)
+        if shared.args.lora:
+            add_lora_to_model(shared.args.lora)
+
+load_llm_model()
 
 shared.generation_lock = Lock()
 
@@ -530,6 +533,9 @@ info_embed_json = {
     "url": "https://github.com/altoiddealer/ad_discordbot"
 }
 info_embed = discord.Embed().from_dict(info_embed_json)
+
+# Img gen embed
+img_embed_info = discord.Embed(title = "Processing image generation ...", description=" ", url='https://github.com/altoiddealer/ad_discordbot')
 
 # If first time bot script is run
 async def first_run():
@@ -866,8 +872,10 @@ async def process_llm_payload_tags(user_name, llm_payload, llm_prompt, matches):
         state = {}
         time_offset = 0.0
         time_format = '%Y-%m-%d %H:%M:%S'
+        change_llmmodel = None
+        swap_llmmodel = None
         for tag in matches:
-            # Values that will only apply from the first tag matches.
+            # Values that will only apply from the first tag matches
             if 'swap_character' in tag and swap_character is None:
                 swap_character = tag['swap_character']
             if 'instruct' in tag and instruct is None:
@@ -877,6 +885,11 @@ async def process_llm_payload_tags(user_name, llm_payload, llm_prompt, matches):
             if 'save_history' in tag and save_history is None:
                 save_history = tag['save_history']
                 llm_payload['save_history'] = tag['save_history']
+            if 'change_llmmodel' in tag and change_llmmodel is None:
+                change_llmmodel = tag['change_llmmodel']
+            if 'swap_llmmodel' in tag and swap_llmmodel is None:
+                swap_llmmodel = tag['swap_llmmodel']
+            # Values that may apply repeatedly
             if 'llm_param_variances' in tag:
                 param_variances.update(tag['llm_param_variances']) # Allow multiple to accumulate.
             if 'state' in tag:
@@ -884,12 +897,12 @@ async def process_llm_payload_tags(user_name, llm_payload, llm_prompt, matches):
             if 'time_offset' in tag:
                 time_offset = tag['time_offset']
             if 'time_format' in tag:
-                time_format = tag['time_format']
+                time_format = tag['time_format']                
         # Format time if defined
         time_for_llm = get_time(time_offset, time_format)
         llm_prompt = llm_prompt.replace('{time}', time_for_llm)
         # Process the tag matches
-        if swap_character or instruct or load_history or save_history or param_variances or state:
+        if swap_character or instruct or load_history or save_history or param_variances or state or llmmodel:
             print_content = f"[TAGS] LLM behavior was modified ("
             # Swap Character handling:
             if swap_character:
@@ -936,10 +949,21 @@ async def process_llm_payload_tags(user_name, llm_payload, llm_prompt, matches):
             if state:
                 print_content += f" | State: {state}"
                 update_dict(llm_payload['state'], state)
+            # LLM model handling
+            llmmodel_params = change_llmmodel or swap_llmmodel or None # 'llmmodel_change' will trump 'llmmodel_swap'
+            if llmmodel_params:
+                mode = 'change' if llmmodel_params == change_llmmodel else 'swap'
+                verb = 'Changing' if mode == 'change' else 'Swapping'
+                # Error handling
+                if not any(llmmodel_params == model for model in all_llmmodels):
+                    logging.error(f'LLM model not found: {llmmodel_params}')
+                else:
+                    print_content += f" | {verb} LLM Model: {llmmodel_params}"
+                    llmmodel_params = {'llmmodel': {'llmmodel_name': llmmodel_params, 'mode': mode, 'verb': verb}}
             # Print results
             print_content += ")"
             logging.info(print_content)
-        return llm_payload, llm_prompt
+        return llm_payload, llm_prompt, llmmodel_params
     except Exception as e:
         logging.error(f"Error processing LLM tags: {e}")
 
@@ -1149,10 +1173,11 @@ async def process_request(i, text, source):
         llm_prompt, tags = process_tag_insertions(llm_prompt, tags)
         matches = tags['matches']
         # apply tags relevant to LLM
-        llm_payload, llm_prompt = await process_llm_payload_tags(i.author.display_name, llm_payload, llm_prompt, matches)
+        llm_payload, llm_prompt, llmmodel_params = await process_llm_payload_tags(i.author.display_name, llm_payload, llm_prompt, matches)
         # offload to ai_gen queue
         llm_payload['text'] = llm_prompt
         queue_item = {'user': i.author, 'user_id': i.author.mention, 'channel': i.channel, 'source': source, 'text': text, 'llm_payload': llm_payload, 'tags': tags}
+        if llmmodel_params: queue_item['params'] = llmmodel_params # Add LLM model params if triggered from tags.
         await task_queue.put(queue_item)
     except Exception as e:
         logging.error(f"An error occurred processing on_message request: {e}")
@@ -1174,33 +1199,61 @@ async def on_message(i):
         logging.error(f"An error occurred in on_message: {e}")
 
 #################################################################
-###################### QUEUED ON MESSAGE# #######################
+#################### QUEUED FROM ON MESSAGE #####################
 #################################################################
-async def on_message_gen(user, user_id, channel, source, tags, llm_payload, params):
+async def on_message_gen(user, user_id, channel, source, text, tags, llm_payload, params):
     try:
+        change_embed = None
+        # Check params to see if an LLM model change/swap was triggered by Tags
+        llmmodel_params = params.get('llmmodel', '')
+        mode = 'change'  # default to 'change' unless a tag was triggered with 'swap'
+        if isinstance(llmmodel, dict):
+            mode = llmmodel_params.get('mode', 'change')
+        if llmmodel_params:
+            if mode == 'swap': orig_llmmodel = copy.deepcopy(shared.model_name) # copy current LLM model name
+            change_embed = await change_llmmodel_task(user, channel, params)           # Change LLM model
         # make a 'Prompting...' embed when generating text for an image response
         should_draw = user_asks_for_image(tags)
-        embed = None
         if should_draw:
             if await a1111_online(channel):
-                info_embed = discord.Embed(title="Prompting ...", description="")
-                embed = await channel.send(embed=info_embed)
-        # process textgen-webui
+                img_embed_info.title = "Prompting ..."
+                img_embed_info.description = " "
+                img_gen_embed = await channel.send(embed=img_embed_info)
+                img_note = f'\n**Processing image generation using your input as the prompt ...**' # msg for if LLM model is unloaded
+        # if no LLM model is loaded, notify that no text will be generated
+        if shared.model_name == 'None':
+            img_note = img_note or ''
+            warn_msg = await channel.send(f'(Cannot process text request: No LLM model is currently loaded. Use "/llmmodel" to load a model.{img_note})')
+            asyncio.create_task(delete_message_after(warn_msg, 5))
+            logging.warning(f'Bot tried to generate text for {user}, but no LLM model was loaded')
+        # generate text with textgen-webui
         last_resp, tts_resp = await llm_gen(llm_payload)
-        logging.info("reply sent: \"" + user_id + ": {'text': '" + llm_payload["text"] + "', 'response': '" + last_resp + "'}\"")
+        # If no text was generated, treat user input at the response
+        if last_resp is not None:
+            logging.info("reply sent: \"" + user_id + ": {'text': '" + llm_payload["text"] + "', 'response': '" + last_resp + "'}\"")
+        else:
+            if should_draw: last_resp = text
+            else: return
+        # if LLM model swapping was triggered
+        if mode == 'swap':
+            if change_embed: await change_embed.delete()                                # Delete embed before the second call
+            llmmodel_params['llmmodel']['llmmodel_name'] = orig_llmmodel
+            change_embed = await change_llmmodel_task(user, channel, llmmodel_params)   # Swap LLM Model back
+            if change_embed: await change_embed.delete()                                # Delete embed again after the second call
         # process image generation (A1111 / Forge)
         tags = match_img_tags(last_resp, tags)
         if not should_draw:
             should_draw = user_asks_for_image(tags) # Check again post-LLM
         if should_draw:
-            if embed: await embed.delete()
+            await img_gen_embed.delete()
             await img_gen(user, channel, source, last_resp, tags, params)
         if tts_resp: await process_tts_resp(channel, tts_resp)
         mention_resp = update_mention(user_id, last_resp) # @mention non-consecutive users
         await send_long_message(channel, mention_resp)
     except Exception as e:
         logging.error(f'An error occurred while processing "on_message" request: {e}')
-        info_embed = discord.Embed(title='An error occurred while processing "on_message" request', description=e)
+        info_embed.title = 'An error occurred while processing "on_message" request'
+        info_embed.description = e
         if embed: await embed.edit(embed=info_embed)
         else: await channel.send(embed=info_embed)
 
@@ -1236,13 +1289,15 @@ async def extra_stopping_strings(llm_payload):
 
 # Send LLM Payload - get response
 async def llm_gen(llm_payload):
+    if shared.model_name == 'None':
+        return None, None
     llm_payload = await extra_stopping_strings(llm_payload)
     loop = asyncio.get_event_loop()
     
     # Subprocess prevents losing discord heartbeat
     def process_responses():
-        last_resp = None
-        tts_resp = None
+        last_resp = ''
+        tts_resp = ''
         for resp in chatbot_wrapper(text=llm_payload['text'], state=llm_payload['state'], regenerate=llm_payload['regenerate'], _continue=llm_payload['_continue'], loading_message=True, for_ui=False):
             i_resp = resp['internal']
             if len(i_resp) > 0:
@@ -1272,24 +1327,37 @@ async def llm_gen(llm_payload):
 async def cont_regen_gen(user, channel, llm_payload, source, message):
     try:
         cmd = 'Continuing' if source == 'cont' else 'Regenerating'
-        info_embed = discord.Embed(title=f'{cmd} ... ', description=f'{cmd} text for {user}')
+        if shared.model_name == 'None':
+            warn_msg = await channel.send('(Cannot process text request: No LLM model is currently loaded. Use "/llmmodel" to load a model.)')
+            asyncio.create_task(delete_message_after(warn_msg, 5))
+            logging.warning(f'{user} used {cmd} but no LLM model was loaded')
+            return
+        info_embed.title = f'{cmd} ... '
+        info_embed.description = f'{cmd} text for {user}'
         embed = await channel.send(embed=info_embed)
         last_resp, tts_resp = await llm_gen(llm_payload)
-        logging.info("reply sent: \"" + user + ": {'text': '" + llm_payload["text"] + "', 'response': '" + last_resp + "'}\"")
         await embed.delete()
+        logging.info("reply sent: \"" + user + ": {'text': '" + llm_payload["text"] + "', 'response': '" + last_resp + "'}\"")
         fetched_message = await channel.fetch_message(message)
         await fetched_message.delete()
         if tts_resp: await process_tts_resp(channel, tts_resp)
         await send_long_message(channel, last_resp)
     except Exception as e:
         logging.error(f'An error occurred while "{cmd}": {e}')
-        embed = discord.Embed(title=f'An error occurred while processing "{cmd}"', description=e)
+        info_embed.title = f'An error occurred while processing "{cmd}"'
+        info_embed.description = e
         if embed: await embed.edit(embed=info_embed)
         else: await channel.send(embed=info_embed)
 
 async def speak_gen(user, channel, user_id, text, llm_payload, params):
     try:
-        info_embed = discord.Embed(title=f"{user} requested tts ... ", description="")
+        if shared.model_name == 'None':
+            warn_msg = await channel.send('Cannot process "/speak" request: No LLM model is currently loaded. Use "/llmmodel" to load a model.)')
+            asyncio.create_task(delete_message_after(warn_msg, 5))
+            logging.warning(f'Bot tried to generate tts for {user}, but no LLM model was loaded')
+            return
+        info_embed.title = f'{user} requested tts ... '
+        info_embed.description = ''
         embed = await channel.send(embed=info_embed)
         tts_args = params.get('tts_args', {})
         await update_extensions(tts_args)
@@ -1300,13 +1368,15 @@ async def speak_gen(user, channel, user_id, text, llm_payload, params):
         for sub_dict in tts_args.values():
             if 'api_key' in sub_dict:
                 sub_dict.pop('api_key')
-        info_embed = discord.Embed(title=f"{user} requested tts", description=f"**Params:** {tts_args}\n**Text:** {text}")
+        info_embed.title = f'{user} requested tts:'
+        info_embed.description = f"**Params:** {tts_args}\n**Text:** {text}"
         await channel.send(embed=info_embed)
         await update_extensions(client.settings['llmcontext'].get('extensions', {})) # Restore character specific extension settings
         if params.get('user_voice'): os.remove(params['user_voice'])
     except Exception as e:
         logging.error(f"An error occurred while generating tts for '/speak': {e}")
-        info_embed = discord.Embed(title="An error occurred while generating tts for '/speak'", description=e)
+        info_embed.title = "An error occurred while generating tts for '/speak'"
+        info_embed.description = e
         await embed.edit(embed=info_embed)
 
 #################################################################
@@ -1315,17 +1385,41 @@ async def speak_gen(user, channel, user_id, text, llm_payload, params):
 # Process selected Img model
 async def change_imgmodel_task(user, channel, params):
     try:
-        imgmodel = params.get('imgmodel', {})
+        await a1111_online(channel) # Can't change Img model if not online!
+        imgmodel_params = params.get('imgmodel')
+        imgmodel_name = imgmodel_params.get('imgmodel_name', '')
+        embed = imgmodel_params.get('embed', None)      # default to None
+        mode = imgmodel_params.get('mode', 'change')    # default to 'change
+        verb = imgmodel_params.get('verb', 'Changing')  # default to 'Changing'
+        imgmodel = await get_selected_imgmodel_data(imgmodel_name) # params will be either model name (yaml method) or checkpoint name (API method)
         imgmodel_name = imgmodel.get('imgmodel_name', '')
-        if channel:
-            info_embed.title = 'Changing Img model ... '
-            info_embed.description = f"Changing to {imgmodel_name}"
+        # Was not 'None' and did not match any known model names/checkpoints
+        if len(imgmodel) < 3:
+            if channel:
+                info_embed.title = 'Failed to change Img model:'
+                info_embed.description = f'Img model not found: {imgmodel_name}'
+                await channel.send(embed=info_embed)
+            return
+        # if imgmodel_name != 'None': ### IF API IMG MODEL UNLOADING GETS EVER DEBUGGED
+        if channel: # Auto-select imgmodel feature may not have a configured channel
+            if embed: await embed.delete() # If Img model 'swap'
+            info_embed.title = f'{verb} Img model ... '
+            info_embed.description = f'{verb} to {imgmodel_name}'
             embed = await channel.send(embed=info_embed)
         # Merge selected imgmodel/tag data with base settings
         imgmodel, imgmodel_name, imgmodel_tags = await merge_imgmodel_data(imgmodel)
-        # Commit all the settings
-        await update_imgmodel(imgmodel, imgmodel_tags)
-        # Announce from /imgmodel
+        # Soft Img model update if swapping
+        if mode == 'swap' or mode == 'swap_back':
+            model_data = imgmodel.get('override_settings') or imgmodel['payload'].get('override_settings')
+            await load_imgmodel(channel, model_data)
+            if mode == 'swap':
+                return embed
+            if mode == 'swap_back':
+                if embed: await embed.delete()
+                return
+        # Change Img model settings
+        await update_imgmodel(channel, imgmodel, imgmodel_tags)
+        # if imgmodel_name != 'None': ### IF API IMG MODEL UNLOADING GETS EVER DEBUGGED
         if channel:
             await embed.delete()
             info_embed.title = f"{user} changed Img model:"
@@ -1333,7 +1427,7 @@ async def change_imgmodel_task(user, channel, params):
             if url: url = " <" + url + ">"
             info_embed.description = f'**{imgmodel_name}**{url}'
             await channel.send(embed=info_embed)
-        logging.info(f"Image model changed to: {imgmodel_name}")
+            logging.info(f"Image model changed to: {imgmodel_name}")
         if config.discord['post_active_settings']['enabled']:
             await bg_task_queue.put(post_active_settings())
     except Exception as e:
@@ -1346,30 +1440,40 @@ async def change_imgmodel_task(user, channel, params):
 # Process selected LLM model
 async def change_llmmodel_task(user, channel, params):
     try:
-        llmmodel = params.get('llmmodel', {})
-        info_embed.title = 'Changing LLM model ... '
-        info_embed.description = f"Changing to {llmmodel}"
-        embed = await channel.send(embed=info_embed)
-        # Unload the current LLM model
-        if shared.model_name != "None":
-            unload_model() # Unload current LLM model
-        # Assign values for selected LLM model
-        shared.model_name = llmmodel
-        model_settings = get_model_metadata(shared.model_name)
-        shared.settings.update(model_settings)
-        update_model_parameters(model_settings, initial=True)
-        # Load the selected LLM model
-        shared.model, shared.tokenizer = load_model(shared.model_name)
-        if shared.args.lora: add_lora_to_model([shared.args.lora])
-        await embed.delete()
-        info_embed.title = f"{user} changed LLM model:"
-        info_embed.description = f'**{llmmodel}**'
-        await channel.send(embed=info_embed)
+        llmmodel_params = params.get('llmmodel', '')
+        mode = 'change'                         # Process LLM model change (once) and announce to channel
+        if isinstance(llmmodel_params, dict):   # will be dict if triggered by Tags, else str
+            mode = llmmodel_params.get('mode')
+            verb = llmmodel_params.get('verb')
+            llmmodel_name = llmmodel_params.get('llmmodel_name') # pop out to process as a string.
+        # Load the new model if it is different from the current one
+        llmmodel_name = llmmodel_name or llmmodel_params or ''
+        if shared.model_name != llmmodel_name:
+            # Announce model change/swap
+            verb = verb or 'Changing'
+            info_embed.title = f'{verb} LLM model ... '
+            info_embed.description = f"{verb} to {llmmodel_name}"
+            change_embed = await channel.send(embed=info_embed)
+            if shared.model_name != 'None':
+                unload_model()                  # If an LLM model is loaded, unload it
+            shared.model_name = llmmodel_name   # set to new LLM model
+            if shared.model_name != 'None':
+                load_llm_model()                # Load an LLM model if specified
+            if mode == 'swap':
+                return change_embed             # return the embed so it can be deleted by the caller
+            if llmmodel_name == 'None':
+                info_embed.title = f"{user} unloaded the LLM model"
+                info_embed.description = 'Use "/llmmodel" to load a new one'
+            else:
+                info_embed.title = f"{user} changed LLM model:"
+                info_embed.description = f'**{llmmodel_name}**'
+            await change_embed.delete()
+            await channel.send(embed=info_embed)
     except Exception as e:
-        logging.error(f"An error occurred while gchanging LLM Model from '/llmmodel': {e}")
-        info_embed.title = "An error occurred while gchanging LLM Model from '/llmmodel'"
+        logging.error(f"An error occurred while changing LLM Model from '/llmmodel': {e}")
+        info_embed.title = "An error occurred while changing LLM Model from '/llmmodel'"
         info_embed.description = e
-        await embed.edit(embed=info_embed)
+        await change_embed.edit(embed=info_embed)
 
 #################################################################
 #################### QUEUED CHARACTER CHANGE ####################
@@ -1489,7 +1593,7 @@ async def process_tasks():
                     elif source == 'cont' or source == 'regen':
                         await cont_regen_gen(user, channel, llm_payload, source, message)
                     elif source == 'on_message':
-                        await on_message_gen(user, user_id, channel, source, tags, llm_payload, params)
+                        await on_message_gen(user, user_id, channel, source, text, tags, llm_payload, params)
                     else:
                         print(f'Unexpectedly received an invalid task. Source: {source}')
             task_event.clear() # Flag function is no longer processing a task
@@ -1510,9 +1614,9 @@ async def a1111_online(channel):
         return True
     except Exception as exc:
         logging.warning(exc)
-        info_embed.title = f"A1111 api is not running at {A1111}"
-        info_embed.description = "Launch Automatic1111 with the `--api` commandline argument\nRead more [here](https://github.com/AUTOMATIC1111/stable-diffusion-webui/wiki/API)"
-        await channel.send(embed=info_embed)        
+        if channel:
+            imgclient_embed_info = discord.Embed(title = f"A1111 api is not running at {A1111}", description="Launch Automatic1111 with the `--api` commandline argument\nRead more [here](https://github.com/AUTOMATIC1111/stable-diffusion-webui/wiki/API)", url='https://github.com/altoiddealer/ad_discordbot')
+            await channel.send(embed=imgclient_embed_info)        
         return False
 
 async def layerdiffuse_hack(temp_dir, img_payload, images, pnginfo):
@@ -1542,7 +1646,7 @@ async def layerdiffuse_hack(temp_dir, img_payload, images, pnginfo):
     except Exception as e:
         logging.error(f'Error processing layerdiffuse images: {e}')    
 
-async def a1111_txt2img(temp_dir, img_payload, embed):
+async def a1111_txt2img(temp_dir, img_payload, img_gen_embed):
     try:
         async def save_images_and_return():
             async with aiohttp.ClientSession() as session:
@@ -1563,7 +1667,7 @@ async def a1111_txt2img(temp_dir, img_payload, embed):
                     return images, response.status, pnginfo
 
         async def track_progress():
-            await check_a1111_progress(embed)
+            await check_a1111_progress(img_gen_embed)
 
         # Start progress task and generation task concurrently
         images_task = asyncio.create_task(save_images_and_return())
@@ -1574,23 +1678,23 @@ async def a1111_txt2img(temp_dir, img_payload, embed):
         images, r, pnginfo = await images_task
 
         # Workaround for layerdiffuse output
-        layerdiffuse = img_payload['alwayson_scripts'].get('layerdiffuse', {})
+        layerdiffuse = img_payload.get('alwayson_scripts', {}).get('layerdiffuse', {})
         if len(images) > 1 and layerdiffuse and layerdiffuse['args'][0]:
             images = await layerdiffuse_hack(temp_dir, img_payload, images, pnginfo)
 
         return images, r
     except Exception as e:
         logging.error(f'Error processing images in txt2img API module: {e}')
-        info_embed.title = 'Error processing images'
-        info_embed.description = e
-        await embed.edit(embed=info_embed)
+        img_embed_info.title = 'Error processing images'
+        img_embed_info.description = e
+        await img_gen_embed.edit(embed=img_embed_info)
 
 def progress_bar(value, length=20):
     filled_length = int(length * value)
     bar = ':white_large_square:' * filled_length + ':white_square_button:' * (length - filled_length)
     return f'{bar}'
 
-async def check_a1111_progress(embed):
+async def check_a1111_progress(img_gen_embed):
     async with aiohttp.ClientSession() as session:
         progress_data = {"progress":0}
         while progress_data['progress'] == 0:
@@ -1599,8 +1703,8 @@ async def check_a1111_progress(embed):
                     progress_data = await progress_response.json()
                     progress = progress_data['progress']
                     #print(f'Progress: {progress}%')
-                    info_embed.title = 'Waiting for response from A1111 ...'
-                    await embed.edit(embed=info_embed)                    
+                    img_embed_info.title = 'Waiting for response from A1111 ...'
+                    await img_gen_embed.edit(embed=img_embed_info)                    
                     await asyncio.sleep(1)
             except aiohttp.client_exceptions.ClientConnectionError:
                 logging.warning('Connection closed, retrying in 1 seconds')
@@ -1612,20 +1716,20 @@ async def check_a1111_progress(embed):
                     #pprint.pp(progress_data)
                     progress = progress_data['progress'] * 100
                     if progress == 0 :
-                        info_embed.title = f'Generating image: 100%'
-                        info_embed.description = progress_bar(1)
-                        await embed.edit(embed=info_embed)
+                        img_embed_info.title = f'Generating image: 100%'
+                        img_embed_info.description = progress_bar(1)
+                        await img_gen_embed.edit(embed=img_embed_info)
                         break
                     #print(f'Progress: {progress}%')
-                    info_embed.title = f'Generating image: {progress:.0f}%'
-                    info_embed.description = progress_bar(progress_data['progress'])
-                    await embed.edit(embed=info_embed)
+                    img_embed_info.title = f'Generating image: {progress:.0f}%'
+                    img_embed_info.description = progress_bar(progress_data['progress'])
+                    await img_gen_embed.edit(embed=img_embed_info)
                     await asyncio.sleep(1)
             except aiohttp.client_exceptions.ClientConnectionError:
                 logging.warning('Connection closed, retrying in 1 seconds')
                 await asyncio.sleep(1)
 
-async def process_image_gen(img_payload, embed, channel):
+async def process_image_gen(img_payload, img_gen_embed, channel):
     try:
         censor_mode = None
         do_censor = False
@@ -1633,8 +1737,8 @@ async def process_image_gen(img_payload, embed, channel):
             censor_mode = img_payload['img_censoring']
             do_censor = True
             if censor_mode == 2:
-                info_embed.title = "Image prompt was flagged as inappropriate."
-                await embed.edit(embed=info_embed)
+                img_embed_info.title = "Image prompt was flagged as inappropriate."
+                await img_gen_embed.edit(embed=img_embed_info)
                 return
         # Ensure the necessary directories exist
         output_dir = 'ad_discordbot/sd_outputs/'
@@ -1642,12 +1746,12 @@ async def process_image_gen(img_payload, embed, channel):
         temp_dir = 'ad_discordbot/temp/'
         os.makedirs(temp_dir, exist_ok=True)
         # Generate images, save locally
-        images, r = await a1111_txt2img(temp_dir, img_payload, embed)
+        images, r = await a1111_txt2img(temp_dir, img_payload, img_gen_embed)
         if not images:
             await channel.send(f"No images were generated. Response code: {r}")
             return
         # Send images to discord
-        await embed.delete()
+        await img_gen_embed.delete()
         # If the censor mode is 1 (blur), prefix the image file with "SPOILER_"
         file_prefix = 'temp_img_'
         if do_censor and censor_mode == 1:
@@ -1873,9 +1977,11 @@ def process_face(img_payload, face_value):
     except Exception as e:
         logging.error(f"Error processing face swap for Reactor: {e}")
 
-def process_img_payload_tags(img_payload, matches):
+async def process_img_payload_tags(img_payload, matches):
     try:
         matches.reverse()
+        change_imgmodel = None
+        swap_imgmodel = None
         for tag in matches:
             if isinstance(tag, tuple):
                 tag = tag[0] # For tags with prompt insertion indexes
@@ -1900,7 +2006,26 @@ def process_img_payload_tags(img_payload, matches):
                 processed_params = process_param_variances(param_variances)
                 logging.info(f'[TAGS] Applied img param variances: "{processed_params}".')
                 sum_update_dict(img_payload, processed_params)
-        return img_payload
+            if 'change_imgmodel' in tag and change_imgmodel is None:
+                change_imgmodel = tag['change_imgmodel']
+            if 'swap_imgmodel' in tag and swap_imgmodel is None:
+                swap_imgmodel = tag['swap_imgmodel']
+        imgmodel_params = change_imgmodel or swap_imgmodel or None
+        if imgmodel_params:
+            ### IF API IMG MODEL UNLOADING GETS EVER DEBUGGED
+            # if not change_imgmodel and swap_imgmodel and swap_imgmodel == 'None':
+            #     await unload_imgmodel(channel=None)
+            # 'change_imgmodel' will trump 'swap_imgmodel'
+            current_imgmodel = client.settings['imgmodel'].get('override_settings', {}).get('sd_model_checkpoint') or client.settings['imgmodel']['payload'].get('override_settings', {}).get('sd_model_checkpoint') or ''
+            if imgmodel_params == current_imgmodel:
+                logging.info(f'[TAGS] Img model was triggered to change, but it is the same as current ("{current_imgmodel}").')
+                change_imgmodel = None # return None
+            else:
+                mode = 'change' if imgmodel_params == change_imgmodel else 'swap'
+                verb = 'Changing' if mode == 'change' else 'Swapping'
+                logging.info(f'[TAGS] {verb} Img model to: "{imgmodel_params}".')
+                imgmodel_params = {'imgmodel': {'imgmodel_name': imgmodel_params, 'mode': mode, 'verb': verb, 'current_imgmodel': current_imgmodel}} # return dict
+        return img_payload, imgmodel_params
     except Exception as e:
         logging.error(f"Error processing Img tags: {e}")
 
@@ -1940,16 +2065,17 @@ def match_img_tags(img_prompt, tags):
 
 async def img_gen(user, channel, source, img_prompt, tags, params):
     try:
-        info_embed.title = "Processing"
-        info_embed.description = " ... "  # await check_a1111_progress()
-        embed = await channel.send(embed=info_embed)
-        info_embed.title = "Sending prompt to A1111 ..."
+        check_key = client.settings['imgmodel'].get('override_settings') or client.settings['imgmodel']['payload'].get('override_settings')
+        if check_key.get('sd_model_checkpoint') == 'None': # Model currently unloaded
+            await channel.send("**Cannot process image request:** No Img model is currently loaded")
+            logging.warning(f'Bot tried to generate image for {user}, but no Img model was loaded')
+        img_gen_embed = await channel.send(embed=img_embed_info)
         matches = tags['matches']
         # Initialize img_payload
         neg_prompt = params.get('neg_prompt', '')
         img_payload = initialize_img_payload(img_prompt, neg_prompt)
         # Apply tags relevant to Img gen
-        img_payload = process_img_payload_tags(img_payload, matches)
+        img_payload, imgmodel_params = await process_img_payload_tags(img_payload, matches)
         # Process lrctl
         if config.sd['extensions'].get('lrctl', {}).get('enabled', False): matches = apply_lrctl(matches)
         # Apply tags relevant to Img prompts
@@ -1958,12 +2084,19 @@ async def img_gen(user, channel, source, img_prompt, tags, params):
         img_payload = apply_imgcmd_params(img_payload, params)
         # Clean anything up that gets messy
         clean_img_payload(img_payload)
+        # Change imgmodel if triggered by tags
+        swap_embed = None
+        if imgmodel_params:
+            img_payload['override_settings']['sd_model_checkpoint'] = imgmodel_params['imgmodel'].get('imgmodel_name')
+            current_imgmodel = imgmodel_params['imgmodel'].get('current_imgmodel', '')
+            swap_embed = await change_imgmodel_task(user, channel, imgmodel_params)
         # Generate and send images
-        await process_image_gen(img_payload, embed, channel)  
+        await process_image_gen(img_payload, img_gen_embed, channel)
+        # If switching back to original Img model
+        if swap_embed: await change_imgmodel_task(user, channel, params={'imgmodel': {'imgmodel_name': current_imgmodel, 'mode': 'swap_back', 'verb': 'Swapping', 'embed': swap_embed}})
         if source == 'image':
-            info_embed.title = f"{user} requested an image:"
-            info_embed.description = params['message']
-            await channel.send(embed=info_embed)    
+            image_embed_info = discord.Embed(title = f"{user} requested an image:", description=params['message'], url='https://github.com/altoiddealer/ad_discordbot')
+            await channel.send(embed=image_embed_info)
     except Exception as e:
         logging.error(f"An error occurred in img_gen(): {e}")
 
@@ -2499,7 +2632,7 @@ async def fetch_imgmodels():
     except Exception as e:
         logging.error(f"Error fetching image models: {e}")
 
-async def a1111_load_imgmodel(options):
+async def load_imgmodel(channel, options):
     try:
         async with aiohttp.ClientSession() as session:
             async with session.post(url=f'{A1111}/sdapi/v1/options', json=options) as response:
@@ -2510,18 +2643,37 @@ async def a1111_load_imgmodel(options):
     except Exception as e:
         logging.error(f"Error loading image model in A1111: {e}")
 
-async def update_imgmodel(selected_imgmodel, selected_imgmodel_tags):
+async def unload_imgmodel(channel):
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url=f'{A1111}/sdapi/v1/unload-checkpoint') as response:
+                if response.status == 200:
+                    await response.json()
+                    if channel:
+                        info_embed.title = 'Unloaded Img model'
+                        info_embed.description = ''
+                        await channel.send(embed=info_embed)
+                else:
+                    logging.error(f"Error unloading image model in A1111 API (response: '{response.status}')")
+    except Exception as e:
+        logging.error(f"Error loading image model in A1111: {e}")
+
+async def update_imgmodel(channel, selected_imgmodel, selected_imgmodel_tags):
     try:
         active_settings = load_file('ad_discordbot/activesettings.yaml')
         active_settings['imgmodel'] = selected_imgmodel
         active_settings['imgmodel']['tags'] = selected_imgmodel_tags
         save_yaml_file('ad_discordbot/activesettings.yaml', active_settings)
         await update_client_settings() # Sync updated user settings to client
+        ### IF API IMG MODEL UNLOADING GETS EVER DEBUGGED
+        # if selected_imgmodel['imgmodel_name'] == 'None':
+        #     await unload_imgmodel(channel)
+        #     return
         # Load the imgmodel and VAE via A1111 API
-        model_data = active_settings['imgmodel'].get('override_settings', None) or active_settings['imgmodel']['payload'].get('override_settings')
-        await a1111_load_imgmodel(model_data)
+        model_data = active_settings['imgmodel'].get('override_settings') or active_settings['imgmodel']['payload'].get('override_settings')
+        await load_imgmodel(channel, model_data)
         # Update size options for /image command
-        await bg_task_queue.put(update_size_options(active_settings.get('imgmodel').get('payload').get('width'),active_settings.get('imgmodel').get('payload').get('height')))
+        await bg_task_queue.put(update_size_options(active_settings['imgmodel'].get('payload').get('width'),active_settings['imgmodel'].get('payload').get('height')))
     except Exception as e:
         logging.error(f"Error updating settings with the selected imgmodel data: {e}")
 
@@ -2557,6 +2709,10 @@ async def guess_model_data(selected_imgmodel):
 async def merge_imgmodel_data(selected_imgmodel):
     try:
         selected_imgmodel_name = selected_imgmodel.get('imgmodel_name')
+        ### IF API IMG MODEL UNLOADING GETS EVER DEBUGGED
+        # if selected_imgmodel_name == 'None': # Unloading model
+        #     selected_imgmodel_tags = []
+        #     return selected_imgmodel, selected_imgmodel_name, selected_imgmodel_tags
         # Get tags if defined
         selected_imgmodel_tags = selected_imgmodel.get('tags', [])
         # Create proper dictionary if A1111 API method
@@ -2586,29 +2742,42 @@ async def merge_imgmodel_data(selected_imgmodel):
 
 async def get_selected_imgmodel_data(selected_imgmodel_value):
     try:
+        ### IF API IMG MODEL UNLOADING GETS EVER DEBUGGED
+        # Unloading the current Img model
+        # if selected_imgmodel_value == 'None':
+        #     selected_imgmodel = {'override_settings': {'sd_model_checkpoint': 'None'}, 'imgmodel_name': 'None', 'imgmodel_url': ''}
+        #     return selected_imgmodel
+        # if selected_imgmodel_value == 'Exit':
+        #      selected_imgmodel = {'imgmodel_name': 'None were selected'}
+        #     return selected_imgmodel
+        selected_imgmodel = {}
         all_imgmodel_data = copy.deepcopy(all_imgmodels)
-        if not config.imgmodels['get_imgmodels_via_api']['enabled']:
-            selected_imgmodel = next(imgmodel for imgmodel in all_imgmodel_data if imgmodel['imgmodel_name'] == selected_imgmodel_value)
-        else: # Collect imgmodel data for A1111 API method
-            selected_imgmodel = {}
-            for imgmodel in all_imgmodel_data:
-                if imgmodel["imgmodel_name"] == selected_imgmodel_value:
-                    selected_imgmodel = {
-                        "sd_model_checkpoint": imgmodel["sd_model_checkpoint"],
-                        "imgmodel_name": imgmodel.get("imgmodel_name"),
-                        "filename": imgmodel.get("filename", None)
-                    }
-                    break
+        for imgmodel in all_imgmodel_data:
+            # imgmodel_checkpoint should match for API method
+            if imgmodel.get('sd_model_checkpoint') == selected_imgmodel_value:
+                selected_imgmodel = {
+                    "sd_model_checkpoint": imgmodel["sd_model_checkpoint"],
+                    "imgmodel_name": imgmodel.get("imgmodel_name"),
+                    "filename": imgmodel.get("filename", None)
+                }
+                break
+            # imgmodel_name should match for .yaml method
+            if imgmodel.get('imgmodel_name') == selected_imgmodel_value:
+                selected_imgmodel = imgmodel
+                break
+            # Error handling
+        if not selected_imgmodel:
+            selected_imgmodel['imgmodel_name'] = selected_imgmodel_value
+            logging.error(f'Img model not found: {selected_imgmodel_value}')
         return selected_imgmodel
     except Exception as e:
         logging.error(f"Error getting selected imgmodel data: {e}")
 
 async def process_imgmodel(i, selected_imgmodel_value):
     try:
-        selected_imgmodel = await get_selected_imgmodel_data(selected_imgmodel_value)
         await ireply(i, 'Img model change') # send a response msg to the user
         # offload to ai_gen queue
-        queue_item = {'user': i.author, 'user_id': i.author.mention, 'channel': i.channel, 'source': 'imgmodel', 'params': {'imgmodel': selected_imgmodel}}
+        queue_item = {'user': i.author, 'user_id': i.author.mention, 'channel': i.channel, 'source': 'imgmodel', 'params': {'imgmodel': {'imgmodel_name': selected_imgmodel_value}}}
         await task_queue.put(queue_item)
     except Exception as e:
         logging.error(f"Error processing selected imgmodel from /imgmodel command: {e}")
@@ -2620,6 +2789,10 @@ if all_imgmodels:
     for imgmodel in all_imgmodels:
         if 'model_name' in imgmodel:
             imgmodel['imgmodel_name'] = imgmodel.pop('model_name')
+    
+    ### IF API IMG MODEL UNLOADING GETS EVER DEBUGGED
+    # unload_options = [app_commands.Choice(name="Unload Model", value="None"),
+    # app_commands.Choice(name="Do Not Unload Model", value="Exit")]
 
     imgmodel_options = [app_commands.Choice(name=imgmodel["imgmodel_name"], value=imgmodel["imgmodel_name"]) for imgmodel in all_imgmodels[:25]]
     imgmodel_options_label = f'{imgmodel_options[0].name[0]}-{imgmodel_options[-1].name[0]}'.lower()
@@ -2648,6 +2821,11 @@ if all_imgmodels:
         @app_commands.describe(imgmodels=f'Imgmodels {imgmodel_options_label.upper()}')
         @app_commands.choices(imgmodels=imgmodel_options)
         async def imgmodel(i: discord.Interaction, imgmodels: typing.Optional[app_commands.Choice[str]]):
+       # @app_commands.choices(unload=unload_options) ### IF API IMG MODEL UNLOADING GETS EVER DEBUGGED
+       # async def imgmodel(i: discord.Interaction, imgmodels: typing.Optional[app_commands.Choice[str]], unload: typing.Optional[app_commands.Choice[str]]):
+       #     if imgmodels and unload:
+       #         await i.send("More than one option was selected. Using the first selection.", ephemeral=True)
+       #     selected_imgmodel = ((imgmodels or unload) and (imgmodels or unload).value) or ''
             selected_imgmodel = imgmodels.value if imgmodels is not None else ''
             await process_imgmodel(i, selected_imgmodel)
 
@@ -2660,8 +2838,12 @@ if all_imgmodels:
         @app_commands.describe(models_2=f'Imgmodels {imgmodel_options1_label.upper()}')
         @app_commands.choices(models_2=imgmodel_options1)
         async def imgmodel(i: discord.Interaction, models_1: typing.Optional[app_commands.Choice[str]], models_2: typing.Optional[app_commands.Choice[str]]):
+       # @app_commands.choices(unload=unload_options) ### IF API IMG MODEL UNLOADING GETS EVER DEBUGGED
+       # async def imgmodel(i: discord.Interaction, models_1: typing.Optional[app_commands.Choice[str]], models_2: typing.Optional[app_commands.Choice[str]], unload: typing.Optional[app_commands.Choice[str]]):
+       #     if sum(1 for v in (models_1, models_2, unload) if v) > 1:
             if models_1 and models_2:
-                await i.send("More than one imgmodel was selected. Using the first selection.", ephemeral=True)
+                await i.send("More than one option was selected. Using the first selection.", ephemeral=True)
+       #     selected_imgmodel = ((models_1 or models_2 or unload) and (models_1 or models_2 or unload).value) or ''
             selected_imgmodel = ((models_1 or models_2) and (models_1 or models_2).value) or ''
             await process_imgmodel(i, selected_imgmodel)
 
@@ -2677,8 +2859,12 @@ if all_imgmodels:
         @app_commands.describe(models_3=f'Imgmodels {imgmodel_options2_label.upper()}')
         @app_commands.choices(models_3=imgmodel_options2)
         async def imgmodel(i: discord.Interaction, models_1: typing.Optional[app_commands.Choice[str]], models_2: typing.Optional[app_commands.Choice[str]], models_3: typing.Optional[app_commands.Choice[str]]):
+       # @app_commands.choices(unload=unload_options) ### IF API IMG MODEL UNLOADING GETS EVER DEBUGGED
+       # async def imgmodel(i: discord.Interaction, models_1: typing.Optional[app_commands.Choice[str]], models_2: typing.Optional[app_commands.Choice[str]], models_3: typing.Optional[app_commands.Choice[str]], unload: typing.Optional[app_commands.Choice[str]]):
+       #     if sum(1 for v in (models_1, models_2, models_3, unload) if v) > 1:
             if sum(1 for v in (models_1, models_2, models_3) if v) > 1:
-                await i.send("More than one imgmodel was selected. Using the first selection.", ephemeral=True)
+                await i.send("More than one option was selected. Using the first selection.", ephemeral=True)
+       #     selected_imgmodel = ((models_1 or models_2 or models_3 or unload) and (models_1 or models_2 or models_3 or unload).value) or ''
             selected_imgmodel = ((models_1 or models_2 or models_3) and (models_1 or models_2 or models_3).value) or ''
             await process_imgmodel(i, selected_imgmodel)
 
@@ -2697,8 +2883,12 @@ if all_imgmodels:
         @app_commands.describe(models_4=f'Imgmodels {imgmodel_options3_label.upper()}')
         @app_commands.choices(models_4=imgmodel_options3)
         async def imgmodel(i: discord.Interaction, models_1: typing.Optional[app_commands.Choice[str]], models_2: typing.Optional[app_commands.Choice[str]], models_3: typing.Optional[app_commands.Choice[str]], models_4: typing.Optional[app_commands.Choice[str]]):
+       # @app_commands.choices(unload=unload_options) ### IF API IMG MODEL UNLOADING GETS EVER DEBUGGED
+       # async def imgmodel(i: discord.Interaction, models_1: typing.Optional[app_commands.Choice[str]], models_2: typing.Optional[app_commands.Choice[str]], models_3: typing.Optional[app_commands.Choice[str]], models_4: typing.Optional[app_commands.Choice[str]], unload: typing.Optional[app_commands.Choice[str]]):
+       #     if sum(1 for v in (models_1, models_2, models_3, models_4, unload) if v) > 1:
             if sum(1 for v in (models_1, models_2, models_3, models_4) if v) > 1:
-                await i.send("More than one imgmodel was selected. Using the first selection.", ephemeral=True)
+                await i.send("More than one option was selected. Using the first selection.", ephemeral=True)
+       #     selected_imgmodel = ((models_1 or models_2 or models_3 or models_4 or unload) and (models_1 or models_2 or models_3 or models_4 or unload).value) or ''
             selected_imgmodel = ((models_1 or models_2 or models_3 or models_4) and (models_1 or models_2 or models_3 or models_4).value) or ''
             await process_imgmodel(i, selected_imgmodel)
 

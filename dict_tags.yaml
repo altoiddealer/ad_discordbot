@@ -126,8 +126,9 @@ tag_presets:
 #   on_prefix_only: (true/false)      If triggers must be matched at beginning of the searched text
 #
 # Relevant to text generation (LLM):
-
-#   time_offset: 0.0                  0 = today's date (system time). -0.5 shifts the current date to be 12 hours ago. (UOM = days)
+#   change_llmmodel: 'string'         For (change/swap)_llmmodel: 'change' will trigger a persistent change. 'swap' will only change the LLM model for the current interaction.
+#   swap_llmmodel: 'string'           Name of an LLM model (ei: 'Mistral-7B-OpenOrca-GPTQ'). Value 'None' will unload the LLM model!
+#   time_offset: 0.0                  0 = today's date (system time). -0.5 shifts the current date to be 12 hours ago. (UOM = days). Use with '{time}' anywhere in your prompts
 #   time_format: '%Y-%m-%d %H:%M:%S'  Examples: '%Y-%m-%d' (YYYY-MM-DD), '%H:%M:%S' (HH:MM:SS), '%A, %B %d, %Y' (DayName, MonthName DD, YYYY)
 #   instruct: 'string with a {}'      Useful for adding text before and/or after your prompt to the LLM.
 #   insert_text: ''                   Text you may want to insert relative to the matched search text.
@@ -141,6 +142,8 @@ tag_presets:
 
 # Relevant to img generation (A1111):
 #   image_response: (true/false)      If LLM's reply should include A1111 img generation
+#   change_imgmodel: 'string'         For (change/swap)_imgmodel: 'change' will trigger a persistent change. 'swap' will only change the Img model for the current interaction.
+#   swap_imgmodel: 'string'           Copy/paste a checkpoint name *exactly* as it appears in A1111 / Forge model list (ei: 'sdxl\epicrealismXL_v4Photoreal.safetensors [c772a1a690]'). Currently, API Img model unloading is bugged in both A1111 and Forde so that is not an option here.
 #   img_censoring: 0                  0 = disabled / 1 = blur image / 2 = block image from being generated
 #   layerdiffuse: (true/false)        enables 'layerdiffuse' extension (must also be enabled in config.py)
 #   face_swap: 'string'               Face image to be used with Reactor extension. Valid options: Image in 'swap_faces' (png/jpg/txt in base64) -OR- Directory name in 'swap_faces' (Picks a random face) -OR- Face model in '{A111}\models\reactor\faces' example 'Minty.safetensors'
