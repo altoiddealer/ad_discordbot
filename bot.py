@@ -1206,6 +1206,7 @@ async def on_message(i):
 async def on_message_gen(user, user_id, channel, source, text, tags, llm_payload, params={}):
     try:
         change_embed = None
+        img_note = ''
         # Check params to see if an LLM model change/swap was triggered by Tags
         llmmodel_params = params.get('llmmodel', '')
         mode = 'change'  # default to 'change' unless a tag was triggered with 'swap'
@@ -1225,7 +1226,6 @@ async def on_message_gen(user, user_id, channel, source, text, tags, llm_payload
                 img_note = f'\n**Processing image generation using your input as the prompt ...**' # msg for if LLM model is unloaded
         # if no LLM model is loaded, notify that no text will be generated     
         if shared.model_name == 'None':
-            img_note = img_note or ''
             warn_msg = await channel.send(f'(Cannot process text request: No LLM model is currently loaded. Use "/llmmodel" to load a model.{img_note})')
             asyncio.create_task(delete_message_after(warn_msg, 5))
             logging.warning(f'Bot tried to generate text for {user}, but no LLM model was loaded')
