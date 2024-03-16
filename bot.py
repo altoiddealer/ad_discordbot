@@ -533,9 +533,10 @@ info_embed_json = {
     "url": "https://github.com/altoiddealer/ad_discordbot"
 }
 info_embed = discord.Embed().from_dict(info_embed_json)
-
 # Img gen embed
 img_embed_info = discord.Embed(title = "Processing image generation ...", description=" ", url='https://github.com/altoiddealer/ad_discordbot')
+# Model change embed
+change_embed_info = discord.Embed(title = "Changing model ...", description=" ", url='https://github.com/altoiddealer/ad_discordbot')
 
 # If first time bot script is run
 async def first_run():
@@ -872,6 +873,7 @@ async def process_llm_payload_tags(user_name, llm_payload, llm_prompt, matches):
         state = {}
         time_offset = 0.0
         time_format = '%Y-%m-%d %H:%M:%S'
+        llmmodel_params = {}
         change_llmmodel = None
         swap_llmmodel = None
         for tag in matches:
@@ -902,7 +904,7 @@ async def process_llm_payload_tags(user_name, llm_payload, llm_prompt, matches):
         time_for_llm = get_time(time_offset, time_format)
         llm_prompt = llm_prompt.replace('{time}', time_for_llm)
         # Process the tag matches
-        if swap_character or instruct or load_history or save_history or param_variances or state or llmmodel:
+        if swap_character or instruct or load_history or save_history or param_variances or state or change_llmmodel or swap_llmmodel:
             print_content = f"[TAGS] LLM behavior was modified ("
             # Swap Character handling:
             if swap_character:
@@ -950,7 +952,7 @@ async def process_llm_payload_tags(user_name, llm_payload, llm_prompt, matches):
                 print_content += f" | State: {state}"
                 update_dict(llm_payload['state'], state)
             # LLM model handling
-            llmmodel_params = change_llmmodel or swap_llmmodel or None # 'llmmodel_change' will trump 'llmmodel_swap'
+            llmmodel_params = change_llmmodel or swap_llmmodel or {} # 'llmmodel_change' will trump 'llmmodel_swap'
             if llmmodel_params:
                 mode = 'change' if llmmodel_params == change_llmmodel else 'swap'
                 verb = 'Changing' if mode == 'change' else 'Swapping'
@@ -1201,17 +1203,18 @@ async def on_message(i):
 #################################################################
 #################### QUEUED FROM ON MESSAGE #####################
 #################################################################
-async def on_message_gen(user, user_id, channel, source, text, tags, llm_payload, params):
+async def on_message_gen(user, user_id, channel, source, text, tags, llm_payload, params={}):
     try:
         change_embed = None
         # Check params to see if an LLM model change/swap was triggered by Tags
         llmmodel_params = params.get('llmmodel', '')
         mode = 'change'  # default to 'change' unless a tag was triggered with 'swap'
-        if isinstance(llmmodel, dict):
+        if isinstance(llmmodel_params, dict):
             mode = llmmodel_params.get('mode', 'change')
         if llmmodel_params:
-            if mode == 'swap': orig_llmmodel = copy.deepcopy(shared.model_name) # copy current LLM model name
-            change_embed = await change_llmmodel_task(user, channel, params)           # Change LLM model
+            orig_llmmodel = copy.deepcopy(shared.model_name)                    # copy current LLM model name
+            change_embed = await change_llmmodel_task(user, channel, params)    # Change LLM model
+            if mode == 'swap': await change_embed.delete()                      # Delete embed before the second call
         # make a 'Prompting...' embed when generating text for an image response
         should_draw = user_asks_for_image(tags)
         if should_draw:
@@ -1220,7 +1223,7 @@ async def on_message_gen(user, user_id, channel, source, text, tags, llm_payload
                 img_embed_info.description = " "
                 img_gen_embed = await channel.send(embed=img_embed_info)
                 img_note = f'\n**Processing image generation using your input as the prompt ...**' # msg for if LLM model is unloaded
-        # if no LLM model is loaded, notify that no text will be generated
+        # if no LLM model is loaded, notify that no text will be generated     
         if shared.model_name == 'None':
             img_note = img_note or ''
             warn_msg = await channel.send(f'(Cannot process text request: No LLM model is currently loaded. Use "/llmmodel" to load a model.{img_note})')
@@ -1236,9 +1239,8 @@ async def on_message_gen(user, user_id, channel, source, text, tags, llm_payload
             else: return
         # if LLM model swapping was triggered
         if mode == 'swap':
-            if change_embed: await change_embed.delete()                                # Delete embed before the second call
-            llmmodel_params['llmmodel']['llmmodel_name'] = orig_llmmodel
-            change_embed = await change_llmmodel_task(user, channel, llmmodel_params)   # Swap LLM Model back
+            params['llmmodel']['llmmodel_name'] = orig_llmmodel
+            change_embed = await change_llmmodel_task(user, channel, params)   # Swap LLM Model back
             if change_embed: await change_embed.delete()                                # Delete embed again after the second call
         # process image generation (A1111 / Forge)
         tags = match_img_tags(last_resp, tags)
@@ -1388,7 +1390,7 @@ async def change_imgmodel_task(user, channel, params):
         await a1111_online(channel) # Can't change Img model if not online!
         imgmodel_params = params.get('imgmodel')
         imgmodel_name = imgmodel_params.get('imgmodel_name', '')
-        embed = imgmodel_params.get('embed', None)      # default to None
+        embed = None
         mode = imgmodel_params.get('mode', 'change')    # default to 'change
         verb = imgmodel_params.get('verb', 'Changing')  # default to 'Changing'
         imgmodel = await get_selected_imgmodel_data(imgmodel_name) # params will be either model name (yaml method) or checkpoint name (API method)
@@ -1402,7 +1404,6 @@ async def change_imgmodel_task(user, channel, params):
             return
         # if imgmodel_name != 'None': ### IF API IMG MODEL UNLOADING GETS EVER DEBUGGED
         if channel: # Auto-select imgmodel feature may not have a configured channel
-            if embed: await embed.delete() # If Img model 'swap'
             info_embed.title = f'{verb} Img model ... '
             info_embed.description = f'{verb} to {imgmodel_name}'
             embed = await channel.send(embed=info_embed)
@@ -1412,11 +1413,8 @@ async def change_imgmodel_task(user, channel, params):
         if mode == 'swap' or mode == 'swap_back':
             model_data = imgmodel.get('override_settings') or imgmodel['payload'].get('override_settings')
             await load_imgmodel(channel, model_data)
-            if mode == 'swap':
-                return embed
-            if mode == 'swap_back':
-                if embed: await embed.delete()
-                return
+            if embed: await embed.delete()
+            return
         # Change Img model settings
         await update_imgmodel(channel, imgmodel, imgmodel_tags)
         # if imgmodel_name != 'None': ### IF API IMG MODEL UNLOADING GETS EVER DEBUGGED
@@ -1441,19 +1439,19 @@ async def change_imgmodel_task(user, channel, params):
 async def change_llmmodel_task(user, channel, params):
     try:
         llmmodel_params = params.get('llmmodel', '')
-        mode = 'change'                         # Process LLM model change (once) and announce to channel
+        mode = 'change'
+        verb = 'Changing'
         if isinstance(llmmodel_params, dict):   # will be dict if triggered by Tags, else str
-            mode = llmmodel_params.get('mode')
-            verb = llmmodel_params.get('verb')
+            mode = llmmodel_params.get('mode', 'change')
+            verb = llmmodel_params.get('verb', 'Changing')
             llmmodel_name = llmmodel_params.get('llmmodel_name') # pop out to process as a string.
+        else: llmmodel_name = llmmodel_params   # if not dict, will be LLM Model name str
         # Load the new model if it is different from the current one
-        llmmodel_name = llmmodel_name or llmmodel_params or ''
         if shared.model_name != llmmodel_name:
             # Announce model change/swap
-            verb = verb or 'Changing'
-            info_embed.title = f'{verb} LLM model ... '
-            info_embed.description = f"{verb} to {llmmodel_name}"
-            change_embed = await channel.send(embed=info_embed)
+            change_embed_info.title = f'{verb} LLM model ... '
+            change_embed_info.description = f"{verb} to {llmmodel_name}"
+            change_embed = await channel.send(embed=change_embed_info)
             if shared.model_name != 'None':
                 unload_model()                  # If an LLM model is loaded, unload it
             shared.model_name = llmmodel_name   # set to new LLM model
@@ -1462,18 +1460,18 @@ async def change_llmmodel_task(user, channel, params):
             if mode == 'swap':
                 return change_embed             # return the embed so it can be deleted by the caller
             if llmmodel_name == 'None':
-                info_embed.title = f"{user} unloaded the LLM model"
-                info_embed.description = 'Use "/llmmodel" to load a new one'
+                change_embed_info.title = f"{user} unloaded the LLM model"
+                change_embed_info.description = 'Use "/llmmodel" to load a new one'
             else:
-                info_embed.title = f"{user} changed LLM model:"
-                info_embed.description = f'**{llmmodel_name}**'
+                change_embed_info.title = f"{user} changed LLM model:"
+                change_embed_info.description = f'**{llmmodel_name}**'
             await change_embed.delete()
-            await channel.send(embed=info_embed)
+            await channel.send(embed=change_embed_info)
     except Exception as e:
         logging.error(f"An error occurred while changing LLM Model from '/llmmodel': {e}")
-        info_embed.title = "An error occurred while changing LLM Model from '/llmmodel'"
-        info_embed.description = e
-        await change_embed.edit(embed=info_embed)
+        change_embed_info.title = "An error occurred while changing LLM Model from '/llmmodel'"
+        change_embed_info.description = e
+        await change_embed.edit(embed=change_embed_info)
 
 #################################################################
 #################### QUEUED CHARACTER CHANGE ####################
@@ -1980,6 +1978,7 @@ def process_face(img_payload, face_value):
 async def process_img_payload_tags(img_payload, matches):
     try:
         matches.reverse()
+        imgmodel_params = None
         change_imgmodel = None
         swap_imgmodel = None
         for tag in matches:
@@ -2019,7 +2018,7 @@ async def process_img_payload_tags(img_payload, matches):
             current_imgmodel = client.settings['imgmodel'].get('override_settings', {}).get('sd_model_checkpoint') or client.settings['imgmodel']['payload'].get('override_settings', {}).get('sd_model_checkpoint') or ''
             if imgmodel_params == current_imgmodel:
                 logging.info(f'[TAGS] Img model was triggered to change, but it is the same as current ("{current_imgmodel}").')
-                change_imgmodel = None # return None
+                imgmodel_params = None # return None
             else:
                 mode = 'change' if imgmodel_params == change_imgmodel else 'swap'
                 verb = 'Changing' if mode == 'change' else 'Swapping'
