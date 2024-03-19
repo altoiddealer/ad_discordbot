@@ -1254,10 +1254,10 @@ async def on_message_gen(user, user_id, channel, source, text, tags, llm_payload
         await send_long_message(channel, mention_resp)
     except Exception as e:
         logging.error(f'An error occurred while processing "on_message" request: {e}')
-        info_embed.title = 'An error occurred while processing "on_message" request'
-        info_embed.description = e
-        if embed: await embed.edit(embed=info_embed)
-        else: await channel.send(embed=info_embed)
+        change_embed_info.title = 'An error occurred while processing "on_message" request'
+        change_embed_info.description = e
+        if change_embed: await change_embed.edit(embed=change_embed_info)
+        else: await channel.send(embed=change_embed_info)
 
 #################################################################
 ##################### QUEUED LLM GENERATION #####################
@@ -3358,6 +3358,7 @@ class LLMState:
             'truncation_length': 2048,
             'turn_template': '',
             'typical_p': 1,
+            'user_bio': '',
             'chat_template_str': '''{%- for message in messages %}\n    {%- if message['role'] == 'system' -%}\n        {{- message['content'] + '\\n\\n' -}}\n    {%- else -%}\n        {%- if message['role'] == 'user' -%}\n            {{- name1 + ': ' + message['content'] + '\\n'-}}\n        {%- else -%}\n            {{- name2 + ': ' + message['content'] + '\\n' -}}\n        {%- endif -%}\n    {%- endif -%}\n{%- endfor -%}''',
             'instruction_template_str': '''{%- set ns = namespace(found=false) -%}\n{%- for message in messages -%}\n    {%- if message['role'] == 'system' -%}\n        {%- set ns.found = true -%}\n    {%- endif -%}\n{%- endfor -%}\n{%- if not ns.found -%}\n    {{- '' + 'Below is an instruction that describes a task. Write a response that appropriately completes the request.' + '\\n\\n' -}}\n{%- endif %}\n{%- for message in messages %}\n    {%- if message['role'] == 'system' -%}\n        {{- '' + message['content'] + '\\n\\n' -}}\n    {%- else -%}\n        {%- if message['role'] == 'user' -%}\n            {{-'### Instruction:\\n' + message['content'] + '\\n\\n'-}}\n        {%- else -%}\n            {{-'### Response:\\n' + message['content'] + '\\n\\n' -}}\n        {%- endif -%}\n    {%- endif -%}\n{%- endfor -%}\n{%- if add_generation_prompt -%}\n    {{-'### Response:\\n'-}}\n{%- endif -%}''',
             'chat-instruct_command': '''Continue the chat dialogue below. Write a single reply for the character "<|character|>".\n\n<|prompt|>'''
