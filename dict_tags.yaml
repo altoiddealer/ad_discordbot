@@ -23,7 +23,7 @@ base_tags:
   - time_offset: 0.0                  # 0 = today's date (system time). -0.5 shifts the current date to be 12 hours ago. (UOM = days).
     time_format: '%Y-%m-%d %H:%M:%S'  # Examples: '%Y-%m-%d' (YYYY-MM-DD), '%H:%M:%S' (HH:MM:SS), '%A, %B %d, %Y' (DayName, MonthName DD, YYYY)
 
-# A1111 payload and textgen-webui params can be randomly modified within specified ranges, or a list of strings (ex: sampler names), or from a boolean value. Must be formatted as a dictionary.
+# Stable Diffusion payload and textgen-webui params can be randomly modified within specified ranges, or a list of strings (ex: sampler names), or from a boolean value. Must be formatted as a dictionary.
 # These examples are commented out by default - you should uncomment and experiment :D
 #  - img_param_variances: {cfg_scale: [-2,4], steps: [-5,5], hr_scale: [-0.50,0.15], hr_enable: false, sampler_name: ['Euler A', 'DPM++ 2M Karras', 'DPM++ 2M']}
 #  - llm_param_variances: {repetition_penalty: [-0.25,0.25], temperature_last: false}
@@ -34,7 +34,7 @@ base_tags:
   - trigger: 'draw,generate'
     search_mode: user           # Only search user's prompt
     on_prefix_only: true        # Only triggers if matched at very beginning
-    image_response: true        # The LLM's reply will be used for A1111 img generation
+    image_response: true        # The LLM's reply will be used for Stable Diffusion img generation
     swap_character: Minty-SDXL  # Filename of character in /characters.
     insert_text: ''
     insert_text_method: replace
@@ -61,7 +61,7 @@ base_tags:
 tag_presets:
   - tag_preset_name: SDXL Turbo Payload   # Each tag preset must be named
     tags:                                 # Tag presets must have their tag definitions nested under a 'tags' key
-      - payload: {width: 896, height: 1152, cfg_scale: 2, steps: 5, sampler_name: 'DPM++ SDE Karras'} # A1111 payload can be modified using 'payload'. Must be formatted as a dictionary.
+      - payload: {width: 896, height: 1152, cfg_scale: 2, steps: 5, sampler_name: 'DPM++ SDE Karras'} # Stable Diffusion payload can be modified using 'payload'. Must be formatted as a dictionary.
       #- img_param_variances: {cfg_scale: [-0.5,0.5], steps: [-1,1], hr_scale: [-0.1,0.1], hr_enabled: true}
   
   - tag_preset_name: SDXL Payload
@@ -126,6 +126,7 @@ tag_presets:
 #   on_prefix_only: (true/false)      If triggers must be matched at beginning of the searched text
 #
 # Relevant to text generation (LLM):
+#   text_response: (true/false)       If LLM should generate text. If False and 'image_response' is True, passes the user's text as prompt for image gen.
 #   change_llmmodel: 'string'         For (change/swap)_llmmodel: 'change' will trigger a persistent change. 'swap' will only change the LLM model for the current interaction.
 #   swap_llmmodel: 'string'           Name of an LLM model (ei: 'Mistral-7B-OpenOrca-GPTQ'). Value 'None' will unload the LLM model!
 #   time_offset: 0.0                  0 = today's date (system time). -0.5 shifts the current date to be 12 hours ago. (UOM = days). Use with '{time}' anywhere in your prompts
@@ -140,10 +141,10 @@ tag_presets:
 #   state: {dictionary}               Update values for textgen-webui state parameters. Must be formatted as a dictionary.
 #   llm_param_variances: {dictionary} Randomization ranges for textgen-webui state parameters. Must be formatted as a dictionary.
 
-# Relevant to img generation (A1111):
-#   image_response: (true/false)      If LLM's reply should include A1111 img generation
+# Relevant to img generation (A1111 / Forge):
+#   image_response: (true/false)      If LLM's reply should include Stable Diffusion img generation
 #   change_imgmodel: 'string'         For (change/swap)_imgmodel: 'change' will trigger a persistent change. 'swap' will only change the Img model for the current interaction.
-#   swap_imgmodel: 'string'           Copy/paste a checkpoint name *exactly* as it appears in A1111 / Forge model list (ei: 'sdxl\epicrealismXL_v4Photoreal.safetensors [c772a1a690]'). Currently, API Img model unloading is bugged in both A1111 and Forde so that is not an option here.
+#   swap_imgmodel: 'string'           Copy/paste a checkpoint name *exactly* as it appears in Stable Diffusion model list (ei: 'sdxl\epicrealismXL_v4Photoreal.safetensors [c772a1a690]'). Currently, API Img model unloading is bugged in both A1111/Forge so that is not an option here.
 #   img_censoring: 0                  0 = disabled / 1 = blur image / 2 = block image from being generated
 #   layerdiffuse: (true/false)        enables 'layerdiffuse' extension (must also be enabled in config.py)
 #   face_swap: 'string'               Face image to be used with Reactor extension. Valid options: Image in 'swap_faces' (png/jpg/txt in base64) -OR- Directory name in 'swap_faces' (Picks a random face) -OR- Face model in '{A111}\models\reactor\faces' example 'Minty.safetensors'
@@ -154,6 +155,6 @@ tag_presets:
 #   negative_prompt_prefix: 'string'  Insert text at the beginning of the image negative prompt
 #   negative_prompt: 'string'         Insert text at the end of the image negative prompt ('_suffix' also works)
 #   img_text_joining: ', '            Relevant to all insertion methods except "replace"
-#   payload: {dictionary}             Replacements for A1111 payload. Must be formatted as a dictionary.
-#   img_param_variances: {dictionary} Randomization ranges for A1111 payload parameters. Must be formatted as a dictionary.
+#   payload: {dictionary}             Replacements for Stable Diffusion payload. Must be formatted as a dictionary.
+#   img_param_variances: {dictionary} Randomization ranges for Stable Diffusion payload parameters. Must be formatted as a dictionary.
 #   layerdiffuse: 'string'            enables 'layerdiffuse' extension with specified method. Valid: "(SD1.5) Only Generate Transparent Image (Attention Injection)", "(SD1.5) From Foreground to Background (need batch size 2)", "(SD1.5) From Background to Foreground (need batch size 2)", "(SD1.5) Generate Everything Together (need batch size 3)", "(SDXL) Only Generate Transparent Image (Attention Injection)", "(SDXL) Only Generate Transparent Image (Conv Injection)", "(SDXL) From Foreground to Blending", "(SDXL) From Foreground and Blending to Background", "(SDXL) From Background to Blending", "(SDXL) From Background and Blending to Foreground"

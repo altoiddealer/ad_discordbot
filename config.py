@@ -26,7 +26,7 @@ discord = {
 }       # THEN SIMPLY RIGHT CLICK CHANNEL > GET CHANNEL ID
 
 sd = {
-    'A1111': "http://127.0.0.1:7860",   # Default URL for A1111 API. Adjust if you have issues connecting.
+    'SD_URL': "http://127.0.0.1:7860",   # Default URL for A1111 API. Adjust if you have issues connecting.
     # Bot has integrations with the following extensions. **Only enable them if they are installed AND enabled in A1111.**
     'extensions': {
         'controlnet_enabled': False,    # Requires: sd-webui-controlnet (https://github.com/Mikubill/sd-webui-controlnet) AND configuring 'dict_cmdoptions.yaml'

@@ -36,7 +36,7 @@ imgmodel:
     # Note: Refiner is disabled if 'refiner_switch_at: 0.0' *OR* refiner_checkpoint: ''
     refiner_checkpoint: '' # 'sd_xl_refiner_1.0_0.9vae.safetensors [8d0ce6c016]'
     refiner_switch_at: 0.8
-    # A1111 extension settings. Modifying these may have unintended results...
+    # Stable Diffusion (A1111 / Forge) extension settings. Modifying these may have unintended results...
     alwayson_scripts:
       controlnet:
         args:
