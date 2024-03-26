@@ -71,6 +71,7 @@ parser.add_argument("--token", type=str, help="Discord bot token to use their AP
 parser.add_argument("--limit-history", type=int, help="When the history gets too large, performance issues can occur. Limit the history to improve performance.")
 bot_args = parser.parse_args(bot_argv)
 
+os.environ['GRADIO_ANALYTICS_ENABLED'] = 'False'
 os.environ["BITSANDBYTES_NOWELCOME"] = "1"
 warnings.filterwarnings("ignore", category=UserWarning, message="TypedStorage is deprecated")
 warnings.filterwarnings("ignore", category=UserWarning, message="You have modified the pretrained model configuration to control generation")
@@ -84,7 +85,7 @@ client = commands.Bot(command_prefix=".", intents=intents)
 #################################################################
 ################### Stable Diffusion Startup ####################
 #################################################################
-SD_URL = config.sd.get('SD_URL', None)
+SD_URL = config.sd.get('SD_URL', None) # Get the URL from config.py
 if SD_URL is None:
     SD_URL = config.sd.get('A1111', 'http://127.0.0.1:7860')
 
@@ -108,7 +109,7 @@ async def sd_sysinfo():
         logging.error(f"Error getting SD sysinfo API: {e}")
         return 'Stable Diffusion'
 
-SD_CLIENT = asyncio.run(sd_sysinfo())
+SD_CLIENT = asyncio.run(sd_sysinfo()) # Stable Diffusion client name to use in messages, warnings, etc
 
 #################################################################
 ##################### TEXTGENWEBUI STARTUP ######################
@@ -119,7 +120,7 @@ from modules import shared
 from modules import chat, utils
 from modules import LoRA
 from modules.models import load_model, unload_model
-from modules.models_settings import get_model_metadata, update_model_parameters, get_fallback_settings
+from modules.models_settings import get_model_metadata, update_model_parameters, get_fallback_settings, infer_loader
 
 ## Majority of this code section is copypasta from modules/server.py
 # Loading custom settings
@@ -231,7 +232,23 @@ elif shared.args.model_menu:
 
     shared.model_name = all_llmmodels[i]
 
-def load_llm_model():
+# Check user settings (models/config-user.yaml) to determine loader
+def get_llm_model_loader(model):
+    loader = None
+    user_model_settings = {}
+    settings = shared.user_config
+    for pat in settings:
+        if re.match(pat.lower(), model.lower()):
+            for k in settings[pat]:
+                user_model_settings[k] = settings[pat][k]
+    if 'loader' in user_model_settings:
+        loader = user_model_settings['loader']
+        return loader
+    else:
+        loader = infer_loader(model, user_model_settings)
+    return loader
+
+def load_llm_model(loader=None):
     # If any model has been selected, load it
     if shared.model_name != 'None':
         p = Path(shared.model_name)
@@ -245,7 +262,7 @@ def load_llm_model():
         update_model_parameters(model_settings, initial=True)  # hijack the command-line arguments
 
         # Load the model
-        shared.model, shared.tokenizer = load_model(model_name)
+        shared.model, shared.tokenizer = load_model(model_name, loader)
         if shared.args.lora:
             add_lora_to_model(shared.args.lora)
 
@@ -1017,7 +1034,7 @@ def process_tag_insertions(prompt, tags):
                     join = tag.get('img_text_joining', ' ')
                     insert_method = tag.get('positive_prompt_method', 'after')  # Default to 'after'
                 if insert_text is None:
-                    print(f"Error processing matched tag {item}. Skipping this tag.")
+                    logging.error(f"Error processing matched tag {item}. Skipping this tag.")
                 else:
                     if insert_method == 'replace':
                         if insert_text == '':
@@ -1516,7 +1533,8 @@ async def change_llmmodel_task(user, channel, params):
                 unload_model()                  # If an LLM model is loaded, unload it
             shared.model_name = llmmodel_name   # set to new LLM model
             if shared.model_name != 'None':
-                load_llm_model()                # Load an LLM model if specified
+                loader = get_llm_model_loader(llmmodel_name)    # Try getting loader from user-config.yaml to prevent errors
+                load_llm_model(loader)                          # Load an LLM model if specified
             if mode == 'swap':
                 return change_embed             # return the embed so it can be deleted by the caller
             if llmmodel_name == 'None':
@@ -1666,7 +1684,7 @@ async def process_tasks():
                     elif source == 'on_message':
                         await on_message_gen(user, channel, source, text)
                     else:
-                        print(f'Unexpectedly received an invalid task. Source: {source}')
+                        logging.warning(f'Unexpectedly received an invalid task. Source: {source}')
             task_event.clear() # Flag function is no longer processing a task
             task_queue.task_done() # Accept next task
     except Exception as e:
