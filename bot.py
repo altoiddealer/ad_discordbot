@@ -908,43 +908,64 @@ def get_time(offset=0.0, time_format='%Y-%m-%d %H:%M:%S'):
     except Exception as e:
         logging.error(f"Error when getting time: {e}")
 
+async def swap_llm_character(char_name, user_name, llm_payload):
+    try:
+        char_data = await load_character_data(char_name)
+        name1 = user_name
+        name2 = ''
+        if char_data.get('state', {}):
+            llm_payload['state'] = char_data['state']
+            llm_payload['state']['name1'] = name1
+        if char_data.get('name', 'AI'):
+            llm_payload['state']['name2'] = char_data['name']
+            llm_payload['state']['character_menu'] = char_data['name']
+        if char_data.get('context', ''):
+            llm_payload['state']['context'] = char_data['context']
+        llm_payload = await fix_llm_payload(llm_payload) # Add any missing required information
+        return llm_payload
+    except Exception as e:
+        logging.error(f"An error occurred while loading the file for swap_character: {e}")
+
+async def collect_tag_values(matches):
+    swap_character = None
+    instruct = None
+    load_history = None
+    save_history = None
+    param_variances = {}
+    state = {}
+    time_offset = 0.0
+    time_format = '%Y-%m-%d %H:%M:%S'
+    llmmodel_params = {}
+    change_llmmodel = None
+    swap_llmmodel = None
+    for tag in matches:
+        # Values that will only apply from the first tag matches
+        if 'swap_character' in tag and swap_character is None:
+            swap_character = tag['swap_character']
+        if 'instruct' in tag and instruct is None:
+            instruct = tag['instruct']
+        if 'load_history' in tag and load_history is None:
+            load_history = tag['load_history']
+        if 'save_history' in tag and save_history is None:
+            save_history = tag['save_history']
+        if 'change_llmmodel' in tag and change_llmmodel is None:
+            change_llmmodel = tag['change_llmmodel']
+        if 'swap_llmmodel' in tag and swap_llmmodel is None:
+            swap_llmmodel = tag['swap_llmmodel']
+        # Values that may apply repeatedly
+        if 'llm_param_variances' in tag:
+            param_variances.update(tag['llm_param_variances']) # Allow multiple to accumulate.
+        if 'state' in tag:
+            state.update(tag['state']) # Allow multiple to accumulate.
+        if 'time_offset' in tag:
+            time_offset = tag['time_offset']
+        if 'time_format' in tag:
+            time_format = tag['time_format']
+    return swap_character, instruct, load_history, save_history, param_variances, state, time_offset, time_format, llmmodel_params, change_llmmodel, swap_llmmodel
+
 async def process_llm_payload_tags(user_name, llm_payload, llm_prompt, matches):
     try:
-        swap_character = None
-        instruct = None
-        load_history = None
-        save_history = None
-        param_variances = {}
-        state = {}
-        time_offset = 0.0
-        time_format = '%Y-%m-%d %H:%M:%S'
-        llmmodel_params = {}
-        change_llmmodel = None
-        swap_llmmodel = None
-        for tag in matches:
-            # Values that will only apply from the first tag matches
-            if 'swap_character' in tag and swap_character is None:
-                swap_character = tag['swap_character']
-            if 'instruct' in tag and instruct is None:
-                instruct = tag['instruct']
-            if 'load_history' in tag and load_history is None:
-                load_history = tag['load_history']
-            if 'save_history' in tag and save_history is None:
-                save_history = tag['save_history']
-                llm_payload['save_history'] = tag['save_history']
-            if 'change_llmmodel' in tag and change_llmmodel is None:
-                change_llmmodel = tag['change_llmmodel']
-            if 'swap_llmmodel' in tag and swap_llmmodel is None:
-                swap_llmmodel = tag['swap_llmmodel']
-            # Values that may apply repeatedly
-            if 'llm_param_variances' in tag:
-                param_variances.update(tag['llm_param_variances']) # Allow multiple to accumulate.
-            if 'state' in tag:
-                state.update(tag['state']) # Allow multiple to accumulate.
-            if 'time_offset' in tag:
-                time_offset = tag['time_offset']
-            if 'time_format' in tag:
-                time_format = tag['time_format']                
+        swap_character, instruct, load_history, save_history, param_variances, state, time_offset, time_format, llmmodel_params, change_llmmodel, swap_llmmodel = await collect_tag_values(matches)            
         # Format time if defined
         time_for_llm = get_time(time_offset, time_format)
         llm_prompt = llm_prompt.replace('{time}', time_for_llm)
@@ -952,47 +973,29 @@ async def process_llm_payload_tags(user_name, llm_payload, llm_prompt, matches):
         if swap_character or instruct or load_history or save_history or param_variances or state or change_llmmodel or swap_llmmodel:
             print_content = f"[TAGS] LLM behavior was modified ("
             # Swap Character handling:
-            if swap_character:
-                try:
-                    character_path = os.path.join("characters", f"{swap_character}.yaml")
-                    if character_path:
-                        char_data = load_file(character_path)
-                        char_data = dict(char_data)
-                        name1 = user_name
-                        name2 = ''
-                        if char_data.get('state', {}):
-                            llm_payload['state'] = char_data['state']
-                            llm_payload['state']['name1'] = name1
-                        if char_data['name']:
-                            name2 = char_data['name']
-                            llm_payload['state']['name2'] = name2
-                            llm_payload['state']['character_menu'] = name2
-                        if char_data.get('context', ''):
-                            context = char_data['context']
-                            llm_payload['state']['context'] = context
-                        await fix_llm_payload(llm_payload) # Add any missing required information
-                except Exception as e:
-                    logging.error(f"An error occurred while loading the YAML file for swap_character: {e}")
+            if swap_character is not None:
+                llm_payload = await swap_llm_character(swap_character, user_name, llm_payload)
                 print_content += f"Swap Character: {swap_character}"
-            else: print_content += f"Swap Character: {llm_payload['state']['name2']}"
             # Instruction handling
-            if instruct:
+            if instruct is not None:
                 llm_prompt = instruct.format(llm_prompt)
                 print_content += f" | Prompt: {llm_prompt}"
             # History handling
-            if load_history:
+            if save_history is not None: llm_payload['save_history'] = save_history # Save this interaction to history (True/False)
+            if load_history is not None:
                 if load_history < 0:
                     llm_payload['state']['history'] = {'internal': [], 'visible': []} # No history
-                if load_history > 0:
+                    print_content += f" | History: suppressed"
+                elif load_history > 0:
                     # Calculate the number of items to retain (up to the length of session_history)
                     num_to_retain = min(load_history, len(session_history["internal"]))
                     llm_payload['state']['history']['internal'] = session_history['internal'][-num_to_retain:]
                     llm_payload['state']['history']['visible'] = session_history['visible'][-num_to_retain:]
-                print_content += f" | History: {llm_payload['state']['history']['visible']}"
+                    print_content += f' | History: limited to "{load_history}"'
             if param_variances:
                 processed_params = process_param_variances(param_variances)
                 print_content += f" | Param Variances: {processed_params}"
-                sum_update_dict(llm_payload['state'], processed_params)
+                sum_update_dict(llm_payload['state'], processed_params) # Updates dictionary while adding floats + ints
             if state:
                 print_content += f" | State: {state}"
                 update_dict(llm_payload['state'], state)
@@ -1096,7 +1099,6 @@ def match_tags(search_text, tags):
                     matches.append(tag)
                     continue
                 case_sensitive = tag.get('case_sensitive', False)
-                trigger_match_strength = tag.get('trigger_match_strength', 0)
                 triggers = [t.strip() for t in tag['trigger'].split(',')]
                 for index, trigger in enumerate(triggers):
                     trigger_regex = r'\b{}\b'.format(re.escape(trigger))
@@ -1875,6 +1877,11 @@ def clean_img_payload(img_payload):
             del img_payload['alwayson_scripts']['reactor'] # Delete all 'reactor' keys if disabled by config
         if not config.sd['extensions'].get('layerdiffuse_enabled', False):
             del img_payload['alwayson_scripts']['layerdiffuse'] # Delete all 'layerdiffuse' keys if disabled by config
+        else:
+            if SD_CLIENT != 'SD WebUI Forge':
+                print(f'layerdiffuse is not known to be compatible with "{SD_CLIENT}". Not applying layerdiffuse...')
+                del img_payload['alwayson_scripts']['layerdiffuse'] # Delete all 'layerdiffuse' keys if disabled by config
+
     # Workaround for denoising strength bug
     if not img_payload.get('enable_hr', False):
         img_payload['denoising_strength'] = None
@@ -1887,7 +1894,10 @@ def clean_img_payload(img_payload):
         del img_payload[key]
     return img_payload
 
-def apply_lrctl(matches):
+def apply_loractl(matches):
+    if SD_CLIENT != 'A1111 SD WebUI':
+        print(f'loractl is not known to be compatible with "{SD_CLIENT}". Not applying loractl...')
+        return matches
     try:
         scaling_settings = [v for k, v in config.sd.get('extensions', {}).get('lrctl', {}).items() if 'scaling' in k]
         scaling_settings = scaling_settings if scaling_settings else ['']
@@ -2170,8 +2180,8 @@ async def img_gen(user, channel, source, img_prompt, params, tags={}):
         img_payload = initialize_img_payload(img_prompt, neg_prompt)
         # Apply tags relevant to Img gen
         img_payload, imgmodel_params = await process_img_payload_tags(img_payload, matches)
-        # Process lrctl
-        if config.sd['extensions'].get('lrctl', {}).get('enabled', False): matches = apply_lrctl(matches)
+        # Process loractl
+        if config.sd['extensions'].get('lrctl', {}).get('enabled', False): matches = apply_loractl(matches)
         # Apply tags relevant to Img prompts
         img_payload = process_img_prompt_tags(img_payload, tags)
         # Apply menu selections from /image command
@@ -2473,6 +2483,19 @@ async def update_client_profile(change_username, change_avatar, char_name):
     except Exception as e:
         logging.error(f"Error while changing character username or avatar: {e}")
 
+async def load_character_data(char_name):
+    char_data = None
+    for ext in ['.yaml', '.yml', '.json']:
+        character_file = os.path.join("characters", f"{char_name}{ext}")
+        if os.path.exists(character_file):
+            try:
+                char_data = load_file(character_file)
+                char_data = dict(char_data)
+                break  # Break the loop if data is successfully loaded
+            except Exception as e:
+                logging.error(f"An error occurred while loading character data for {char_name}: {e}")
+    return char_data
+
 # Collect character information
 async def character_loader(source):
     try:
@@ -2483,9 +2506,7 @@ async def character_loader(source):
             logging.warning(f'Note that character "{source}" is missing the following info:"{missing_keys}".')
         textgen_data = {'name': name, 'greeting': greeting, 'context': context}
         # Check for extra bot data
-        char_path = os.path.join("characters", f"{source}.yaml")
-        char_data = load_file(char_path)
-        char_data = dict(char_data)
+        char_data = await load_character_data(source)
         # Merge with basesettings
         char_data = merge_base(char_data, 'llmcontext')
         # Gather context specific keys from the character data
