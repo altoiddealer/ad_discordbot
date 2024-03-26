@@ -117,14 +117,14 @@ tag_presets:
 
 
 # List of all available tag keys:
-#
+
 # Relevant to all tags:
 #   search_mode: userllm              Search method for trigger matching. 'user' = user prompt only / 'llm' = bot reply only / 'userllm' = search both for matches
 #   trigger: 'trigger,another one'    Recommended for most tags (except 'global_tag_keys' and 'tag_preset_name').
 #   random: 0.5                       Chance for tag to process. 0.0 = 0% chance and 1.0 = 100% chance.
 #   case_sensitive: (true/false)      If the triggers are case sensitive
 #   on_prefix_only: (true/false)      If triggers must be matched at beginning of the searched text
-#
+
 # Relevant to text generation (LLM):
 #   text_response: (true/false)       If LLM should generate text. If False and 'image_response' is True, passes the user's text as prompt for image gen.
 #   change_llmmodel: 'string'         For (change/swap)_llmmodel: 'change' will trigger a persistent change. 'swap' will only change the LLM model for the current interaction.
@@ -146,8 +146,6 @@ tag_presets:
 #   change_imgmodel: 'string'         For (change/swap)_imgmodel: 'change' will trigger a persistent change. 'swap' will only change the Img model for the current interaction.
 #   swap_imgmodel: 'string'           Copy/paste a checkpoint name *exactly* as it appears in Stable Diffusion model list (ei: 'sdxl\epicrealismXL_v4Photoreal.safetensors [c772a1a690]'). Currently, API Img model unloading is bugged in both A1111/Forge so that is not an option here.
 #   img_censoring: 0                  0 = disabled / 1 = blur image / 2 = block image from being generated
-#   layerdiffuse: (true/false)        enables 'layerdiffuse' extension (must also be enabled in config.py)
-#   face_swap: 'string'               Face image to be used with Reactor extension. Valid options: Image in 'swap_faces' (png/jpg/txt in base64) -OR- Directory name in 'swap_faces' (Picks a random face) -OR- Face model in '{A111}\models\reactor\faces' example 'Minty.safetensors'
 #   positive_prompt: 'string'         Text you may want to insert relative to the matched text in the image prompt.
 #   positive_prompt_method: after     Relevant to 'positive_prompt'. 'after' = insert value after matched text / 'before' = before text / 'replace' = replace text
 #   positive_prompt_prefix: 'string'  Insert text at the beginning of the image positive prompt
@@ -157,4 +155,5 @@ tag_presets:
 #   img_text_joining: ', '            Relevant to all insertion methods except "replace"
 #   payload: {dictionary}             Replacements for Stable Diffusion payload. Must be formatted as a dictionary.
 #   img_param_variances: {dictionary} Randomization ranges for Stable Diffusion payload parameters. Must be formatted as a dictionary.
+#   face_swap: 'string'               Face image to be used with Reactor extension. Valid options: Image in 'swap_faces' (png/jpg/txt in base64) -OR- Directory name in 'swap_faces' (Picks a random face) -OR- Face model in '{A111}\models\reactor\faces' example 'Minty.safetensors'
 #   layerdiffuse: 'string'            enables 'layerdiffuse' extension with specified method. Valid: "(SD1.5) Only Generate Transparent Image (Attention Injection)", "(SD1.5) From Foreground to Background (need batch size 2)", "(SD1.5) From Background to Foreground (need batch size 2)", "(SD1.5) Generate Everything Together (need batch size 3)", "(SDXL) Only Generate Transparent Image (Attention Injection)", "(SDXL) Only Generate Transparent Image (Conv Injection)", "(SDXL) From Foreground to Blending", "(SDXL) From Foreground and Blending to Background", "(SDXL) From Background to Blending", "(SDXL) From Background and Blending to Foreground"
