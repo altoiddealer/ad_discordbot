@@ -405,10 +405,11 @@ def save_yaml_file(file_path, data):
 async def send_long_message(channel, message_text):
     """ Splits a longer message into parts while preserving sentence boundaries and code blocks """
     activelang = ''
+
     # Helper function to ensure even pairs of code block markdown
     def ensure_even_code_blocks(chunk_text, code_block_inserted):
         nonlocal activelang  # Declare activelang as nonlocal to modify the global variable
-        code_block_languages = ["asciidoc", "autohotkey", "bash", "coffeescript", "cpp", "cs", "css", "diff", "fix", "glsl", "ini", "json", "md", "ml", "prolog", "ps", "py", "tex", "xl", "xml", "yaml"]
+        code_block_languages = ["asciidoc", "autohotkey", "bash", "coffeescript", "cpp", "cs", "css", "diff", "fix", "glsl", "ini", "json", "md", "ml", "prolog", "ps", "py", "tex", "xl", "xml", "yaml", "html"]
         code_block_count = chunk_text.count("```")
         if code_block_inserted:
             # If a code block was inserted in the previous chunk, add a leading set of "```"
@@ -420,13 +421,14 @@ async def send_long_message(channel, message_text):
             last_code_block_index = chunk_text.rfind("```")
             last_code_block = chunk_text[last_code_block_index + len("```"):].strip()
             for lang in code_block_languages:
-                if last_code_block.startswith(lang):
+                if (last_code_block.lower()).startswith(lang):
                     activelang = lang
                     break  # Stop checking if a match is found
             # If there is an odd number of code blocks, add a closing set of "```"
             chunk_text += "```"
             code_block_inserted = True
         return chunk_text, code_block_inserted
+
     if len(message_text) <= 1980:
         sent_message = await channel.send(message_text)
     else:
@@ -582,6 +584,8 @@ info_embed = discord.Embed().from_dict(info_embed_json)
 img_embed_info = discord.Embed(title = "Processing image generation ...", description=" ", url='https://github.com/altoiddealer/ad_discordbot')
 # Model change embed
 change_embed_info = discord.Embed(title = "Changing model ...", description=" ", url='https://github.com/altoiddealer/ad_discordbot')
+# Character embed
+char_embed_info = discord.Embed(title = 'Changing character ... ', description=" ", url='https://github.com/altoiddealer/ad_discordbot')
 
 # If first time bot script is run
 async def first_run():
@@ -892,21 +896,25 @@ async def fix_llm_payload(llm_payload):
     llm_payload['state'] = fix_dict(current_state, default_state)
     return llm_payload
 
-def get_time(offset=0.0, time_format='%Y-%m-%d %H:%M:%S'):
+def get_time(offset=0.0, time_format=None, date_format=None):
     try:
-        time_for_llm = ''
-        if offset == 0.0:
-            time_for_llm = datetime.now()
-        elif isinstance(coffset, int):
-            time_for_llm = datetime.now() + timedelta(days=offset)
-        elif isinstance(offset, float):
-            days = math.floor(offset)
-            hours = (offset - days) * 24
-            time_for_llm = datetime.now() + timedelta(days=days, hours=hours)
-        time_for_llm = time_for_llm.strftime(time_format)
-        return time_for_llm
+        new_time = ''
+        new_date = ''
+        current_time = datetime.now()
+        if offset is not None and offset != 0.0:
+            if isinstance(offset, int):
+                current_time = datetime.now() + timedelta(days=offset)
+            elif isinstance(offset, float):
+                days = math.floor(offset)
+                hours = (offset - days) * 24
+                current_time = datetime.now() + timedelta(days=days, hours=hours)
+        time_format = time_format if time_format is not None else '%H:%M:%S'
+        date_format = date_format if date_format is not None else '%Y-%m-%d'
+        new_time = current_time.strftime(time_format)
+        new_date = current_time.strftime(date_format)
+        return new_time, new_date
     except Exception as e:
-        logging.error(f"Error when getting time: {e}")
+        logging.error(f"Error when getting date/time: {e}")
 
 async def swap_llm_character(char_name, user_name, llm_payload):
     try:
@@ -926,60 +934,67 @@ async def swap_llm_character(char_name, user_name, llm_payload):
     except Exception as e:
         logging.error(f"An error occurred while loading the file for swap_character: {e}")
 
-async def collect_tag_values(matches):
-    swap_character = None
-    instruct = None
-    load_history = None
-    save_history = None
-    param_variances = {}
-    state = {}
-    time_offset = 0.0
-    time_format = '%Y-%m-%d %H:%M:%S'
-    llmmodel_params = {}
-    change_llmmodel = None
-    swap_llmmodel = None
-    for tag in matches:
-        # Values that will only apply from the first tag matches
-        if 'swap_character' in tag and swap_character is None:
-            swap_character = tag['swap_character']
-        if 'instruct' in tag and instruct is None:
-            instruct = tag['instruct']
-        if 'load_history' in tag and load_history is None:
-            load_history = tag['load_history']
-        if 'save_history' in tag and save_history is None:
-            save_history = tag['save_history']
-        if 'change_llmmodel' in tag and change_llmmodel is None:
-            change_llmmodel = tag['change_llmmodel']
-        if 'swap_llmmodel' in tag and swap_llmmodel is None:
-            swap_llmmodel = tag['swap_llmmodel']
-        # Values that may apply repeatedly
-        if 'llm_param_variances' in tag:
-            param_variances.update(tag['llm_param_variances']) # Allow multiple to accumulate.
-        if 'state' in tag:
-            state.update(tag['state']) # Allow multiple to accumulate.
-        if 'time_offset' in tag:
-            time_offset = tag['time_offset']
-        if 'time_format' in tag:
-            time_format = tag['time_format']
-    return swap_character, instruct, load_history, save_history, param_variances, state, time_offset, time_format, llmmodel_params, change_llmmodel, swap_llmmodel
+def format_prompt_with_recent_msgs(user, prompt):
+    formatted_prompt = copy.copy(prompt)
+    # Find all matches of {user_x} and {llm_x} in the prompt
+    pattern = r'\{(user|llm|history)_([0-9]+)\}'
+    matches = re.findall(pattern, prompt)
+    # Iterate through the matches
+    for match in matches:
+        try:
+            prefix, index = match
+            index = int(index)
+            if prefix in ['user', 'llm'] and 0 <= index <= 10:
+                message_list = recent_messages[prefix]
+                if not message_list or index >= len(message_list):
+                    continue
+                matched_syntax = f"{prefix}_{index}"
+                formatted_prompt = formatted_prompt.replace(f"{{{matched_syntax}}}", message_list[index])
+            elif prefix == 'history' and 0 <= index <= 10:
+                user_message = recent_messages['user'][index] if index < len(recent_messages['user']) else ''
+                llm_message = recent_messages['llm'][index] if index < len(recent_messages['llm']) else ''
+                formatted_history = f'"{user}:" {user_message}\n"{client.user.display_name}:" {llm_message}\n'
+                matched_syntax = f"{prefix}_{index}"
+                formatted_prompt = formatted_prompt.replace(f"{{{matched_syntax}}}", formatted_history)
+        except Exception as e:
+            logging.error(f'An error occurred while formatting prompt with recent messages: {e}')
+    return formatted_prompt
 
-async def process_llm_payload_tags(user_name, llm_payload, llm_prompt, matches):
+def process_tag_formatting(user, prompt, formatting):
     try:
-        swap_character, instruct, load_history, save_history, param_variances, state, time_offset, time_format, llmmodel_params, change_llmmodel, swap_llmmodel = await collect_tag_values(matches)            
+        format_prompt = formatting.get('format_prompt', None)
+        time_offset = formatting.get('time_offset', None)
+        time_format = formatting.get('time_format', None)
+        date_format = formatting.get('date_format', None)
+        # Tag handling for prompt formatting
+        if format_prompt is not None:
+            prompt = format_prompt.replace('{prompt}', prompt)
+            # print_content += f" | Prompt: {llm_prompt}"
+        # format prompt with any defined recent messages
+        prompt = format_prompt_with_recent_msgs(user, prompt)
         # Format time if defined
-        time_for_llm = get_time(time_offset, time_format)
-        llm_prompt = llm_prompt.replace('{time}', time_for_llm)
+        new_time, new_date = get_time(time_offset, time_format, date_format)
+        prompt = prompt.replace('{time}', new_time)
+        prompt = prompt.replace('{date}', new_date)
+        return prompt
+    except Exception as e:
+        logging.error(f"Error formatting LLM prompt: {e}")
+
+async def process_llm_payload_tags(user_name, channel, llm_payload, llm_prompt, mods):
+    try:
+        char_params = {}
+        llmmodel_params = {}
+        save_history = mods.get('save_history', None)
+        load_history = mods.get('load_histor', None)
+        param_variances = mods.get('param_variances', {})
+        state = mods.get('state', {})
+        change_character = mods.get('change_character', None)
+        swap_character = mods.get('swap_character', None)
+        change_llmmodel = mods.get('change_llmmodel', None)
+        swap_llmmodel = mods.get('swap_llmmodel', None)
         # Process the tag matches
-        if swap_character or instruct or load_history or save_history or param_variances or state or change_llmmodel or swap_llmmodel:
+        if save_history or load_history or param_variances or state or change_character or swap_character or change_llmmodel or swap_llmmodel:
             print_content = f"[TAGS] LLM behavior was modified ("
-            # Swap Character handling:
-            if swap_character is not None:
-                llm_payload = await swap_llm_character(swap_character, user_name, llm_payload)
-                print_content += f"Swap Character: {swap_character}"
-            # Instruction handling
-            if instruct is not None:
-                llm_prompt = instruct.format(llm_prompt)
-                print_content += f" | Prompt: {llm_prompt}"
             # History handling
             if save_history is not None: llm_payload['save_history'] = save_history # Save this interaction to history (True/False)
             if load_history is not None:
@@ -999,6 +1014,21 @@ async def process_llm_payload_tags(user_name, llm_payload, llm_prompt, matches):
             if state:
                 print_content += f" | State: {state}"
                 update_dict(llm_payload['state'], state)
+            # Character handling
+            char_params = change_character or swap_character or {} # 'character_change' will trump 'character_swap'
+            if char_params:
+                # Error handling
+                if not any(char_params == char['name'] for char in all_characters):
+                    logging.error(f'Character not found: {char_params}')
+                else:
+                    if char_params == change_character:
+                        verb = 'Changing'
+                        char_params = {'character': {'char_name': char_params, 'mode': 'change', 'verb': verb}}
+                        await change_char_task(user_name, channel, 'Tags', char_params)
+                    else:
+                        verb = 'Swapping'
+                        llm_payload = await swap_llm_character(swap_character, user_name, llm_payload)
+                    print_content += f" | {verb} Character: {char_params}"
             # LLM model handling
             llmmodel_params = change_llmmodel or swap_llmmodel or {} # 'llmmodel_change' will trump 'llmmodel_swap'
             if llmmodel_params:
@@ -1017,6 +1047,55 @@ async def process_llm_payload_tags(user_name, llm_payload, llm_prompt, matches):
     except Exception as e:
         logging.error(f"Error processing LLM tags: {e}")
 
+def collect_tag_values(tags):
+    llm_payload_mods = {
+        'save_history': None,
+        'load_history': None,
+        'change_character': None,
+        'swap_character': None,
+        'change_llmmodel': None,
+        'swap_llmmodel': None,
+        'param_variances': {},
+        'state': {}
+        }
+    formatting = {
+        'format_prompt': None,
+        'time_offset': None,
+        'time_format': None,
+        'date_format': None
+        }
+    for tag in tags['matches']:
+        # Values that will only apply from the first tag matches
+        if 'save_history' in tag and llm_payload_mods['save_history'] is None:
+            llm_payload_mods['save_history'] = tag.pop('save_history')
+        if 'load_history' in tag and llm_payload_mods['load_history'] is None:
+            llm_payload_mods['load_history'] = tag.pop('load_history')
+        if 'change_character' in tag and llm_payload_mods['change_character'] is None:
+            llm_payload_mods['change_character'] = tag.pop('change_character')
+        if 'swap_character' in tag and llm_payload_mods['swap_character'] is None:
+            llm_payload_mods['swap_character'] = tag.pop('swap_character')
+        if 'change_llmmodel' in tag and llm_payload_mods['change_llmmodel'] is None:
+            llm_payload_mods['change_llmmodel'] = tag.pop('change_llmmodel')
+        if 'swap_llmmodel' in tag and llm_payload_mods['swap_llmmodel'] is None:
+            llm_payload_mods['swap_llmmodel'] = tag.pop('swap_llmmodel')
+        if 'format_prompt' in tag and formatting['format_prompt'] is None:
+            formatting['format_prompt'] = tag.pop('format_prompt')
+        # Values that may apply repeatedly
+        if 'time_offset' in tag:
+            formatting['time_offset'] = tag.pop('time_offset')
+        if 'time_format' in tag:
+            formatting['time_format'] = tag.pop('time_format')
+        if 'date_format' in tag:
+            formatting['date_format'] = tag.pop('date_format')
+        if 'llm_param_variances' in tag:
+            llm_param_variances = tag.pop('llm_param_variances')
+            llm_payload_mods['param_variances'].update(llm_param_variances) # Allow multiple to accumulate.
+        if 'state' in tag:
+            state = tag.pop('state')
+            llm_payload_mods['state'].update(state) # Allow multiple to accumulate.
+
+    return llm_payload_mods, formatting
+
 def process_tag_insertions(prompt, tags):
     try:
         updated_matches = []
@@ -1029,13 +1108,13 @@ def process_tag_insertions(prompt, tags):
                 tag, start, end = item # unpack tuple
                 phase = tag['phase']
                 if phase == 'llm':
-                    insert_text = tag.get('insert_text', None)
-                    join = tag.get('text_joining', ' ')
-                    insert_method = tag.get('insert_text_method', 'after')  # Default to 'after'
+                    insert_text = tag.pop('insert_text', None)
+                    join = tag.pop('text_joining', ' ')
+                    insert_method = tag.pop('insert_text_method', 'after')  # Default to 'after'
                 else:
                     insert_text = tag.get('positive_prompt', None)
-                    join = tag.get('img_text_joining', ' ')
-                    insert_method = tag.get('positive_prompt_method', 'after')  # Default to 'after'
+                    join = tag.pop('img_text_joining', ' ')
+                    insert_method = tag.pop('positive_prompt_method', 'after')  # Default to 'after'
                 if insert_text is None:
                     logging.error(f"Error processing matched tag {item}. Skipping this tag.")
                 else:
@@ -1066,6 +1145,7 @@ def process_tag_trumps(matches):
                 tag_dict = tag
             if 'trumps' in tag_dict:
                 trump_params.update([param.strip().lower() for param in tag_dict['trumps'].split(',')])
+                del tag_dict['trumps']
         # Remove duplicates from the trump_params set
         trump_params = set(trump_params)
         # Iterate over all tags in 'matches' and remove 'trumped' tags
@@ -1230,6 +1310,7 @@ async def on_message(i):
 #################################################################
 async def on_message_gen(user, channel, source, text):
     try:
+        params = {}
         # collects all tags, sorted into sub-lists by phase (user / llm / userllm)
         tags = get_tags()
         # match tags labeled for user / userllm.
@@ -1241,9 +1322,8 @@ async def on_message_gen(user, channel, source, text):
             if should_draw:
                 if await sd_online(channel):
                     await channel.send(f'Bot was triggered by Tags to not respond with text.\n**Processing image generation using your input as the prompt ...**') # msg for if LLM model is unloaded
-                params = {}
                 llm_prompt = copy.copy(text)
-                await img_gen(user, channel, source, llm_prompt, params, tags)
+                await img_gen(user.name, channel, source, llm_prompt, params, tags)
                 return
             else: return
         # build llm_payload with defaults
@@ -1252,17 +1332,19 @@ async def on_message_gen(user, channel, source, text):
         llm_prompt = copy.copy(text)
         # apply tags to prompt
         llm_prompt, tags = process_tag_insertions(llm_prompt, tags)
-        matches = tags['matches']
-        # apply tags relevant to LLM
-        llm_payload, llm_prompt, llmmodel_params = await process_llm_payload_tags(user.name, llm_payload, llm_prompt, matches)
+        # collect matched tag values
+        llm_payload_mods, formatting = collect_tag_values(tags)
+        # apply tags relevant to LLM payload
+        llm_payload, llm_prompt, params = await process_llm_payload_tags(user.name, channel, llm_payload, llm_prompt, llm_payload_mods)
+        # apply formatting tags to LLM prompt
+        llm_prompt = process_tag_formatting(user.name, llm_prompt, formatting)
         # offload to ai_gen queue
         llm_payload['text'] = llm_prompt
-        if llmmodel_params: params = llmmodel_params # Send LLM model params if triggered from tags.
-        await hybrid_llm_img_gen(user, channel, source, text, tags, llm_payload, params={})
+        await hybrid_llm_img_gen(user, channel, source, text, tags, llm_payload, params)
     except Exception as e:
         logging.error(f"An error occurred processing on_message request: {e}")
 
-async def hybrid_llm_img_gen(user, channel, source, text, tags, llm_payload, params={}):
+async def hybrid_llm_img_gen(user, channel, source, text, tags, llm_payload, params):
     try:
         change_embed = None
         img_gen_embed = None
@@ -1323,11 +1405,29 @@ async def hybrid_llm_img_gen(user, channel, source, text, tags, llm_payload, par
 ##################### QUEUED LLM GENERATION #####################
 #################################################################
 session_history = {'internal': [], 'visible': []}
+recent_messages = {'user': [], 'llm': []}
 
 # Reset session_history
 def reset_session_history():
     global session_history
     session_history = {'internal': [], 'visible': []}
+
+def manage_history(prompt, reply, save_history):
+    # Retain up to 10 most recent messages
+    global recent_messages
+    recent_messages['user'].append(prompt)
+    recent_messages['llm'].append(reply)
+    # Limit each sublist to 10 messages or total character count of 10,000
+    for sublist in ['user', 'llm']:
+        total_chars = sum(len(message) for message in recent_messages[sublist])
+        while len(recent_messages[sublist]) > 10 or total_chars > 10000:
+            oldest_message = recent_messages[sublist].pop(0)
+            total_chars -= len(oldest_message)
+    # Retain chat history
+    global session_history
+    if not client.behavior.ignore_history and save_history:
+        session_history['internal'].append([prompt, reply])
+        session_history['visible'].append([prompt, reply])
 
 # Add dynamic stopping strings
 async def extra_stopping_strings(llm_payload):
@@ -1376,16 +1476,13 @@ async def llm_gen(llm_payload):
                     audio_format_match = re.search(r'audio src="file/(.*?\.(wav|mp3))"', last_vis_resp)
                     if audio_format_match:
                         tts_resp = audio_format_match.group(1)
-        # Retain chat history
-        if not client.behavior.ignore_history and llm_payload.get('save_history', True):
-            global session_history
-            session_history['internal'].append([llm_payload['text'], last_resp])
-            session_history['visible'].append([llm_payload['text'], last_resp])
-
         return last_resp, tts_resp  # bot's reply
 
     # Offload the synchronous task to a separate thread using run_in_executor
     last_resp, tts_resp = await loop.run_in_executor(None, process_responses)
+
+    save_history = llm_payload.get('save_history', True)
+    manage_history(llm_payload['text'], last_resp, save_history)
 
     return last_resp, tts_resp
 
@@ -1467,9 +1564,9 @@ async def speak_gen(user, channel, text, params):
 async def change_imgmodel_task(user, channel, params):
     try:
         await sd_online(channel) # Can't change Img model if not online!
+        embed = None
         imgmodel_params = params.get('imgmodel')
         imgmodel_name = imgmodel_params.get('imgmodel_name', '')
-        embed = None
         mode = imgmodel_params.get('mode', 'change')    # default to 'change
         verb = imgmodel_params.get('verb', 'Changing')  # default to 'Changing'
         imgmodel = await get_selected_imgmodel_data(imgmodel_name) # params will be either model name (yaml method) or checkpoint name (API method)
@@ -1518,13 +1615,9 @@ async def change_imgmodel_task(user, channel, params):
 async def change_llmmodel_task(user, channel, params):
     try:
         llmmodel_params = params.get('llmmodel', '')
-        mode = 'change'
-        verb = 'Changing'
-        if isinstance(llmmodel_params, dict):   # will be dict if triggered by Tags, else str
-            mode = llmmodel_params.get('mode', 'change')
-            verb = llmmodel_params.get('verb', 'Changing')
-            llmmodel_name = llmmodel_params.get('llmmodel_name') # pop out to process as a string.
-        else: llmmodel_name = llmmodel_params   # if not dict, will be LLM Model name str
+        llmmodel_name = llmmodel_params.get('llmmodel_name')
+        mode = llmmodel_params.get('mode', 'change')
+        verb = llmmodel_params.get('verb', 'Changing')
         # Load the new model if it is different from the current one
         if shared.model_name != llmmodel_name:
             # Announce model change/swap
@@ -1558,14 +1651,15 @@ async def change_llmmodel_task(user, channel, params):
 #################################################################
 async def change_char_task(user, channel, source, params):
     try:
-        char_name = params.get('char_name', {})
-        if source == 'character':
-            info_embed.title = "Changing character ... "
-            info_embed.description = f'{user.name} requested character change: "{char_name}"'
-        else:
-            info_embed.title = "Resetting character ... "
-            info_embed.description = f'{user.name} requested character reset: "{char_name}"'
-        embed = await channel.send(embed=info_embed)
+        char_params = params.get('character', {})
+        char_name = char_params.get('char_name', {})
+        verb = char_params.get('verb', 'Changing')
+        mode = char_params.get('mode', 'change')
+        # Make embed
+        char_embed_info.title = f'{verb} character ... '
+        char_embed_info.description = f'{user} requested character {mode}: "{char_name}"'
+        char_embed = await channel.send(embed=char_embed_info)
+        # Change character
         await change_character(channel, char_name)
         greeting = client.settings['llmcontext']['greeting']
         if greeting:
@@ -1573,16 +1667,16 @@ async def change_char_task(user, channel, source, params):
             greeting = greeting.replace('{{char}}', char_name)
         else:
             greeting = f'**{char_name}** has entered the chat"'
-        await embed.delete()
-        info_embed.title = f"{user} Changed character:"
-        info_embed.description = f'**{char_name}**'
-        await channel.send(embed=info_embed)
+        await char_embed.delete()
+        char_embed_info.title = f"{user} changed character:"
+        char_embed_info.description = f'**{char_name}**'
+        await channel.send(embed=char_embed_info)
         await channel.send(greeting)
     except Exception as e:
         logging.error(f"An error occurred while changing character for /character: {e}")
-        info_embed.title = "An error occurred while changing character"
-        info_embed.description = e
-        await embed.edit(embed=info_embed)
+        char_embed_info.title = "An error occurred while changing character"
+        char_embed_info.description = e
+        await char_embed.edit(embed=char_embed_info)
 
 #################################################################
 ######################## MAIN TASK QUEUE ########################
@@ -2444,7 +2538,7 @@ async def reset(i):
         shared.stop_everything = True
         await ireply(i, 'character reset') # send a response msg to the user
         # offload to ai_gen queue
-        queue_item = {'user': i.author, 'user_id': i.author.mention, 'channel': i.channel, 'source': 'reset', 'params': {'char_name': client.user.display_name}}
+        queue_item = {'user': i.author, 'user_id': i.author.mention, 'channel': i.channel, 'source': 'reset', 'params': {'character': {'char_name': client.user.display_name, 'verb': 'Resetting', 'mode': 'reset'}}}
         await task_queue.put(queue_item)
     except Exception as e:
         logging.error(f"Error with /reset: {e}")
@@ -2596,7 +2690,7 @@ async def process_character(i, selected_character_value):
         char_name = Path(selected_character_value).stem
         await ireply(i, 'character change') # send a response msg to the user
         # offload to ai_gen queue
-        queue_item = {'user': i.author, 'channel': i.channel, 'source': 'character', 'params': {'char_name': char_name}}
+        queue_item = {'user': i.author, 'channel': i.channel, 'source': 'character', 'params': {'character': {'char_name': char_name, 'verb': 'Changing', 'mode': 'change'}}}
         await task_queue.put(queue_item)
     except Exception as e:
         logging.error(f"Error processing selected character from /character command: {e}")
@@ -3009,7 +3103,7 @@ async def process_llmmodel(i, selected_llmmodel):
     try:
         await ireply(i, 'LLM model change') # send a response msg to the user
         # offload to ai_gen queue
-        queue_item = {'user': i.author, 'user_id': i.author.mention, 'channel': i.channel, 'source': 'llmmodel', 'params': {'llmmodel': selected_llmmodel}}
+        queue_item = {'user': i.author, 'user_id': i.author.mention, 'channel': i.channel, 'source': 'llmmodel', 'params': {'llmmodel': {'llmmodel_name': selected_llmmodel, 'verb': 'Changing', 'mode': 'change'}}}
         await task_queue.put(queue_item)
     except Exception as e:
         logging.error(f"Error processing /llmmodel command: {e}")
@@ -3306,6 +3400,22 @@ if tts_client and tts_client in supported_tts_clients:
             voice_input = voice_input if voice_input is not None else ''
             lang = lang.value if lang is not None else ''
             await process_speak(i, input_text, selected_voice, lang, voice_input)
+
+#################################################################
+###################### HISTORY MANAGEMENT #######################
+#################################################################
+class History:
+    def __init__(self):
+        self.session_history = {'internal': [], 'visible': []}
+
+    def reset_session_history(self):
+        self.session_history = {'internal': [], 'visible': []}
+
+    def manage_history(self, prompt, reply, save_history):
+        # Retain chat history
+        if save_history:
+            self.session_history['internal'].append((prompt, reply))
+            self.session_history['visible'].append((prompt, reply))
 
 #################################################################
 ####################### DEFAULT SETTINGS ########################

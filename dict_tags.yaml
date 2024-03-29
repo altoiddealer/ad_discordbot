@@ -19,9 +19,10 @@ global_tag_keys:
 
 # 'base_tags' are always in effect. Base tags have lower priority than tags defined anywhere else.
 base_tags:
-    # Use '{time}' written anywhere in your prompts which will be replaced with the current time. The tags 'offset' and 'time_format' will apply to the result.
-  - time_offset: 0.0                  # 0 = today's date (system time). -0.5 shifts the current date to be 12 hours ago. (UOM = days).
-    time_format: '%Y-%m-%d %H:%M:%S'  # Examples: '%Y-%m-%d' (YYYY-MM-DD), '%H:%M:%S' (HH:MM:SS), '%A, %B %d, %Y' (DayName, MonthName DD, YYYY)
+    # Use {time} or {date} written anywhere in your prompts, which will be replaced with the current date/time. The tags 'offset' and '(date/time)_format' will apply to the result.
+  - time_offset: 0.0        # 0 = today's date (system time). -0.5 shifts the current date to be 12 hours ago. (UOM = days).
+    time_format: '%H:%M:%S' # Examples: '%H:%M:%S' (HH:MM:SS), '%I:%M:%S %p' (12HR:MM:SS AM/PM)
+    date_format: '%Y-%m-%d' # Examples: '%Y-%m-%d' (YYYY-MM-DD), '%A, %B %d, %Y' (DayName, MonthName DD, YYYY)
 
 # Stable Diffusion payload and textgen-webui params can be randomly modified within specified ranges, or a list of strings (ex: sampler names), or from a boolean value. Must be formatted as a dictionary.
 # These examples are commented out by default - you should uncomment and experiment :D
@@ -44,12 +45,12 @@ base_tags:
   - trigger: 'take a photo,take {a|another} picture'
     search_mode: user
     image_response: true
-    instruct: '''[SYSTEM] You have been tasked with generating an image: "{}". Describe the image in vivid detail as if you were describing it to a blind person. The description in your response will be sent to an image generation API.'''
+    format_prompt: '''[SYSTEM] You have been tasked with creating a text-to-image prompt. Describe the scene in concise and vivid detail as if you were describing it to a blind person: "{prompt}"'''
 
   - trigger: 'selfie,self portrait'
     search_mode: user
     image_response: true
-    instruct: '''[SYSTEM] You have been tasked with taking a selfie: "{}". Include your appearance, your current state of clothing, your surroundings and what you are doing right now.'''
+    format_prompt: '''[SYSTEM] You have been tasked with taking a selfie. Include your appearance, your surroundings, and what you are doing right now: "{prompt}"'''
 
   - trigger: 'calculate,define'
     on_prefix_only: true
@@ -130,12 +131,14 @@ tag_presets:
 #   change_llmmodel: 'string'         For (change/swap)_llmmodel: 'change' will trigger a persistent change. 'swap' will only change the LLM model for the current interaction.
 #   swap_llmmodel: 'string'           Name of an LLM model (ei: 'Mistral-7B-OpenOrca-GPTQ'). Value 'None' will unload the LLM model!
 #   time_offset: 0.0                  0 = today's date (system time). -0.5 shifts the current date to be 12 hours ago. (UOM = days). Use with '{time}' anywhere in your prompts
-#   time_format: '%Y-%m-%d %H:%M:%S'  Examples: '%Y-%m-%d' (YYYY-MM-DD), '%H:%M:%S' (HH:MM:SS), '%A, %B %d, %Y' (DayName, MonthName DD, YYYY)
-#   instruct: 'string with a {}'      Useful for adding text before and/or after your prompt to the LLM.
+#   time_format: '%H:%M:%S'           Examples: '%H:%M:%S' (HH:MM:SS), '%I:%M:%S %p' (12HR:MM:SS AM/PM)
+#   date_format: '%Y-%m-%d'           Examples: '%Y-%m-%d' (YYYY-MM-DD), '%A, %B %d, %Y' (DayName, MonthName DD, YYYY)
+#   format_prompt: 'string'           Useful for adding text before and/or after your prompt to the LLM. **If you do not include {prompt}, your prompt will be replaced entirely with the value of 'format_prompt'.** Can include any variables, see '/tips_and_info/Message Variables.txt'
 #   insert_text: ''                   Text you may want to insert relative to the matched search text.
 #   insert_text_method: replace       Relevant in tags with key 'pinsert_text'. 'after' = insert value after matched text / 'before' = before text / 'replace' = replace text
 #   text_joining: ' '                 Relevant to all insertion methods except "replace"
-#   swap_character: 'string'          Filename of character in /characters (do not include extension). That character's name, context, and state parameters will be used in LLM payload.
+#   change_character: 'string'        Filename of character in /characters (do not include extension). That character's name, context, and state parameters will be used in LLM payload.
+#   swap_character: 'string'          For (change/swap)_character: 'change' will trigger a persistent change. 'swap' will only change the character for the current interaction.
 #   load_history: 0                   0 = default (all history included) / -1 = prompt excludes chat history / > 1 = llm only sees this many recent exchanges.
 #   save_history: (true/false)        Whether to save this interaction to history or not.
 #   state: {dictionary}               Update values for textgen-webui state parameters. Must be formatted as a dictionary.

@@ -1,0 +1,8 @@
+text-generation-webui has a feature to "Save Model Settings" when you are in the Models tab.
+
+This will save the model-specific settings to '.../text-generation-webui/models/config-user.yaml'
+
+
+It is highly recommended to do this for all models you will use with this bot.
+
+Any settings in config-user.yaml will be respected when launching the bot, without having to explicitly use CMD arguments.  They will also be used when using /llmmodel to change models, or if activating 'change_llmmodel' or 'swap_llmmodel' via the Tags feature.
