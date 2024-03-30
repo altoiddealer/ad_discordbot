@@ -530,8 +530,7 @@ async def load_chat():
         if source != client.user.display_name:
             sources = [
                 client.user.display_name, # Try current bot name
-                client.settings['llmcontext']['name'], # Try last known name
-                config.discord.get('char_name', '') # Try default name in config.py
+                client.settings['llmcontext']['name'] # Try last known name
             ]
             for source in sources:
                 logging.info(f'Trying to load character "{source}"...')
@@ -2561,22 +2560,6 @@ async def continue_llm_gen(i: discord.Interaction, message: discord.Message):
     queue_item = {'user': i.user.display_name, 'channel': i.channel, 'source': 'cont', 'text': text, 'message': message.id}
     await task_queue.put(queue_item)
 
-# Update bot's discord username / avatar
-async def update_client_profile(change_username, change_avatar, char_name):
-    try:
-        if change_username and client.user.display_name != char_name:
-            await client.user.edit(username=char_name)
-        if change_avatar:
-            folder = 'characters'
-            picture_path = os.path.join(folder, f'{char_name}.png')
-            if os.path.exists(picture_path):
-                with open(picture_path, 'rb') as f:
-                    picture = f.read()
-                await client.user.edit(avatar=picture)
-        update_last_change() # Store the current datetime in bot.db
-    except Exception as e:
-        logging.error(f"Error while changing character username or avatar: {e}")
-
 async def load_character_data(char_name):
     char_data = None
     for ext in ['.yaml', '.yml', '.json']:
@@ -2645,31 +2628,62 @@ def update_last_change():
     except Exception as e:
         logging.error(f"An error occurred while logging time of profile update to bot.db: {e}")
 
-async def check_last_change(channel, char_name):
+# Task to manage discord profile updates
+delayed_profile_update_task = None
+
+async def delayed_profile_update(username, avatar, remaining_cooldown):
     try:
-        change_username = config.discord.get('change_username_with_character', '')
-        change_avatar = config.discord.get('change_avatar_with_character', '')
-        if channel and client.user.display_name != char_name:
-            # Check for cooldown before allowing profile change
-            if change_username or change_avatar:
-                last_change = client.database.last_change
-                if last_change and datetime.now() < last_change + timedelta(minutes=10):
-                    remaining_cooldown = last_change + timedelta(minutes=10) - datetime.now()
-                    seconds = int(remaining_cooldown.total_seconds())
-                    await channel.send(f'Please wait {seconds} before changing character again')
-        return change_username, change_avatar
+        await asyncio.sleep(remaining_cooldown)
+        if username:
+            await client.user.edit(username=username)
+        if avatar:
+            await client.user.edit(avatar=avatar)
+        logging.info(f"Updated discord client profile (username/avatar). Profile can be updated again in 10 minutes.")
+        update_last_change()  # Store the current datetime in bot.db
     except Exception as e:
-        logging.error(f"An error occurred while checking time of last discord profile update: {e}")
+        logging.error(f"Error while changing character username or avatar: {e}")
+
+async def update_client_profile(channel, char_name):
+    try:
+        global delayed_profile_update_task
+        # Cancel delayed profile update task if one is already pending
+        if delayed_profile_update_task and not delayed_profile_update_task.done():
+            delayed_profile_update_task.cancel()
+        # Do not update profile if name is same and no update task is scheduled
+        elif (client.user.display_name == char_name):
+            return
+        username = char_name if change_username else None
+        avatar = None
+        if change_avatar:
+            folder = 'characters'
+            picture_path = os.path.join(folder, f'{char_name}.png')
+            if os.path.exists(picture_path):
+                with open(picture_path, 'rb') as f:
+                    avatar = f.read()
+        # Check for cooldown before allowing profile change
+        last_change = client.database.last_change
+        last_change = datetime.strptime(last_change, '%Y-%m-%d %H:%M:%S')
+        last_cooldown = last_change + timedelta(minutes=10)
+        if datetime.now() >= last_cooldown:
+            # Apply changes immediately if outside 10 minute cooldown
+            delayed_profile_update_task = asyncio.create_task(delayed_profile_update(username, avatar, 0))
+        else:
+            remaining_cooldown = last_cooldown - datetime.now()
+            seconds = int(remaining_cooldown.total_seconds())
+            warning = await channel.send(f'**Due to Discord limitations, character name/avatar will update in {seconds} seconds.**')
+            asyncio.create_task(delete_message_after(warning, 10))
+            logging.info(f"Due to Discord limitations, character name/avatar will update in {remaining_cooldown} seconds.")
+            delayed_profile_update_task = asyncio.create_task(delayed_profile_update(username, avatar, seconds))
+    except Exception as e:
+        logging.error(f"An error occurred while updating Discord profile: {e}")
 
 # Apply character changes
 async def change_character(channel, char_name):
     try:
-        # Check last time username / avatar were changed
-        change_username, change_avatar = await check_last_change(channel, char_name)
         # Load the character
         char_llmcontext, char_behavior, char_llmstate = await character_loader(char_name)
         # Update discord username / avatar
-        await update_client_profile(change_username, change_avatar, char_name)
+        await update_client_profile(channel, char_name)
         # Save the updated active_settings to activesettings.yaml
         active_settings = load_file('ad_discordbot/activesettings.yaml')
         active_settings['llmcontext'] = char_llmcontext
@@ -3616,19 +3630,26 @@ class Database:
         self.main_channels = self.initialize_main_channels()
 
     def initialize_last_change(self):
-        conn = sqlite3.connect('bot.db')
-        c = conn.cursor()
-        c.execute('''SELECT name FROM sqlite_master WHERE type='table' AND name='last_change' ''')
-        is_last_change_table_exists = c.fetchone()
-        if not is_last_change_table_exists:
+        try:
+            conn = sqlite3.connect('bot.db')
+            c = conn.cursor()
             c.execute('''CREATE TABLE IF NOT EXISTS last_change (timestamp TEXT)''')
-            conn.commit()  # Commit the changes to persist them
+            c.execute('''SELECT timestamp FROM last_change''')
+            timestamp = c.fetchone()
+            if timestamp is None or timestamp[0] is None:
+                now = datetime.now()
+                formatted_now = now.strftime('%Y-%m-%d %H:%M:%S')
+                if timestamp is None:
+                    c.execute('''INSERT INTO last_change (timestamp) VALUES (?)''', (formatted_now,))
+                else:
+                    c.execute('''UPDATE last_change SET timestamp = ?''', (formatted_now,))
+                conn.commit()
+                conn.close()
+                return formatted_now
             conn.close()
-            return None
-        c.execute('''SELECT timestamp FROM last_change''')
-        timestamp = c.fetchone()
-        conn.close()
-        return timestamp[0] if timestamp else None
+            return timestamp[0] if timestamp else None
+        except Exception as e:
+            logging.error(f"Error initializing last_change: {e}")
 
     def initialize_main_channels(self):
         conn = sqlite3.connect('bot.db')
