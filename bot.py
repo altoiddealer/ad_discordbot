@@ -1639,6 +1639,7 @@ async def change_llmmodel_task(user, channel, params):
                 change_embed_info.description = f'**{llmmodel_name}**'
             await change_embed.delete()
             await channel.send(embed=change_embed_info)
+            logging.info(f"LLM model changed to: {llmmodel_name}")
     except Exception as e:
         logging.error(f"An error occurred while changing LLM Model from '/llmmodel': {e}")
         change_embed_info.title = "An error occurred while changing LLM Model from '/llmmodel'"
@@ -1671,6 +1672,7 @@ async def change_char_task(user, channel, source, params):
         char_embed_info.description = f'**{char_name}**'
         await channel.send(embed=char_embed_info)
         await channel.send(greeting)
+        logging.info(f"Character changed to: {char_name}")
     except Exception as e:
         logging.error(f"An error occurred while changing character for /character: {e}")
         char_embed_info.title = "An error occurred while changing character"
@@ -1729,7 +1731,7 @@ def unpack_queue_item(queue_item):
     text = queue_item.get('text', None)
     message = queue_item.get('message', None)
     params = queue_item.get('params', {})
-    info = params.get('llmmodel', '') or params.get('imgmodel', {}).get('imgmodel_name', '') or params.get('char_name', '')
+    info = params.get('llmmodel', {}).get('llmmodel_name', '') or params.get('imgmodel', {}).get('imgmodel_name', '') or params.get('character', {}).get('char_name', '')
     if source == 'on_message':
         logging.info(f'reply requested: {user} said: "{text}"')
     if source == 'character' or source == 'reset':
