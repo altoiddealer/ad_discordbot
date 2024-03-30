@@ -2654,28 +2654,26 @@ async def update_client_profile(channel, char_name):
         # Do not update profile if name is same and no update task is scheduled
         elif (client.user.display_name == char_name):
             return
-        username = char_name if change_username else None
         avatar = None
-        if change_avatar:
-            folder = 'characters'
-            picture_path = os.path.join(folder, f'{char_name}.png')
-            if os.path.exists(picture_path):
-                with open(picture_path, 'rb') as f:
-                    avatar = f.read()
+        folder = 'characters'
+        picture_path = os.path.join(folder, f'{char_name}.png')
+        if os.path.exists(picture_path):
+            with open(picture_path, 'rb') as f:
+                avatar = f.read()
         # Check for cooldown before allowing profile change
         last_change = client.database.last_change
         last_change = datetime.strptime(last_change, '%Y-%m-%d %H:%M:%S')
         last_cooldown = last_change + timedelta(minutes=10)
         if datetime.now() >= last_cooldown:
             # Apply changes immediately if outside 10 minute cooldown
-            delayed_profile_update_task = asyncio.create_task(delayed_profile_update(username, avatar, 0))
+            delayed_profile_update_task = asyncio.create_task(delayed_profile_update(char_name, avatar, 0))
         else:
             remaining_cooldown = last_cooldown - datetime.now()
             seconds = int(remaining_cooldown.total_seconds())
             warning = await channel.send(f'**Due to Discord limitations, character name/avatar will update in {seconds} seconds.**')
             asyncio.create_task(delete_message_after(warning, 10))
             logging.info(f"Due to Discord limitations, character name/avatar will update in {remaining_cooldown} seconds.")
-            delayed_profile_update_task = asyncio.create_task(delayed_profile_update(username, avatar, seconds))
+            delayed_profile_update_task = asyncio.create_task(delayed_profile_update(char_name, avatar, seconds))
     except Exception as e:
         logging.error(f"An error occurred while updating Discord profile: {e}")
 
