@@ -1297,8 +1297,6 @@ async def on_message(i):
         # if @ mentioning bot, remove the @ mention from user prompt
         if text.startswith(f"@{client.user.display_name} "):
             text = text.replace(f"@{client.user.display_name} ", "", 1)
-        elif text.startswith(f"@{config.discord['char_name']} "): # may be a default name defined in config.py
-            text = text.replace(f"@{config.discord['char_name']} ","", 1)
         queue_item = {'user': i.author, 'user_id': i.author.mention, 'channel': i.channel, 'source': 'on_message', 'text': text}    
         await task_queue.put(queue_item)
     except Exception as e:
