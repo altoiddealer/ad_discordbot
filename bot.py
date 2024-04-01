@@ -398,7 +398,7 @@ def update_dict_matched_keys(d, u):
 def save_yaml_file(file_path, data):
     try:
         with open(file_path, 'w') as file:
-            yaml.dump(data, file, encoding='utf-8', default_flow_style=False, width=float("inf"))
+            yaml.dump(data, file, encoding='utf-8', default_flow_style=False, width=float("inf"), sort_keys=False)
     except Exception as e:
         logging.error(f"An error occurred while saving {file_path}: {str(e)}")
 
@@ -639,6 +639,7 @@ async def update_tags(tags):
         return updated_tags
     except Exception as e:
         logging.error(f"Error loading tag presets: {e}")
+        return tags
 
 async def update_client_base_tags():
     try:
@@ -914,6 +915,7 @@ def get_time(offset=0.0, time_format=None, date_format=None):
         return new_time, new_date
     except Exception as e:
         logging.error(f"Error when getting date/time: {e}")
+        return '', ''
 
 async def swap_llm_character(char_name, user_name, llm_payload):
     try:
@@ -932,15 +934,16 @@ async def swap_llm_character(char_name, user_name, llm_payload):
         return llm_payload
     except Exception as e:
         logging.error(f"An error occurred while loading the file for swap_character: {e}")
+        return llm_payload
 
 def format_prompt_with_recent_msgs(user, prompt):
-    formatted_prompt = copy.copy(prompt)
-    # Find all matches of {user_x} and {llm_x} in the prompt
-    pattern = r'\{(user|llm|history)_([0-9]+)\}'
-    matches = re.findall(pattern, prompt)
-    # Iterate through the matches
-    for match in matches:
-        try:
+    try:
+        formatted_prompt = copy.copy(prompt)
+        # Find all matches of {user_x} and {llm_x} in the prompt
+        pattern = r'\{(user|llm|history)_([0-9]+)\}'
+        matches = re.findall(pattern, prompt)
+        # Iterate through the matches
+        for match in matches:
             prefix, index = match
             index = int(index)
             if prefix in ['user', 'llm'] and 0 <= index <= 10:
@@ -955,9 +958,10 @@ def format_prompt_with_recent_msgs(user, prompt):
                 formatted_history = f'"{user}:" {user_message}\n"{client.user.display_name}:" {llm_message}\n'
                 matched_syntax = f"{prefix}_{index}"
                 formatted_prompt = formatted_prompt.replace(f"{{{matched_syntax}}}", formatted_history)
-        except Exception as e:
-            logging.error(f'An error occurred while formatting prompt with recent messages: {e}')
-    return formatted_prompt
+        return formatted_prompt
+    except Exception as e:
+        logging.error(f'An error occurred while formatting prompt with recent messages: {e}')
+        return prompt
 
 def process_tag_formatting(user, prompt, formatting):
     try:
@@ -978,6 +982,7 @@ def process_tag_formatting(user, prompt, formatting):
         return prompt
     except Exception as e:
         logging.error(f"Error formatting LLM prompt: {e}")
+        return prompt
 
 async def process_llm_payload_tags(user_name, channel, llm_payload, llm_prompt, mods):
     try:
@@ -1031,22 +1036,27 @@ async def process_llm_payload_tags(user_name, channel, llm_payload, llm_prompt, 
             # LLM model handling
             llmmodel_params = change_llmmodel or swap_llmmodel or {} # 'llmmodel_change' will trump 'llmmodel_swap'
             if llmmodel_params:
-                mode = 'change' if llmmodel_params == change_llmmodel else 'swap'
-                verb = 'Changing' if mode == 'change' else 'Swapping'
-                # Error handling
-                if not any(llmmodel_params == model for model in all_llmmodels):
-                    logging.error(f'LLM model not found: {llmmodel_params}')
+                if llmmodel_params == shared.model_name:
+                    logging.info(f'[TAGS] LLM model was triggered to change, but it is the same as current ("{shared.model_name}").')
+                    llmmodel_params = {} # return empty dict
                 else:
-                    print_content += f" | {verb} LLM Model: {llmmodel_params}"
-                    llmmodel_params = {'llmmodel': {'llmmodel_name': llmmodel_params, 'mode': mode, 'verb': verb}}
+                    mode = 'change' if llmmodel_params == change_llmmodel else 'swap'
+                    verb = 'Changing' if mode == 'change' else 'Swapping'
+                    # Error handling
+                    if not any(llmmodel_params == model for model in all_llmmodels):
+                        logging.error(f'LLM model not found: {llmmodel_params}')
+                    else:
+                        print_content += f" | {verb} LLM Model: {llmmodel_params}"
+                        llmmodel_params = {'llmmodel': {'llmmodel_name': llmmodel_params, 'mode': mode, 'verb': verb}}
             # Print results
             print_content += ")"
             logging.info(print_content)
         return llm_payload, llm_prompt, llmmodel_params
     except Exception as e:
         logging.error(f"Error processing LLM tags: {e}")
+        return llm_payload, llm_prompt, {}
 
-def collect_tag_values(tags):
+def collect_llm_tag_values(tags):
     llm_payload_mods = {
         'save_history': None,
         'load_history': None,
@@ -1092,7 +1102,6 @@ def collect_tag_values(tags):
         if 'state' in tag:
             state = tag.pop('state')
             llm_payload_mods['state'].update(state) # Allow multiple to accumulate.
-
     return llm_payload_mods, formatting
 
 def process_tag_insertions(prompt, tags):
@@ -1132,6 +1141,7 @@ def process_tag_insertions(prompt, tags):
         return prompt, tags
     except Exception as e:
         logging.error(f"Error processing LLM prompt tags: {e}")
+        return prompt, tags
 
 def process_tag_trumps(matches):
     try:
@@ -1210,6 +1220,7 @@ def match_tags(search_text, tags):
         return updated_tags
     except Exception as e:
         logging.error(f"Error matching tags: {e}")
+        return tags
 
 def sort_tags(all_tags):
     try:
@@ -1229,6 +1240,7 @@ def sort_tags(all_tags):
         return sorted_tags
     except Exception as e:
         logging.error(f"Error sorting tags: {e}")
+        return all_tags
 
 async def expand_triggers(all_tags):
     try:
@@ -1257,17 +1269,66 @@ async def expand_triggers(all_tags):
         return all_tags
     except Exception as e:
         logging.error(f"Error expanding tags: {e}")
+        return all_tags
+        
+# Function to convert string values to bool/int/float
+def extract_value(value_str):
+    try:
+        value_str = value_str.strip()
+        if value_str.lower() == 'true':
+            return True
+        elif value_str.lower() == 'false':
+            return False
+        elif '.' in value_str:
+            try:
+                return float(value_str)
+            except ValueError:
+                return value_str
+        else:
+            try:
+                return int(value_str)
+            except ValueError:
+                return value_str
+    except Exception as e:
+        logging.error(f"Error converting string to bool/int/float: {e}")
 
-def get_tags():
+# Matches [[this:syntax]] and creates 'tags' from matches
+def get_tags_from_text(text):
+    try:
+        tags_from_text = []
+        pattern = r'\[\[(.*?)\]\]'
+        matches = re.findall(pattern, text)
+        detagged_text = re.sub(pattern, '', text)
+        for match in matches:
+            tag_dict = {}
+            tag_pairs = match.split('|')
+            for pair in tag_pairs:
+                key_value = pair.split(':')
+                key = key_value[0].strip()
+                value_str = ':'.join(key_value[1:]).strip()
+                if value_str.startswith('{') and value_str.endswith('}'):
+                    value = eval(value_str)
+                else:
+                    value = extract_value(value_str)
+                tag_dict[key] = value
+            tags_from_text.append(tag_dict)
+        return detagged_text, tags_from_text
+    except Exception as e:
+        logging.error(f"Error getting tags from text: {e}")
+        return text, []
+
+def get_tags(text):
     try:
         base_tags = client.settings.get('tags', []) # base tags
         imgmodel_tags = client.settings['imgmodel'].get('tags', []) # imgmodel specific tags
         char_tags = client.settings['llmcontext'].get('tags', []) # character specific tags
-        all_tags = char_tags + base_tags + imgmodel_tags # merge tags to one dictionary
+        detagged_text, tags_from_text = get_tags_from_text(text)
+        all_tags = char_tags + base_tags + imgmodel_tags + tags_from_text # merge tags to one dictionary
         sorted_tags = sort_tags(all_tags) # sort tags into phases (user / llm / userllm)
-        return sorted_tags
+        return detagged_text, sorted_tags
     except Exception as e:
         logging.error(f"Error getting tags: {e}")
+        return text, []      
 
 async def initialize_llm_payload(user, text):
     llm_payload = copy.deepcopy(client.settings['llmstate'])
@@ -1309,7 +1370,7 @@ async def on_message_gen(user, channel, source, text):
     try:
         params = {}
         # collects all tags, sorted into sub-lists by phase (user / llm / userllm)
-        tags = get_tags()
+        text, tags = get_tags(text)
         # match tags labeled for user / userllm.
         tags = match_tags(text, tags)
         # check if triggered to not respond with text
@@ -1321,8 +1382,7 @@ async def on_message_gen(user, channel, source, text):
                     await channel.send(f'Bot was triggered by Tags to not respond with text.\n**Processing image generation using your input as the prompt ...**') # msg for if LLM model is unloaded
                 llm_prompt = copy.copy(text)
                 await img_gen(user.name, channel, source, llm_prompt, params, tags)
-                return
-            else: return
+            return
         # build llm_payload with defaults
         llm_payload = await initialize_llm_payload(user.name, text)
         # make working copy of user's request (without @ mention)
@@ -1330,7 +1390,7 @@ async def on_message_gen(user, channel, source, text):
         # apply tags to prompt
         llm_prompt, tags = process_tag_insertions(llm_prompt, tags)
         # collect matched tag values
-        llm_payload_mods, formatting = collect_tag_values(tags)
+        llm_payload_mods, formatting = collect_llm_tag_values(tags)
         # apply tags relevant to LLM payload
         llm_payload, llm_prompt, params = await process_llm_payload_tags(user.name, channel, llm_payload, llm_prompt, llm_payload_mods)
         # apply formatting tags to LLM prompt
@@ -1347,10 +1407,8 @@ async def hybrid_llm_img_gen(user, channel, source, text, tags, llm_payload, par
         img_gen_embed = None
         img_note = ''
         # Check params to see if an LLM model change/swap was triggered by Tags
-        llmmodel_params = params.get('llmmodel', '')
-        mode = 'change'  # default to 'change' unless a tag was triggered with 'swap'
-        if isinstance(llmmodel_params, dict):
-            mode = llmmodel_params.get('mode', 'change')
+        llmmodel_params = params.get('llmmodel', {})
+        mode = llmmodel_params.get('mode', 'change') # default to 'change' unless a tag was triggered with 'swap'
         if llmmodel_params:
             orig_llmmodel = copy.deepcopy(shared.model_name)                    # copy current LLM model name
             change_embed = await change_llmmodel_task(user, channel, params)    # Change LLM model
@@ -1448,40 +1506,44 @@ async def extra_stopping_strings(llm_payload):
         return llm_payload
     except Exception as e:
         logging.error(f'An error occurred while updating stopping strings: {e}')
-
+        return llm_payload
+    
 # Send LLM Payload - get response
 async def llm_gen(llm_payload):
-    if shared.model_name == 'None':
-        return None, None
-    llm_payload = await extra_stopping_strings(llm_payload)
-    loop = asyncio.get_event_loop()
-    
-    # Subprocess prevents losing discord heartbeat
-    def process_responses():
-        last_resp = ''
-        tts_resp = ''
-        for resp in chatbot_wrapper(text=llm_payload['text'], state=llm_payload['state'], regenerate=llm_payload['regenerate'], _continue=llm_payload['_continue'], loading_message=True, for_ui=False):
-            i_resp = resp['internal']
-            if len(i_resp) > 0:
-                resp_clean = i_resp[len(i_resp) - 1][1]
-                last_resp = resp_clean
-            # look for tts response
-            vis_resp = resp['visible']
-            if len(vis_resp) > 0:
-                last_vis_resp = vis_resp[-1][-1]
-                if 'audio src=' in last_vis_resp:
-                    audio_format_match = re.search(r'audio src="file/(.*?\.(wav|mp3))"', last_vis_resp)
-                    if audio_format_match:
-                        tts_resp = audio_format_match.group(1)
-        return last_resp, tts_resp  # bot's reply
+    try:
+        if shared.model_name == 'None':
+            return None, None
+        llm_payload = await extra_stopping_strings(llm_payload)
+        loop = asyncio.get_event_loop()
 
-    # Offload the synchronous task to a separate thread using run_in_executor
-    last_resp, tts_resp = await loop.run_in_executor(None, process_responses)
+        # Subprocess prevents losing discord heartbeat
+        def process_responses():
+            last_resp = ''
+            tts_resp = ''
+            for resp in chatbot_wrapper(text=llm_payload['text'], state=llm_payload['state'], regenerate=llm_payload['regenerate'], _continue=llm_payload['_continue'], loading_message=True, for_ui=False):
+                i_resp = resp['internal']
+                if len(i_resp) > 0:
+                    resp_clean = i_resp[len(i_resp) - 1][1]
+                    last_resp = resp_clean
+                # look for tts response
+                vis_resp = resp['visible']
+                if len(vis_resp) > 0:
+                    last_vis_resp = vis_resp[-1][-1]
+                    if 'audio src=' in last_vis_resp:
+                        audio_format_match = re.search(r'audio src="file/(.*?\.(wav|mp3))"', last_vis_resp)
+                        if audio_format_match:
+                            tts_resp = audio_format_match.group(1)
+            return last_resp, tts_resp  # bot's reply
 
-    save_history = llm_payload.get('save_history', True)
-    manage_history(llm_payload['text'], last_resp, save_history)
+        # Offload the synchronous task to a separate thread using run_in_executor
+        last_resp, tts_resp = await loop.run_in_executor(None, process_responses)
 
-    return last_resp, tts_resp
+        save_history = llm_payload.get('save_history', True)
+        manage_history(llm_payload['text'], last_resp, save_history)
+
+        return last_resp, tts_resp
+    except Exception as e:
+        logging.error(f'An error occurred in llm_gen(): {e}')
 
 async def cont_regen_gen(user, text, channel, source, message):
     try:
@@ -1531,7 +1593,6 @@ async def speak_gen(user, channel, text, params):
         llm_payload = await initialize_llm_payload(user.name, text)
         llm_payload['_continue'] = True
         llm_payload['state']['max_new_tokens'] = 1
-        llm_payload['state']['min_length'] = 0
         llm_payload['state']['history'] = {'internal': [[text, text]], 'visible': [[text, text]]}
         llm_payload['save_history'] = False
         tts_args = params.get('tts_args', {})
@@ -1611,7 +1672,7 @@ async def change_imgmodel_task(user, channel, params):
 # Process selected LLM model
 async def change_llmmodel_task(user, channel, params):
     try:
-        llmmodel_params = params.get('llmmodel', '')
+        llmmodel_params = params.get('llmmodel', {})
         llmmodel_name = llmmodel_params.get('llmmodel_name')
         mode = llmmodel_params.get('mode', 'change')
         verb = llmmodel_params.get('verb', 'Changing')
@@ -1694,6 +1755,7 @@ def user_asks_for_text(tags={}):
         return True
     except Exception as e:
         logging.error(f"An error occurred while checking if bot should reply with text: {e}")
+        return True
 
 def user_asks_for_image(tags={}):
     try:
@@ -1711,7 +1773,9 @@ def user_asks_for_image(tags={}):
         return False
     except Exception as e:
         logging.error(f"An error occurred while checking if bot should reply with image: {e}")
+        return False
 
+# For @ mentioning users who were not last replied to
 previous_user_id = ''
 
 def update_mention(user_id, last_resp):
@@ -1828,7 +1892,7 @@ async def layerdiffuse_hack(temp_dir, img_payload, images, pnginfo):
         images[0] = img0 # Update images list
         return images
     except Exception as e:
-        logging.error(f'Error processing layerdiffuse images: {e}')    
+        logging.error(f'Error processing layerdiffuse images: {e}')
 
 async def sd_txt2img(temp_dir, img_payload, img_gen_embed):
     try:
@@ -1952,80 +2016,87 @@ async def process_image_gen(img_payload, img_gen_embed, channel):
         logging.error(f"An error occurred when processing image generation: {e}")
 
 def clean_img_payload(img_payload):
-    # Remove duplicate negative prompts
-    negative_prompt_list = img_payload.get('negative_prompt', '').split(', ')
-    unique_values_set = set()
-    unique_values_list = []
-    for value in negative_prompt_list:
-        if value not in unique_values_set:
-            unique_values_set.add(value)
-            unique_values_list.append(value)
-    processed_negative_prompt = ', '.join(unique_values_list)
-    img_payload['negative_prompt'] = processed_negative_prompt
-    # Delete unwanted extension keys
-    if img_payload.get('alwayson_scripts', {}):
-        if not config.sd['extensions'].get('controlnet_enabled', False):
-            del img_payload['alwayson_scripts']['controlnet'] # Delete all 'controlnet' keys if disabled by config
-        if not config.sd['extensions'].get('reactor_enabled', False):
-            del img_payload['alwayson_scripts']['reactor'] # Delete all 'reactor' keys if disabled by config
-        if not config.sd['extensions'].get('layerdiffuse_enabled', False):
-            del img_payload['alwayson_scripts']['layerdiffuse'] # Delete all 'layerdiffuse' keys if disabled by config
-        else:
-            if SD_CLIENT != 'SD WebUI Forge':
-                print(f'layerdiffuse is not known to be compatible with "{SD_CLIENT}". Not applying layerdiffuse...')
-                del img_payload['alwayson_scripts']['layerdiffuse'] # Delete all 'layerdiffuse' keys if disabled by config
-
-    # Workaround for denoising strength bug
-    if not img_payload.get('enable_hr', False):
-        img_payload['denoising_strength'] = None
-    # Delete all empty keys
-    keys_to_delete = []
-    for key, value in img_payload.items():
-        if value == "":
-            keys_to_delete.append(key)
-    for key in keys_to_delete:
-        del img_payload[key]
-    return img_payload
-
-def apply_loractl(matches):
-    if SD_CLIENT != 'A1111 SD WebUI':
-        print(f'loractl is not known to be compatible with "{SD_CLIENT}". Not applying loractl...')
-        return matches
     try:
-        scaling_settings = [v for k, v in config.sd.get('extensions', {}).get('lrctl', {}).items() if 'scaling' in k]
-        scaling_settings = scaling_settings if scaling_settings else ['']
-        # Flatten the matches dictionary values to get a list of all tags (including those within tuples)
-        matched_tags = [tag if isinstance(tag, dict) else tag[0] for tag in matches]
-        # Filter the matched tags to include only those with certain patterns in their text fields
-        lora_tags = [tag for tag in matched_tags if any(re.findall(r'<lora:[^:]+:[^>]+>', text) for text in (tag.get('positive_prompt', ''), tag.get('positive_prompt_prefix', ''), tag.get('positive_prompt_suffix', '')))]
-        if len(lora_tags) >= config.sd['extensions']['lrctl']['min_loras']:
-            for i, tag in enumerate(lora_tags):
-                # Determine the key with a non-empty value among the specified keys
-                used_key = next((key for key in ['positive_prompt', 'positive_prompt_prefix', 'positive_prompt_suffix'] if tag.get(key, '')), None)
-                if used_key:  # If a key with a non-empty value is found
-                    positive_prompt = tag[used_key]
-                    lora_matches = re.findall(r'<lora:[^:]+:[^>]+>', positive_prompt)
-                    if lora_matches:
-                        for lora_match in lora_matches:
-                            lora_weight_match = re.search(r'(?<=:)\d+(\.\d+)?', lora_match) # Extract lora weight
-                            if lora_weight_match:
-                                lora_weight = float(lora_weight_match.group())
-                                # Selecting the appropriate scaling based on the index
-                                scaling_key = f'lora_{i + 1}_scaling' if i+1 < len(scaling_settings) else 'additional_loras_scaling'
-                                scaling_values = config.sd.get('extensions', {}).get('lrctl', {}).get(scaling_key, '')
-                                if scaling_values:
-                                    scaling_factors = [round(float(factor.split('@')[0]) * lora_weight, 2) for factor in scaling_values.split(',')]
-                                    scaling_steps = [float(step.split('@')[1]) for step in scaling_values.split(',')]
-                                    # Construct/apply the calculated lora-weight string
-                                    new_lora_weight_str = f'{",".join(f"{factor}@{step}" for factor, step in zip(scaling_factors, scaling_steps))}'
-                                    updated_lora_match = lora_match.replace(str(lora_weight), new_lora_weight_str)
-                                    new_positive_prompt = positive_prompt.replace(lora_match, updated_lora_match)                                   
-                                    # Update the appropriate key in the tag dictionary
-                                    tag[used_key] = new_positive_prompt
-                                    logging.info(f'''[TAGS] loractl applied: "{lora_match}" > "{updated_lora_match}"''') 
-        return matches
+        # Remove duplicate negative prompts
+        negative_prompt_list = img_payload.get('negative_prompt', '').split(', ')
+        unique_values_set = set()
+        unique_values_list = []
+        for value in negative_prompt_list:
+            if value not in unique_values_set:
+                unique_values_set.add(value)
+                unique_values_list.append(value)
+        processed_negative_prompt = ', '.join(unique_values_list)
+        img_payload['negative_prompt'] = processed_negative_prompt
+        # Delete unwanted extension keys
+        if img_payload.get('alwayson_scripts', {}):
+            if not config.sd['extensions'].get('controlnet_enabled', False):
+                del img_payload['alwayson_scripts']['controlnet'] # Delete all 'controlnet' keys if disabled by config
+            if not config.sd['extensions'].get('reactor_enabled', False):
+                del img_payload['alwayson_scripts']['reactor'] # Delete all 'reactor' keys if disabled by config
+            else:
+                img_payload['alwayson_scripts']['reactor']['args'] = list(img_payload['alwayson_scripts']['reactor']['args'].values()) # convert dictionary to list
+            if not config.sd['extensions'].get('layerdiffuse_enabled', False):
+                del img_payload['alwayson_scripts']['layerdiffuse'] # Delete all 'layerdiffuse' keys if disabled by config
+            elif SD_CLIENT != 'SD WebUI Forge':
+                logging.warning(f'layerdiffuse is not known to be compatible with "{SD_CLIENT}". Not applying layerdiffuse...')
+                del img_payload['alwayson_scripts']['layerdiffuse'] # Delete all 'layerdiffuse' keys if disabled by config
+            else:
+                img_payload['alwayson_scripts']['layerdiffuse']['args'] = list(img_payload['alwayson_scripts']['layerdiffuse']['args'].values()) # convert dictionary to list
+        # Workaround for denoising strength bug
+        if not img_payload.get('enable_hr', False):
+            img_payload['denoising_strength'] = None
+        # Delete all empty keys
+        keys_to_delete = []
+        for key, value in img_payload.items():
+            if value == "":
+                keys_to_delete.append(key)
+        for key in keys_to_delete:
+            del img_payload[key]
+        return img_payload
+    except Exception as e:
+        logging.error(f"An error occurred when cleaning img_payload: {e}")
+        return img_payload
+
+def apply_loractl(tags):
+    try:
+        if SD_CLIENT != 'A1111 SD WebUI':
+            logging.warning(f'loractl is not known to be compatible with "{SD_CLIENT}". Not applying loractl...')
+        else:
+            scaling_settings = [v for k, v in config.sd.get('extensions', {}).get('lrctl', {}).items() if 'scaling' in k]
+            scaling_settings = scaling_settings if scaling_settings else ['']
+            # Flatten the matches dictionary values to get a list of all tags (including those within tuples)
+            matched_tags = [tag if isinstance(tag, dict) else tag[0] for tag in tag['matches']]
+            # Filter the matched tags to include only those with certain patterns in their text fields
+            lora_tags = [tag for tag in matched_tags if any(re.findall(r'<lora:[^:]+:[^>]+>', text) for text in (tag.get('positive_prompt', ''), tag.get('positive_prompt_prefix', ''), tag.get('positive_prompt_suffix', '')))]
+            if len(lora_tags) >= config.sd['extensions']['lrctl']['min_loras']:
+                for i, tag in enumerate(lora_tags):
+                    # Determine the key with a non-empty value among the specified keys
+                    used_key = next((key for key in ['positive_prompt', 'positive_prompt_prefix', 'positive_prompt_suffix'] if tag.get(key, '')), None)
+                    if used_key:  # If a key with a non-empty value is found
+                        positive_prompt = tag[used_key]
+                        lora_matches = re.findall(r'<lora:[^:]+:[^>]+>', positive_prompt)
+                        if lora_matches:
+                            for lora_match in lora_matches:
+                                lora_weight_match = re.search(r'(?<=:)\d+(\.\d+)?', lora_match) # Extract lora weight
+                                if lora_weight_match:
+                                    lora_weight = float(lora_weight_match.group())
+                                    # Selecting the appropriate scaling based on the index
+                                    scaling_key = f'lora_{i + 1}_scaling' if i+1 < len(scaling_settings) else 'additional_loras_scaling'
+                                    scaling_values = config.sd.get('extensions', {}).get('lrctl', {}).get(scaling_key, '')
+                                    if scaling_values:
+                                        scaling_factors = [round(float(factor.split('@')[0]) * lora_weight, 2) for factor in scaling_values.split(',')]
+                                        scaling_steps = [float(step.split('@')[1]) for step in scaling_values.split(',')]
+                                        # Construct/apply the calculated lora-weight string
+                                        new_lora_weight_str = f'{",".join(f"{factor}@{step}" for factor, step in zip(scaling_factors, scaling_steps))}'
+                                        updated_lora_match = lora_match.replace(str(lora_weight), new_lora_weight_str)
+                                        new_positive_prompt = positive_prompt.replace(lora_match, updated_lora_match)                                   
+                                        # Update the appropriate key in the tag dictionary
+                                        tag[used_key] = new_positive_prompt
+                                        logging.info(f'''[TAGS] loractl applied: "{lora_match}" > "{updated_lora_match}"''')
+        return tags
     except Exception as e:
         logging.error(f"Error processing lrctl: {e}")
+        return tags
 
 def apply_imgcmd_params(img_payload, params):
     try:
@@ -2034,12 +2105,13 @@ def apply_imgcmd_params(img_payload, params):
         controlnet = params.get('controlnet', None) if params else None
         if size: img_payload.update(size)
         if face_swap:
-            img_payload['alwayson_scripts']['reactor']['args'][0] = face_swap # image in base64 format
-            img_payload['alwayson_scripts']['reactor']['args'][1] = True # Enable
+            img_payload['alwayson_scripts']['reactor']['args']['image'] = face_swap # image in base64 format
+            img_payload['alwayson_scripts']['reactor']['args']['enabled'] = True # Enable
         if controlnet: img_payload['alwayson_scripts']['controlnet']['args'][0].update(controlnet)
         return img_payload
     except Exception as e:
         logging.error(f"Error initializing img payload: {e}")
+        return img_payload
 
 def process_img_prompt_tags(img_payload, tags):
     try:
@@ -2070,7 +2142,8 @@ def process_img_prompt_tags(img_payload, tags):
         return img_payload
     except Exception as e:
         logging.error(f"Error processing Img prompt tags: {e}")
-        
+        return img_payload
+
 def random_value_from_range(value_range):
     if isinstance(value_range, (list, tuple)) and len(value_range) == 2:
         start, end = value_range
@@ -2089,31 +2162,36 @@ def convert_lists_to_tuples(dictionary):
     return dictionary
 
 def process_param_variances(param_variances):
-    param_variances = convert_lists_to_tuples(param_variances) # Only converts lists containing ints and floats (not strings or bools) 
-    processed_params = copy.deepcopy(param_variances)
-    for key, value in param_variances.items():
-        # unpack dictionaries assuming they contain variances
-        if isinstance(value, dict):
-            processed_params[key] = process_param_variances(value)
-        elif isinstance(value, tuple):
-            processed_params[key] = random_value_from_range(value)
-        elif isinstance(value, bool):
-            processed_params[key] = random.choice([True, False])
-        elif isinstance(value, list):
-            if all(isinstance(item, str) for item in value):
-                processed_params[key] = random.choice(value)
-            elif all(isinstance(item, bool) for item in value):
-                processed_params[key] = random.choice(value)
+    try:
+        param_variances = convert_lists_to_tuples(param_variances) # Only converts lists containing ints and floats (not strings or bools) 
+        processed_params = copy.deepcopy(param_variances)
+        for key, value in param_variances.items():
+            # unpack dictionaries assuming they contain variances
+            if isinstance(value, dict):
+                processed_params[key] = process_param_variances(value)
+            elif isinstance(value, tuple):
+                processed_params[key] = random_value_from_range(value)
+            elif isinstance(value, bool):
+                processed_params[key] = random.choice([True, False])
+            elif isinstance(value, list):
+                if all(isinstance(item, str) for item in value):
+                    processed_params[key] = random.choice(value)
+                elif all(isinstance(item, bool) for item in value):
+                    processed_params[key] = random.choice(value)
+                else:
+                    logging.warning(f'Invalid params "{key}", "{value}" will not be applied.')
+                    processed_params.pop(key)  # Remove invalid key
             else:
                 logging.warning(f'Invalid params "{key}", "{value}" will not be applied.')
                 processed_params.pop(key)  # Remove invalid key
-        else:
-            logging.warning(f'Invalid params "{key}", "{value}" will not be applied.')
-            processed_params.pop(key)  # Remove invalid key
-    return processed_params
+        return processed_params
+    except Exception as e:
+        logging.error(f"Error processing param variances: {e}")
+        return {}
 
 # Process Reactor (face swap)
-def process_face(img_payload, face_value):
+def process_reactor_tag(face_value):
+    reactor_args = {}
     try:
         base_path = os.path.join("ad_discordbot", "swap_faces")
         full_path = os.path.join(base_path, face_value)
@@ -2122,15 +2200,15 @@ def process_face(img_payload, face_value):
         if os.path.isdir(full_path):
             cwd_path = os.getcwd()
             face_dir = os.path.join(cwd_path, full_path)
-            img_payload['alwayson_scripts']['reactor']['args'][0] = None
-            img_payload['alwayson_scripts']['reactor']['args'][22] = 2 # Randomly select image from path
-            img_payload['alwayson_scripts']['reactor']['args'][24] = face_dir # Path to face dir
+            reactor_args['image'] = None
+            reactor_args['source_type'] = 2 # Randomly select image from path
+            reactor_args['source_folder'] = face_dir # Path to face dir
             face_method = 'Random from folder'
         # If face_value is a face model file in ReActor
         elif ".safetensors" in face_value:
-            img_payload['alwayson_scripts']['reactor']['args'][0] = None
-            img_payload['alwayson_scripts']['reactor']['args'][22] = 1
-            img_payload['alwayson_scripts']['reactor']['args'][23] = face_value
+            reactor_args['image'] = None
+            reactor_args['source_type'] = 1
+            reactor_args['face_model'] = face_value
             face_method = 'Face model'
         # If face_value contains valid image extension
         else:
@@ -2139,88 +2217,231 @@ def process_face(img_payload, face_value):
                 face_file_path = os.path.join(base_path, face_value)
             # If face_value does not specify an extension, but is not a directory
             else:
+                found = False
                 for ext in (".txt", ".png", ".jpg"):
                     temp_path = os.path.join(base_path, face_value + ext)
                     if os.path.exists(temp_path):
                         face_file_path = temp_path
+                        found = True
                         break
-                else:
+                if not found:
                     raise FileNotFoundError(f"File '{face_value}' not found with supported extensions (.txt, .png, .jpg)")
             if face_file_path and os.path.isfile(face_file_path):
-                if face_file_path.endswith((".txt", ".png", ".jpg")):
-                    if face_file_path.endswith(".txt"):
-                        with open(face_file_path, "r") as txt_file:
-                            img_payload['alwayson_scripts']['reactor']['args'][0] = txt_file.read()
-                            face_method = 'base64'
-                    else:
-                        with open(face_file_path, "rb") as image_file:
-                            image_data = image_file.read()
-                            faceswapimg = base64.b64encode(image_data).decode('utf-8')
-                            img_payload['alwayson_scripts']['reactor']['args'][0] = faceswapimg
-                            face_method = 'Face image'
+                if face_file_path.endswith(".txt"):
+                    with open(face_file_path, "r") as txt_file:
+                        reactor_args['image'] = txt_file.read()
+                        face_method = 'base64'
                 else:
-                    logging.error("Invalid value for face swap input (must be .txt, .png, or .jpg).")
+                    with open(face_file_path, "rb") as image_file:
+                        image_data = image_file.read()
+                        faceswapimg = base64.b64encode(image_data).decode('utf-8')
+                        reactor_args['image'] = faceswapimg
+                        face_method = 'Face image'
             else:
                 logging.error(f"File not found '{face_file_path}'.")
         if face_method:
-            img_payload['alwayson_scripts']['reactor']['args'][1] = True # enable extension
+            reactor_args['enabled'] = True # enable extension
             logging.info(f'[TAGS] Face swap was triggered and applied "{face_value}" ({face_method}).')
-        return img_payload
+        return reactor_args
     except Exception as e:
         logging.error(f"Error processing face swap for Reactor: {e}")
+        return {}
 
-async def process_img_payload_tags(img_payload, matches):
+def process_controlnet_tag(cnet_value):
+    cnet_args = {}
+    cnet_file_path = None
     try:
-        matches.reverse()
+        base_path = os.path.join("ad_discordbot", "controlnet_images")
+        full_path = os.path.join(base_path, cnet_value)
+        cnet_method = ''
+        cnet_file_path = ''
+        # If value was a directory to choose random image from
+        if os.path.isdir(full_path):
+            cwd_path = os.getcwd()
+            cnet_dir = os.path.join(cwd_path, full_path)
+            # List all files in the directory
+            files = [f for f in os.listdir(cnet_dir) if os.path.isfile(os.path.join(cnet_dir, f))]
+            # Filter files to include only .png and .jpg extensions
+            image_files = [f for f in files if f.lower().endswith(('.png', '.jpg'))]
+            # Choose a random image file
+            if image_files:
+                random_image = random.choice(image_files)
+                cnet_file_path = os.path.join(cnet_dir, random_image)
+                cnet_method = 'Random from folder'
+        # If cnet_value contains valid image extension
+        elif any(ext in cnet_value for ext in (".txt", ".png", ".jpg")): # extension included in value
+            cnet_file_path = os.path.join(base_path, cnet_value)
+        # If cnet_value does not specify an extension, but is not a directory
+        else:
+            found = False
+            for ext in (".txt", ".png", ".jpg"):
+                temp_path = os.path.join(base_path, cnet_value + ext)
+                if os.path.exists(temp_path):
+                    cnet_file_path = temp_path
+                    found = True
+                    break
+            if not found:
+                raise FileNotFoundError(f"File '{cnet_value}' not found with supported extensions (.txt, .png, .jpg)")
+        if cnet_file_path and os.path.isfile(cnet_file_path):
+            if cnet_file_path.endswith(".txt"):
+                with open(cnet_file_path, "r") as txt_file:
+                    cnet_args['image'] = txt_file.read()
+                    cnet_method = 'base64 from .txt'
+            else:
+                with open(cnet_file_path, "rb") as image_file:
+                    image_data = image_file.read()
+                    cnet_img = base64.b64encode(image_data).decode('utf-8')
+                    cnet_args['image'] = cnet_img
+                    if not cnet_method: # will already have value if random img picked from dir
+                        cnet_method = 'Image file'
+        else:
+            logging.error(f"File not found '{cnet_file_path}'.")
+        if cnet_method:
+            cnet_args['enabled'] = True # enable extension
+            logging.info(f'[TAGS] ControlNet enabled: "{cnet_value}" ({cnet_method}).')
+        return cnet_args
+    except Exception as e:
+        logging.error(f"Error processing ControlNet from tag: {e}")
+        return {}
+
+async def process_img_payload_tags(img_payload, mods):
+    try:
         imgmodel_params = None
-        change_imgmodel = None
-        swap_imgmodel = None
-        for tag in matches:
-            if isinstance(tag, tuple):
-                tag = tag[0] # For tags with prompt insertion indexes
-            if 'payload' in tag:
-                if isinstance(tag['payload'], dict):
-                    logging.info(f"[TAGS] Payload values were updated: '{tag['payload']}'.")
-                    update_dict(img_payload, tag['payload'])
+        img_censoring = mods.get('img_censoring', None)
+        change_imgmodel = mods.get('change_imgmodel', None)
+        swap_imgmodel = mods.get('swap_imgmodel', None)
+        payload = mods.get('payload', None)
+        param_variances = mods.get('param_variances', {})
+        controlnet = mods.get('controlnet', [])
+        layerdiffuse = mods.get('layerdiffuse', {})
+        reactor = mods.get('reactor', {})
+        # Process the tag matches
+        if img_censoring or change_imgmodel or swap_imgmodel or payload or param_variances or controlnet or layerdiffuse or reactor:
+            # Img censoring handling
+            if img_censoring and img_censoring > 0:
+                img_payload['img_censoring'] = img_censoring
+            # Imgmodel handling
+            imgmodel_params = change_imgmodel or swap_imgmodel or None
+            if imgmodel_params:
+                    ## IF API IMG MODEL UNLOADING GETS EVER DEBUGGED
+                    ## if not change_imgmodel and swap_imgmodel and swap_imgmodel == 'None':
+                    ##     await unload_imgmodel(channel=None)
+                # 'change_imgmodel' will trump 'swap_imgmodel'
+                current_imgmodel = client.settings['imgmodel'].get('override_settings', {}).get('sd_model_checkpoint') or client.settings['imgmodel']['payload'].get('override_settings', {}).get('sd_model_checkpoint') or ''
+                if imgmodel_params == current_imgmodel:
+                    logging.info(f'[TAGS] Img model was triggered to change, but it is the same as current ("{current_imgmodel}").')
+                    imgmodel_params = None # return None
+                else:
+                    mode = 'change' if imgmodel_params == change_imgmodel else 'swap'
+                    verb = 'Changing' if mode == 'change' else 'Swapping'
+                    logging.info(f'[TAGS] {verb} Img model to: "{imgmodel_params}".')
+                    imgmodel_params = {'imgmodel': {'imgmodel_name': imgmodel_params, 'mode': mode, 'verb': verb, 'current_imgmodel': current_imgmodel}} # return dict
+            # Payload handling
+            if payload:
+                if isinstance(payload, dict):
+                    logging.info(f"[TAGS] Payload values were updated: '{payload}'.")
+                    update_dict(img_payload, payload)
                 else:
                     logging.warning("A tag was matched with invalid 'payload'; must be a dictionary.")
-            if tag.get('face_swap'):
-                img_payload = process_face(img_payload, tag['face_swap'])
-            if tag.get('layerdiffuse'):
-                img_payload['alwayson_scripts']['layerdiffuse']['args'][0] = True   # enable layerdiffuse
-                if isinstance(tag['layerdiffuse'], str):                            # backwards compatibility check
-                    img_payload['alwayson_scripts']['layerdiffuse']['args'][1] = tag['layerdiffuse'] # Update the method
-                logging.info('[TAGS] layerdiffuse was triggered (transparency).')
-            # Process these keys only once
-            if 'img_censoring' in tag and tag['img_censoring'] > 0:
-                img_payload['img_censoring'] = tag['img_censoring']
-            if 'img_param_variances' in tag:
-                param_variances = tag['img_param_variances']
+            # Param variances handling
+            if param_variances:
                 processed_params = process_param_variances(param_variances)
                 logging.info(f'[TAGS] Applied img param variances: "{processed_params}".')
                 sum_update_dict(img_payload, processed_params)
-            if 'change_imgmodel' in tag and change_imgmodel is None:
-                change_imgmodel = tag['change_imgmodel']
-            if 'swap_imgmodel' in tag and swap_imgmodel is None:
-                swap_imgmodel = tag['swap_imgmodel']
-        imgmodel_params = change_imgmodel or swap_imgmodel or None
-        if imgmodel_params:
-            ### IF API IMG MODEL UNLOADING GETS EVER DEBUGGED
-            # if not change_imgmodel and swap_imgmodel and swap_imgmodel == 'None':
-            #     await unload_imgmodel(channel=None)
-            # 'change_imgmodel' will trump 'swap_imgmodel'
-            current_imgmodel = client.settings['imgmodel'].get('override_settings', {}).get('sd_model_checkpoint') or client.settings['imgmodel']['payload'].get('override_settings', {}).get('sd_model_checkpoint') or ''
-            if imgmodel_params == current_imgmodel:
-                logging.info(f'[TAGS] Img model was triggered to change, but it is the same as current ("{current_imgmodel}").')
-                imgmodel_params = None # return None
-            else:
-                mode = 'change' if imgmodel_params == change_imgmodel else 'swap'
-                verb = 'Changing' if mode == 'change' else 'Swapping'
-                logging.info(f'[TAGS] {verb} Img model to: "{imgmodel_params}".')
-                imgmodel_params = {'imgmodel': {'imgmodel_name': imgmodel_params, 'mode': mode, 'verb': verb, 'current_imgmodel': current_imgmodel}} # return dict
+            # Controlnet handling
+            if controlnet:       
+                img_payload['alwayson_scripts']['controlnet']['args'] = controlnet
+            # layerdiffuse handling
+            if layerdiffuse:
+                img_payload['alwayson_scripts']['layerdiffuse']['args'].update(layerdiffuse)
+                logging.info(f'[TAGS] layerdiffuse was triggered ({layerdiffuse}).')
+            # ReActor face swap handling
+            if reactor:
+                img_payload['alwayson_scripts']['reactor']['args'].update(reactor)
+                logging.info(f'[TAGS] ReActor face swap was triggered ({reactor}).')
         return img_payload, imgmodel_params
     except Exception as e:
         logging.error(f"Error processing Img tags: {e}")
+        return img_payload, None
+
+def collect_img_tag_values(tags):
+    try:
+        img_payload_mods = {
+            'img_censoring': None,
+            'change_imgmodel': None,
+            'swap_imgmodel': None,
+            'payload': {},
+            'param_variances': {},
+            'controlnet': [],
+            'layerdiffuse': {},
+            'reactor': {}
+            }
+        controlnet_dicts = {}  # To collect controlnet key-value pairs
+        controlnet_args_dicts = {}  # To collect cnet_ key-value pairs
+        layerdiffuse_args = {}
+        reactor_args = {}
+        for tag in reversed(tags['matches']):
+            if isinstance(tag, tuple):
+                tag = tag[0] # For tags with prompt insertion indexes
+            for key, value in tag.items():
+                if key == 'img_censoring' and img_payload_mods['img_censoring'] is None:
+                    img_payload_mods['img_censoring'] = value
+                elif key == 'change_imgmodel' and img_payload_mods['change_imgmodel'] is None:
+                    img_payload_mods['change_imgmodel'] = value
+                elif key == 'swap_imgmodel' and img_payload_mods['swap_imgmodel'] is None:
+                    img_payload_mods['swap_imgmodel'] = value
+                elif key == 'payload': # Allow multiple to accumulate
+                    if isinstance(tag['payload'], dict):
+                        update_dict(img_payload_mods['payload'], value)
+                    else:
+                        logging.warning("A tag was matched with invalid 'payload'; must be a dictionary.")
+                elif key == 'img_param_variances': # Allow multiple to accumulate
+                    if isinstance(tag['img_param_variances'], dict):
+                        update_dict(img_payload_mods['param_variances'], value)
+                    else:
+                        logging.warning("A tag was matched with invalid 'img_param_variances'; must be a dictionary.")
+                # get controlnet tag params
+                elif key.startswith('controlnet'):
+                    index = int(key[len('controlnet'):]) if key != 'controlnet' else 0  # Determine the index for controlnet sublist (defaulting to 0)
+                    activate_cnet = process_controlnet_tag(value)                # Get 'image' and 'enabled'
+                    controlnet_dicts.setdefault(index, {}).update(activate_cnet) # Update controlnet dictionary at the specified index
+                elif key.startswith('cnet'):
+                    # Determine the index for controlnet_args sublist
+                    if key.startswith('cnet_'): index = 0
+                    else: index = int(key.split('_')[0][len('cnet'):])
+                    # Update controlnet_args dictionary at the specified index
+                    controlnet_args_dicts.setdefault(index, {}).update({key.split('_')[-1]: value})
+                # get layerdiffuse tag params                    
+                elif key == 'layerdiffuse':
+                    img_payload_mods['layerdiffuse']['method'] = value
+                    img_payload_mods['layerdiffuse']['enabled'] = True
+                elif key.startswith('laydiff_'):
+                    if key == 'laydiff_method': img_payload_mods['layerdiffuse']['enabled'] = True # enable it automatically
+                    laydiff_key = key[len('laydiff_'):]
+                    layerdiffuse_args[laydiff_key] = value
+                # get reactor tag params
+                elif key == 'reactor':
+                    reactor = process_reactor_tag(tag['reactor'])
+                    img_payload_mods['reactor'] = reactor
+                elif key.startswith('reactor_'):
+                    reactor_key = key[len('reactor_'):]
+                    reactor_args[reactor_key] = value
+        # Merge controlnet_dicts and controlnet_args_dicts
+        for index in sorted(set(controlnet_dicts.keys()) | set(controlnet_args_dicts.keys())):
+            cnet_basesettings = copy.copy(client.settings['imgmodel']['payload']['alwayson_scripts']['controlnet']['args'][0])
+            controlnet_dict = controlnet_dicts.get(index, {})
+            controlnet_args_dict = controlnet_args_dicts.get(index, {})
+            merged_dict = controlnet_dict.copy()
+            merged_dict.update(controlnet_args_dict)
+            final_dict = update_dict(cnet_basesettings, merged_dict)
+            img_payload_mods['controlnet'].append(final_dict)
+        #img_payload_mods['controlnet'].update(controlnet_args)
+        img_payload_mods['layerdiffuse'].update(layerdiffuse_args)
+        img_payload_mods['reactor'].update(reactor_args)
+        return img_payload_mods
+    except Exception as e:
+        logging.error(f"Error collecting Img tag values: {e}")
+        return tags
 
 def initialize_img_payload(img_prompt, neg_prompt):
     try:
@@ -2255,6 +2476,7 @@ def match_img_tags(img_prompt, tags):
         return tags
     except Exception as e:
         logging.error(f"Error matching tags for img phase: {e}")
+        return tags
 
 async def img_gen(user, channel, source, img_prompt, params, tags={}):
     try:
@@ -2264,23 +2486,25 @@ async def img_gen(user, channel, source, img_prompt, params, tags={}):
             logging.warning(f'Bot tried to generate image for {user}, but no Img model was loaded')
         img_gen_embed = await channel.send(embed=img_embed_info)
         if not tags:
-            tags = get_tags()
+            img_prompt, tags = get_tags(img_prompt)
             if 'user' in tags['unmatched']: del tags['unmatched']['user'] # Tags intended for pre-LLM processing should be removed
             tags = match_img_tags(img_prompt, tags)
-        matches = tags['matches']
         # Initialize img_payload
         neg_prompt = params.get('neg_prompt', '')
         img_payload = initialize_img_payload(img_prompt, neg_prompt)
+        # collect matched tag values
+        img_payload_mods = collect_img_tag_values(tags)
         # Apply tags relevant to Img gen
-        img_payload, imgmodel_params = await process_img_payload_tags(img_payload, matches)
+        img_payload, imgmodel_params = await process_img_payload_tags(img_payload, img_payload_mods)
         # Process loractl
-        if config.sd['extensions'].get('lrctl', {}).get('enabled', False): matches = apply_loractl(matches)
+        if config.sd['extensions'].get('lrctl', {}).get('enabled', False):
+            tags = apply_loractl(tags)
         # Apply tags relevant to Img prompts
         img_payload = process_img_prompt_tags(img_payload, tags)
         # Apply menu selections from /image command
         img_payload = apply_imgcmd_params(img_payload, params)
         # Clean anything up that gets messy
-        clean_img_payload(img_payload)
+        img_payload = clean_img_payload(img_payload)
         # Change imgmodel if triggered by tags
         swap_embed = None
         if imgmodel_params:
@@ -3501,13 +3725,13 @@ class ImgModel:
         self.img_payload = {
             'alwayson_scripts': {
                 'controlnet': {
-                    'args': [{'enabled': False, 'image': None, 'lowvram': True, 'model': 'None', 'module': 'None', 'pixel_perfect': True}]
+                    'args': [{'enabled': False, 'image': None, 'mask_image': None, 'model': 'None', 'module': 'None', 'weight': 1.0, 'processor_res': 64, 'pixel_perfect': True, 'guidance_start': 0.0, 'guidance_end': 1.0, 'threshold_a': 64, 'threshold_b': 64, 'control_mode': 0, 'resize_mode': 1, 'lowvram': False}]
                 },
                 'layerdiffuse': {
-                    'args': [False, '(SDXL) Only Generate Transparent Image (Attention Injection)', 1.0, 1.0, None, None, None, 'Crop and Resize', False, '', '', '']
+                    'args': {'enabled': False, 'method': '(SDXL) Only Generate Transparent Image (Attention Injection)', 'weight': 1.0, 'stop_at': 1.0, 'foreground': None, 'background': None, 'blending': None, 'resize_mode': 'Crop and Resize', 'output_mat_for_i2i': False, 'fg_prompt': '', 'bg_prompt': '', 'blended_prompt': ''}
                 },
                 'reactor': {
-                    'args': ['', False, '0', '0', 'inswapper_128.onnx', 'CodeFormer', 1, True, '4x_NMKD-Superscale-SP_178000_G', 1.5, 1, False, True, 1, 0, 0, False, 0.8, False, False, 'CUDA', True, 0, '', '', None, True, True, 0.6, 2]
+                    'args': {'image': '', 'enabled': False, 'source_faces': '0', 'target_faces': '0', 'model': 'inswapper_128.onnx', 'restore_face': 'CodeFormer', 'restore_visibility': 1, 'restore_upscale': True, 'upscaler': '4x_NMKD-Superscale-SP_178000_G', 'scale': 1.5, 'upscaler_visibility': 1, 'swap_in_source_img': False, 'swap_in_gen_img': True, 'log_level': 1, 'gender_detect_source': 0, 'gender_detect_target': 0, 'save_original': False, 'codeformer_weight': 0.8, 'source_img_hash_check': False, 'target_img_hash_check': False, 'system': 'CUDA', 'face_mask_correction': True, 'source_type': 0, 'face_model': '', 'source_folder': '', 'multiple_source_images': None, 'random_img': True, 'force_upscale': True, 'threshold': 0.6, 'max_faces': 2}
                 }
             }
         }
@@ -3544,7 +3768,6 @@ class LLMState:
             'dynatemp_low': 1,
             'dynatemp_high': 1,
             'dynatemp_exponent': 1,
-            'early_stopping': False,
             'encoder_repetition_penalty': 1,
             'epsilon_cutoff': 0,
             'eta_cutoff': 0,
@@ -3552,10 +3775,8 @@ class LLMState:
             'greeting': '',
             'guidance_scale': 1,
             'history': {'internal': [], 'visible': []},
-            'length_penalty': 1,
             'max_new_tokens': 512,
             'max_tokens_second': 0,
-            'min_length': 0,
             'min_p': 0.00,
             'mirostat_eta': 0.1,
             'mirostat_mode': 0,
@@ -3567,7 +3788,6 @@ class LLMState:
             'name2_instruct': '',
             'negative_prompt': '',
             'no_repeat_ngram_size': 0,
-            'num_beams': 1,
             'penalty_alpha': 0,
             'presence_penalty': 0,
             'prompt_lookup_num_tokens': 0,

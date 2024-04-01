@@ -16,7 +16,6 @@ global_tag_keys:
   img_text_joining: ', '          # Relevant to 'positive_prompt' (and '_prefix' / '_suffix'). Method of joining the inserted text to the img prompt.
   positive_prompt_method: after   # Relevant in tags with key 'positive_prompt'. 'after' = insert value after matched text / 'before' = before text / 'replace' = replace text
 
-
 # 'base_tags' are always in effect. Base tags have lower priority than tags defined anywhere else.
 base_tags:
     # Use {time} or {date} written anywhere in your prompts, which will be replaced with the current date/time. The tags 'offset' and '(date/time)_format' will apply to the result.
@@ -45,7 +44,7 @@ base_tags:
   - trigger: 'take a photo,take {a|another} picture'
     search_mode: user
     image_response: true
-    format_prompt: '''[SYSTEM] You have been tasked with creating a text-to-image prompt. Describe the scene in concise and vivid detail as if you were describing it to a blind person: "{prompt}"'''
+    format_prompt: '''[SYSTEM] You have been tasked with creating a text-to-image prompt. Describe the scene in concise and vivid detail: "{prompt}"'''
 
   - trigger: 'selfie,self portrait'
     search_mode: user
@@ -82,7 +81,7 @@ tag_presets:
         payload: {override_settings: {CLIP_stop_at_last_layers: 2}} # Nested payload dictionary settings can also be modified. Must be formatted as a dictionary.
 
       - trigger: '{no|without|clear|empty|transparent} {bg|background}'
-        layerdiffuse: '(SDXL) Only Generate Transparent Image (Attention Injection)'  # enables 'layerdiffuse' extension while applying specified method. See tag references at bottom for list of methods.
+        layerdiffuse: '(SDXL) Only Generate Transparent Image (Attention Injection)'  # enables 'layerdiffuse' extension while applying specified method. See tag references at bottom for list of methods and advanced usage.
       #  Use 'payload' tag if you need more complex triggered settings for layerdiffuse
       #  payload: {'alwayson_scripts': {'layerdiffuse': {'args': [true,'Only Generate Transparent Image (Attention Injection)',0.2,1.0,null,null,null,'Crop and Resize']}}}
 
@@ -118,7 +117,7 @@ tag_presets:
 
 
 # List of all available tag keys:
-
+#
 # Relevant to all tags:
 #   search_mode: userllm              Search method for trigger matching. 'user' = user prompt only / 'llm' = bot reply only / 'userllm' = search both for matches
 #   trigger: 'trigger,another one'    Recommended for most tags (except 'global_tag_keys' and 'tag_preset_name').
@@ -147,7 +146,8 @@ tag_presets:
 # Relevant to img generation (A1111 / Forge):
 #   image_response: (true/false)      If LLM's reply should include Stable Diffusion img generation
 #   change_imgmodel: 'string'         For (change/swap)_imgmodel: 'change' will trigger a persistent change. 'swap' will only change the Img model for the current interaction.
-#   swap_imgmodel: 'string'           Copy/paste a checkpoint name *exactly* as it appears in Stable Diffusion model list (ei: 'sdxl\epicrealismXL_v4Photoreal.safetensors [c772a1a690]'). Currently, API Img model unloading is bugged in both A1111/Forge so that is not an option here.
+#   swap_imgmodel: 'string'           Copy/paste a checkpoint name *exactly* as it appears in A1111/Forge model list (ei: 'sdxl\epicrealismXL_v4Photoreal.safetensors [c772a1a690]').
+#                                     Currently, API Img model unloading is bugged in both A1111/Forge so that is not an option here.
 #   img_censoring: 0                  0 = disabled / 1 = blur image / 2 = block image from being generated
 #   positive_prompt: 'string'         Text you may want to insert relative to the matched text in the image prompt.
 #   positive_prompt_method: after     Relevant to 'positive_prompt'. 'after' = insert value after matched text / 'before' = before text / 'replace' = replace text
@@ -158,5 +158,38 @@ tag_presets:
 #   img_text_joining: ', '            Relevant to all insertion methods except "replace"
 #   payload: {dictionary}             Replacements for Stable Diffusion payload. Must be formatted as a dictionary.
 #   img_param_variances: {dictionary} Randomization ranges for Stable Diffusion payload parameters. Must be formatted as a dictionary.
-#   face_swap: 'string'               Face image to be used with Reactor extension. Valid options: Image in 'swap_faces' (png/jpg/txt in base64) -OR- Directory name in 'swap_faces' (Picks a random face) -OR- Face model in '{A111}\models\reactor\faces' example 'Minty.safetensors'
-#   layerdiffuse: 'string'            enables 'layerdiffuse' extension with specified method. Valid: "(SD1.5) Only Generate Transparent Image (Attention Injection)", "(SD1.5) From Foreground to Background (need batch size 2)", "(SD1.5) From Background to Foreground (need batch size 2)", "(SD1.5) Generate Everything Together (need batch size 3)", "(SDXL) Only Generate Transparent Image (Attention Injection)", "(SDXL) Only Generate Transparent Image (Conv Injection)", "(SDXL) From Foreground to Blending", "(SDXL) From Foreground and Blending to Background", "(SDXL) From Background to Blending", "(SDXL) From Background and Blending to Foreground"
+
+
+# HINT: tags can be created/activated on-demand if using this sytax in your prompt: [[key:value]] or [[key1:value1 | key2:value2]] etc
+#       EXAMPLE (Single tag):     [[reactor_max_faces:6]]
+#       EXAMPLE (Multiple tags):  [[reactor_save_original:True | laydiff_weight:0.5]]
+#   ** This is a good way to add specific extension parameters on-demand!! **
+
+# ControlNet specific tags (A1111/Forge extension):
+#   controlnet: 'string'              Simplified tag to both **apply** ControlNet image/folder AND **enable** ControlNet.
+#   controlnet#: 'string'             Optional syntax for multi-ControlNet where # represents the ControlNet unit. ex: 'controlnet0: guy.png', 'controlnet1: architecture', etc.
+#                                     Value values: Image in 'controlnet_images' (png/jpg/txt in base64) -OR- Directory name in '/controlnet_images/' (Picks a random image)
+#   cnet_{key}                        ANY key can be used (see dict_base_settings.yaml for complete list). A 'controlnet' tag must also be in effect when using these tags in order to properly assign the image.
+#   cnet#_{key}: 'string'             Optional syntax for multi-ControlNet parameters where # represents the ControlNet unit. ex: 'cnet0_weight: 0.5', 'cnet1_guidance_end: 0.8', etc.
+
+# layerdiffuse specific tags (Forge extension):
+#   layerdiffuse: 'string'            Simplified tag to both **apply** AND **enable** layerdiffuse. Note: 'laydiffuse_method' works exactly the same.
+#   laydiff_method: 'string'          Valid values for either 'layerdiffuse' or 'laydiff_method':
+#                                         "(SD1.5) Only Generate Transparent Image (Attention Injection)"
+#                                         "(SD1.5) From Foreground to Background (need batch size 2)"
+#                                         "(SD1.5) From Background to Foreground (need batch size 2)"
+#                                         "(SD1.5) Generate Everything Together (need batch size 3)"
+#                                         "(SDXL) Only Generate Transparent Image (Attention Injection)"
+#                                         "(SDXL) Only Generate Transparent Image (Conv Injection)"
+#                                         "(SDXL) From Foreground to Blending"
+#                                         "(SDXL) From Foreground and Blending to Background"
+#                                         "(SDXL) From Background to Blending"
+#                                         "(SDXL) From Background and Blending to Foreground"
+#   laydiff_{key}                     ANY key can be used (see dict_base_settings.yaml for complete list). Note: layerdiffusion will not be enabled without either a 'layerdiffuse' or 'laydiff_method' tag.
+
+# ReActor specific tags (A1111/Forge extension):
+#   reactor: 'string'                 Simplified tag to both **apply** face image/folder/model AND **enable** ReActor.
+#                                     Value values: Image in 'swap_faces' (png/jpg/txt in base64) -OR- Directory name in '/swap_faces/' (Picks a random face) -OR- Face model in '{SD_CLIENT}\models\reactor\faces' example 'Minty.safetensors'
+#   reactor_{key}                     ANY key can be used (see dict_base_settings.yaml for complete list).
+#                                     Recommended to use in combination with 'reactor' tag - otherwise, you can't use "single face image method"
+#                                     (technically, you could send a base64 string... and you would need to include 'reactor_enabled: True')
