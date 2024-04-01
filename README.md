@@ -20,15 +20,20 @@
 
 <details>
   <summary>click to expand</summary>
+  
    **04/01/2024:** Pretty massive update. Be sure to update textgen-webui, and take care updating settings files.
+   
     - Overhauled SD WebUI extension support (ControlNet, layerdiffuse, ReActor) to be much more powerful and manageable.
+    
       - ControlNet support received a massive update in particular... multi-ControlNet is even supported!
       - These extensions each have a simple primary Tag to activate and apply.
       - **ALL** of their parameters are now easily controlled by the Tags system.
+      
     - Added a new method to create Tags on-the-fly using this syntax: [[key:value]] or [[key1:value1 | key2:value2]]. These go into immediate effect, particularly useful for controlling the extension settings.
+    
     - 4 older parameters were recently removed from textgen-webui - mirrored in this bot update.
 
-    ---
+   ---
    
    **03/07/2024:** [layerdiffuse](https://github.com/layerdiffusion/sd-forge-layerdiffuse) support added to Tags feature!
 
