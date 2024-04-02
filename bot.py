@@ -779,7 +779,9 @@ async def voice_channel(vc_setting):
                 else:
                     logging.warning(f'Bot launched with {tts_client}, but no voice channel is specified in config.py')
             else:
-                logging.warning(f'Character "use_voice_channel" = True, and "voice channel" is specified in config.py, but no "tts_client" is specified in config.py')
+                if not client.database.was_warned('char_tts'):
+                    client.database.update_was_warned('char_tts', 1)
+                    logging.warning(f'Character "use_voice_channel" = True, and "voice channel" is specified in config.py, but no "tts_client" is specified in config.py')
         except Exception as e:
             logging.error(f"An error occurred while connecting to voice channel: {e}")
     # Stop voice client if explicitly deactivated in character settings
@@ -1417,15 +1419,19 @@ async def hybrid_llm_img_gen(user, channel, source, text, tags, llm_payload, par
         should_draw = user_asks_for_image(tags)
         if should_draw:
             if await sd_online(channel):
-                img_embed_info.title = "Prompting ..."
-                img_embed_info.description = " "
-                img_gen_embed = await channel.send(embed=img_embed_info)
-                img_note = f'\n**Processing image generation using your input as the prompt ...**' # msg for if LLM model is unloaded
+                if shared.model_name == 'None':
+                    await channel.send('**Processing image generation using message as the image prompt ...**') # msg for if LLM model is unloaded
+                else:
+                    img_embed_info.title = "Prompting ..."
+                    img_embed_info.description = " "
+                    img_gen_embed = await channel.send(embed=img_embed_info)
         # if no LLM model is loaded, notify that no text will be generated     
         if shared.model_name == 'None':
-            warn_msg = await channel.send(f'(Cannot process text request: No LLM model is currently loaded. Use "/llmmodel" to load a model.{img_note})')
-            asyncio.create_task(delete_message_after(warn_msg, 5))
-            logging.warning(f'Bot tried to generate text for {user}, but no LLM model was loaded')
+            if not client.database.was_warned('no_llmmodel'):
+                client.database.update_was_warned('no_llmmodel', 1)
+                warn_msg = await channel.send(f'(Cannot process text request: No LLM model is currently loaded. Use "/llmmodel" to load a model.)')
+                asyncio.create_task(delete_message_after(warn_msg, 10))
+                logging.warning(f'Bot tried to generate text for {user}, but no LLM model was loaded')
         # generate text with textgen-webui
         last_resp, tts_resp = await llm_gen(llm_payload)
         # If no text was generated, treat user input at the response
@@ -1686,6 +1692,7 @@ async def change_llmmodel_task(user, channel, params):
                 unload_model()                  # If an LLM model is loaded, unload it
             shared.model_name = llmmodel_name   # set to new LLM model
             if shared.model_name != 'None':
+                client.database.update_was_warned('no_llmmodel', 0) # Reset warning message
                 loader = get_llm_model_loader(llmmodel_name)    # Try getting loader from user-config.yaml to prevent errors
                 load_llm_model(loader)                          # Load an LLM model if specified
             if mode == 'swap':
@@ -2029,12 +2036,15 @@ def clean_img_payload(img_payload):
         img_payload['negative_prompt'] = processed_negative_prompt
         # Delete unwanted extension keys
         if img_payload.get('alwayson_scripts', {}):
+            # Clean ControlNet
             if not config.sd['extensions'].get('controlnet_enabled', False):
                 del img_payload['alwayson_scripts']['controlnet'] # Delete all 'controlnet' keys if disabled by config
+            # Clean ReActor
             if not config.sd['extensions'].get('reactor_enabled', False):
                 del img_payload['alwayson_scripts']['reactor'] # Delete all 'reactor' keys if disabled by config
             else:
                 img_payload['alwayson_scripts']['reactor']['args'] = list(img_payload['alwayson_scripts']['reactor']['args'].values()) # convert dictionary to list
+            # Clean layerdiffuse
             if not config.sd['extensions'].get('layerdiffuse_enabled', False):
                 del img_payload['alwayson_scripts']['layerdiffuse'] # Delete all 'layerdiffuse' keys if disabled by config
             elif SD_CLIENT != 'SD WebUI Forge':
@@ -2060,39 +2070,41 @@ def clean_img_payload(img_payload):
 def apply_loractl(tags):
     try:
         if SD_CLIENT != 'A1111 SD WebUI':
-            logging.warning(f'loractl is not known to be compatible with "{SD_CLIENT}". Not applying loractl...')
-        else:
-            scaling_settings = [v for k, v in config.sd.get('extensions', {}).get('lrctl', {}).items() if 'scaling' in k]
-            scaling_settings = scaling_settings if scaling_settings else ['']
-            # Flatten the matches dictionary values to get a list of all tags (including those within tuples)
-            matched_tags = [tag if isinstance(tag, dict) else tag[0] for tag in tag['matches']]
-            # Filter the matched tags to include only those with certain patterns in their text fields
-            lora_tags = [tag for tag in matched_tags if any(re.findall(r'<lora:[^:]+:[^>]+>', text) for text in (tag.get('positive_prompt', ''), tag.get('positive_prompt_prefix', ''), tag.get('positive_prompt_suffix', '')))]
-            if len(lora_tags) >= config.sd['extensions']['lrctl']['min_loras']:
-                for i, tag in enumerate(lora_tags):
-                    # Determine the key with a non-empty value among the specified keys
-                    used_key = next((key for key in ['positive_prompt', 'positive_prompt_prefix', 'positive_prompt_suffix'] if tag.get(key, '')), None)
-                    if used_key:  # If a key with a non-empty value is found
-                        positive_prompt = tag[used_key]
-                        lora_matches = re.findall(r'<lora:[^:]+:[^>]+>', positive_prompt)
-                        if lora_matches:
-                            for lora_match in lora_matches:
-                                lora_weight_match = re.search(r'(?<=:)\d+(\.\d+)?', lora_match) # Extract lora weight
-                                if lora_weight_match:
-                                    lora_weight = float(lora_weight_match.group())
-                                    # Selecting the appropriate scaling based on the index
-                                    scaling_key = f'lora_{i + 1}_scaling' if i+1 < len(scaling_settings) else 'additional_loras_scaling'
-                                    scaling_values = config.sd.get('extensions', {}).get('lrctl', {}).get(scaling_key, '')
-                                    if scaling_values:
-                                        scaling_factors = [round(float(factor.split('@')[0]) * lora_weight, 2) for factor in scaling_values.split(',')]
-                                        scaling_steps = [float(step.split('@')[1]) for step in scaling_values.split(',')]
-                                        # Construct/apply the calculated lora-weight string
-                                        new_lora_weight_str = f'{",".join(f"{factor}@{step}" for factor, step in zip(scaling_factors, scaling_steps))}'
-                                        updated_lora_match = lora_match.replace(str(lora_weight), new_lora_weight_str)
-                                        new_positive_prompt = positive_prompt.replace(lora_match, updated_lora_match)                                   
-                                        # Update the appropriate key in the tag dictionary
-                                        tag[used_key] = new_positive_prompt
-                                        logging.info(f'''[TAGS] loractl applied: "{lora_match}" > "{updated_lora_match}"''')
+            if not client.database.was_warned('loractl'):
+                client.database.update_was_warned('loractl', 1)
+                logging.warning(f'loractl is not known to be compatible with "{SD_CLIENT}". Not applying loractl...')
+            return tags
+        scaling_settings = [v for k, v in config.sd.get('extensions', {}).get('lrctl', {}).items() if 'scaling' in k]
+        scaling_settings = scaling_settings if scaling_settings else ['']
+        # Flatten the matches dictionary values to get a list of all tags (including those within tuples)
+        matched_tags = [tag if isinstance(tag, dict) else tag[0] for tag in tag['matches']]
+        # Filter the matched tags to include only those with certain patterns in their text fields
+        lora_tags = [tag for tag in matched_tags if any(re.findall(r'<lora:[^:]+:[^>]+>', text) for text in (tag.get('positive_prompt', ''), tag.get('positive_prompt_prefix', ''), tag.get('positive_prompt_suffix', '')))]
+        if len(lora_tags) >= config.sd['extensions']['lrctl']['min_loras']:
+            for i, tag in enumerate(lora_tags):
+                # Determine the key with a non-empty value among the specified keys
+                used_key = next((key for key in ['positive_prompt', 'positive_prompt_prefix', 'positive_prompt_suffix'] if tag.get(key, '')), None)
+                if used_key:  # If a key with a non-empty value is found
+                    positive_prompt = tag[used_key]
+                    lora_matches = re.findall(r'<lora:[^:]+:[^>]+>', positive_prompt)
+                    if lora_matches:
+                        for lora_match in lora_matches:
+                            lora_weight_match = re.search(r'(?<=:)\d+(\.\d+)?', lora_match) # Extract lora weight
+                            if lora_weight_match:
+                                lora_weight = float(lora_weight_match.group())
+                                # Selecting the appropriate scaling based on the index
+                                scaling_key = f'lora_{i + 1}_scaling' if i+1 < len(scaling_settings) else 'additional_loras_scaling'
+                                scaling_values = config.sd.get('extensions', {}).get('lrctl', {}).get(scaling_key, '')
+                                if scaling_values:
+                                    scaling_factors = [round(float(factor.split('@')[0]) * lora_weight, 2) for factor in scaling_values.split(',')]
+                                    scaling_steps = [float(step.split('@')[1]) for step in scaling_values.split(',')]
+                                    # Construct/apply the calculated lora-weight string
+                                    new_lora_weight_str = f'{",".join(f"{factor}@{step}" for factor, step in zip(scaling_factors, scaling_steps))}'
+                                    updated_lora_match = lora_match.replace(str(lora_weight), new_lora_weight_str)
+                                    new_positive_prompt = positive_prompt.replace(lora_match, updated_lora_match)                                   
+                                    # Update the appropriate key in the tag dictionary
+                                    tag[used_key] = new_positive_prompt
+                                    logging.info(f'''[TAGS] loractl applied: "{lora_match}" > "{updated_lora_match}"''')
         return tags
     except Exception as e:
         logging.error(f"Error processing lrctl: {e}")
@@ -2189,119 +2201,64 @@ def process_param_variances(param_variances):
         logging.error(f"Error processing param variances: {e}")
         return {}
 
-# Process Reactor (face swap)
-def process_reactor_tag(face_value):
-    reactor_args = {}
+def cnet_reactor_extension_args(value, ext, ext_dir):
+    args = {}
+    file_path = ''
+    method = ''
     try:
-        base_path = os.path.join("ad_discordbot", "swap_faces")
-        full_path = os.path.join(base_path, face_value)
-        face_method = ''
+        home_path = os.path.join("ad_discordbot", ext_dir)
+        full_path = os.path.join(home_path, value)
         # If value was a directory to choose random image from
         if os.path.isdir(full_path):
             cwd_path = os.getcwd()
-            face_dir = os.path.join(cwd_path, full_path)
-            reactor_args['image'] = None
-            reactor_args['source_type'] = 2 # Randomly select image from path
-            reactor_args['source_folder'] = face_dir # Path to face dir
-            face_method = 'Random from folder'
-        # If face_value is a face model file in ReActor
-        elif ".safetensors" in face_value:
-            reactor_args['image'] = None
-            reactor_args['source_type'] = 1
-            reactor_args['face_model'] = face_value
-            face_method = 'Face model'
-        # If face_value contains valid image extension
-        else:
-            face_file_path = None
-            if any(ext in face_value for ext in (".txt", ".png", ".jpg")): # extension included in value
-                face_file_path = os.path.join(base_path, face_value)
-            # If face_value does not specify an extension, but is not a directory
-            else:
-                found = False
-                for ext in (".txt", ".png", ".jpg"):
-                    temp_path = os.path.join(base_path, face_value + ext)
-                    if os.path.exists(temp_path):
-                        face_file_path = temp_path
-                        found = True
-                        break
-                if not found:
-                    raise FileNotFoundError(f"File '{face_value}' not found with supported extensions (.txt, .png, .jpg)")
-            if face_file_path and os.path.isfile(face_file_path):
-                if face_file_path.endswith(".txt"):
-                    with open(face_file_path, "r") as txt_file:
-                        reactor_args['image'] = txt_file.read()
-                        face_method = 'base64'
-                else:
-                    with open(face_file_path, "rb") as image_file:
-                        image_data = image_file.read()
-                        faceswapimg = base64.b64encode(image_data).decode('utf-8')
-                        reactor_args['image'] = faceswapimg
-                        face_method = 'Face image'
-            else:
-                logging.error(f"File not found '{face_file_path}'.")
-        if face_method:
-            reactor_args['enabled'] = True # enable extension
-            logging.info(f'[TAGS] Face swap was triggered and applied "{face_value}" ({face_method}).')
-        return reactor_args
-    except Exception as e:
-        logging.error(f"Error processing face swap for Reactor: {e}")
-        return {}
-
-def process_controlnet_tag(cnet_value):
-    cnet_args = {}
-    cnet_file_path = None
-    try:
-        base_path = os.path.join("ad_discordbot", "controlnet_images")
-        full_path = os.path.join(base_path, cnet_value)
-        cnet_method = ''
-        cnet_file_path = ''
-        # If value was a directory to choose random image from
-        if os.path.isdir(full_path):
-            cwd_path = os.getcwd()
-            cnet_dir = os.path.join(cwd_path, full_path)
+            os_path = os.path.join(cwd_path, full_path)
             # List all files in the directory
-            files = [f for f in os.listdir(cnet_dir) if os.path.isfile(os.path.join(cnet_dir, f))]
+            files = [f for f in os.listdir(os_path) if os.path.isfile(os.path.join(os_path, f))]
             # Filter files to include only .png and .jpg extensions
             image_files = [f for f in files if f.lower().endswith(('.png', '.jpg'))]
             # Choose a random image file
             if image_files:
                 random_image = random.choice(image_files)
-                cnet_file_path = os.path.join(cnet_dir, random_image)
-                cnet_method = 'Random from folder'
-        # If cnet_value contains valid image extension
-        elif any(ext in cnet_value for ext in (".txt", ".png", ".jpg")): # extension included in value
-            cnet_file_path = os.path.join(base_path, cnet_value)
-        # If cnet_value does not specify an extension, but is not a directory
+                file_path = os.path.join(os_path, random_image)
+                method = 'Random from folder'
+        # If value contains valid image extension
+        elif any(ext in value for ext in (".txt", ".png", ".jpg")): # extension included in value
+            file_path = os.path.join(home_path, value)
+        # ReActor specific
+        elif ".safetensors" in value and ext == 'ReActor Enabled':
+            args['image'] = None
+            args['source_type'] = 1
+            args['face_model'] = value
+            method = 'Face model'
+        # If value does not specify an extension, but is also not a directory
         else:
             found = False
             for ext in (".txt", ".png", ".jpg"):
-                temp_path = os.path.join(base_path, cnet_value + ext)
+                temp_path = os.path.join(home_path, value + ext)
                 if os.path.exists(temp_path):
-                    cnet_file_path = temp_path
+                    file_path = temp_path
                     found = True
                     break
             if not found:
-                raise FileNotFoundError(f"File '{cnet_value}' not found with supported extensions (.txt, .png, .jpg)")
-        if cnet_file_path and os.path.isfile(cnet_file_path):
-            if cnet_file_path.endswith(".txt"):
-                with open(cnet_file_path, "r") as txt_file:
-                    cnet_args['image'] = txt_file.read()
-                    cnet_method = 'base64 from .txt'
+                raise FileNotFoundError(f"File '{value}' not found with supported extensions (.txt, .png, .jpg)")
+        if file_path and os.path.isfile(file_path):
+            if file_path.endswith(".txt"):
+                with open(file_path, "r") as txt_file:
+                    base64_img = txt_file.read()
+                    method = 'base64 from .txt'
             else:
-                with open(cnet_file_path, "rb") as image_file:
+                with open(file_path, "rb") as image_file:
                     image_data = image_file.read()
-                    cnet_img = base64.b64encode(image_data).decode('utf-8')
-                    cnet_args['image'] = cnet_img
-                    if not cnet_method: # will already have value if random img picked from dir
-                        cnet_method = 'Image file'
-        else:
-            logging.error(f"File not found '{cnet_file_path}'.")
-        if cnet_method:
-            cnet_args['enabled'] = True # enable extension
-            logging.info(f'[TAGS] ControlNet enabled: "{cnet_value}" ({cnet_method}).')
-        return cnet_args
+                    base64_img = base64.b64encode(image_data).decode('utf-8')
+                    args['image'] = base64_img
+                    if not method: # will already have value if random img picked from dir
+                        method = 'Image file'
+        if method:
+            args['enabled'] = True # enable extension
+            logging.info(f'[TAGS] {ext}: "{value}" ({method}).')
+        return args
     except Exception as e:
-        logging.error(f"Error processing ControlNet from tag: {e}")
+        logging.error(f"[TAGS] Error processing {ext} tag: {e}")
         return {}
 
 async def process_img_payload_tags(img_payload, mods):
@@ -2320,6 +2277,7 @@ async def process_img_payload_tags(img_payload, mods):
             # Img censoring handling
             if img_censoring and img_censoring > 0:
                 img_payload['img_censoring'] = img_censoring
+                logging.info(f"[TAGS] Censoring: {'Image Blurred' if value == 1 else 'Generation Blocked'}")
             # Imgmodel handling
             imgmodel_params = change_imgmodel or swap_imgmodel or None
             if imgmodel_params:
@@ -2334,19 +2292,19 @@ async def process_img_payload_tags(img_payload, mods):
                 else:
                     mode = 'change' if imgmodel_params == change_imgmodel else 'swap'
                     verb = 'Changing' if mode == 'change' else 'Swapping'
-                    logging.info(f'[TAGS] {verb} Img model to: "{imgmodel_params}".')
+                    logging.info(f"[TAGS] {verb} Img model: '{imgmodel_params}'")
                     imgmodel_params = {'imgmodel': {'imgmodel_name': imgmodel_params, 'mode': mode, 'verb': verb, 'current_imgmodel': current_imgmodel}} # return dict
             # Payload handling
             if payload:
                 if isinstance(payload, dict):
-                    logging.info(f"[TAGS] Payload values were updated: '{payload}'.")
+                    logging.info(f"[TAGS] Updated payload: '{payload}'")
                     update_dict(img_payload, payload)
                 else:
                     logging.warning("A tag was matched with invalid 'payload'; must be a dictionary.")
             # Param variances handling
             if param_variances:
                 processed_params = process_param_variances(param_variances)
-                logging.info(f'[TAGS] Applied img param variances: "{processed_params}".')
+                logging.info(f"[TAGS] Applied Param Variances: '{processed_params}'")
                 sum_update_dict(img_payload, processed_params)
             # Controlnet handling
             if controlnet:       
@@ -2354,11 +2312,10 @@ async def process_img_payload_tags(img_payload, mods):
             # layerdiffuse handling
             if layerdiffuse:
                 img_payload['alwayson_scripts']['layerdiffuse']['args'].update(layerdiffuse)
-                logging.info(f'[TAGS] layerdiffuse was triggered ({layerdiffuse}).')
+                logging.info(f"[TAGS] Enabled layerdiffuse: {processed_params}")
             # ReActor face swap handling
             if reactor:
                 img_payload['alwayson_scripts']['reactor']['args'].update(reactor)
-                logging.info(f'[TAGS] ReActor face swap was triggered ({reactor}).')
         return img_payload, imgmodel_params
     except Exception as e:
         logging.error(f"Error processing Img tags: {e}")
@@ -2376,8 +2333,7 @@ def collect_img_tag_values(tags):
             'layerdiffuse': {},
             'reactor': {}
             }
-        controlnet_dicts = {}  # To collect controlnet key-value pairs
-        controlnet_args_dicts = {}  # To collect cnet_ key-value pairs
+        controlnet_args = {}
         layerdiffuse_args = {}
         reactor_args = {}
         for tag in reversed(tags['matches']):
@@ -2402,15 +2358,17 @@ def collect_img_tag_values(tags):
                         logging.warning("A tag was matched with invalid 'img_param_variances'; must be a dictionary.")
                 # get controlnet tag params
                 elif key.startswith('controlnet'):
-                    index = int(key[len('controlnet'):]) if key != 'controlnet' else 0  # Determine the index for controlnet sublist (defaulting to 0)
-                    activate_cnet = process_controlnet_tag(value)                # Get 'image' and 'enabled'
-                    controlnet_dicts.setdefault(index, {}).update(activate_cnet) # Update controlnet dictionary at the specified index
+                    index = int(key[len('controlnet'):]) if key != 'controlnet' else 0  # Determine the index (cnet unit) for main controlnet args
+                    cnet = cnet_reactor_extension_args(value, 'ControlNet Image', 'controlnet_images')                       # Get 'image' and 'enabled'
+                    controlnet_args.setdefault(index, {}).update(cnet)         # Update controlnet args at the specified index
                 elif key.startswith('cnet'):
                     # Determine the index for controlnet_args sublist
-                    if key.startswith('cnet_'): index = 0
+                    if key.startswith('cnet_'): index = 0                                       # Determine the index (cnet unit) for additional controlnet args
                     else: index = int(key.split('_')[0][len('cnet'):])
-                    # Update controlnet_args dictionary at the specified index
-                    controlnet_args_dicts.setdefault(index, {}).update({key.split('_')[-1]: value})
+                    if key.endswith('mask_image'):
+                        mask_args = cnet_reactor_extension_args(value, 'ControlNet Mask', 'controlnet_images')
+                        value = mask_args['image']
+                    controlnet_args.setdefault(index, {}).update({key.split('_', 1)[-1]: value})   # Update controlnet args at the specified index
                 # get layerdiffuse tag params                    
                 elif key == 'layerdiffuse':
                     img_payload_mods['layerdiffuse']['method'] = value
@@ -2421,21 +2379,17 @@ def collect_img_tag_values(tags):
                     layerdiffuse_args[laydiff_key] = value
                 # get reactor tag params
                 elif key == 'reactor':
-                    reactor = process_reactor_tag(tag['reactor'])
+                    reactor = cnet_reactor_extension_args(value, 'ReActor Enabled', 'swap_faces')
                     img_payload_mods['reactor'] = reactor
                 elif key.startswith('reactor_'):
                     reactor_key = key[len('reactor_'):]
                     reactor_args[reactor_key] = value
-        # Merge controlnet_dicts and controlnet_args_dicts
-        for index in sorted(set(controlnet_dicts.keys()) | set(controlnet_args_dicts.keys())):
-            cnet_basesettings = copy.copy(client.settings['imgmodel']['payload']['alwayson_scripts']['controlnet']['args'][0])
-            controlnet_dict = controlnet_dicts.get(index, {})
-            controlnet_args_dict = controlnet_args_dicts.get(index, {})
-            merged_dict = controlnet_dict.copy()
-            merged_dict.update(controlnet_args_dict)
-            final_dict = update_dict(cnet_basesettings, merged_dict)
-            img_payload_mods['controlnet'].append(final_dict)
-        #img_payload_mods['controlnet'].update(controlnet_args)
+        # Add the collected SD WebUI extension args to the img_payload_mods dict
+        for index in sorted(set(controlnet_args.keys())):   # This flattens down any gaps between collected ControlNet units (ensures lowest index is 0, next is 1, and so on)
+            cnet_basesettings = copy.copy(client.settings['imgmodel']['payload']['alwayson_scripts']['controlnet']['args'][0])  # Copy of required dict items
+            cnet_unit_args = controlnet_args.get(index, {})
+            cnet_unit = update_dict(cnet_basesettings, cnet_unit_args)
+            img_payload_mods['controlnet'].append(cnet_unit)
         img_payload_mods['layerdiffuse'].update(layerdiffuse_args)
         img_payload_mods['reactor'].update(reactor_args)
         return img_payload_mods
@@ -2810,6 +2764,8 @@ async def character_loader(source):
         char_data = await load_character_data(source)
         # Merge with basesettings
         char_data = merge_base(char_data, 'llmcontext')
+        # Reset warning for character specific TTS
+        client.database.update_was_warned('char_tts', 0)
         # Gather context specific keys from the character data
         char_llmcontext = {}
         for key, value in char_data.items():
@@ -3346,7 +3302,7 @@ async def process_llmmodel(i, selected_llmmodel):
 
 if all_llmmodels:
     llmmodel_options = [app_commands.Choice(name=llmmodel, value=llmmodel) for llmmodel in all_llmmodels[:25]]
-    llmmodel_options_label = f'{llmmodel_options[0].name[0]}-{llmmodel_options[-1].name[0]}'.lower()
+    llmmodel_options_label = f'{llmmodel_options[1].name[0]}-{llmmodel_options[-1].name[0]}'.lower() # Using second "Name" since first name is "None"
     if len(all_llmmodels) > 25:
         llmmodel_options1 = [app_commands.Choice(name=llmmodel, value=llmmodel) for llmmodel in all_llmmodels[25:50]]
         llmmodel_options1_label = f'{llmmodel_options1[0].name[0]}-{llmmodel_options1[-1].name[0]}'.lower()
@@ -3846,6 +3802,23 @@ class Database:
         self.first_run = self.initialize_first_run()
         self.last_change = self.initialize_last_change()
         self.main_channels = self.initialize_main_channels()
+        self.warned_once = self.initialize_warned_once()
+
+    def initialize_first_run(self):
+        conn = sqlite3.connect('bot.db')
+        c = conn.cursor()
+        c.execute('''SELECT name FROM sqlite_master WHERE type='table' AND name='first_run' ''')
+        is_first_run_table_exists = c.fetchone()
+        if not is_first_run_table_exists:
+            c.execute('''CREATE TABLE IF NOT EXISTS first_run (is_first_run BOOLEAN)''')
+            c.execute('''INSERT INTO first_run (is_first_run) VALUES (1)''')
+            conn.commit()
+            conn.close()
+            return True
+        c.execute('''SELECT COUNT(*) FROM first_run''')
+        is_first_run_exists = c.fetchone()[0]
+        conn.close()
+        return is_first_run_exists == 0
 
     def initialize_last_change(self):
         try:
@@ -3872,28 +3845,38 @@ class Database:
     def initialize_main_channels(self):
         conn = sqlite3.connect('bot.db')
         c = conn.cursor()
-        c.execute('''CREATE TABLE IF NOT EXISTS emojis (emoji TEXT UNIQUE, meaning TEXT)''')
-        c.execute('''CREATE TABLE IF NOT EXISTS config (setting TEXT UNIQUE, value TEXT)''')
         c.execute('''CREATE TABLE IF NOT EXISTS main_channels (channel_id TEXT UNIQUE)''')
         c.execute('''SELECT channel_id FROM main_channels''')
         result = [int(row[0]) for row in c.fetchall()]
         conn.close()
         return result if result else []
 
-    def initialize_first_run(self):
+    def initialize_warned_once(self):
         conn = sqlite3.connect('bot.db')
         c = conn.cursor()
-        c.execute('''SELECT name FROM sqlite_master WHERE type='table' AND name='first_run' ''')
-        is_first_run_table_exists = c.fetchone()
-        if not is_first_run_table_exists:
-            c.execute('''CREATE TABLE IF NOT EXISTS first_run (is_first_run BOOLEAN)''')
-            c.execute('''INSERT INTO first_run (is_first_run) VALUES (1)''')
-            conn.commit()
-            conn.close()
-            return True
-        c.execute('''SELECT COUNT(*) FROM first_run''')
-        is_first_run_exists = c.fetchone()[0]
+        c.execute('''CREATE TABLE IF NOT EXISTS warned_once (flag_name TEXT UNIQUE, value INTEGER)''')
+        flags_to_insert = [('loractl', 0), ('char_tts', 0), ('no_llmmodel', 0)]
+        for flag_name, value in flags_to_insert:
+            c.execute('''INSERT OR REPLACE INTO warned_once (flag_name, value) VALUES (?, ?)''', (flag_name, value))
+        conn.commit()
         conn.close()
-        return is_first_run_exists == 0
+
+    def was_warned(self, flag_name):
+        conn = sqlite3.connect('bot.db')
+        c = conn.cursor()
+        c.execute('''SELECT value FROM warned_once WHERE flag_name = ?''', (flag_name,))
+        result = c.fetchone()
+        conn.close()
+        if result:
+            return result[0]
+        else:
+            return None
+
+    def update_was_warned(self, flag_name, value):
+        conn = sqlite3.connect('bot.db')
+        c = conn.cursor()
+        c.execute('''UPDATE warned_once SET value = ? WHERE flag_name = ?''', (value, flag_name))
+        conn.commit()
+        conn.close()
 
 client.run(bot_args.token if bot_args.token else TOKEN, root_logger=True, log_handler=handler)

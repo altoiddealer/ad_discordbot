@@ -171,6 +171,7 @@ tag_presets:
 #                                     Value values: Image in 'controlnet_images' (png/jpg/txt in base64) -OR- Directory name in '/controlnet_images/' (Picks a random image)
 #   cnet_{key}                        ANY key can be used (see dict_base_settings.yaml for complete list). A 'controlnet' tag must also be in effect when using these tags in order to properly assign the image.
 #   cnet#_{key}: 'string'             Optional syntax for multi-ControlNet parameters where # represents the ControlNet unit. ex: 'cnet0_weight: 0.5', 'cnet1_guidance_end: 0.8', etc.
+#   cnet#_mask_image: 'string'        The value for the 'cnet_mask_image' param will be handled exactly the same as the main controlnet (see writeup for 'controlnet' a few lines up)
 
 # layerdiffuse specific tags (Forge extension):
 #   layerdiffuse: 'string'            Simplified tag to both **apply** AND **enable** layerdiffuse. Note: 'laydiffuse_method' works exactly the same.

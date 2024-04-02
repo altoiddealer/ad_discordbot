@@ -41,8 +41,8 @@ imgmodel:
       controlnet:           # ControlNet extension arguments. The 'tags' feature supports multi-controlnet. To enable multi-controlnet, first increase # of CNets in A1111/Forge CNet settings.
         args:               # Then, use 'cnet0_{key}: value' tags for first unit, and 'cnet1_{key}' etc, for additional ControlNets.
           - enabled: false        # Enable ControlNet
-            image: null           # source image in base64
-            mask_image: null      # controlnet mask image (not yet supported in this script)
+            image: null           # base64 string for an input image
+            mask_image: null      # base64 string for a greyscale mask image
             model: "None"         # Exact name of the model including hash (ex: "diffusers_xl_canny_full [2b69fca4]")
             module: "None"        # The preprocessor, such as "canny". "None" = No preprocessor (treat input image as a ControlNet mask)
             weight: 1.0           # strength of the ControlNet
