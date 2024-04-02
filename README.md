@@ -64,15 +64,15 @@
 - **Robust "Tags" system to manipulate bot behavior persistently or via trigger phrases, including:**
   - Trigger Text and/or Image response
   - Image censoring settings (None / Spoiler / Block)
-  - Face swap with [ReActor](https://github.com/Gourieff/sd-webui-reactor) support
-  - Generate images with transparency with [layerdiffuse](https://github.com/layerdiffusion/sd-forge-layerdiffuse) support (Currently Forge only)
-  - Swapping LLM characters (ei: "draw... " can trigger character tailored for image prompting)
-  - Modifying LLM state (temperature, repetition penalty, etc)
-  - Modifying image gen settings (width, height, cfg scale, etc)
-  - Keep things spicy by factoring random variations to LLM state / img gen settings.
-  - Modifying the user's prompt and/or LLM's reply (delete/insert/replace text, img LORAs, etc)
+  - Powerful [ControlNet](https://github.com/Mikubill/sd-webui-controlnet), [ReActor](https://github.com/Gourieff/sd-webui-reactor), and [layerdiffuse](https://github.com/layerdiffusion/sd-forge-layerdiffuse) integration
   - Automatically apply [loractl scaling](https://github.com/cheald/sd-webui-loractl) (Currently A1111 only)
+  - Swapping / Changing LLM characters (ei: "draw... " can trigger character tailored for image prompting)
+  - Swapping / Changing LLM models and Img models
+  - Modifying LLM state (temperature, repetition penalty, etc) and image gen settings (width, height, cfg scale, etc)
+  - Keep things spicy by factoring random variations to LLM state / img gen settings
+  - Modifying the user's prompt and LLM's reply with delete/insert/replace text, img LORAs, etc
   - Manipulate LLM history (Suppress history, limit history, save or do-no-save reply, etc)
+  - **New Feature:** Flexible, Instant-Tags by using syntax [[key:value]] or [[key1:value1 | key2:value2 ]]
   - New features being added frequently and easily due to the framework of the "Tags" system
 
 - **TTS Support!**
