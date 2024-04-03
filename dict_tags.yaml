@@ -55,6 +55,22 @@ base_tags:
     on_prefix_only: true
     state: {preset: 'Divine Intellect'} # Update values for textgen-webui state parameters. Must be formatted as a dictionary.
 
+# Example of the 'Flow' tag feature... THE MOST ADVANCED FEATURE IN THIS BOT.
+# Creates a message loop, injecting the 'tags' from each flow_step. Paired with the 'format_tag' prompt, the possibilities are ENDLESS (seemingly!)
+  - trigger: 'loopback flow'  # Try a prompt such as 'draw a ____________ loopback flow'
+    insert_text: ''
+    insert_text_method: 'replace'
+    flow:
+      - flow_step: 1
+        flow_step_loops: 5  # Loops this flow step
+        format_prompt: 'Provide a more detailed version of this prompt: {llm_0}'
+        swap_character: M1nty-SDXL
+        image_response: false
+      - flow_step: 2
+        format_prompt: '{llm_0}'
+        swap_character: M1nty-SDXL
+        image_response: true
+
 # 'tag_presets' are not in effect by default - they will be imported anywhere you use a 'tag_preset_name' tag.
 # Useful for when you want to use the same set of tags for mulitple uses (a few characters, a few imgmodels, etc).
 # Example: '- tag_preset_name: SDXL Tags' would be a simple way to share tags among all your SDXL imgmodels defined in dict_imgmodels.yaml.
@@ -124,6 +140,11 @@ tag_presets:
 #   random: 0.5                       Chance for tag to process. 0.0 = 0% chance and 1.0 = 100% chance.
 #   case_sensitive: (true/false)      If the triggers are case sensitive
 #   on_prefix_only: (true/false)      If triggers must be matched at beginning of the searched text
+
+# Most advanced tag (Relevant to all):
+#   flow: {list}                      A list of 'flow_steps'. When a 'flow' tag is triggered, it creates a message loop for each defined 'loop_step'
+#   flow_step: {dict}                 The tags you want to apply in each flow step.  Without a trigger, they will auto-apply.  'format_prompt' is very useful in each flow_step
+#   flow_step_loops: int              The number of times you want to loop a particular flow_step.
 
 # Relevant to text generation (LLM):
 #   text_response: (true/false)       If LLM should generate text. If False and 'image_response' is True, passes the user's text as prompt for image gen.

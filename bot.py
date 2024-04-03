@@ -585,6 +585,8 @@ img_embed_info = discord.Embed(title = "Processing image generation ...", descri
 change_embed_info = discord.Embed(title = "Changing model ...", description=" ", url='https://github.com/altoiddealer/ad_discordbot')
 # Character embed
 char_embed_info = discord.Embed(title = 'Changing character ... ', description=" ", url='https://github.com/altoiddealer/ad_discordbot')
+# Flow embed
+flow_embed_info = discord.Embed(title = 'Processing flow ... ', description=" ", url='https://github.com/altoiddealer/ad_discordbot')
 
 # If first time bot script is run
 async def first_run():
@@ -967,21 +969,24 @@ def format_prompt_with_recent_msgs(user, prompt):
 
 def process_tag_formatting(user, prompt, formatting):
     try:
+        updated_prompt = copy.copy(prompt)
         format_prompt = formatting.get('format_prompt', None)
         time_offset = formatting.get('time_offset', None)
         time_format = formatting.get('time_format', None)
         date_format = formatting.get('date_format', None)
         # Tag handling for prompt formatting
         if format_prompt is not None:
-            prompt = format_prompt.replace('{prompt}', prompt)
+            updated_prompt = format_prompt.replace('{prompt}', updated_prompt)
             # print_content += f" | Prompt: {llm_prompt}"
         # format prompt with any defined recent messages
-        prompt = format_prompt_with_recent_msgs(user, prompt)
+        updated_prompt = format_prompt_with_recent_msgs(user, updated_prompt)
         # Format time if defined
         new_time, new_date = get_time(time_offset, time_format, date_format)
-        prompt = prompt.replace('{time}', new_time)
-        prompt = prompt.replace('{date}', new_date)
-        return prompt
+        updated_prompt = updated_prompt.replace('{time}', new_time)
+        updated_prompt = updated_prompt.replace('{date}', new_date)
+        if updated_prompt != prompt:
+            logging.info(f'Prompt was formatted: {updated_prompt}')
+        return updated_prompt
     except Exception as e:
         logging.error(f"Error formatting LLM prompt: {e}")
         return prompt
@@ -990,6 +995,7 @@ async def process_llm_payload_tags(user_name, channel, llm_payload, llm_prompt, 
     try:
         char_params = {}
         llmmodel_params = {}
+        flow = mods.get('flow', None)
         save_history = mods.get('save_history', None)
         load_history = mods.get('load_histor', None)
         param_variances = mods.get('param_variances', {})
@@ -999,27 +1005,39 @@ async def process_llm_payload_tags(user_name, channel, llm_payload, llm_prompt, 
         change_llmmodel = mods.get('change_llmmodel', None)
         swap_llmmodel = mods.get('swap_llmmodel', None)
         # Process the tag matches
-        if save_history or load_history or param_variances or state or change_character or swap_character or change_llmmodel or swap_llmmodel:
-            print_content = f"[TAGS] LLM behavior was modified ("
+        if flow or save_history or load_history or param_variances or state or change_character or swap_character or change_llmmodel or swap_llmmodel:
+            # Flow handling
+            if flow is not None:
+                if not flow_event.is_set(): # if not currently processing a flow
+                    total_flows = 0
+                    for flow_step in flow:  # Iterate over each dictionary in the list
+                        counter = 1
+                        flow_step_loops = flow_step.get('flow_step_loops', 0)
+                        counter += flow_step_loops
+                        total_flows += counter
+                        while counter > 0:
+                            counter -= 1
+                            await flow_queue.put(flow_step)
             # History handling
             if save_history is not None: llm_payload['save_history'] = save_history # Save this interaction to history (True/False)
             if load_history is not None:
                 if load_history < 0:
                     llm_payload['state']['history'] = {'internal': [], 'visible': []} # No history
-                    print_content += f" | History: suppressed"
+                    logging.info("[TAGS] History is being ignored")
                 elif load_history > 0:
                     # Calculate the number of items to retain (up to the length of session_history)
                     num_to_retain = min(load_history, len(session_history["internal"]))
                     llm_payload['state']['history']['internal'] = session_history['internal'][-num_to_retain:]
                     llm_payload['state']['history']['visible'] = session_history['visible'][-num_to_retain:]
-                    print_content += f' | History: limited to "{load_history}"'
+                    logging.info(f'[TAGS] History is being limited to previous {load_history} exchanges')
             if param_variances:
                 processed_params = process_param_variances(param_variances)
-                print_content += f" | Param Variances: {processed_params}"
+                logging.info(f'[TAGS] LLM Param Variances: {processed_params}')
                 sum_update_dict(llm_payload['state'], processed_params) # Updates dictionary while adding floats + ints
             if state:
                 print_content += f" | State: {state}"
                 update_dict(llm_payload['state'], state)
+                logging.info(f'[TAGS] LLM State was modified')
             # Character handling
             char_params = change_character or swap_character or {} # 'character_change' will trump 'character_swap'
             if char_params:
@@ -1034,7 +1052,7 @@ async def process_llm_payload_tags(user_name, channel, llm_payload, llm_prompt, 
                     else:
                         verb = 'Swapping'
                         llm_payload = await swap_llm_character(swap_character, user_name, llm_payload)
-                    print_content += f" | {verb} Character: {char_params}"
+                    logging.info(f'[TAGS] {verb} Character: {char_params}')
             # LLM model handling
             llmmodel_params = change_llmmodel or swap_llmmodel or {} # 'llmmodel_change' will trump 'llmmodel_swap'
             if llmmodel_params:
@@ -1048,11 +1066,8 @@ async def process_llm_payload_tags(user_name, channel, llm_payload, llm_prompt, 
                     if not any(llmmodel_params == model for model in all_llmmodels):
                         logging.error(f'LLM model not found: {llmmodel_params}')
                     else:
-                        print_content += f" | {verb} LLM Model: {llmmodel_params}"
+                        logging.info(f'[TAGS] {verb} LLM Model: {llmmodel_params}')
                         llmmodel_params = {'llmmodel': {'llmmodel_name': llmmodel_params, 'mode': mode, 'verb': verb}}
-            # Print results
-            print_content += ")"
-            logging.info(print_content)
         return llm_payload, llm_prompt, llmmodel_params
     except Exception as e:
         logging.error(f"Error processing LLM tags: {e}")
@@ -1060,6 +1075,7 @@ async def process_llm_payload_tags(user_name, channel, llm_payload, llm_prompt, 
 
 def collect_llm_tag_values(tags):
     llm_payload_mods = {
+        'flow': None,
         'save_history': None,
         'load_history': None,
         'change_character': None,
@@ -1077,6 +1093,8 @@ def collect_llm_tag_values(tags):
         }
     for tag in tags['matches']:
         # Values that will only apply from the first tag matches
+        if 'flow' in tag and llm_payload_mods['flow'] is None:
+            llm_payload_mods['flow'] = tag.pop('flow')
         if 'save_history' in tag and llm_payload_mods['save_history'] is None:
             llm_payload_mods['save_history'] = tag.pop('save_history')
         if 'load_history' in tag and llm_payload_mods['load_history'] is None:
@@ -1319,13 +1337,16 @@ def get_tags_from_text(text):
         logging.error(f"Error getting tags from text: {e}")
         return text, []
 
-def get_tags(text):
+async def get_tags(text):
     try:
+        flow_step_tags = []
+        if flow_queue.qsize() > 0:
+            flow_step_tags = [await flow_queue.get()]
         base_tags = client.settings.get('tags', []) # base tags
         imgmodel_tags = client.settings['imgmodel'].get('tags', []) # imgmodel specific tags
         char_tags = client.settings['llmcontext'].get('tags', []) # character specific tags
         detagged_text, tags_from_text = get_tags_from_text(text)
-        all_tags = char_tags + base_tags + imgmodel_tags + tags_from_text # merge tags to one dictionary
+        all_tags = char_tags + base_tags + imgmodel_tags + tags_from_text + flow_step_tags # merge tags to one dictionary
         sorted_tags = sort_tags(all_tags) # sort tags into phases (user / llm / userllm)
         return detagged_text, sorted_tags
     except Exception as e:
@@ -1372,7 +1393,7 @@ async def on_message_gen(user, channel, source, text):
     try:
         params = {}
         # collects all tags, sorted into sub-lists by phase (user / llm / userllm)
-        text, tags = get_tags(text)
+        text, tags = await get_tags(text)
         # match tags labeled for user / userllm.
         tags = match_tags(text, tags)
         # check if triggered to not respond with text
@@ -1474,16 +1495,13 @@ def reset_session_history():
     session_history = {'internal': [], 'visible': []}
 
 def manage_history(prompt, reply, save_history):
-    # Retain up to 10 most recent messages
     global recent_messages
-    recent_messages['user'].append(prompt)
-    recent_messages['llm'].append(reply)
-    # Limit each sublist to 10 messages or total character count of 10,000
-    for sublist in ['user', 'llm']:
-        total_chars = sum(len(message) for message in recent_messages[sublist])
-        while len(recent_messages[sublist]) > 10 or total_chars > 10000:
-            oldest_message = recent_messages[sublist].pop(0)
-            total_chars -= len(oldest_message)
+    recent_messages['user'].insert(0, prompt)
+    recent_messages['llm'].insert(0, reply)
+    # Ensure recent messages list does not exceed 10 elements or 10,000 characters
+    for key in recent_messages:
+        while len(recent_messages[key]) > 10 or sum(len(message) for message in recent_messages[key]) > 10000:
+            oldest_message = recent_messages[key].pop()
     # Retain chat history
     global session_history
     if not client.behavior.ignore_history and save_history:
@@ -1820,6 +1838,9 @@ def unpack_queue_item(queue_item):
         else: logging.info(f'{user} used "/imgmodel": "{info}"')
     return user, channel, source, text, message, params
 
+flow_event = asyncio.Event()
+flow_queue = asyncio.Queue()
+
 task_event = asyncio.Event()
 task_queue = asyncio.Queue()
 
@@ -1851,12 +1872,42 @@ async def process_tasks():
                         await on_message_gen(user, channel, source, text)
                     else:
                         logging.warning(f'Unexpectedly received an invalid task. Source: {source}')
+                    if flow_queue.qsize() > 0:          # flows are activated in process_llm_payload_tags(), and is where the flow queue is populated
+                        await process_flow(user, channel, source, text)
             task_event.clear() # Flag function is no longer processing a task
             task_queue.task_done() # Accept next task
     except Exception as e:
         logging.error(f"An error occurred while processing a main task: {e}")
         task_event.clear()
         task_queue.task_done()
+
+#################################################################
+########################## QUEUED FLOW ##########################
+#################################################################
+async def process_flow(user, channel, source, text):
+    try:
+        total_flow_steps = flow_queue.qsize()
+        flow_embed_info.title = f'Processing a Flow with {total_flow_steps} steps ... '
+        flow_embed_info.description = f'{user} triggered a Flow. Processing step 1 of {total_flow_steps} ... '
+        flow_embed = await channel.send(embed=flow_embed_info)
+        flow_event.set()                # flag that a flow is being processed. Check with 'if flow_event.is_set():'
+        while flow_queue.qsize() > 0:   # flow_queue items are removed in get_tags()
+            remaining_flow_steps = flow_queue.qsize()
+            flow_embed_info.description = f'{user} triggered a Flow. Processing step {total_flow_steps + 1 - remaining_flow_steps} of {total_flow_steps} ... '
+            await flow_embed.edit(embed=flow_embed_info)
+            await on_message_gen(user, channel, source, text)
+        flow_embed_info.title = f"Flow completed "
+        flow_embed_info.description = f'{user} triggered a Flow with {total_flow_steps} steps'
+        await flow_embed.edit(embed=flow_embed_info)
+        flow_event.clear()              # flag that flow is no longer processing
+        flow_queue.task_done()          # flow queue task is complete      
+    except Exception as e:
+        logging.error(f"An error occurred while processing a Flow: {e}")
+        flow_embed_info.title = "An error occurred while processing a Flow"
+        flow_embed_info.description = e
+        await flow_embed.edit(embed=flow_embed_info)
+        flow_event.clear()
+        flow_queue.task_done()
 
 #################################################################
 #################### QUEUED IMAGE GENERATION ####################
@@ -2440,7 +2491,7 @@ async def img_gen(user, channel, source, img_prompt, params, tags={}):
             logging.warning(f'Bot tried to generate image for {user}, but no Img model was loaded')
         img_gen_embed = await channel.send(embed=img_embed_info)
         if not tags:
-            img_prompt, tags = get_tags(img_prompt)
+            img_prompt, tags = await get_tags(img_prompt)
             if 'user' in tags['unmatched']: del tags['unmatched']['user'] # Tags intended for pre-LLM processing should be removed
             tags = match_img_tags(img_prompt, tags)
         # Initialize img_payload
@@ -3592,22 +3643,6 @@ if tts_client and tts_client in supported_tts_clients:
             voice_input = voice_input if voice_input is not None else ''
             lang = lang.value if lang is not None else ''
             await process_speak(i, input_text, selected_voice, lang, voice_input)
-
-#################################################################
-###################### HISTORY MANAGEMENT #######################
-#################################################################
-class History:
-    def __init__(self):
-        self.session_history = {'internal': [], 'visible': []}
-
-    def reset_session_history(self):
-        self.session_history = {'internal': [], 'visible': []}
-
-    def manage_history(self, prompt, reply, save_history):
-        # Retain chat history
-        if save_history:
-            self.session_history['internal'].append((prompt, reply))
-            self.session_history['visible'].append((prompt, reply))
 
 #################################################################
 ####################### DEFAULT SETTINGS ########################
