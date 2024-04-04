@@ -34,7 +34,7 @@ base_tags:
   - trigger: 'draw,generate'
     search_mode: user           # Only search user's prompt
     on_prefix_only: true        # Only triggers if matched at very beginning
-    image_response: true        # The LLM's reply will be used for Stable Diffusion img generation
+    should_gen_image: true        # The LLM's reply will be used for Stable Diffusion img generation
     swap_character: Minty-SDXL  # Filename of character in /characters.
     insert_text: ''
     insert_text_method: replace
@@ -43,12 +43,12 @@ base_tags:
 
   - trigger: 'take a photo,take {a|another} picture'
     search_mode: user
-    image_response: true
+    should_gen_image: true
     format_prompt: '''[SYSTEM] You have been tasked with creating a text-to-image prompt. Describe the scene in concise and vivid detail: "{prompt}"'''
 
   - trigger: 'selfie,self portrait'
     search_mode: user
-    image_response: true
+    should_gen_image: true
     format_prompt: '''[SYSTEM] You have been tasked with taking a selfie. Include your appearance, your surroundings, and what you are doing right now: "{prompt}"'''
 
   - trigger: 'calculate,define'
@@ -65,11 +65,11 @@ base_tags:
         flow_step_loops: 5  # Loops this flow step
         format_prompt: 'Provide a more detailed version of this prompt: {llm_0}'
         swap_character: M1nty-SDXL
-        image_response: false
+        should_gen_image: false
       - flow_step: 2
         format_prompt: '{llm_0}'
         swap_character: M1nty-SDXL
-        image_response: true
+        should_gen_image: true
 
 # 'tag_presets' are not in effect by default - they will be imported anywhere you use a 'tag_preset_name' tag.
 # Useful for when you want to use the same set of tags for mulitple uses (a few characters, a few imgmodels, etc).
@@ -147,7 +147,8 @@ tag_presets:
 #   flow_step_loops: int              The number of times you want to loop a particular flow_step.
 
 # Relevant to text generation (LLM):
-#   text_response: (true/false)       If LLM should generate text. If False and 'image_response' is True, passes the user's text as prompt for image gen.
+#   should_gen_text: (true/false)     If LLM should generate text. If False and 'should_gen_image' is True, passes the user's text as prompt for image gen.
+#   should_send_text: (true/false)    If LLM should send generated text to channel. Mainly used for 'flows' tag.
 #   change_llmmodel: 'string'         For (change/swap)_llmmodel: 'change' will trigger a persistent change. 'swap' will only change the LLM model for the current interaction.
 #   swap_llmmodel: 'string'           Name of an LLM model (ei: 'Mistral-7B-OpenOrca-GPTQ'). Value 'None' will unload the LLM model!
 #   time_offset: 0.0                  0 = today's date (system time). -0.5 shifts the current date to be 12 hours ago. (UOM = days). Use with '{time}' anywhere in your prompts
@@ -165,7 +166,8 @@ tag_presets:
 #   llm_param_variances: {dictionary} Randomization ranges for textgen-webui state parameters. Must be formatted as a dictionary.
 
 # Relevant to img generation (A1111 / Forge):
-#   image_response: (true/false)      If LLM's reply should include Stable Diffusion img generation
+#   should_gen_image: (true/false)    If bot should generate an image using Stable Diffusion. The LLM's reply will be used as the img prompt, unless no LLM Model is loaded or 'should_gen_text' is False - in which case user message is prompt.
+#   should_send_image: (true/false)   If bot should send generated image to channel. Mainly used for 'flows' tag.
 #   change_imgmodel: 'string'         For (change/swap)_imgmodel: 'change' will trigger a persistent change. 'swap' will only change the Img model for the current interaction.
 #   swap_imgmodel: 'string'           Copy/paste a checkpoint name *exactly* as it appears in A1111/Forge model list (ei: 'sdxl\epicrealismXL_v4Photoreal.safetensors [c772a1a690]').
 #                                     Currently, API Img model unloading is bugged in both A1111/Forge so that is not an option here.

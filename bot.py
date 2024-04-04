@@ -1013,7 +1013,7 @@ async def process_llm_payload_tags(user_name, channel, llm_payload, llm_prompt, 
                     for flow_step in flow:  # Iterate over each dictionary in the list
                         counter = 1
                         flow_step_loops = flow_step.get('flow_step_loops', 0)
-                        counter += flow_step_loops
+                        counter += (flow_step_loops - 1) if flow_step_loops else 0
                         total_flows += counter
                         while counter > 0:
                             counter -= 1
@@ -1397,10 +1397,10 @@ async def on_message_gen(user, channel, source, text):
         # match tags labeled for user / userllm.
         tags = match_tags(text, tags)
         # check if triggered to not respond with text
-        should_text = user_asks_for_text(tags)
-        if not should_text:
-            should_draw = user_asks_for_image(tags)
-            if should_draw:
+        should_gen_text = should_bot_do('should_gen_text', default=True, tags=tags)
+        if not should_gen_text:
+            should_gen_image = should_bot_do('should_gen_image', default=False, tags=tags)
+            if should_gen_image:
                 if await sd_online(channel):
                     await channel.send(f'Bot was triggered by Tags to not respond with text.\n**Processing image generation using your input as the prompt ...**') # msg for if LLM model is unloaded
                 llm_prompt = copy.copy(text)
@@ -1437,8 +1437,8 @@ async def hybrid_llm_img_gen(user, channel, source, text, tags, llm_payload, par
             change_embed = await change_llmmodel_task(user, channel, params)    # Change LLM model
             if mode == 'swap': await change_embed.delete()                      # Delete embed before the second call
         # make a 'Prompting...' embed when generating text for an image response
-        should_draw = user_asks_for_image(tags)
-        if should_draw:
+        should_gen_image = should_bot_do('should_gen_image', default=False, tags=tags)
+        if should_gen_image:
             if await sd_online(channel):
                 if shared.model_name == 'None':
                     await channel.send('**Processing image generation using message as the image prompt ...**') # msg for if LLM model is unloaded
@@ -1459,7 +1459,7 @@ async def hybrid_llm_img_gen(user, channel, source, text, tags, llm_payload, par
         if last_resp is not None:
             logging.info("reply sent: \"" + user.name + ": {'text': '" + llm_payload["text"] + "', 'response': '" + last_resp + "'}\"")
         else:
-            if should_draw: last_resp = copy.copy(text)
+            if should_gen_image: last_resp = copy.copy(text)
             else: return
         # if LLM model swapping was triggered
         if mode == 'swap':
@@ -1468,14 +1468,16 @@ async def hybrid_llm_img_gen(user, channel, source, text, tags, llm_payload, par
             if change_embed: await change_embed.delete()                                # Delete embed again after the second call
         # process image generation (A1111 / Forge)
         tags = match_img_tags(last_resp, tags)
-        if not should_draw:
-            should_draw = user_asks_for_image(tags) # Check again post-LLM
-        if should_draw:
+        if not should_gen_image:
+            should_gen_image = should_bot_do('should_gen_image', default=False, tags=tags) # Check again post-LLM
+        if should_gen_image:
             if img_gen_embed: await img_gen_embed.delete()
             await img_gen(user, channel, source, last_resp, params, tags)
         if tts_resp: await process_tts_resp(channel, tts_resp)
         mention_resp = update_mention(user.mention, last_resp) # @mention non-consecutive users
-        await send_long_message(channel, mention_resp)
+        should_send_text = should_bot_do('should_send_text', default=True, tags=tags)
+        if should_send_text:
+            await send_long_message(channel, mention_resp)
     except Exception as e:
         logging.error(f'An error occurred while processing "{source}" request: {e}')
         change_embed_info.title = f'An error occurred while processing "{source}" request'
@@ -1766,39 +1768,21 @@ async def change_char_task(user, channel, source, params):
 #################################################################
 ######################## MAIN TASK QUEUE ########################
 #################################################################
-def user_asks_for_text(tags={}):
-    try:
-        matches = tags.get('matches', {})
-        for item in matches:
-            if isinstance(item, tuple):
-                tag, start, end = item
-            else:
-                tag = item
-            if 'text_response' in tag and tag['text_response'] is False:
-                logging.info('[TAGS]: "text_response" = False. Bot is not replying.')
-                return False
-        return True
+def should_bot_do(key, default, tags={}):   # Used to check if should:
+    try:                                    # - generate text
+        matches = tags.get('matches', {})   # - generate image
+        if matches:                         # - send text response
+            for item in matches:            # - send image response
+                if isinstance(item, tuple):
+                    tag, start, end = item
+                else:
+                    tag = item
+                if key in tag:
+                    return tag.get(key, default)
+        return default
     except Exception as e:
-        logging.error(f"An error occurred while checking if bot should reply with text: {e}")
-        return True
-
-def user_asks_for_image(tags={}):
-    try:
-        matches = tags.get('matches', {})
-        for item in matches:
-            if isinstance(item, tuple):
-                tag, start, end = item
-            else:
-                tag = item
-            if 'image_response' in tag:
-                return tag.get('image_response', False)
-        # Last method to trigger an image response
-        if random.random() < client.behavior.reply_with_image:
-            return True
-        return False
-    except Exception as e:
-        logging.error(f"An error occurred while checking if bot should reply with image: {e}")
-        return False
+        logging.error(f"An error occurred while checking if bot should do '{key}': {e}")
+        return default
 
 # For @ mentioning users who were not last replied to
 previous_user_id = ''
@@ -1884,6 +1868,11 @@ async def process_tasks():
 #################################################################
 ########################## QUEUED FLOW ##########################
 #################################################################
+async def peek(queue):
+    item = await queue.get()
+    await queue.put(item)  # Put the item back
+    return item
+
 async def process_flow(user, channel, source, text):
     try:
         total_flow_steps = flow_queue.qsize()
@@ -1895,6 +1884,10 @@ async def process_flow(user, channel, source, text):
             remaining_flow_steps = flow_queue.qsize()
             flow_embed_info.description = f'{user} triggered a Flow. Processing step {total_flow_steps + 1 - remaining_flow_steps} of {total_flow_steps} ... '
             await flow_embed.edit(embed=flow_embed_info)
+            next_flow = await peek(flow_queue)
+            if 'format_prompt' in next_flow:    # format prompt before feeding it back into on_message_gen()
+                formatting = {'format_prompt': next_flow['format_prompt']}
+                text = process_tag_formatting(user, text, formatting)
             await on_message_gen(user, channel, source, text)
         flow_embed_info.title = f"Flow completed "
         flow_embed_info.description = f'{user} triggered a Flow with {total_flow_steps} steps'
@@ -2035,7 +2028,7 @@ async def check_sd_progress(img_gen_embed):
                 logging.warning('Connection closed, retrying in 1 seconds')
                 await asyncio.sleep(1)
 
-async def process_image_gen(img_payload, img_gen_embed, channel):
+async def process_image_gen(img_payload, img_gen_embed, channel, tags):
     try:
         censor_mode = None
         do_censor = False
@@ -2063,7 +2056,9 @@ async def process_image_gen(img_payload, img_gen_embed, channel):
         if do_censor and censor_mode == 1:
             file_prefix = 'SPOILER_temp_img_'
         image_files = [discord.File(f'{temp_dir}/temp_img_{idx}.png', filename=f'{file_prefix}{idx}.png') for idx in range(len(images))]
-        await channel.send(files=image_files)
+        should_send_image = should_bot_do('should_send_image', default=True, tags=tags)
+        if should_send_image:
+            await channel.send(files=image_files)
         # Save the image at index 0 with the date/time naming convention
         timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         os.rename(f'{temp_dir}/temp_img_0.png', f'{output_dir}/{timestamp}.png')
@@ -2517,7 +2512,7 @@ async def img_gen(user, channel, source, img_prompt, params, tags={}):
             current_imgmodel = imgmodel_params['imgmodel'].get('current_imgmodel', '')
             swap_embed = await change_imgmodel_task(user, channel, imgmodel_params)
         # Generate and send images
-        await process_image_gen(img_payload, img_gen_embed, channel)
+        await process_image_gen(img_payload, img_gen_embed, channel, tags)
         # If switching back to original Img model
         if swap_embed: await change_imgmodel_task(user, channel, params={'imgmodel': {'imgmodel_name': current_imgmodel, 'mode': 'swap_back', 'verb': 'Swapping', 'embed': swap_embed}})
         if source == 'image':
