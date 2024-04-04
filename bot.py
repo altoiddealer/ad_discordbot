@@ -991,6 +991,29 @@ def process_tag_formatting(user, prompt, formatting):
         logging.error(f"Error formatting LLM prompt: {e}")
         return prompt
 
+async def build_flow_queue(flow):   
+    try: 
+        if not flow_event.is_set(): # if not currently processing a flow
+            total_flows = 0
+            flow_base = {}
+            for flow_dict in flow: # find and extract any 'flow_base' first
+                if 'flow_base' in flow_dict:
+                    flow_base = flow_dict.pop('flow_base')
+                    flow.remove(flow_dict)
+                    break
+            for step in flow:
+                flow_step = copy.copy(flow_base)
+                flow_step.update(step)
+                counter = 1
+                flow_step_loops = flow_step.pop('flow_step_loops', 0)
+                counter += (flow_step_loops - 1) if flow_step_loops else 0
+                total_flows += counter
+                while counter > 0:
+                    counter -= 1
+                    await flow_queue.put(flow_step)
+    except Exception as e:
+        logging.error(f"Error building Flow: {e}")
+
 async def process_llm_payload_tags(user_name, channel, llm_payload, llm_prompt, mods):
     try:
         char_params = {}
@@ -1007,17 +1030,7 @@ async def process_llm_payload_tags(user_name, channel, llm_payload, llm_prompt, 
         # Process the tag matches
         if flow or save_history or load_history or param_variances or state or change_character or swap_character or change_llmmodel or swap_llmmodel:
             # Flow handling
-            if flow is not None:
-                if not flow_event.is_set(): # if not currently processing a flow
-                    total_flows = 0
-                    for flow_step in flow:  # Iterate over each dictionary in the list
-                        counter = 1
-                        flow_step_loops = flow_step.get('flow_step_loops', 0)
-                        counter += (flow_step_loops - 1) if flow_step_loops else 0
-                        total_flows += counter
-                        while counter > 0:
-                            counter -= 1
-                            await flow_queue.put(flow_step)
+            if flow is not None: await build_flow_queue(flow)
             # History handling
             if save_history is not None: llm_payload['save_history'] = save_history # Save this interaction to history (True/False)
             if load_history is not None:
@@ -1868,10 +1881,25 @@ async def process_tasks():
 #################################################################
 ########################## QUEUED FLOW ##########################
 #################################################################
+# function to get a copy of the next queue item while maintaining the original queue
 async def peek(queue):
-    item = await queue.get()
-    await queue.put(item)  # Put the item back
-    return item
+    temp_queue = asyncio.Queue()
+    total_queue_size = queue.qsize()
+    first_item = None
+    while queue.qsize() > 0:
+        if queue.qsize() == total_queue_size:
+            item = await queue.get()
+            first_item = copy.copy(item)
+        else:
+            item = await queue.get()
+        await temp_queue.put(item)
+    # Enqueue the items back into the original queue
+    while temp_queue.qsize() > 0:
+        item_to_put_back = await temp_queue.get()
+        await queue.put(item_to_put_back)
+    
+    print("first_item:", first_item)
+    return first_item
 
 async def process_flow(user, channel, source, text):
     try:

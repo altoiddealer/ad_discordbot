@@ -57,19 +57,30 @@ base_tags:
 
 # Example of the 'Flow' tag feature... THE MOST ADVANCED FEATURE IN THIS BOT.
 # Creates a message loop, injecting the 'tags' from each flow_step. Paired with the 'format_tag' prompt, the possibilities are ENDLESS (seemingly!)
-  - trigger: 'loopback flow'  # Try a prompt such as 'draw a ____________ loopback flow'
-    insert_text: ''
+  # Note: a triggered "flow" is executed after the initial message response is completed.  It does not immediately hijack the bot behavior.
+  - trigger: 'loopback' # Try a prompt such as 'loopback ____________'
+    insert_text: ''                   # the tags here are anything you want to happen on the initial pass before the 'flow' actually kicks in
     insert_text_method: 'replace'
+    save_history: False
+    load_history: -1
+    swap_character: M1nty-SDXL
+    should_send_text: false # modify default behavior which is "true"
+    should_gen_image: false # modify default behavior which is "true"
     flow:
+      - flow_base:  # If flow_base is provided, its tags will apply to all flow_steps. flow_step tags will overwrite flow_base tags.
+          format_prompt: 'Provide a more detailed version of this prompt: {llm_0}'
+          save_history: False
+          load_history: -1
+          swap_character: M1nty-SDXL
+          should_send_text: false
+          should_gen_image: false
       - flow_step: 1
-        flow_step_loops: 5  # Loops this flow step
-        format_prompt: 'Provide a more detailed version of this prompt: {llm_0}'
-        swap_character: M1nty-SDXL
+        flow_step_loops: 3      # this flow_step will execute 3 times (remember: includes flow_base)
         should_gen_image: false
       - flow_step: 2
-        format_prompt: '{llm_0}'
-        swap_character: M1nty-SDXL
-        should_gen_image: true
+        should_gen_image: true  # finally, generate the image
+        should_send_text: true  # finally, send the reply to channel
+
 
 # 'tag_presets' are not in effect by default - they will be imported anywhere you use a 'tag_preset_name' tag.
 # Useful for when you want to use the same set of tags for mulitple uses (a few characters, a few imgmodels, etc).
