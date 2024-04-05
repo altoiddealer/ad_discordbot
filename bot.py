@@ -89,27 +89,34 @@ SD_URL = config.sd.get('SD_URL', None) # Get the URL from config.py
 if SD_URL is None:
     SD_URL = config.sd.get('A1111', 'http://127.0.0.1:7860')
 
-async def sd_sysinfo():
+async def sd_api(endpoint, method='get', json=None):
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.get(url=f'{SD_URL}/sdapi/v1/cmd-flags') as response:
+            request_method = getattr(session, method.lower())  
+            async with request_method(url=f'{SD_URL}{endpoint}', json=json) as response:
                 if response.status == 200:
-                    data = await response.json()
-                    ui_settings_file = data.get("ui_settings_file", "")
-                    if "webui-forge" in ui_settings_file:
-                        return 'SD WebUI Forge'
-                    elif "webui" in ui_settings_file:
-                        return 'A1111 SD WebUI'
-                    else:
-                        return 'Stable Diffusion'
+                    r = await response.json()
+                    return r
                 else:
-                    logging.error(f"Error getting SD sysinfo API (response: '{response.status}')")
-                    return 'Stable Diffusion'
+                    logging.error(f'{SD_URL}{endpoint} response: "{response.status}"')
+    except Exception as e:
+        logging.error(f'Error getting data from "{SD_URL}{endpoint}": {e}')
+
+async def get_sd_sysinfo():
+    try:
+        r = await sd_api(endpoint='/sdapi/v1/cmd-flags', method='get', json=None)
+        ui_settings_file = r.get("ui_settings_file", "")
+        if "webui-forge" in ui_settings_file:
+            return 'SD WebUI Forge'
+        elif "webui" in ui_settings_file:
+            return 'A1111 SD WebUI'
+        else:
+            return 'Stable Diffusion'
     except Exception as e:
         logging.error(f"Error getting SD sysinfo API: {e}")
         return 'Stable Diffusion'
 
-SD_CLIENT = asyncio.run(sd_sysinfo()) # Stable Diffusion client name to use in messages, warnings, etc
+SD_CLIENT = asyncio.run(get_sd_sysinfo()) # Stable Diffusion client name to use in messages, warnings, etc
 
 #################################################################
 ##################### TEXTGENWEBUI STARTUP ######################
@@ -991,26 +998,28 @@ def process_tag_formatting(user, prompt, formatting):
         logging.error(f"Error formatting LLM prompt: {e}")
         return prompt
 
-async def build_flow_queue(flow):   
+async def build_flow_queue(input_flow):   
     try: 
-        if not flow_event.is_set(): # if not currently processing a flow
-            total_flows = 0
-            flow_base = {}
-            for flow_dict in flow: # find and extract any 'flow_base' first
-                if 'flow_base' in flow_dict:
-                    flow_base = flow_dict.pop('flow_base')
-                    flow.remove(flow_dict)
-                    break
-            for step in flow:
-                flow_step = copy.copy(flow_base)
-                flow_step.update(step)
-                counter = 1
-                flow_step_loops = flow_step.pop('flow_step_loops', 0)
-                counter += (flow_step_loops - 1) if flow_step_loops else 0
-                total_flows += counter
-                while counter > 0:
-                    counter -= 1
-                    await flow_queue.put(flow_step)
+        flow = copy.copy(input_flow)
+        total_flows = 0
+        flow_base = {}
+        for flow_dict in flow: # find and extract any 'flow_base' first
+            if 'flow_base' in flow_dict:
+                flow_base = flow_dict.get('flow_base')
+                flow.remove(flow_dict)
+                break
+        for step in flow:
+            if not step:
+                continue
+            flow_step = copy.copy(flow_base)
+            flow_step.update(step)
+            counter = 1
+            flow_step_loops = flow_step.pop('flow_step_loops', 0)
+            counter += (flow_step_loops - 1) if flow_step_loops else 0
+            total_flows += counter
+            while counter > 0:
+                counter -= 1
+                await flow_queue.put(flow_step)
     except Exception as e:
         logging.error(f"Error building Flow: {e}")
 
@@ -1030,7 +1039,8 @@ async def process_llm_payload_tags(user_name, channel, llm_payload, llm_prompt, 
         # Process the tag matches
         if flow or save_history or load_history or param_variances or state or change_character or swap_character or change_llmmodel or swap_llmmodel:
             # Flow handling
-            if flow is not None: await build_flow_queue(flow)
+            if flow is not None and not flow_event.is_set():
+                await build_flow_queue(flow)
             # History handling
             if save_history is not None: llm_payload['save_history'] = save_history # Save this interaction to history (True/False)
             if load_history is not None:
@@ -1685,7 +1695,7 @@ async def change_imgmodel_task(user, channel, params):
         # Soft Img model update if swapping
         if mode == 'swap' or mode == 'swap_back':
             model_data = imgmodel.get('override_settings') or imgmodel['payload'].get('override_settings')
-            await load_imgmodel(channel, model_data)
+            _ = await sd_api(endpoint='/sdapi/v1/options', method='post', json=model_data)
             if embed: await embed.delete()
             return
         # Change Img model settings
@@ -1897,22 +1907,23 @@ async def peek(queue):
     while temp_queue.qsize() > 0:
         item_to_put_back = await temp_queue.get()
         await queue.put(item_to_put_back)
-    
-    print("first_item:", first_item)
     return first_item
 
 async def process_flow(user, channel, source, text):
     try:
         total_flow_steps = flow_queue.qsize()
-        flow_embed_info.title = f'Processing a Flow with {total_flow_steps} steps ... '
-        flow_embed_info.description = f'{user} triggered a Flow. Processing step 1 of {total_flow_steps} ... '
+        flow_embed_info.title = f'Processing Flow for {user} with {total_flow_steps} steps'
+        flow_embed_info.description = f'Processing step 1/{total_flow_steps}'
         flow_embed = await channel.send(embed=flow_embed_info)
         flow_event.set()                # flag that a flow is being processed. Check with 'if flow_event.is_set():'
         while flow_queue.qsize() > 0:   # flow_queue items are removed in get_tags()
-            remaining_flow_steps = flow_queue.qsize()
-            flow_embed_info.description = f'{user} triggered a Flow. Processing step {total_flow_steps + 1 - remaining_flow_steps} of {total_flow_steps} ... '
-            await flow_embed.edit(embed=flow_embed_info)
             next_flow = await peek(flow_queue)
+            flow_name = ''
+            if 'flow_step' in next_flow:    # format prompt before feeding it back into on_message_gen()
+                flow_name = f": {next_flow['flow_step']}"
+            remaining_flow_steps = flow_queue.qsize()
+            flow_embed_info.description = f'Processing step {total_flow_steps + 1 - remaining_flow_steps}/{total_flow_steps}{flow_name} '
+            await flow_embed.edit(embed=flow_embed_info)
             if 'format_prompt' in next_flow:    # format prompt before feeding it back into on_message_gen()
                 formatting = {'format_prompt': next_flow['format_prompt']}
                 text = process_tag_formatting(user, text, formatting)
@@ -1976,22 +1987,20 @@ async def layerdiffuse_hack(temp_dir, img_payload, images, pnginfo):
 async def sd_txt2img(temp_dir, img_payload, img_gen_embed):
     try:
         async def save_images_and_return():
-            async with aiohttp.ClientSession() as session:
-                async with session.post(url=f'{SD_URL}/sdapi/v1/txt2img', json=img_payload) as response:
-                    r = await response.json()
-                    images = []
-                    pnginfo = None
-                    for i, img_data in enumerate(r['images']):
-                        image = Image.open(io.BytesIO(base64.b64decode(img_data.split(",", 1)[0])))
-                        png_payload = {"image": "data:image/png;base64," + img_data}
-                        response2 = requests.post(url=f'{SD_URL}/sdapi/v1/png-info', json=png_payload)
-                        png_info_data = response2.json().get("info")
-                        if i == 0:  # Only capture pnginfo from the first png_img_data
-                            pnginfo = PngImagePlugin.PngInfo()
-                            pnginfo.add_text("parameters", png_info_data)
-                        image.save(f'{temp_dir}/temp_img_{i}.png', pnginfo=pnginfo) # save image to temp directory
-                        images.append(image) # collect a list of PIL images
-                    return images, response.status, pnginfo
+            r = await sd_api(endpoint='/sdapi/v1/txt2img', method='post', json=img_payload)
+            images = []
+            pnginfo = None
+            for i, img_data in enumerate(r.get('images')):
+                image = Image.open(io.BytesIO(base64.b64decode(img_data.split(",", 1)[0])))
+                png_payload = {"image": "data:image/png;base64," + img_data}
+                r2 = await sd_api(endpoint='/sdapi/v1/png-info', method='post', json=png_payload) 
+                png_info_data = r2.get("info")
+                if i == 0:  # Only capture pnginfo from the first png_img_data
+                    pnginfo = PngImagePlugin.PngInfo()
+                    pnginfo.add_text("parameters", png_info_data)
+                image.save(f'{temp_dir}/temp_img_{i}.png', pnginfo=pnginfo) # save image to temp directory
+                images.append(image) # collect a list of PIL images
+            return images, pnginfo
 
         async def track_progress():
             await check_sd_progress(img_gen_embed)
@@ -2002,14 +2011,14 @@ async def sd_txt2img(temp_dir, img_payload, img_gen_embed):
         # Wait for both tasks to complete
         await asyncio.gather(images_task, progress_task)
         # Get the list of images after both tasks are done
-        images, r, pnginfo = await images_task
+        images, pnginfo = await images_task
 
         # Workaround for layerdiffuse output
         layerdiffuse = img_payload.get('alwayson_scripts', {}).get('layerdiffuse', {})
         if len(images) > 1 and layerdiffuse and layerdiffuse['args'][0]:
             images = await layerdiffuse_hack(temp_dir, img_payload, images, pnginfo)
 
-        return images, r
+        return images
     except Exception as e:
         logging.error(f'Error processing images in txt2img API module: {e}')
         img_embed_info.title = 'Error processing images'
@@ -2073,9 +2082,9 @@ async def process_image_gen(img_payload, img_gen_embed, channel, tags):
         temp_dir = 'ad_discordbot/temp/'
         os.makedirs(temp_dir, exist_ok=True)
         # Generate images, save locally
-        images, r = await sd_txt2img(temp_dir, img_payload, img_gen_embed)
+        images= await sd_txt2img(temp_dir, img_payload, img_gen_embed)
         if not images:
-            await channel.send(f"No images were generated. Response code: {r}")
+            await channel.send(f"No images were generated.")
             return
         # Send images to discord
         await img_gen_embed.delete()
@@ -2110,6 +2119,14 @@ def clean_img_payload(img_payload):
         img_payload['negative_prompt'] = processed_negative_prompt
         # Delete unwanted extension keys
         if img_payload.get('alwayson_scripts', {}):
+            # Warn Non-Forge:
+            if SD_CLIENT != 'SD WebUI Forge':
+                if img_payload['alwayson_scripts']['forgecouple']['args'].get('enabled', False):
+                    logging.warning(f'Forge Couple is not known to be compatible with "{SD_CLIENT}". Not applying Forge Couple...')
+                    client.database.update_was_warned('forgecouple', 1)
+                if img_payload['alwayson_scripts']['layerdiffuse']['args'].get('enabled', False):
+                    logging.warning(f'layerdiffuse is not known to be compatible with "{SD_CLIENT}". Not applying layerdiffuse...')
+                    client.database.update_was_warned('layerdiffuse', 1)
             # Clean ControlNet
             if not config.sd['extensions'].get('controlnet_enabled', False):
                 del img_payload['alwayson_scripts']['controlnet'] # Delete all 'controlnet' keys if disabled by config
@@ -2118,11 +2135,16 @@ def clean_img_payload(img_payload):
                 del img_payload['alwayson_scripts']['reactor'] # Delete all 'reactor' keys if disabled by config
             else:
                 img_payload['alwayson_scripts']['reactor']['args'] = list(img_payload['alwayson_scripts']['reactor']['args'].values()) # convert dictionary to list
+            # Clean Forge Couple
+
+            del img_payload['alwayson_scripts']['forgecouple'] # Delete all 'forgecouple' keys if disabled by config
+
+            # if not config.sd['extensions'].get('forgecouple_enabled', False):
+            #     del img_payload['alwayson_scripts']['forgecouple'] # Delete all 'forgecouple' keys if disabled by config
+            # else:
+            #     img_payload['alwayson_scripts']['forgecouple']['args'] = list(img_payload['alwayson_scripts']['forgecouple']['args'].values()) # convert dictionary to list
             # Clean layerdiffuse
             if not config.sd['extensions'].get('layerdiffuse_enabled', False):
-                del img_payload['alwayson_scripts']['layerdiffuse'] # Delete all 'layerdiffuse' keys if disabled by config
-            elif SD_CLIENT != 'SD WebUI Forge':
-                logging.warning(f'layerdiffuse is not known to be compatible with "{SD_CLIENT}". Not applying layerdiffuse...')
                 del img_payload['alwayson_scripts']['layerdiffuse'] # Delete all 'layerdiffuse' keys if disabled by config
             else:
                 img_payload['alwayson_scripts']['layerdiffuse']['args'] = list(img_payload['alwayson_scripts']['layerdiffuse']['args'].values()) # convert dictionary to list
@@ -2151,7 +2173,7 @@ def apply_loractl(tags):
         scaling_settings = [v for k, v in config.sd.get('extensions', {}).get('lrctl', {}).items() if 'scaling' in k]
         scaling_settings = scaling_settings if scaling_settings else ['']
         # Flatten the matches dictionary values to get a list of all tags (including those within tuples)
-        matched_tags = [tag if isinstance(tag, dict) else tag[0] for tag in tag['matches']]
+        matched_tags = [tag if isinstance(tag, dict) else tag[0] for tag in tags['matches']]
         # Filter the matched tags to include only those with certain patterns in their text fields
         lora_tags = [tag for tag in matched_tags if any(re.findall(r'<lora:[^:]+:[^>]+>', text) for text in (tag.get('positive_prompt', ''), tag.get('positive_prompt_prefix', ''), tag.get('positive_prompt_suffix', '')))]
         if len(lora_tags) >= config.sd['extensions']['lrctl']['min_loras']:
@@ -2344,10 +2366,11 @@ async def process_img_payload_tags(img_payload, mods):
         payload = mods.get('payload', None)
         param_variances = mods.get('param_variances', {})
         controlnet = mods.get('controlnet', [])
+        forgecouple = mods.get('forgecouple', {})
         layerdiffuse = mods.get('layerdiffuse', {})
         reactor = mods.get('reactor', {})
         # Process the tag matches
-        if img_censoring or change_imgmodel or swap_imgmodel or payload or param_variances or controlnet or layerdiffuse or reactor:
+        if img_censoring or change_imgmodel or swap_imgmodel or payload or param_variances or controlnet or forgecouple or layerdiffuse or reactor:
             # Img censoring handling
             if img_censoring and img_censoring > 0:
                 img_payload['img_censoring'] = img_censoring
@@ -2357,7 +2380,7 @@ async def process_img_payload_tags(img_payload, mods):
             if imgmodel_params:
                     ## IF API IMG MODEL UNLOADING GETS EVER DEBUGGED
                     ## if not change_imgmodel and swap_imgmodel and swap_imgmodel == 'None':
-                    ##     await unload_imgmodel(channel=None)
+                        # _ = await sd_api(endpoint='/sdapi/v1/unload-checkpoint', method='post', json=None)
                 # 'change_imgmodel' will trump 'swap_imgmodel'
                 current_imgmodel = client.settings['imgmodel'].get('override_settings', {}).get('sd_model_checkpoint') or client.settings['imgmodel']['payload'].get('override_settings', {}).get('sd_model_checkpoint') or ''
                 if imgmodel_params == current_imgmodel:
@@ -2383,10 +2406,14 @@ async def process_img_payload_tags(img_payload, mods):
             # Controlnet handling
             if controlnet:       
                 img_payload['alwayson_scripts']['controlnet']['args'] = controlnet
+            # Forge Couple handling
+            if forgecouple:
+                img_payload['alwayson_scripts']['forgecouple']['args'].update(forgecouple)
+                logging.info(f"[TAGS] Enabled Forge Couple: {forgecouple}")
             # layerdiffuse handling
             if layerdiffuse:
                 img_payload['alwayson_scripts']['layerdiffuse']['args'].update(layerdiffuse)
-                logging.info(f"[TAGS] Enabled layerdiffuse: {processed_params}")
+                logging.info(f"[TAGS] Enabled layerdiffuse: {layerdiffuse}")
             # ReActor face swap handling
             if reactor:
                 img_payload['alwayson_scripts']['reactor']['args'].update(reactor)
@@ -2404,10 +2431,12 @@ def collect_img_tag_values(tags):
             'payload': {},
             'param_variances': {},
             'controlnet': [],
+            'forgecouple': {},
             'layerdiffuse': {},
             'reactor': {}
             }
         controlnet_args = {}
+        forgecouple_args = {}
         layerdiffuse_args = {}
         reactor_args = {}
         for tag in reversed(tags['matches']):
@@ -2443,6 +2472,14 @@ def collect_img_tag_values(tags):
                         mask_args = cnet_reactor_extension_args(value, 'ControlNet Mask', 'controlnet_images')
                         value = mask_args['image']
                     controlnet_args.setdefault(index, {}).update({key.split('_', 1)[-1]: value})   # Update controlnet args at the specified index
+                # get Forge Couple tag params                    
+                elif key == 'forgecouple':
+                    if isinstance(value, list): img_payload_mods['forgecouple']['mapping']['data'] = value
+                    else: img_payload_mods['forgecouple']['direction'] = value
+                    img_payload_mods['forgecouple']['enabled'] = True
+                elif key.startswith('couple_'):
+                    couple_key = key[len('couple_'):]
+                    forgecouple_args[couple_key] = value
                 # get layerdiffuse tag params                    
                 elif key == 'layerdiffuse':
                     img_payload_mods['layerdiffuse']['method'] = value
@@ -2464,6 +2501,7 @@ def collect_img_tag_values(tags):
             cnet_unit_args = controlnet_args.get(index, {})
             cnet_unit = update_dict(cnet_basesettings, cnet_unit_args)
             img_payload_mods['controlnet'].append(cnet_unit)
+        img_payload_mods['forgecouple'].update(forgecouple_args)
         img_payload_mods['layerdiffuse'].update(layerdiffuse_args)
         img_payload_mods['reactor'].update(reactor_args)
         return img_payload_mods
@@ -2553,12 +2591,11 @@ async def img_gen(user, channel, source, img_prompt, params, tags={}):
 ######################## /IMAGE COMMAND #########################
 #################################################################
 # Function to update size options
-async def update_size_options(new_width, new_height):
+async def update_size_options(average):
     global size_choices
     options = load_file('ad_discordbot/dict_cmdoptions.yaml')
     sizes = options.get('sizes', [])
     aspect_ratios = [size.get("ratio") for size in sizes.get('ratios', [])]
-    average = average_width_height(new_width, new_height)
     size_choices.clear()  # Clear the existing list
     ratio_options = calculate_aspect_ratio_sizes(average, aspect_ratios)
     static_options = sizes.get('static_sizes', [])
@@ -3079,17 +3116,11 @@ async def fetch_imgmodels():
             imgmodels = copy.deepcopy(imgmodels_data)
         else:
             try:
-                async with aiohttp.ClientSession() as session: # populate options from API
-                    async with session.get(url=f'{SD_URL}/sdapi/v1/sd-models') as response:
-                        if response.status == 200:
-                            imgmodels = await response.json()
-                            # Update 'title' keys in fetched list to be uniform with .yaml method
-                            for imgmodel in imgmodels:
-                                if 'title' in imgmodel:
-                                    imgmodel['sd_model_checkpoint'] = imgmodel.pop('title')
-                        else:
-                            return ''
-                            logging.error(f"Error fetching image models from the API (response: '{response.status}')")
+                imgmodels = await sd_api(endpoint='/sdapi/v1/sd-models', method='get', json=None)
+                # Update 'title' keys in fetched list to be uniform with .yaml method
+                for imgmodel in imgmodels:
+                    if 'title' in imgmodel:
+                        imgmodel['sd_model_checkpoint'] = imgmodel.pop('title')
             except Exception as e:
                 logging.error(f"Error fetching image models via API: {e}")
                 if str(e).startswith('Cannot connect to host'):
@@ -3101,48 +3132,30 @@ async def fetch_imgmodels():
     except Exception as e:
         logging.error(f"Error fetching image models: {e}")
 
-async def load_imgmodel(channel, options):
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.post(url=f'{SD_URL}/sdapi/v1/options', json=options) as response:
-                if response.status == 200:
-                    await response.json()
-                else:
-                    logging.error(f"Error loading image model in {SD_CLIENT} API (response: '{response.status}')")
-    except Exception as e:
-        logging.error(f"Error loading image model in {SD_CLIENT}: {e}")
-
-async def unload_imgmodel(channel):
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.post(url=f'{SD_URL}/sdapi/v1/unload-checkpoint') as response:
-                if response.status == 200:
-                    await response.json()
-                    if channel:
-                        info_embed.title = 'Unloaded Img model'
-                        info_embed.description = ''
-                        await channel.send(embed=info_embed)
-                else:
-                    logging.error(f"Error unloading image model from {SD_CLIENT} API (response: '{response.status}')")
-    except Exception as e:
-        logging.error(f"Error loading image model from {SD_CLIENT}: {e}")
-
 async def update_imgmodel(channel, selected_imgmodel, selected_imgmodel_tags):
     try:
         active_settings = load_file('ad_discordbot/activesettings.yaml')
+        current_w, current_h = active_settings['imgmodel'].get('payload', {}).get('width', 512), active_settings['imgmodel'].get('payload', {}).get('height', 512)
+        new_w, new_h = selected_imgmodel.get('payload', {}).get('width', 512), selected_imgmodel.get('payload', {}).get('height', 512)
         active_settings['imgmodel'] = selected_imgmodel
         active_settings['imgmodel']['tags'] = selected_imgmodel_tags
         save_yaml_file('ad_discordbot/activesettings.yaml', active_settings)
         await update_client_settings() # Sync updated user settings to client
         ### IF API IMG MODEL UNLOADING GETS EVER DEBUGGED
         # if selected_imgmodel['imgmodel_name'] == 'None':
-        #     await unload_imgmodel(channel)
+        # _ = await sd_api(endpoint='/sdapi/v1/unload-checkpoint', method='post', json=None)
+        #     info_embed.title = 'Unloaded Img model'
+        #     info_embed.description = ''
+        #     await channel.send(embed=info_embed)
         #     return
         # Load the imgmodel and VAE via API
         model_data = active_settings['imgmodel'].get('override_settings') or active_settings['imgmodel']['payload'].get('override_settings')
-        await load_imgmodel(channel, model_data)
+        _ = await sd_api(endpoint='/sdapi/v1/options', method='post', json=model_data)
         # Update size options for /image command
-        await bg_task_queue.put(update_size_options(active_settings['imgmodel'].get('payload').get('width'),active_settings['imgmodel'].get('payload').get('height')))
+        current_avg = average_width_height(current_w, current_h)    # get current average width/height
+        new_avg = average_width_height(new_w, new_h)                # get new average width/height
+        if current_avg != new_avg:                                  # Update size options in menus if they are different
+            await bg_task_queue.put(update_size_options(new_avg))
     except Exception as e:
         logging.error(f"Error updating settings with the selected imgmodel data: {e}")
 
@@ -3744,6 +3757,9 @@ class ImgModel:
                 'layerdiffuse': {
                     'args': {'enabled': False, 'method': '(SDXL) Only Generate Transparent Image (Attention Injection)', 'weight': 1.0, 'stop_at': 1.0, 'foreground': None, 'background': None, 'blending': None, 'resize_mode': 'Crop and Resize', 'output_mat_for_i2i': False, 'fg_prompt': '', 'bg_prompt': '', 'blended_prompt': ''}
                 },
+                'forgecouple': {
+                    'args': {'enable': False, 'direction': 'Horizontal', 'global_effect': 'None', 'sep': '', 'mode': 'basic', 'maps': {"headers": ["x", "y", "weight"], "data": [["0:0.5", "0.0:1.0", "1.0"],["0.5:1.0","0.0:1.0","1.0"]]}}
+                },                
                 'reactor': {
                     'args': {'image': '', 'enabled': False, 'source_faces': '0', 'target_faces': '0', 'model': 'inswapper_128.onnx', 'restore_face': 'CodeFormer', 'restore_visibility': 1, 'restore_upscale': True, 'upscaler': '4x_NMKD-Superscale-SP_178000_G', 'scale': 1.5, 'upscaler_visibility': 1, 'swap_in_source_img': False, 'swap_in_gen_img': True, 'log_level': 1, 'gender_detect_source': 0, 'gender_detect_target': 0, 'save_original': False, 'codeformer_weight': 0.8, 'source_img_hash_check': False, 'target_img_hash_check': False, 'system': 'CUDA', 'face_mask_correction': True, 'source_type': 0, 'face_model': '', 'source_folder': '', 'multiple_source_images': None, 'random_img': True, 'force_upscale': True, 'threshold': 0.6, 'max_faces': 2}
                 }
@@ -3913,7 +3929,7 @@ class Database:
         conn = sqlite3.connect('bot.db')
         c = conn.cursor()
         c.execute('''CREATE TABLE IF NOT EXISTS warned_once (flag_name TEXT UNIQUE, value INTEGER)''')
-        flags_to_insert = [('loractl', 0), ('char_tts', 0), ('no_llmmodel', 0)]
+        flags_to_insert = [('loractl', 0), ('char_tts', 0), ('no_llmmodel', 0), ('forgecouple', 0), ('layerdiffuse', 0)]
         for flag_name, value in flags_to_insert:
             c.execute('''INSERT OR REPLACE INTO warned_once (flag_name, value) VALUES (?, ?)''', (flag_name, value))
         conn.commit()

@@ -55,6 +55,16 @@ imgmodel:
             control_mode: 0       # 0 - Balanced, 1 - Prompt is More Important, 2 - ControlNet is More Important
             resize_mode: 1        # 0 - Just Resize, 1 - Crop and Resize, 2 - Resize and Fill
             lowvram: false        # Reduces vram usage by increasing generation time
+      forgecouple:          # Forge Couple extension arguments
+        args:
+          enabled: false                # Enable Forge Couple
+          direction: 'Horizontal'       # 'Horizontal' / 'Vertical'
+          global_effect: 'None'         # 'None' / 'First Line' / 'Last Line'
+          sep: ''                       # Separator such as '{SEP}'. if defined, replaces '\n' newline behavior
+          mode: 'basic'                 # enables 'mapping' instead of 'direction'
+          maps:                         # for advanced regional mapping
+            headers: ["x", "y", "weight"]
+            data: [["0:0.5", "0.0:1.0", "1.0"],["0.5:1.0","0.0:1.0","1.0"]]
       layerdiffuse:         # layerdiffuse extension arguments
         args:               
           enabled: false                  # Enable layerdiffuse

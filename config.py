@@ -27,8 +27,9 @@ sd = {
     # Bot has integrations with the following extensions. **Only enable them if they are installed AND enabled in A1111.**
     'extensions': {
         'controlnet_enabled': False,    # Requires: sd-webui-controlnet (https://github.com/Mikubill/sd-webui-controlnet) AND configuring 'dict_cmdoptions.yaml'
+        'forgecouple_enabled': False,   # Requires: sd-forge-couple (https://github.com/Haoming02/sd-forge-couple). **Only works for Forge, not A1111**
+        'layerdiffuse_enabled': False,  # Requires: sd-forge-layerdiffuse (https://github.com/layerdiffusion/sd-forge-layerdiffuse). **Only works for Forge, not A1111**
         'reactor_enabled': False,       # Requires: sd-webui-reactor (https://github.com/Gourieff/sd-webui-reactor) AND adding face images to '/swap_faces/'
-        'layerdiffuse_enabled': False,  # Requires: sd-forge-layerdiffuse (https://github.com/layerdiffusion/sd-forge-layerdiffuse). **Only works for sd-webui-forge, not A1111**
         'lrctl': {                      # Requires: sd-webui-loractl (https://github.com/cheald/sd-webui-loractl)
             'enabled': False,   # This extension enhances LORA processing by allowing adjustable weights during image generation. Weight is scaled linearly between step definitions.
             'min_loras': 2,     # Minimum number of loras in the prompt to trigger the following weight scaling definitions.
