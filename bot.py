@@ -98,6 +98,7 @@ async def sd_api(endpoint, method='get', json=None):
                     r = await response.json()
                     return r
                 else:
+                    print("response:", response)
                     logging.error(f'{SD_URL}{endpoint} response: "{response.status}"')
     except Exception as e:
         logging.error(f'Error getting data from "{SD_URL}{endpoint}": {e}')
@@ -984,7 +985,6 @@ def process_tag_formatting(user, prompt, formatting):
         # Tag handling for prompt formatting
         if format_prompt is not None:
             updated_prompt = format_prompt.replace('{prompt}', updated_prompt)
-            # print_content += f" | Prompt: {llm_prompt}"
         # format prompt with any defined recent messages
         updated_prompt = format_prompt_with_recent_msgs(user, updated_prompt)
         # Format time if defined
@@ -1058,7 +1058,6 @@ async def process_llm_payload_tags(user_name, channel, llm_payload, llm_prompt, 
                 logging.info(f'[TAGS] LLM Param Variances: {processed_params}')
                 sum_update_dict(llm_payload['state'], processed_params) # Updates dictionary while adding floats + ints
             if state:
-                print_content += f" | State: {state}"
                 update_dict(llm_payload['state'], state)
                 logging.info(f'[TAGS] LLM State was modified')
             # Character handling
@@ -1957,74 +1956,6 @@ async def sd_online(channel):
             await channel.send(embed=imgclient_embed_info)        
         return False
         
-async def layerdiffuse_hack(temp_dir, img_payload, images, pnginfo):
-    try:
-        ld_output = None
-        for i, image in enumerate(images):
-            if image.mode == 'RGBA':
-                if i == 0:
-                    return images
-                ld_output = images.pop(i)
-                break
-        if ld_output is None:
-            logging.warning("Failed to find layerdiffuse output image")
-            return images
-        # Workaround for layerdiffuse PNG infoReActor + layerdiffuse combination
-        reactor = img_payload['alwayson_scripts'].get('reactor', {})
-        if reactor and reactor['args'][1]:          # if ReActor was enabled:
-            _, _, _, alpha = ld_output.split()      # Extract alpha channel from layerdiffuse output
-            img0 = Image.open(f'{temp_dir}/temp_img_0.png') # Open first image (with ReActor output)
-            img0 = img0.convert('RGBA')             # Convert it to RGBA 
-            img0.putalpha(alpha)                    # apply alpha from layerdiffuse output
-        else:                           # if ReActor was not enabled:
-            img0 = ld_output            # Just replace first image with layerdiffuse output
-        img0.save(f'{temp_dir}/temp_img_0.png', pnginfo=pnginfo) # Save the local image with correct pnginfo
-        images[0] = img0 # Update images list
-        return images
-    except Exception as e:
-        logging.error(f'Error processing layerdiffuse images: {e}')
-
-async def sd_txt2img(temp_dir, img_payload, img_gen_embed):
-    try:
-        async def save_images_and_return():
-            r = await sd_api(endpoint='/sdapi/v1/txt2img', method='post', json=img_payload)
-            images = []
-            pnginfo = None
-            for i, img_data in enumerate(r.get('images')):
-                image = Image.open(io.BytesIO(base64.b64decode(img_data.split(",", 1)[0])))
-                png_payload = {"image": "data:image/png;base64," + img_data}
-                r2 = await sd_api(endpoint='/sdapi/v1/png-info', method='post', json=png_payload) 
-                png_info_data = r2.get("info")
-                if i == 0:  # Only capture pnginfo from the first png_img_data
-                    pnginfo = PngImagePlugin.PngInfo()
-                    pnginfo.add_text("parameters", png_info_data)
-                image.save(f'{temp_dir}/temp_img_{i}.png', pnginfo=pnginfo) # save image to temp directory
-                images.append(image) # collect a list of PIL images
-            return images, pnginfo
-
-        async def track_progress():
-            await check_sd_progress(img_gen_embed)
-
-        # Start progress task and generation task concurrently
-        images_task = asyncio.create_task(save_images_and_return())
-        progress_task = asyncio.create_task(track_progress())
-        # Wait for both tasks to complete
-        await asyncio.gather(images_task, progress_task)
-        # Get the list of images after both tasks are done
-        images, pnginfo = await images_task
-
-        # Workaround for layerdiffuse output
-        layerdiffuse = img_payload.get('alwayson_scripts', {}).get('layerdiffuse', {})
-        if len(images) > 1 and layerdiffuse and layerdiffuse['args'][0]:
-            images = await layerdiffuse_hack(temp_dir, img_payload, images, pnginfo)
-
-        return images
-    except Exception as e:
-        logging.error(f'Error processing images in txt2img API module: {e}')
-        img_embed_info.title = 'Error processing images'
-        img_embed_info.description = e
-        await img_gen_embed.edit(embed=img_embed_info)
-
 def progress_bar(value, length=20):
     filled_length = int(length * value)
     bar = ':white_large_square:' * filled_length + ':white_square_button:' * (length - filled_length)
@@ -2065,7 +1996,75 @@ async def check_sd_progress(img_gen_embed):
                 logging.warning('Connection closed, retrying in 1 seconds')
                 await asyncio.sleep(1)
 
-async def process_image_gen(img_payload, img_gen_embed, channel, tags):
+async def track_progress(img_gen_embed):
+    await check_sd_progress(img_gen_embed)
+
+async def layerdiffuse_hack(temp_dir, img_payload, images, pnginfo):
+    try:
+        ld_output = None
+        for i, image in enumerate(images):
+            if image.mode == 'RGBA':
+                if i == 0:
+                    return images
+                ld_output = images.pop(i)
+                break
+        if ld_output is None:
+            logging.warning("Failed to find layerdiffuse output image")
+            return images
+        # Workaround for layerdiffuse PNG infoReActor + layerdiffuse combination
+        reactor = img_payload['alwayson_scripts'].get('reactor', {})
+        if reactor and reactor['args'][1]:          # if ReActor was enabled:
+            _, _, _, alpha = ld_output.split()      # Extract alpha channel from layerdiffuse output
+            img0 = Image.open(f'{temp_dir}/temp_img_0.png') # Open first image (with ReActor output)
+            img0 = img0.convert('RGBA')             # Convert it to RGBA 
+            img0.putalpha(alpha)                    # apply alpha from layerdiffuse output
+        else:                           # if ReActor was not enabled:
+            img0 = ld_output            # Just replace first image with layerdiffuse output
+        img0.save(f'{temp_dir}/temp_img_0.png', pnginfo=pnginfo) # Save the local image with correct pnginfo
+        images[0] = img0 # Update images list
+        return images
+    except Exception as e:
+        logging.error(f'Error processing layerdiffuse images: {e}')
+
+async def save_images_and_return(temp_dir, img_payload, endpoint):
+    images = []
+    pnginfo = None
+    # with open("img_payload.json", "w") as file:
+    #     json.dump(img_payload, file)
+    r = await sd_api(endpoint=endpoint, method='post', json=img_payload)
+    for i, img_data in enumerate(r.get('images')):
+        image = Image.open(io.BytesIO(base64.b64decode(img_data.split(",", 1)[0])))
+        png_payload = {"image": "data:image/png;base64," + img_data}
+        r2 = await sd_api(endpoint='/sdapi/v1/png-info', method='post', json=png_payload) 
+        png_info_data = r2.get("info")
+        if i == 0:  # Only capture pnginfo from the first png_img_data
+            pnginfo = PngImagePlugin.PngInfo()
+            pnginfo.add_text("parameters", png_info_data)
+        image.save(f'{temp_dir}/temp_img_{i}.png', pnginfo=pnginfo) # save image to temp directory
+        images.append(image) # collect a list of PIL images
+    return images, pnginfo
+
+async def sd_img_gen(temp_dir, img_payload, img_gen_embed, endpoint):
+    try:
+        # Start progress task and generation task concurrently
+        images_task = asyncio.create_task(save_images_and_return(temp_dir, img_payload, endpoint))
+        progress_task = asyncio.create_task(track_progress(img_gen_embed))
+        # Wait for both tasks to complete
+        await asyncio.gather(images_task, progress_task)
+        # Get the list of images and copy of pnginfo after both tasks are done
+        images, pnginfo = await images_task
+        # Workaround for layerdiffuse output
+        layerdiffuse = img_payload.get('alwayson_scripts', {}).get('layerdiffuse', {})
+        if len(images) > 1 and layerdiffuse and layerdiffuse['args'][0]:
+            images = await layerdiffuse_hack(temp_dir, img_payload, images, pnginfo)
+        return images
+    except Exception as e:
+        logging.error(f'Error processing images in {SD_CLIENT} API module: {e}')
+        img_embed_info.title = 'Error processing images'
+        img_embed_info.description = e
+        await img_gen_embed.edit(embed=img_embed_info)
+
+async def process_image_gen(img_payload, img_gen_embed, channel, tags, endpoint, sd_output_dir='ad_discordbot/sd_outputs/'):
     try:
         censor_mode = None
         do_censor = False
@@ -2077,12 +2076,11 @@ async def process_image_gen(img_payload, img_gen_embed, channel, tags):
                 await img_gen_embed.edit(embed=img_embed_info)
                 return
         # Ensure the necessary directories exist
-        output_dir = 'ad_discordbot/sd_outputs/'
-        os.makedirs(output_dir, exist_ok=True)
+        os.makedirs(sd_output_dir, exist_ok=True)
         temp_dir = 'ad_discordbot/temp/'
         os.makedirs(temp_dir, exist_ok=True)
         # Generate images, save locally
-        images= await sd_txt2img(temp_dir, img_payload, img_gen_embed)
+        images = await sd_img_gen(temp_dir, img_payload, img_gen_embed, endpoint)
         if not images:
             await channel.send(f"No images were generated.")
             return
@@ -2098,7 +2096,7 @@ async def process_image_gen(img_payload, img_gen_embed, channel, tags):
             await channel.send(files=image_files)
         # Save the image at index 0 with the date/time naming convention
         timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        os.rename(f'{temp_dir}/temp_img_0.png', f'{output_dir}/{timestamp}.png')
+        os.rename(f'{temp_dir}/temp_img_0.png', f'{sd_output_dir}/{timestamp}.png')
         # Delete temporary image files
         for tempfile in os.listdir(temp_dir):
             os.remove(os.path.join(temp_dir, tempfile))
@@ -2121,8 +2119,8 @@ def clean_img_payload(img_payload):
         if img_payload.get('alwayson_scripts', {}):
             # Warn Non-Forge:
             if SD_CLIENT != 'SD WebUI Forge':
-                if img_payload['alwayson_scripts']['forgecouple']['args'].get('enabled', False):
-                    logging.warning(f'Forge Couple is not known to be compatible with "{SD_CLIENT}". Not applying Forge Couple...')
+                if img_payload['alwayson_scripts']['forge_couple']['args'].get('enabled', False):
+                    logging.warning(f'forge_couple is not known to be compatible with "{SD_CLIENT}". Not applying forge_couple...')
                     client.database.update_was_warned('forgecouple', 1)
                 if img_payload['alwayson_scripts']['layerdiffuse']['args'].get('enabled', False):
                     logging.warning(f'layerdiffuse is not known to be compatible with "{SD_CLIENT}". Not applying layerdiffuse...')
@@ -2136,20 +2134,18 @@ def clean_img_payload(img_payload):
             else:
                 img_payload['alwayson_scripts']['reactor']['args'] = list(img_payload['alwayson_scripts']['reactor']['args'].values()) # convert dictionary to list
             # Clean Forge Couple
-
-            del img_payload['alwayson_scripts']['forgecouple'] # Delete all 'forgecouple' keys if disabled by config
-
-            # if not config.sd['extensions'].get('forgecouple_enabled', False):
-            #     del img_payload['alwayson_scripts']['forgecouple'] # Delete all 'forgecouple' keys if disabled by config
-            # else:
-            #     img_payload['alwayson_scripts']['forgecouple']['args'] = list(img_payload['alwayson_scripts']['forgecouple']['args'].values()) # convert dictionary to list
+            if not config.sd['extensions'].get('forgecouple_enabled', False) or img_payload.get('init_images', False):
+                del img_payload['alwayson_scripts']['forge_couple'] # Delete all 'forge_couple' keys if disabled by config
+            else:
+                img_payload['alwayson_scripts']['forge_couple']['args'] = list(img_payload['alwayson_scripts']['forge_couple']['args'].values()) # convert dictionary to list
+                img_payload['alwayson_scripts']['forge couple'] = img_payload['alwayson_scripts'].pop('forge_couple') # Add the required space between "forge" and "couple" ("forge couple")
             # Clean layerdiffuse
             if not config.sd['extensions'].get('layerdiffuse_enabled', False):
                 del img_payload['alwayson_scripts']['layerdiffuse'] # Delete all 'layerdiffuse' keys if disabled by config
             else:
                 img_payload['alwayson_scripts']['layerdiffuse']['args'] = list(img_payload['alwayson_scripts']['layerdiffuse']['args'].values()) # convert dictionary to list
         # Workaround for denoising strength bug
-        if not img_payload.get('enable_hr', False):
+        if not img_payload.get('enable_hr', False) and not img_payload.get('init_images', False):
             img_payload['denoising_strength'] = None
         # Delete all empty keys
         keys_to_delete = []
@@ -2211,6 +2207,10 @@ def apply_imgcmd_params(img_payload, params):
         size = params.get('size', None) if params else None
         face_swap = params.get('face_swap', None) if params else None
         controlnet = params.get('controlnet', None) if params else None
+        img2img = params.get('img2img', {})
+        if img2img:
+            img_payload['init_images'] = [img2img['image']]
+            img_payload['denoising_strength'] = img2img['denoising_strength']
         if size: img_payload.update(size)
         if face_swap:
             img_payload['alwayson_scripts']['reactor']['args']['image'] = face_swap # image in base64 format
@@ -2366,11 +2366,11 @@ async def process_img_payload_tags(img_payload, mods):
         payload = mods.get('payload', None)
         param_variances = mods.get('param_variances', {})
         controlnet = mods.get('controlnet', [])
-        forgecouple = mods.get('forgecouple', {})
+        forge_couple = mods.get('forge_couple', {})
         layerdiffuse = mods.get('layerdiffuse', {})
         reactor = mods.get('reactor', {})
         # Process the tag matches
-        if img_censoring or change_imgmodel or swap_imgmodel or payload or param_variances or controlnet or forgecouple or layerdiffuse or reactor:
+        if img_censoring or change_imgmodel or swap_imgmodel or payload or param_variances or controlnet or forge_couple or layerdiffuse or reactor:
             # Img censoring handling
             if img_censoring and img_censoring > 0:
                 img_payload['img_censoring'] = img_censoring
@@ -2404,18 +2404,18 @@ async def process_img_payload_tags(img_payload, mods):
                 logging.info(f"[TAGS] Applied Param Variances: '{processed_params}'")
                 sum_update_dict(img_payload, processed_params)
             # Controlnet handling
-            if controlnet:       
+            if controlnet and config.sd['extensions'].get('controlnet_enabled', False):       
                 img_payload['alwayson_scripts']['controlnet']['args'] = controlnet
-            # Forge Couple handling
-            if forgecouple:
-                img_payload['alwayson_scripts']['forgecouple']['args'].update(forgecouple)
-                logging.info(f"[TAGS] Enabled Forge Couple: {forgecouple}")
+            # forge_couple handling
+            if forge_couple and config.sd['extensions'].get('forgecouple_enabled', False):
+                img_payload['alwayson_scripts']['forge_couple']['args'].update(forge_couple)
+                logging.info(f"[TAGS] Enabled forge_couple: {forge_couple}")
             # layerdiffuse handling
-            if layerdiffuse:
+            if layerdiffuse and config.sd['extensions'].get('layerdiffuse_enabled', False):
                 img_payload['alwayson_scripts']['layerdiffuse']['args'].update(layerdiffuse)
                 logging.info(f"[TAGS] Enabled layerdiffuse: {layerdiffuse}")
             # ReActor face swap handling
-            if reactor:
+            if reactor and config.sd['extensions'].get('reactor_enabled', False):
                 img_payload['alwayson_scripts']['reactor']['args'].update(reactor)
         return img_payload, imgmodel_params
     except Exception as e:
@@ -2424,6 +2424,7 @@ async def process_img_payload_tags(img_payload, mods):
 
 def collect_img_tag_values(tags):
     try:
+        sd_output_dir = 'ad_discordbot/sd_outputs/'
         img_payload_mods = {
             'img_censoring': None,
             'change_imgmodel': None,
@@ -2431,19 +2432,21 @@ def collect_img_tag_values(tags):
             'payload': {},
             'param_variances': {},
             'controlnet': [],
-            'forgecouple': {},
+            'forge_couple': {},
             'layerdiffuse': {},
             'reactor': {}
             }
         controlnet_args = {}
-        forgecouple_args = {}
+        forge_couple_args = {}
         layerdiffuse_args = {}
         reactor_args = {}
         for tag in reversed(tags['matches']):
             if isinstance(tag, tuple):
                 tag = tag[0] # For tags with prompt insertion indexes
             for key, value in tag.items():
-                if key == 'img_censoring' and img_payload_mods['img_censoring'] is None:
+                if key == 'sd_output_dir':
+                    sd_output_dir = value
+                elif key == 'img_censoring' and img_payload_mods['img_censoring'] is None:
                     img_payload_mods['img_censoring'] = value
                 elif key == 'change_imgmodel' and img_payload_mods['change_imgmodel'] is None:
                     img_payload_mods['change_imgmodel'] = value
@@ -2472,14 +2475,14 @@ def collect_img_tag_values(tags):
                         mask_args = cnet_reactor_extension_args(value, 'ControlNet Mask', 'controlnet_images')
                         value = mask_args['image']
                     controlnet_args.setdefault(index, {}).update({key.split('_', 1)[-1]: value})   # Update controlnet args at the specified index
-                # get Forge Couple tag params                    
-                elif key == 'forgecouple':
-                    if isinstance(value, list): img_payload_mods['forgecouple']['mapping']['data'] = value
-                    else: img_payload_mods['forgecouple']['direction'] = value
-                    img_payload_mods['forgecouple']['enabled'] = True
+                # get forge_couple tag params                    
+                elif key == 'forge_couple':
+                    if isinstance(value, list): img_payload_mods['forge_couple']['mapping']['data'] = value
+                    else: img_payload_mods['forge_couple']['direction'] = value
+                    img_payload_mods['forge_couple']['enable'] = True
                 elif key.startswith('couple_'):
-                    couple_key = key[len('couple_'):]
-                    forgecouple_args[couple_key] = value
+                    forge_couple_key = key[len('couple_'):]
+                    forge_couple_args[forge_couple_key] = value
                 # get layerdiffuse tag params                    
                 elif key == 'layerdiffuse':
                     img_payload_mods['layerdiffuse']['method'] = value
@@ -2501,10 +2504,10 @@ def collect_img_tag_values(tags):
             cnet_unit_args = controlnet_args.get(index, {})
             cnet_unit = update_dict(cnet_basesettings, cnet_unit_args)
             img_payload_mods['controlnet'].append(cnet_unit)
-        img_payload_mods['forgecouple'].update(forgecouple_args)
+        img_payload_mods['forge_couple'].update(forge_couple_args)
         img_payload_mods['layerdiffuse'].update(layerdiffuse_args)
         img_payload_mods['reactor'].update(reactor_args)
-        return img_payload_mods
+        return sd_output_dir, img_payload_mods
     except Exception as e:
         logging.error(f"Error collecting Img tag values: {e}")
         return tags
@@ -2512,7 +2515,7 @@ def collect_img_tag_values(tags):
 def initialize_img_payload(img_prompt, neg_prompt):
     try:
         # Initialize img_payload settings
-        img_payload = {"prompt": img_prompt, "negative_prompt": neg_prompt, "width": 512, "height": 512, "steps": 20}
+        img_payload = {"prompt": img_prompt, "negative_prompt": neg_prompt, "width": 512, "height": 512, "steps": 20, "resize_mode": 1}
         # Apply settings from imgmodel configuration
         imgmodel_img_payload = copy.deepcopy(client.settings['imgmodel'].get('payload', {}))
         img_payload.update(imgmodel_img_payload)
@@ -2559,7 +2562,7 @@ async def img_gen(user, channel, source, img_prompt, params, tags={}):
         neg_prompt = params.get('neg_prompt', '')
         img_payload = initialize_img_payload(img_prompt, neg_prompt)
         # collect matched tag values
-        img_payload_mods = collect_img_tag_values(tags)
+        sd_output_dir, img_payload_mods = collect_img_tag_values(tags)
         # Apply tags relevant to Img gen
         img_payload, imgmodel_params = await process_img_payload_tags(img_payload, img_payload_mods)
         # Process loractl
@@ -2578,7 +2581,8 @@ async def img_gen(user, channel, source, img_prompt, params, tags={}):
             current_imgmodel = imgmodel_params['imgmodel'].get('current_imgmodel', '')
             swap_embed = await change_imgmodel_task(user, channel, imgmodel_params)
         # Generate and send images
-        await process_image_gen(img_payload, img_gen_embed, channel, tags)
+        endpoint = params.get('endpoint', '/sdapi/v1/txt2img')
+        await process_image_gen(img_payload, img_gen_embed, channel, tags, endpoint, sd_output_dir)
         # If switching back to original Img model
         if swap_embed: await change_imgmodel_task(user, channel, params={'imgmodel': {'imgmodel_name': current_imgmodel, 'mode': 'swap_back', 'verb': 'Swapping', 'embed': swap_embed}})
         if source == 'image':
@@ -2640,141 +2644,219 @@ def average_width_height(width, height):
     if (width + height) % 2 != 0: avg += 1
     return avg
 
-options = load_file('ad_discordbot/dict_cmdoptions.yaml')
-options = dict(options)
-active_settings = load_file('ad_discordbot/activesettings.yaml')
-active_settings = dict(active_settings)
-
-sizes = options.get('sizes', {})
-aspect_ratios = [size.get("ratio") for size in sizes.get('ratios', [])]
-
-# Calculate the average and aspect ratio sizes
-width = active_settings.get('imgmodel', {}).get('payload', {}).get('width', 512)
-height = active_settings.get('imgmodel', {}).get('payload', {}).get('height', 512)
-average = average_width_height(width, height)
-ratio_options = calculate_aspect_ratio_sizes(average, aspect_ratios)
-# Collect any defined static sizes
-static_options = sizes.get('static_sizes', [])
-# Merge dynamic and static sizes
-size_options = (ratio_options or []) + (static_options or [])
-style_options = options.get('styles', {})
-controlnet_options = options.get('controlnet', {})
-
-size_choices = [
-    app_commands.Choice(name=option['name'], value=option['name'])
-    for option in size_options]
-style_choices = [
-    app_commands.Choice(name=option['name'], value=option['name'])
-    for option in style_options]
-cnet_model_choices = [
-    app_commands.Choice(name=option['name'], value=option['name'])
-    for option in controlnet_options]
-
-@client.hybrid_command(name="image", description=f'Generate an image using {SD_CLIENT}')
-@app_commands.choices(size=size_choices)
-@app_commands.choices(style=style_choices)
-@app_commands.choices(cnet_model=cnet_model_choices)
-@app_commands.choices(cnet_map=[
-    app_commands.Choice(name="Yes, map design is white on a black background", value="map"),
-    app_commands.Choice(name="Yes, map design is black on a white background", value="invert_map"),
-    app_commands.Choice(name="No, I attached a reference image", value="no_map"),
-])
-
-async def image(
-    i: discord.Interaction,
-    prompt: str,
-    size: typing.Optional[app_commands.Choice[str]],
-    style: typing.Optional[app_commands.Choice[str]],
-    neg_prompt: typing.Optional[str],
-    face_swap: typing.Optional[discord.Attachment],
-    cnet_model: typing.Optional[app_commands.Choice[str]],
-    cnet_input: typing.Optional[discord.Attachment],
-    cnet_map: typing.Optional[app_commands.Choice[str]]
-    ):
-
-    if not await sd_online(i.channel):
-        return
-
+async def get_imgcmd_choices(size_options, style_options):
     try:
-        neg_style_prompt = ""
-        size_dict = {}
-        faceswapimg = ''
-        controlnet_dict = {}
+        size_choices = [
+            app_commands.Choice(name=option['name'], value=option['name'])
+            for option in size_options]
+        style_choices = [
+            app_commands.Choice(name=option['name'], value=option['name'])
+            for option in style_options]
+        return size_choices, style_choices
+    except Exception as e:
+        logging.error(f"An error occurred while building choices for /image: {e}")  
 
-        message = f"**Prompt:** {prompt}"
+async def get_imgcmd_options():
+    try:
+        options = load_file('ad_discordbot/dict_cmdoptions.yaml')
+        options = dict(options)
+        active_settings = load_file('ad_discordbot/activesettings.yaml')
+        active_settings = dict(active_settings)
+        # Get sizes and aspect ratios from 'dict_cmdoptions.yaml'
+        sizes = options.get('sizes', {})
+        aspect_ratios = [size.get("ratio") for size in sizes.get('ratios', [])]
+        # Calculate the average and aspect ratio sizes
+        width = active_settings.get('imgmodel', {}).get('payload', {}).get('width', 512)
+        height = active_settings.get('imgmodel', {}).get('payload', {}).get('height', 512)
+        average = average_width_height(width, height)
+        ratio_options = calculate_aspect_ratio_sizes(average, aspect_ratios)
+        # Collect any defined static sizes
+        static_options = sizes.get('static_sizes', [])
+        # Merge dynamic and static sizes
+        size_options = (ratio_options or []) + (static_options or [])
+        # Get style and controlnet options
+        style_options = options.get('styles', {})
+        return size_options, style_options
+    except Exception as e:
+        logging.error(f"An error occurred while building options for /image: {e}")
 
-        if neg_prompt:
-            neg_style_prompt = f"{neg_prompt}, {neg_style_prompt}"
-            message += f" | **Negative Prompt:** {neg_prompt}"
+size_options, style_options = asyncio.run(get_imgcmd_options())
+size_choices, style_choices = asyncio.run(get_imgcmd_choices(size_options, style_options))
 
+async def ext_online(ext, endpoint):
+    if config.sd['extensions'].get(f'{ext}_enabled', False):
+        try:
+            online = await sd_api(endpoint=endpoint, method='get', json=None)
+            if online: return True
+            else: return False
+        except:
+            logging.warning(f"{ext} is enabled in config.py, but was not responsive via API. Omitting option from '/image' command.")
+    return False
+
+cnet_online = asyncio.run(ext_online('controlnet', '/controlnet/model_list'))
+reactor_online = asyncio.run(ext_online('reactor', '/reactor/models'))
+
+if cnet_online and reactor_online:
+    @client.hybrid_command(name="image", description=f'Generate an image using {SD_CLIENT}')
+    @app_commands.choices(size=size_choices)
+    @app_commands.choices(style=style_choices)
+    async def image(i: discord.Interaction, prompt: str, img2img: typing.Optional[discord.Attachment], size: typing.Optional[app_commands.Choice[str]], style: typing.Optional[app_commands.Choice[str]], neg_prompt: typing.Optional[str], 
+        face_swap: typing.Optional[discord.Attachment], cnet: typing.Optional[discord.Attachment]):
+        user_selections = {"prompt": prompt, "img2img": img2img if img2img else None, "size": size.value if size else None, "style": style.value if style else None, "neg_prompt": neg_prompt,
+        "face_swap": face_swap if face_swap else None, "cnet": cnet if cnet else None}
+        await process_image(i, user_selections)
+elif cnet_online and not reactor_online:
+    @client.hybrid_command(name="image", description=f'Generate an image using {SD_CLIENT}')
+    @app_commands.choices(size=size_choices)
+    @app_commands.choices(style=style_choices)
+    async def image(i: discord.Interaction, prompt: str, img2img: typing.Optional[discord.Attachment], size: typing.Optional[app_commands.Choice[str]], style: typing.Optional[app_commands.Choice[str]], neg_prompt: typing.Optional[str], 
+        cnet: typing.Optional[discord.Attachment]):
+        user_selections = {"prompt": prompt, "img2img": img2img if img2img else None, "size": size.value if size else None, "style": style.value if style else None, "neg_prompt": neg_prompt,
+        "cnet": cnet if cnet else None}
+        await process_image(i, user_selections)
+elif reactor_online and not cnet_online:
+    @client.hybrid_command(name="image", description=f'Generate an image using {SD_CLIENT}')
+    @app_commands.choices(size=size_choices)
+    @app_commands.choices(style=style_choices)
+    async def image(i: discord.Interaction, prompt: str, img2img: typing.Optional[discord.Attachment], size: typing.Optional[app_commands.Choice[str]], style: typing.Optional[app_commands.Choice[str]], neg_prompt: typing.Optional[str], 
+        face_swap: typing.Optional[discord.Attachment]):
+        user_selections = {"prompt": prompt, "img2img": img2img if img2img else None, "size": size.value if size else None, "style": style.value if style else None, "neg_prompt": neg_prompt,
+        "face_swap": face_swap if face_swap else None}
+        await process_image(i, user_selections)
+else:
+    @client.hybrid_command(name="image", description=f'Generate an image using {SD_CLIENT}')
+    @app_commands.choices(size=size_choices)
+    @app_commands.choices(style=style_choices)
+    async def image(i: discord.Interaction, prompt: str, img2img: typing.Optional[discord.Attachment], size: typing.Optional[app_commands.Choice[str]], style: typing.Optional[app_commands.Choice[str]], neg_prompt: typing.Optional[str]):
+        user_selections = {"prompt": prompt, "img2img": img2img if img2img else None, "size": size.value if size else None, "style": style.value if style else None, "neg_prompt": neg_prompt}
+        await process_image(i, user_selections)
+
+async def process_image(i, selections):
+    # Do not process if SD WebUI is offline
+    if not await sd_online(i.channel):
+        await i.response.defer()
+        return
+    # User inputs from /image command
+    prompt = selections.get('prompt', '')
+    img2img = selections.get('img2img', None)    
+    size = selections.get('size', None)
+    style = selections.get('style', None)
+    neg_prompt = selections.get('neg_prompt', '')
+    cnet = selections.get('cnet', None)
+    face_swap = selections.get('face_swap', None)
+    # Defaults
+    message = f"**Prompt:** {prompt}"
+    endpoint = '/sdapi/v1/txt2img'
+    neg_style_prompt = ""
+    size_dict = {}
+    faceswapimg = None
+    img2img_dict = {}
+    cnet_dict = {}
+    try:
+        if img2img:
+            try:
+                #Convert attached image to base64
+                attached_i2i_img = await img2img.read()
+                i2i_image = base64.b64encode(attached_i2i_img).decode('utf-8')
+                img2img_dict['image'] = i2i_image
+                # Ask user to select a Denoise Strength
+                denoise_options = []
+                for value in [round(0.05 * i, 2) for i in range(int(1 / 0.05) + 1)]:
+                    denoise_options.append(discord.SelectOption(label=str(value), value=str(value), default=True if value == 0.40 else False))
+                denoise_options = denoise_options[:25]
+                denoise_select = discord.ui.Select(custom_id="denoise", options=denoise_options)
+                # Send Denoise Strength select menu in a view
+                submit_button = discord.ui.Button(style=discord.ButtonStyle.primary, label="Submit")
+                view = discord.ui.View()
+                view.add_item(denoise_select)
+                view.add_item(submit_button)
+                select_message = await i.send("Select denoise strength for img2img:", view=view, ephemeral=True)
+                interaction = await client.wait_for("interaction", check=lambda interaction: interaction.message.id == select_message.id)
+                denoising_strength = interaction.data.get("values", ["0.40"])[0]
+                img2img_dict['denoising_strength'] = float(denoising_strength)
+                await interaction.response.defer() # defer response for this interaction
+                await select_message.delete()
+                endpoint = '/sdapi/v1/img2img' # Change API endpoint to img2img
+                message += f" | **Img2Img**, denoise strength: {denoising_strength}"
+            except Exception as e:
+                logging.error(f"An error occurred while configuring Img2Img for /image command: {e}")
+        if size:
+            selected_size = next((option for option in size_options if option['name'] == size), None)
+            if selected_size:
+                size_dict['width'] = selected_size.get('width')
+                size_dict['height'] = selected_size.get('height')
+            message += f" | **Size:** {size}"
         if style:
-            selected_style_option = next((option for option in style_options if option['name'] == style.value), None)
-
+            selected_style_option = next((option for option in style_options if option['name'] == style), None)
             if selected_style_option:
                 prompt = selected_style_option.get('positive').format(prompt)
                 neg_style_prompt = selected_style_option.get('negative')
-            message += f" | **Style:** {style.value}"
-
-        if size:
-            selected_size_option = next((option for option in size_options if option['name'] == size.value), None)
-            if selected_size_option:
-                size_dict['width'] = selected_size_option.get('width')
-                size_dict['height'] = selected_size_option.get('height')
-            message += f" | **Size:** {size.value}"
-
-        if config.sd['extensions']['reactor_enabled']:
-            if face_swap:
-                if face_swap.content_type and face_swap.content_type.startswith("image/"):
-                    imgurl = face_swap.url
-                    attached_img = await face_swap.read()
-                    faceswapimg = base64.b64encode(attached_img).decode('utf-8')
-                    message += f" | **Face Swap:** Image Provided"
-                else:
-                    await i.send("Please attach a valid image to use for Face Swap.",ephemeral=True)
-                    return
-
-        if config.sd['extensions']['controlnet_enabled']:
-            if cnet_model:
-                selected_cnet_option = next((option for option in controlnet_options if option['name'] == cnet_model.value), None)
+            message += f" | **Style:** {style}"
+        if neg_prompt:
+            neg_style_prompt = f"{neg_prompt}, {neg_style_prompt}"
+            message += f" | **Negative Prompt:** {neg_prompt}"
+        if face_swap:
+            attached_face_img = await face_swap.read()
+            faceswapimg = base64.b64encode(attached_face_img).decode('utf-8')
+            message += f" | **Face Swap:** Image Provided"
+        if cnet:
+            try:
+                # Convert attached image to base64
+                attached_cnet_img = await cnet.read()
+                cnetimage = base64.b64encode(attached_cnet_img).decode('utf-8')
+                cnet_dict['image'] = cnetimage
+                # Ask user for model
+                options = load_file('ad_discordbot/dict_cmdoptions.yaml')
+                options = dict(options)
+                cnet_options = options.get('controlnet', {})
+                cnet_model_options = [discord.SelectOption(label=option['name'], value=option['name']) for option in cnet_options]
+                cnet_model_select = discord.ui.Select(custom_id="cnet_model_select", placeholder="Select ControlNet Model", options=cnet_model_options)
+                # Send ControlNet model select menu in a view
+                view = discord.ui.View()
+                view.add_item(cnet_model_select)
+                # Wait for user selection
+                select_message = await i.send("Select ControlNet Model:", view=view, ephemeral=True)
+                interaction = await client.wait_for("interaction", check=lambda interaction: interaction.message.id == select_message.id)
+                cnet_model = interaction.data["values"][0]
+                selected_cnet_option = next((option for option in cnet_options if option['name'] == cnet_model), None)
                 if selected_cnet_option:
-                    controlnet_dict['model'] = selected_cnet_option.get('model')
-                    controlnet_dict['module'] = selected_cnet_option.get('module')
-                    controlnet_dict['guidance_end'] = selected_cnet_option.get('guidance_end')
-                    controlnet_dict['weight'] = selected_cnet_option.get('weight')
-                    controlnet_dict['enabled'] = True
-                message += f" | **ControlNet:** Model: {cnet_model.value}"
-            if cnet_input:
-                if cnet_input.content_type and cnet_input.content_type.startswith("image/"):
-                    imgurl = cnet_input.url
-                    attached_img = await cnet_input.read()
-                    cnetimage = base64.b64encode(attached_img).decode('utf-8')
-                    controlnet_dict['image'] = cnetimage
+                    cnet_dict['model'] = selected_cnet_option.get('model')
+                    cnet_dict['module'] = selected_cnet_option.get('module')
+                    cnet_dict['guidance_end'] = selected_cnet_option.get('guidance_end')
+                    cnet_dict['weight'] = selected_cnet_option.get('weight')
+                    cnet_dict['enabled'] = True
+                    message += f" | **ControlNet:** Model: {cnet_model}"
+                await interaction.response.defer() # defer response for this interaction
+                await select_message.delete()
+                # Ask about map
+                cnet_map_select = discord.ui.Select(custom_id="cnet_map_select", options=[
+                        discord.SelectOption(label="No, my image is not a ControlNet map", value="no_map", default=True),
+                        discord.SelectOption(label="Yes, my image is a map on a black background", value="map"),
+                        discord.SelectOption(label="Yes, my image is a map on a white background", value="invert_map")])
+                submit_button = discord.ui.Button(style=discord.ButtonStyle.primary, label="Submit")
+                view = discord.ui.View()
+                view.add_item(cnet_map_select)
+                view.add_item(submit_button)
+                # Wait for user selection
+                select_message = await i.send('Is your ControlNet input image a "map"?', view=view, ephemeral=True)
+                interaction = await client.wait_for("interaction", check=lambda interaction: interaction.message.id == select_message.id)
+                selected_cnet_map = interaction.data.get("values", ["no_map"])[0]
+                if not selected_cnet_map:
+                    selected_cnet_map = "no_map"
+                    cnet_dict['module'] = selected_cnet_option.get('module')
+                    message += f", Module: {cnet_dict['module']}"
                 else:
-                    await i.send("Invalid image. Please attach a valid image.",ephemeral=True)
-                    return
-                if cnet_map:
-                    if cnet_map.value == "no_map":
-                        controlnet_dict['module'] = selected_cnet_option.get('module')
-                    if cnet_map.value == "map":
-                        controlnet_dict['module'] = "none"
-                    if cnet_map.value == "invert_map":
-                        controlnet_dict['module'] = "invert (from white bg & black line)"
-                    message += f", Module: {controlnet_dict['module']}"
-                    message += f", Map Input: {cnet_map.value}"
-                else:
-                    message += f", Module: {controlnet_dict['module']}"
-                if (cnet_model and not cnet_input) or (cnet_input and not cnet_model):
-                    await i.send("ControlNet feature requires **both** selecting a model (cnet_model) and attaching an image (cnet_input).",ephemeral=True)
-                    return
+                    if selected_cnet_map == "map":
+                        cnet_dict['module'] = "none"
+                    elif selected_cnet_map == "invert_map":
+                        cnet_dict['module'] = "invert (from white bg & black line)"
+                    message += f", Map: {selected_cnet_map}"
+                await interaction.response.defer() # defer response for this interaction
+                await select_message.delete()
+            except Exception as e:
+                logging.error(f"An error occurred while configuring ControlNet for /image command: {e}")
 
-        channel = i.channel
-        
-        neg_prompt=neg_style_prompt
-        size=size_dict if size_dict else None
-        face_swap=faceswapimg if face_swap else None
-        controlnet=controlnet_dict if controlnet_dict else None
-
-        params = {'neg_prompt': neg_prompt, 'size': size, 'face_swap': face_swap, 'controlnet': controlnet, 'message': message}
+        params = {'neg_prompt': neg_style_prompt, 'size': size_dict, 'img2img': img2img_dict, 'face_swap': faceswapimg, 'controlnet': cnet_dict, 'endpoint': endpoint, 'message': message}
 
         await ireply(i, 'image') # send a response msg to the user
         # offload to ai_gen queue
@@ -3757,8 +3839,8 @@ class ImgModel:
                 'layerdiffuse': {
                     'args': {'enabled': False, 'method': '(SDXL) Only Generate Transparent Image (Attention Injection)', 'weight': 1.0, 'stop_at': 1.0, 'foreground': None, 'background': None, 'blending': None, 'resize_mode': 'Crop and Resize', 'output_mat_for_i2i': False, 'fg_prompt': '', 'bg_prompt': '', 'blended_prompt': ''}
                 },
-                'forgecouple': {
-                    'args': {'enable': False, 'direction': 'Horizontal', 'global_effect': 'None', 'sep': '', 'mode': 'basic', 'maps': {"headers": ["x", "y", "weight"], "data": [["0:0.5", "0.0:1.0", "1.0"],["0.5:1.0","0.0:1.0","1.0"]]}}
+                'forge_couple': {
+                    'args': {'enable': False, 'direction': 'Horizontal', 'global_effect': 'First Line', 'sep': 'SEP', 'mode': 'Basic', 'maps': [["0:0.5", "0.0:1.0", "1.0"],["0.5:1.0","0.0:1.0","1.0"]]}
                 },                
                 'reactor': {
                     'args': {'image': '', 'enabled': False, 'source_faces': '0', 'target_faces': '0', 'model': 'inswapper_128.onnx', 'restore_face': 'CodeFormer', 'restore_visibility': 1, 'restore_upscale': True, 'upscaler': '4x_NMKD-Superscale-SP_178000_G', 'scale': 1.5, 'upscaler_visibility': 1, 'swap_in_source_img': False, 'swap_in_gen_img': True, 'log_level': 1, 'gender_detect_source': 0, 'gender_detect_target': 0, 'save_original': False, 'codeformer_weight': 0.8, 'source_img_hash_check': False, 'target_img_hash_check': False, 'system': 'CUDA', 'face_mask_correction': True, 'source_type': 0, 'face_model': '', 'source_folder': '', 'multiple_source_images': None, 'random_img': True, 'force_upscale': True, 'threshold': 0.6, 'max_faces': 2}
