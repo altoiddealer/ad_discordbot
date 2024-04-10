@@ -20,6 +20,22 @@
 
 <details>
   <summary>click to expand</summary>
+
+   **04/10/2024:** Upgraded '/image' cmd. Added Tags. Added [sd-forge-couple](https://github.com/Haoming02/sd-forge-couple) extension support.
+   
+    - Upgraded the /image command:
+    
+      - ControlNet and ReActor now only appear in the select options if enabled in config.py
+      - 'img2img' has been added. If an image is attached, it will prompt for the Denoise Strength.
+      - ControlNet now follows up asking for model/map if an image is attached, to simplify the main menu.
+      
+    - Added 'sd_output_dir' tag, so now you can control the image save location in your tag definitions.
+    
+    - Added extension support for SD Forge Couple.  Currently only useful for '/image' command unless you can get the LLM to reply with the correct format (I'm working on that!)
+
+<img width="658" alt="Screenshot_2024-04-10_140521" src="https://github.com/altoiddealer/ad_discordbot/assets/1613484/c5aa7146-92b5-43d2-87d7-8887320a45d8">
+
+   ---
   
    **04/01/2024:** Pretty massive update. Be sure to update textgen-webui, and take care updating settings files.
    
@@ -127,17 +143,20 @@
 
 2. **[Create a Discord bot account](https://discordpy.readthedocs.io/en/stable/discord.html), invite it to your server, and note its authentication token**.
 
-3. Clone this repository into **/text-generation-webui/**
+3. Clone this repository to a safe location. (**NOT into /text-generation-webui/**)
    ```
    git clone https://github.com/altoiddealer/ad_discordbot
    ```
+3. **Make a copy** of the cloned repository, into **/text-generation-webui/**
+
+   `.../text-generation-webui/ad_discordbot/`
+  
 4. Move **bot.py** out of subdirectory **/ad_discordbot/** -> into the directory **/text-generation-webui/**
 
-   ```
-   /text-generation-webui/bot.py
+   `/text-generation-webui/bot.py`
    
-   /text-generation-webui/ad_discordbot/(remaining files)
-   ```
+   `/text-generation-webui/ad_discordbot/(remaining files)`
+
 5. **Add the bot token (from Step 2) into **/ad_discordbot/config.py**
    
 6. **Run the .cmd file** in text-generation-webui directory (**ex: cmd_windows.bat**), and performing the following commands:
@@ -218,24 +237,24 @@
 
 ## Updating
 
-1. **Open a cmd window** in **/ad_discordbot/** and **git pull**
+1. **Open a cmd window** in the **/ad_discordbot/** cloned repository (See step 3 in Installation) and **git pull**
    ```
    git pull
    ```
 
 2. **IF bot.py has changed:**
   
-   Move **bot.py** out of subdirectory **/ad_discordbot/** -> into the directory **/text-generation-webui/** (*overwriting old version*)
+   Copy and Replace **bot.py** -> into the directory **/text-generation-webui/** (*overwriting old version*)
 
-   ```
-   /text-generation-webui/bot.py
+   `.../text-generation-webui/bot.py`
    
    /text-generation-webui/ad_discordbot/(remaining files)
-   ```
 
-3. **IF files have changed that you modified:**
+3. **IF other files have changed ('config.py', 'dict_X.yaml', etc:**
   
-   You will need to backup files you modified, and update them to match new changes**
+   **You will need to compare changes, and either:**
+   - migrate the changes into your active setup, OR
+   - migrate values from your active setup into the fresh new files
 
    **Example**: config.py gets updated with a new feature.
    
@@ -243,4 +262,4 @@
 
    * Update your existing config.py with the new feature, OR
      
-   * Update the new config.py with your settings.
+   * Make a copy of the new config.py and update it with your settings.
