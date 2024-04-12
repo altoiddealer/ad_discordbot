@@ -185,6 +185,7 @@ tag_presets:
 #   save_history: (true/false)        Whether to save this interaction to history or not.
 #   state: {dictionary}               Update values for textgen-webui state parameters. Must be formatted as a dictionary.
 #   llm_param_variances: {dictionary} Randomization ranges for textgen-webui state parameters. Must be formatted as a dictionary.
+#   user_image: 'string'              Sends a local image to the channel. Value values: Image in 'user_images' (png/jpg/txt in base64) -OR- Directory name in '/user_images/' (Picks a random image or random image from random subdirectory)
 
 # Relevant to img generation (A1111 / Forge):
 #   sd_output_dir: 'string'           Location to save any generated images. Default: 'ad_discordbot/sd_outputs/'
@@ -203,7 +204,9 @@ tag_presets:
 #   img_text_joining: ', '            Relevant to all insertion methods except "replace"
 #   payload: {dictionary}             Replacements for Stable Diffusion payload. Must be formatted as a dictionary.
 #   img_param_variances: {dictionary} Randomization ranges for Stable Diffusion payload parameters. Must be formatted as a dictionary.
-
+#   img2img: 'string'                 Uses a local image as img2img input. Value values: Image in 'user_images' (png/jpg/txt in base64) -OR- Directory name in '/user_images/' (Picks a random image or random image from random subdirectory)
+#   img2img_mask: 'string'            AKA Inpainting. Won't have any effect without img2img also triggered. Should be a greyscale image. Value values: Image in 'user_images' (png/jpg/txt in base64) -OR- Directory name in '/user_images/' (Picks a random image or random image from random subdirectory)
+#   user_image: 'string'              Sends a local image to the channel. Value values: Image in 'user_images' (png/jpg/txt in base64) -OR- Directory name in '/user_images/' (Picks a random image or random image from random subdirectory)
 
 # HINT: tags can be created/activated on-demand if using this sytax in your prompt: [[key:value]] or [[key1:value1 | key2:value2]] etc
 #       EXAMPLE (Single tag):     [[reactor_max_faces:6]]
@@ -213,7 +216,7 @@ tag_presets:
 # ControlNet specific tags (A1111/Forge extension):
 #   controlnet: 'string'              Simplified tag to both **apply** ControlNet image/folder AND **enable** ControlNet.
 #   controlnet#: 'string'             Optional syntax for multi-ControlNet where # represents the ControlNet unit. ex: 'controlnet0: guy.png', 'controlnet1: architecture', etc.
-#                                     Value values: Image in 'controlnet_images' (png/jpg/txt in base64) -OR- Directory name in '/controlnet_images/' (Picks a random image)
+#                                     Value values: Image in 'user_images' (png/jpg/txt in base64) -OR- Directory name in '/user_images/' (Picks a random image or random image from random subdirectory)
 #   cnet_{key}                        ANY key can be used (see dict_base_settings.yaml for complete list). A 'controlnet' tag must also be in effect when using these tags in order to properly assign the image.
 #   cnet#_{key}: 'string'             Optional syntax for multi-ControlNet parameters where # represents the ControlNet unit. ex: 'cnet0_weight: 0.5', 'cnet1_guidance_end: 0.8', etc.
 #   cnet#_mask_image: 'string'        The value for the 'cnet_mask_image' param will be handled exactly the same as the main controlnet (see writeup for 'controlnet' a few lines up)
@@ -240,7 +243,7 @@ tag_presets:
 
 # ReActor specific tags (A1111/Forge extension):
 #   reactor: 'string'                 Simplified tag to both **apply** face image/folder/model AND **enable** ReActor.
-#                                     Value values: Image in 'swap_faces' (png/jpg/txt in base64) -OR- Directory name in '/swap_faces/' (Picks a random face) -OR- Face model in '{SD_CLIENT}\models\reactor\faces' example 'Minty.safetensors'
+#                                     Value values: Image in 'user_images' (png/jpg/txt in base64) -OR- Directory name in '/user_images/' (Picks a random image or random image from random subdirectory) -OR- Face model in '{SD_CLIENT}\models\reactor\faces' example 'Minty.safetensors'
 #   reactor_{key}                     ANY key can be used (see dict_base_settings.yaml for complete list).
 #                                     Recommended to use in combination with 'reactor' tag - otherwise, you can't use "single face image method"
 #                                     (technically, you could send a base64 string... and you would need to include 'reactor_enabled: True')

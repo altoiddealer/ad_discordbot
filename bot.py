@@ -1026,7 +1026,7 @@ async def build_flow_queue(input_flow):
 async def process_llm_payload_tags(user_name, channel, llm_payload, llm_prompt, mods):
     try:
         char_params = {}
-        llmmodel_params = {}
+        params = {}
         flow = mods.get('flow', None)
         save_history = mods.get('save_history', None)
         load_history = mods.get('load_histor', None)
@@ -1036,8 +1036,9 @@ async def process_llm_payload_tags(user_name, channel, llm_payload, llm_prompt, 
         swap_character = mods.get('swap_character', None)
         change_llmmodel = mods.get('change_llmmodel', None)
         swap_llmmodel = mods.get('swap_llmmodel', None)
+        send_user_image = mods.get('send_user_image', None)
         # Process the tag matches
-        if flow or save_history or load_history or param_variances or state or change_character or swap_character or change_llmmodel or swap_llmmodel:
+        if flow or save_history or load_history or param_variances or state or change_character or swap_character or change_llmmodel or swap_llmmodel or send_user_image:
             # Flow handling
             if flow is not None and not flow_event.is_set():
                 await build_flow_queue(flow)
@@ -1076,21 +1077,25 @@ async def process_llm_payload_tags(user_name, channel, llm_payload, llm_prompt, 
                         llm_payload = await swap_llm_character(swap_character, user_name, llm_payload)
                     logging.info(f'[TAGS] {verb} Character: {char_params}')
             # LLM model handling
-            llmmodel_params = change_llmmodel or swap_llmmodel or {} # 'llmmodel_change' will trump 'llmmodel_swap'
-            if llmmodel_params:
-                if llmmodel_params == shared.model_name:
+            params = change_llmmodel or swap_llmmodel or {} # 'llmmodel_change' will trump 'llmmodel_swap'
+            if params:
+                if params == shared.model_name:
                     logging.info(f'[TAGS] LLM model was triggered to change, but it is the same as current ("{shared.model_name}").')
-                    llmmodel_params = {} # return empty dict
+                    params = {} # return empty dict
                 else:
-                    mode = 'change' if llmmodel_params == change_llmmodel else 'swap'
+                    mode = 'change' if params == change_llmmodel else 'swap'
                     verb = 'Changing' if mode == 'change' else 'Swapping'
                     # Error handling
-                    if not any(llmmodel_params == model for model in all_llmmodels):
-                        logging.error(f'LLM model not found: {llmmodel_params}')
+                    if not any(params == model for model in all_llmmodels):
+                        logging.error(f'LLM model not found: {params}')
                     else:
-                        logging.info(f'[TAGS] {verb} LLM Model: {llmmodel_params}')
-                        llmmodel_params = {'llmmodel': {'llmmodel_name': llmmodel_params, 'mode': mode, 'verb': verb}}
-        return llm_payload, llm_prompt, llmmodel_params
+                        logging.info(f'[TAGS] {verb} LLM Model: {params}')
+                        params = {'llmmodel': {'llmmodel_name': params, 'mode': mode, 'verb': verb}}
+            # Send User Image handling
+            if send_user_image:
+                params['send_user_image'] = send_user_image
+                logging.info(f"[TAGS] Sending user image: {send_user_image}")
+        return llm_payload, llm_prompt, params
     except Exception as e:
         logging.error(f"Error processing LLM tags: {e}")
         return llm_payload, llm_prompt, {}
@@ -1104,6 +1109,7 @@ def collect_llm_tag_values(tags):
         'swap_character': None,
         'change_llmmodel': None,
         'swap_llmmodel': None,
+        'send_user_image': None,
         'param_variances': {},
         'state': {}
         }
@@ -1129,6 +1135,9 @@ def collect_llm_tag_values(tags):
             llm_payload_mods['change_llmmodel'] = tag.pop('change_llmmodel')
         if 'swap_llmmodel' in tag and llm_payload_mods['swap_llmmodel'] is None:
             llm_payload_mods['swap_llmmodel'] = tag.pop('swap_llmmodel')
+        if 'send_user_image' in tag and llm_payload_mods['send_user_image'] is None:
+            user_image_file = tag.pop('send_user_image')
+            llm_payload_mods['send_user_image'] = get_image_tag_args(user_image_file, 'User image')
         if 'format_prompt' in tag and formatting['format_prompt'] is None:
             formatting['format_prompt'] = tag.pop('format_prompt')
         # Values that may apply repeatedly
@@ -1185,10 +1194,10 @@ def process_tag_insertions(prompt, tags):
         logging.error(f"Error processing LLM prompt tags: {e}")
         return prompt, tags
 
-def process_tag_trumps(matches):
+def process_tag_trumps(matches, trump_params=[]):
     try:
         # Collect all 'trump' parameters for all matched tags
-        trump_params = set()
+        trump_params = set(trump_params)
         for tag in matches:
             if isinstance(tag, tuple):
                 tag_dict = tag[0]  # get tag value if tuple
@@ -1210,7 +1219,7 @@ def process_tag_trumps(matches):
                 logging.info(f'''[TAGS] Tag with triggers "{tag_dict['trigger']}" was trumped by another tag.''')
             else:
                 untrumped_matches.append(tag)
-        return untrumped_matches
+        return untrumped_matches, trump_params
     except Exception as e:
         logging.error(f"Error processing matched tags: {e}")
         return matches  # return original matches if error occurs
@@ -1254,7 +1263,7 @@ def match_tags(search_text, tags):
                             tag['imgtag_uninserted'] = True
                             matches.append(tag)
         if matches:
-            updated_tags['matches'] = process_tag_trumps(matches) # trump tags
+            updated_tags['matches'], updated_tags['trump_params'] = process_tag_trumps(matches, tags['trump_params']) # trump tags
         # Adjust the return value depending on which phase match_tags() was called on
         unmatched['llm'] = llm_tags
         if 'user' in unmatched:
@@ -1266,7 +1275,7 @@ def match_tags(search_text, tags):
 
 def sort_tags(all_tags):
     try:
-        sorted_tags = {'matches': [], 'unmatched': {'user': [], 'llm': [], 'userllm': []}}
+        sorted_tags = {'matches': [], 'unmatched': {'user': [], 'llm': [], 'userllm': []}, 'trump_params': []}
         for tag in all_tags:
             if 'random' in tag:
                 if not isinstance(tag['random'], (int, float)):
@@ -1453,6 +1462,7 @@ async def hybrid_llm_img_gen(user, channel, source, text, tags, llm_payload, par
         img_note = ''
         # Check params to see if an LLM model change/swap was triggered by Tags
         llmmodel_params = params.get('llmmodel', {})
+        send_user_image = params.get('send_user_image', None)
         mode = llmmodel_params.get('mode', 'change') # default to 'change' unless a tag was triggered with 'swap'
         if llmmodel_params:
             orig_llmmodel = copy.deepcopy(shared.model_name)                    # copy current LLM model name
@@ -1500,6 +1510,9 @@ async def hybrid_llm_img_gen(user, channel, source, text, tags, llm_payload, par
         should_send_text = should_bot_do('should_send_text', default=True, tags=tags)
         if should_send_text:
             await send_long_message(channel, mention_resp)
+        if send_user_image:
+            send_user_image = discord.File(send_user_image)
+            await channel.send(file=send_user_image)
     except Exception as e:
         logging.error(f'An error occurred while processing "{source}" request: {e}')
         change_embed_info.title = f'An error occurred while processing "{source}" request'
@@ -2208,9 +2221,12 @@ def apply_imgcmd_params(img_payload, params):
         face_swap = params.get('face_swap', None) if params else None
         controlnet = params.get('controlnet', None) if params else None
         img2img = params.get('img2img', {})
+        img2img_mask = img2img.get('mask', '')
         if img2img:
             img_payload['init_images'] = [img2img['image']]
             img_payload['denoising_strength'] = img2img['denoising_strength']
+        if img2img_mask:
+            img_payload['mask'] = img2img_mask
         if size: img_payload.update(size)
         if face_swap:
             img_payload['alwayson_scripts']['reactor']['args']['image'] = face_swap # image in base64 format
@@ -2297,53 +2313,75 @@ def process_param_variances(param_variances):
         logging.error(f"Error processing param variances: {e}")
         return {}
 
-def cnet_reactor_extension_args(value, ext, ext_dir):
+def select_random_image_or_subdir(directory):
+    contents = os.listdir(directory)    # List all files and directories in the given directory
+    # Filter files to include only .png and .jpg extensions
+    image_files = [f for f in contents if os.path.isfile(os.path.join(directory, f)) and f.lower().endswith(('.png', '.jpg'))]
+    # If there are image files, choose one randomly
+    if image_files:
+        random_image = random.choice(image_files)
+        image_file_path = os.path.join(directory, random_image)
+        method = 'Random from folder'
+        return image_file_path, method
+    # If no image files, check for subdirectories
+    subdirectories = [d for d in contents if os.path.isdir(os.path.join(directory, d))]
+    # If there are subdirectories, select one randomly and recursively call select_random_image
+    if subdirectories:
+        random_subdirectory = random.choice(subdirectories)
+        subdirectory_path = os.path.join(directory, random_subdirectory)
+        return select_random_image_or_subdir(subdirectory_path)
+    
+    # If neither image files nor subdirectories found, return None
+    return None, None
+
+def get_image_tag_args(value, ext):
     args = {}
-    file_path = ''
+    image_file_path = ''
     method = ''
     try:
-        home_path = os.path.join("ad_discordbot", ext_dir)
+        home_path = os.path.join("ad_discordbot/user_images")
         full_path = os.path.join(home_path, value)
-        # If value was a directory to choose random image from
-        if os.path.isdir(full_path):
-            cwd_path = os.getcwd()
-            os_path = os.path.join(cwd_path, full_path)
-            # List all files in the directory
-            files = [f for f in os.listdir(os_path) if os.path.isfile(os.path.join(os_path, f))]
-            # Filter files to include only .png and .jpg extensions
-            image_files = [f for f in files if f.lower().endswith(('.png', '.jpg'))]
-            # Choose a random image file
-            if image_files:
-                random_image = random.choice(image_files)
-                file_path = os.path.join(os_path, random_image)
-                method = 'Random from folder'
         # If value contains valid image extension
-        elif any(ext in value for ext in (".txt", ".png", ".jpg")): # extension included in value
-            file_path = os.path.join(home_path, value)
+        if any(ext in value for ext in (".txt", ".png", ".jpg")): # extension included in value
+            image_file_path = os.path.join(home_path, value)
         # ReActor specific
         elif ".safetensors" in value and ext == 'ReActor Enabled':
             args['image'] = None
             args['source_type'] = 1
             args['face_model'] = value
             method = 'Face model'
+        # If value was a directory to choose random image from
+        elif os.path.isdir(full_path):
+            cwd_path = os.getcwd()
+            os_path = os.path.join(cwd_path, full_path)
+            while True:
+                image_file_path, method = select_random_image_or_subdir(os_path)
+                if image_file_path:
+                    break  # Break the loop if an image is found and selected
+                else:
+                    if not os.listdir(os_path):
+                        logging.warning(f'Valid file not found in a "{homepath}" or any subdirectories: "{value}"')
+                        break  # Break the loop if no folders or images are found
         # If value does not specify an extension, but is also not a directory
         else:
             found = False
             for ext in (".txt", ".png", ".jpg"):
                 temp_path = os.path.join(home_path, value + ext)
                 if os.path.exists(temp_path):
-                    file_path = temp_path
+                    image_file_path = temp_path
                     found = True
                     break
             if not found:
                 raise FileNotFoundError(f"File '{value}' not found with supported extensions (.txt, .png, .jpg)")
-        if file_path and os.path.isfile(file_path):
-            if file_path.endswith(".txt"):
-                with open(file_path, "r") as txt_file:
+        if image_file_path and os.path.isfile(image_file_path):
+            if ext == "User image":
+                return image_file_path # user image does not need to be converted to base64
+            if image_file_path.endswith(".txt"):
+                with open(image_file_path, "r") as txt_file:
                     base64_img = txt_file.read()
                     method = 'base64 from .txt'
             else:
-                with open(file_path, "rb") as image_file:
+                with open(image_file_path, "rb") as image_file:
                     image_data = image_file.read()
                     base64_img = base64.b64encode(image_data).decode('utf-8')
                     args['image'] = base64_img
@@ -2357,7 +2395,7 @@ def cnet_reactor_extension_args(value, ext, ext_dir):
         logging.error(f"[TAGS] Error processing {ext} tag: {e}")
         return {}
 
-async def process_img_payload_tags(img_payload, mods):
+async def process_img_payload_tags(img_payload, mods, params):
     try:
         imgmodel_params = None
         img_censoring = mods.get('img_censoring', None)
@@ -2369,8 +2407,12 @@ async def process_img_payload_tags(img_payload, mods):
         forge_couple = mods.get('forge_couple', {})
         layerdiffuse = mods.get('layerdiffuse', {})
         reactor = mods.get('reactor', {})
+        img2img = mods.get('img2img', {})
+        img2img_mask = mods.get('img2img_mask', {})
+        send_user_image = mods.get('send_user_image', None)
+        endpoint = '/sdapi/v1/txt2img'
         # Process the tag matches
-        if img_censoring or change_imgmodel or swap_imgmodel or payload or param_variances or controlnet or forge_couple or layerdiffuse or reactor:
+        if img_censoring or change_imgmodel or swap_imgmodel or payload or param_variances or controlnet or forge_couple or layerdiffuse or reactor or img2img or img2img_mask or send_user_image:
             # Img censoring handling
             if img_censoring and img_censoring > 0:
                 img_payload['img_censoring'] = img_censoring
@@ -2417,7 +2459,19 @@ async def process_img_payload_tags(img_payload, mods):
             # ReActor face swap handling
             if reactor and config.sd['extensions'].get('reactor_enabled', False):
                 img_payload['alwayson_scripts']['reactor']['args'].update(reactor)
-        return img_payload, imgmodel_params
+            # Img2Img handling
+            if img2img:
+                base64_img = img2img['image']
+                img_payload['init_images'] = [base64_img]
+                params['endpoint'] = '/sdapi/v1/img2img'
+            # Inpaint Mask handling
+            if img2img_mask:
+                base64_img = img2img_mask['image']
+                img_payload['mask'] = base64_img
+            # Send User Image handling
+            if send_user_image:
+                logging.info(f"[TAGS] Sending user image: {send_user_image}")
+        return img_payload, imgmodel_params, params
     except Exception as e:
         logging.error(f"Error processing Img tags: {e}")
         return img_payload, None
@@ -2434,8 +2488,12 @@ def collect_img_tag_values(tags):
             'controlnet': [],
             'forge_couple': {},
             'layerdiffuse': {},
-            'reactor': {}
+            'reactor': {},
+            'send_user_image': None,
+            'img2img': {},
+            'img2img_mask': {}
             }
+        inpaint_args = {}
         controlnet_args = {}
         forge_couple_args = {}
         layerdiffuse_args = {}
@@ -2443,6 +2501,11 @@ def collect_img_tag_values(tags):
         for tag in reversed(tags['matches']):
             if isinstance(tag, tuple):
                 tag = tag[0] # For tags with prompt insertion indexes
+            # WIP CODE...
+            # if 'controlnet' in tag or 'img2img' in tag or 'img2img_mask' in tag or :
+            #     if '.' not in tag['value']:
+            #         values = set(item['value'] for item in tags['matches'] if item['key'] == tag['key'])
+            #         if len(values) == 1:
             for key, value in tag.items():
                 if key == 'sd_output_dir':
                     sd_output_dir = value
@@ -2465,14 +2528,14 @@ def collect_img_tag_values(tags):
                 # get controlnet tag params
                 elif key.startswith('controlnet'):
                     index = int(key[len('controlnet'):]) if key != 'controlnet' else 0  # Determine the index (cnet unit) for main controlnet args
-                    cnet = cnet_reactor_extension_args(value, 'ControlNet Image', 'controlnet_images')                       # Get 'image' and 'enabled'
+                    cnet = get_image_tag_args(value, 'ControlNet Image')                       # Get 'image' and 'enabled'
                     controlnet_args.setdefault(index, {}).update(cnet)         # Update controlnet args at the specified index
                 elif key.startswith('cnet'):
                     # Determine the index for controlnet_args sublist
                     if key.startswith('cnet_'): index = 0                                       # Determine the index (cnet unit) for additional controlnet args
                     else: index = int(key.split('_')[0][len('cnet'):])
                     if key.endswith('mask_image'):
-                        mask_args = cnet_reactor_extension_args(value, 'ControlNet Mask', 'controlnet_images')
+                        mask_args = get_image_tag_args(value, 'ControlNet Mask')
                         value = mask_args['image']
                     controlnet_args.setdefault(index, {}).update({key.split('_', 1)[-1]: value})   # Update controlnet args at the specified index
                 # get forge_couple tag params                    
@@ -2493,11 +2556,20 @@ def collect_img_tag_values(tags):
                     layerdiffuse_args[laydiff_key] = value
                 # get reactor tag params
                 elif key == 'reactor':
-                    reactor = cnet_reactor_extension_args(value, 'ReActor Enabled', 'swap_faces')
+                    reactor = get_image_tag_args(value, 'ReActor Enabled')
                     img_payload_mods['reactor'] = reactor
                 elif key.startswith('reactor_'):
                     reactor_key = key[len('reactor_'):]
                     reactor_args[reactor_key] = value
+                # get any user image
+                elif key == 'send_user_image':
+                    img_payload_mods['send_user_image'] = get_image_tag_args(value, 'User image')
+                # get any img2img
+                elif key == 'img2img':
+                    img_payload_mods['img2img'] = get_image_tag_args(value, 'Img2Img')
+                # get any inpaint mask
+                elif key == 'img2img_mask':
+                    img_payload_mods['img2img_mask'] = get_image_tag_args(value, 'Img2Img Mask')
         # Add the collected SD WebUI extension args to the img_payload_mods dict
         for index in sorted(set(controlnet_args.keys())):   # This flattens down any gaps between collected ControlNet units (ensures lowest index is 0, next is 1, and so on)
             cnet_basesettings = copy.copy(client.settings['imgmodel']['payload']['alwayson_scripts']['controlnet']['args'][0])  # Copy of required dict items
@@ -2563,8 +2635,9 @@ async def img_gen(user, channel, source, img_prompt, params, tags={}):
         img_payload = initialize_img_payload(img_prompt, neg_prompt)
         # collect matched tag values
         sd_output_dir, img_payload_mods = collect_img_tag_values(tags)
+        send_user_image = img_payload_mods.get('send_user_image', None)
         # Apply tags relevant to Img gen
-        img_payload, imgmodel_params = await process_img_payload_tags(img_payload, img_payload_mods)
+        img_payload, imgmodel_params, params = await process_img_payload_tags(img_payload, img_payload_mods, params)
         # Process loractl
         if config.sd['extensions'].get('lrctl', {}).get('enabled', False):
             tags = apply_loractl(tags)
@@ -2588,6 +2661,9 @@ async def img_gen(user, channel, source, img_prompt, params, tags={}):
         if source == 'image':
             image_embed_info = discord.Embed(title = f"{user} requested an image:", description=params['message'], url='https://github.com/altoiddealer/ad_discordbot')
             await channel.send(embed=image_embed_info)
+        if send_user_image:
+            send_user_image = discord.File(send_user_image)
+            await channel.send(file=send_user_image)
     except Exception as e:
         logging.error(f"An error occurred in img_gen(): {e}")
 
@@ -2700,35 +2776,35 @@ if cnet_online and reactor_online:
     @client.hybrid_command(name="image", description=f'Generate an image using {SD_CLIENT}')
     @app_commands.choices(size=size_choices)
     @app_commands.choices(style=style_choices)
-    async def image(i: discord.Interaction, prompt: str, img2img: typing.Optional[discord.Attachment], size: typing.Optional[app_commands.Choice[str]], style: typing.Optional[app_commands.Choice[str]], neg_prompt: typing.Optional[str], 
+    async def image(i: discord.Interaction, prompt: str, size: typing.Optional[app_commands.Choice[str]], style: typing.Optional[app_commands.Choice[str]], neg_prompt: typing.Optional[str], img2img: typing.Optional[discord.Attachment], img2img_mask: typing.Optional[discord.Attachment],
         face_swap: typing.Optional[discord.Attachment], cnet: typing.Optional[discord.Attachment]):
-        user_selections = {"prompt": prompt, "img2img": img2img if img2img else None, "size": size.value if size else None, "style": style.value if style else None, "neg_prompt": neg_prompt,
+        user_selections = {"prompt": prompt, "size": size.value if size else None, "style": style.value if style else None, "neg_prompt": neg_prompt, "img2img": img2img if img2img else None, "img2img_mask": img2img_mask if img2img_mask else None,
         "face_swap": face_swap if face_swap else None, "cnet": cnet if cnet else None}
         await process_image(i, user_selections)
 elif cnet_online and not reactor_online:
     @client.hybrid_command(name="image", description=f'Generate an image using {SD_CLIENT}')
     @app_commands.choices(size=size_choices)
     @app_commands.choices(style=style_choices)
-    async def image(i: discord.Interaction, prompt: str, img2img: typing.Optional[discord.Attachment], size: typing.Optional[app_commands.Choice[str]], style: typing.Optional[app_commands.Choice[str]], neg_prompt: typing.Optional[str], 
+    async def image(i: discord.Interaction, prompt: str, size: typing.Optional[app_commands.Choice[str]], style: typing.Optional[app_commands.Choice[str]], neg_prompt: typing.Optional[str], img2img: typing.Optional[discord.Attachment], img2img_mask: typing.Optional[discord.Attachment],
         cnet: typing.Optional[discord.Attachment]):
-        user_selections = {"prompt": prompt, "img2img": img2img if img2img else None, "size": size.value if size else None, "style": style.value if style else None, "neg_prompt": neg_prompt,
+        user_selections = {"prompt": prompt, "size": size.value if size else None, "style": style.value if style else None, "neg_prompt": neg_prompt, "img2img": img2img if img2img else None, "img2img_mask": img2img_mask if img2img_mask else None,
         "cnet": cnet if cnet else None}
         await process_image(i, user_selections)
 elif reactor_online and not cnet_online:
     @client.hybrid_command(name="image", description=f'Generate an image using {SD_CLIENT}')
     @app_commands.choices(size=size_choices)
     @app_commands.choices(style=style_choices)
-    async def image(i: discord.Interaction, prompt: str, img2img: typing.Optional[discord.Attachment], size: typing.Optional[app_commands.Choice[str]], style: typing.Optional[app_commands.Choice[str]], neg_prompt: typing.Optional[str], 
+    async def image(i: discord.Interaction, prompt: str, size: typing.Optional[app_commands.Choice[str]], style: typing.Optional[app_commands.Choice[str]], neg_prompt: typing.Optional[str], img2img: typing.Optional[discord.Attachment], img2img_mask: typing.Optional[discord.Attachment], 
         face_swap: typing.Optional[discord.Attachment]):
-        user_selections = {"prompt": prompt, "img2img": img2img if img2img else None, "size": size.value if size else None, "style": style.value if style else None, "neg_prompt": neg_prompt,
+        user_selections = {"prompt": prompt, "size": size.value if size else None, "style": style.value if style else None, "neg_prompt": neg_prompt, "img2img": img2img if img2img else None, "img2img_mask": img2img_mask if img2img_mask else None,
         "face_swap": face_swap if face_swap else None}
         await process_image(i, user_selections)
 else:
     @client.hybrid_command(name="image", description=f'Generate an image using {SD_CLIENT}')
     @app_commands.choices(size=size_choices)
     @app_commands.choices(style=style_choices)
-    async def image(i: discord.Interaction, prompt: str, img2img: typing.Optional[discord.Attachment], size: typing.Optional[app_commands.Choice[str]], style: typing.Optional[app_commands.Choice[str]], neg_prompt: typing.Optional[str]):
-        user_selections = {"prompt": prompt, "img2img": img2img if img2img else None, "size": size.value if size else None, "style": style.value if style else None, "neg_prompt": neg_prompt}
+    async def image(i: discord.Interaction, prompt: str,  size: typing.Optional[app_commands.Choice[str]], style: typing.Optional[app_commands.Choice[str]], neg_prompt: typing.Optional[str], img2img: typing.Optional[discord.Attachment], img2img_mask: typing.Optional[discord.Attachment]):
+        user_selections = {"prompt": prompt, "size": size.value if size else None, "style": style.value if style else None, "neg_prompt": neg_prompt, "img2img": img2img if img2img else None, "img2img_mask": img2img_mask if img2img_mask else None}
         await process_image(i, user_selections)
 
 async def process_image(i, selections):
@@ -2737,13 +2813,14 @@ async def process_image(i, selections):
         await i.response.defer()
         return
     # User inputs from /image command
-    prompt = selections.get('prompt', '')
-    img2img = selections.get('img2img', None)    
+    prompt = selections.get('prompt', '')  
     size = selections.get('size', None)
     style = selections.get('style', None)
     neg_prompt = selections.get('neg_prompt', '')
-    cnet = selections.get('cnet', None)
+    img2img = selections.get('img2img', None)
+    img2img_mask = selections.get('img2img_mask', None)
     face_swap = selections.get('face_swap', None)
+    cnet = selections.get('cnet', None)
     # Defaults
     message = f"**Prompt:** {prompt}"
     endpoint = '/sdapi/v1/txt2img'
@@ -2753,8 +2830,23 @@ async def process_image(i, selections):
     img2img_dict = {}
     cnet_dict = {}
     try:
+        if size:
+            selected_size = next((option for option in size_options if option['name'] == size), None)
+            if selected_size:
+                size_dict['width'] = selected_size.get('width')
+                size_dict['height'] = selected_size.get('height')
+            message += f" | **Size:** {size}"
+        if style:
+            selected_style_option = next((option for option in style_options if option['name'] == style), None)
+            if selected_style_option:
+                prompt = selected_style_option.get('positive').format(prompt)
+                neg_style_prompt = selected_style_option.get('negative')
+            message += f" | **Style:** {style}"
+        if neg_prompt:
+            neg_style_prompt = f"{neg_prompt}, {neg_style_prompt}"
+            message += f" | **Negative Prompt:** {neg_prompt}"
         if img2img:
-            try:
+            async def process_image_img2img(img2img, img2img_dict, endpoint, message):
                 #Convert attached image to base64
                 attached_i2i_img = await img2img.read()
                 i2i_image = base64.b64encode(attached_i2i_img).decode('utf-8')
@@ -2778,29 +2870,25 @@ async def process_image(i, selections):
                 await select_message.delete()
                 endpoint = '/sdapi/v1/img2img' # Change API endpoint to img2img
                 message += f" | **Img2Img**, denoise strength: {denoising_strength}"
+                return img2img_dict, endpoint, message
+            try:
+                img2img_dict, endpoint, message = await process_image_img2img(img2img, img2img_dict, endpoint, message)
             except Exception as e:
                 logging.error(f"An error occurred while configuring Img2Img for /image command: {e}")
-        if size:
-            selected_size = next((option for option in size_options if option['name'] == size), None)
-            if selected_size:
-                size_dict['width'] = selected_size.get('width')
-                size_dict['height'] = selected_size.get('height')
-            message += f" | **Size:** {size}"
-        if style:
-            selected_style_option = next((option for option in style_options if option['name'] == style), None)
-            if selected_style_option:
-                prompt = selected_style_option.get('positive').format(prompt)
-                neg_style_prompt = selected_style_option.get('negative')
-            message += f" | **Style:** {style}"
-        if neg_prompt:
-            neg_style_prompt = f"{neg_prompt}, {neg_style_prompt}"
-            message += f" | **Negative Prompt:** {neg_prompt}"
+        if img2img_mask:
+            if img2img:
+                attached_img2img_mask_img = await img2img_mask.read()
+                img2img_mask_img = base64.b64encode(attached_img2img_mask_img).decode('utf-8')
+                img2img_dict['mask'] = img2img_mask_img
+                message += f" | **Inpainting:** Image Provided"
+            else:
+                await channel.send("Inpainting requires im2img. Not applying img2img_mask mask...", ephemeral=True)
         if face_swap:
             attached_face_img = await face_swap.read()
             faceswapimg = base64.b64encode(attached_face_img).decode('utf-8')
             message += f" | **Face Swap:** Image Provided"
         if cnet:
-            try:
+            async def process_image_controlnet(cnet, cnet_dict, message):
                 # Convert attached image to base64
                 attached_cnet_img = await cnet.read()
                 cnetimage = base64.b64encode(attached_cnet_img).decode('utf-8')
@@ -2853,6 +2941,9 @@ async def process_image(i, selections):
                     message += f", Map: {selected_cnet_map}"
                 await interaction.response.defer() # defer response for this interaction
                 await select_message.delete()
+                return cnet_dict, message
+            try:
+                cnet_dict, message = await process_image_controlnet(cnet, cnet_dict, message)
             except Exception as e:
                 logging.error(f"An error occurred while configuring ControlNet for /image command: {e}")
 

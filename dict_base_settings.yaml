@@ -36,6 +36,12 @@ imgmodel:
     # Note: Refiner is disabled if 'refiner_switch_at: 0.0' *OR* refiner_checkpoint: ''
     refiner_checkpoint: '' # 'sd_xl_refiner_1.0_0.9vae.safetensors [8d0ce6c016]'
     refiner_switch_at: 0.8
+    # inpainting params
+    mask_blur: 4                  # blur strength
+    inpainting_fill: 1            # 0 - 'fill' / 1 - 'original' / 2 - 'latent noise' / 3 - 'latent nothing'
+    inpaint_full_res: true        # true - 'Whole picture' / false - 'Only masked'
+    inpaint_full_res_padding: 32  # 'Only masked padding, pixels' (default: 32)
+    inpainting_mask_invert: 0     # 0 - 'Inpaint masked', 1 - 'Inpaint not masked'
     # Stable Diffusion (A1111 / Forge) extension settings. Modifying these may have unintended results...
     alwayson_scripts:
       controlnet:           # ControlNet extension arguments. The 'tags' feature supports multi-controlnet. To enable multi-controlnet, first increase # of CNets in A1111/Forge CNet settings.
