@@ -185,7 +185,7 @@ tag_presets:
 #   save_history: (true/false)        Whether to save this interaction to history or not.
 #   state: {dictionary}               Update values for textgen-webui state parameters. Must be formatted as a dictionary.
 #   llm_param_variances: {dictionary} Randomization ranges for textgen-webui state parameters. Must be formatted as a dictionary.
-#   user_image: 'string'              Sends a local image to the channel. Value values: Image in 'user_images' (png/jpg/txt in base64) -OR- Directory name in '/user_images/' (Picks a random image or random image from random subdirectory)
+#   send_user_image: 'string'         Sends a local image to the channel. Value values: Image in 'user_images' (png/jpg/txt in base64) -OR- Directory name in '/user_images/' (Picks a random image or random image from random subdirectory)
 
 # Relevant to img generation (A1111 / Forge):
 #   sd_output_dir: 'string'           Location to save any generated images. Default: 'ad_discordbot/sd_outputs/'
@@ -206,7 +206,7 @@ tag_presets:
 #   img_param_variances: {dictionary} Randomization ranges for Stable Diffusion payload parameters. Must be formatted as a dictionary.
 #   img2img: 'string'                 Uses a local image as img2img input. Value values: Image in 'user_images' (png/jpg/txt in base64) -OR- Directory name in '/user_images/' (Picks a random image or random image from random subdirectory)
 #   img2img_mask: 'string'            AKA Inpainting. Won't have any effect without img2img also triggered. Should be a greyscale image. Value values: Image in 'user_images' (png/jpg/txt in base64) -OR- Directory name in '/user_images/' (Picks a random image or random image from random subdirectory)
-#   user_image: 'string'              Sends a local image to the channel. Value values: Image in 'user_images' (png/jpg/txt in base64) -OR- Directory name in '/user_images/' (Picks a random image or random image from random subdirectory)
+#   send_user_image: 'string'         Sends a local image to the channel. Value values: Image in 'user_images' (png/jpg/txt in base64) -OR- Directory name in '/user_images/' (Picks a random image or random image from random subdirectory)
 
 # HINT: tags can be created/activated on-demand if using this sytax in your prompt: [[key:value]] or [[key1:value1 | key2:value2]] etc
 #       EXAMPLE (Single tag):     [[reactor_max_faces:6]]
