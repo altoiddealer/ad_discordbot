@@ -37,6 +37,9 @@
       the function will recursively attempt to select a random image - if no images are in the directory, it will try picking a random directory, and so on,
       until an image is found or reaches an empty directory (error).  So rather than just picking a random image from a folder, it can now pick from a random folder.
       
+  <img width="1166" alt="example" src="https://github.com/altoiddealer/ad_discordbot/assets/1613484/1f4e1297-b69e-4c85-b525-d34c568d5477">
+
+      
   ---
 
    **04/10/2024:** Upgraded '/image' cmd. Added Tags. Added [sd-forge-couple](https://github.com/Haoming02/sd-forge-couple) extension support.
@@ -51,7 +54,7 @@
     
     - Added extension support for SD Forge Couple.  Currently only useful for '/image' command unless you can get the LLM to reply with the correct format (I'm working on that!)
 
-<img width="658" alt="Screenshot_2024-04-10_140521" src="https://github.com/altoiddealer/ad_discordbot/assets/1613484/c5aa7146-92b5-43d2-87d7-8887320a45d8">
+  <img width="658" alt="Screenshot_2024-04-10_140521" src="https://github.com/altoiddealer/ad_discordbot/assets/1613484/c5aa7146-92b5-43d2-87d7-8887320a45d8">
 
    ---
   
