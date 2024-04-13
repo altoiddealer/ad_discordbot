@@ -21,6 +21,24 @@
 <details>
   <summary>click to expand</summary>
 
+   **04/12/2024:** Changed user images dir. New Tags. Enhanced Image Selection.
+
+     - All images now go into a root 'user_images' folder.
+       There are no longer separate root folders for ReActor, ControlNet, Img2Img, Inpainting masks, etc.
+       Users can organize their images in 'user_images' however they wish - just include path in Tags values.
+
+     - New tags:
+       - 'img2img'. Previous commit added img2img to /images cmd - now, it's also a Tag.
+       - 'img2img_mask' (inpainting)...  and now also added to /image command!
+       - 'send_user_image' - can send a local, non-AI generated image! Can be triggered to send an image after LLM Gen and/or after Img Gen.
+       
+    - Enhanced image selection:
+      When processing images from tags (ReActor, ControlNet, etc etc), if the value is a directory (does not include .jpg/.png/.txt),
+      the function will recursively attempt to select a random image - if no images are in the directory, it will try picking a random directory, and so on,
+      until an image is found or reaches an empty directory (error).  So rather than just picking a random image from a folder, it can now pick from a random folder.
+      
+  ---
+
    **04/10/2024:** Upgraded '/image' cmd. Added Tags. Added [sd-forge-couple](https://github.com/Haoming02/sd-forge-couple) extension support.
    
     - Upgraded the /image command:
