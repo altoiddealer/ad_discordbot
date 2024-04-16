@@ -21,6 +21,25 @@
 <details>
   <summary>click to expand</summary>
 
+   **04/16/2024:** Enhanced Flows and "Instant Tags". Many other improvements.
+
+    - Changed the 'Logging Level' from DEBUG to INFO - LESS SPAM!
+    - Performance may be more optimized... all settings were being stored in the discord client object.
+      Now, they are stored in a dedicated class object.
+    - Characters can now be omitted from /character command with new parameter (see M1nty example char)
+    - The feature to create tags instantly from your text has been upgraded.
+      ANY tag values can be created including dictionaries, lists, sublists... anything.
+    - The SD API "Guess imgmodel params" feature has much better success rate now.
+    - "Flows" feature can now use variables for tag values.
+    - Added a new "Flows" example in 'dict_tags.yaml'
+    - Added new forge-couple param.
+    - Better error handling when failure to change Img model
+    - Fixed img prompt insertions from Tags sometimes creating a line break.
+
+  <img width="1616" alt="Screenshot_2024-04-16_144136" src="https://github.com/altoiddealer/ad_discordbot/assets/1613484/141a03ae-0412-4cb0-a462-816c29eea857">
+
+  ---
+  
    **04/12/2024:** Changed user images dir. New Tags. Enhanced Image Selection.
 
      - All images now go into a root 'user_images' folder.
@@ -38,8 +57,7 @@
       until an image is found or reaches an empty directory (error).  So rather than just picking a random image from a folder, it can now pick from a random folder.
       
   <img width="1166" alt="example" src="https://github.com/altoiddealer/ad_discordbot/assets/1613484/1f4e1297-b69e-4c85-b525-d34c568d5477">
-
-      
+  
   ---
 
    **04/10/2024:** Upgraded '/image' cmd. Added Tags. Added [sd-forge-couple](https://github.com/Haoming02/sd-forge-couple) extension support.
