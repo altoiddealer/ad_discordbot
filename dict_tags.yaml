@@ -39,6 +39,52 @@ base_tags:
     on_prefix_only: true
     state: {preset: 'Divine Intellect', mode: instruct} # Update values for textgen-webui state parameters.
 
+  # Tag that triggers a 'Flow' which asks 'Imgmodel_Selector' to review the prompt
+  #    which was written by 'M1inty' to assign the best Image Model for the prompt.
+  - trigger: 'check imgmodel'                   # Intended to be used with a prompt like 'draw _______ check imgmodel'
+    insert_text: ''
+    insert_text_method: 'replace'
+    search_mode: user                           # Only search user's prompt (will not trigger from LLM reply)
+    should_send_text: false                     # Suppress text response (still generate text)
+    should_gen_image: false                     # Suppress image generation (won't send an image by default)
+    flow:                                       # The actual 'Flow' tag value
+      - flow_base:                              # Flow_base are tags that apply to every flow_step
+          save_history: False                   # Do not write these interactions to the main chat history
+          load_history: -1                      # 0 = default (all history), -1 = excludes chat history, > 1 = LLM sees this many recent exchanges.
+      - flow_step: Ask LLM for best Image Model # text displayed in discord embed
+        format_prompt: '{llm_0}'                # Replace prompt with the most recent LLM reply (from M1nty - the image prompt)
+        swap_character: Imgmodel_Selector       # Swap to character finetuned for choosing Image models
+        should_send_text: false                 # Suppress text response
+        should_gen_image: false                 # Suppress image generation
+      - flow_step: Gen image with LLM's chosen Img Model
+        format_prompt: '{llm_1}'                # Replace prompt with the 2nd most recent LLM reply (from M1nty - the image prompt)
+        change_imgmodel: '{llm_0}'              # Use the reply from Imgmodel_Selector
+        should_gen_image: true                  # Generate image
+        should_gen_text: false                  # ** IF NO TEXT GEN - the prompt will be used directly for Image Generation **
+        should_send_text: true                  # Send the prompt to channel
+
+  # Tag that triggers a 'Flow' which asks M1nty-SDXL repeatedly to add more details to it's previous reply.
+  - trigger: 'loopback'                         # Intended to be used with a prompt like 'draw _______ loopback'
+    insert_text: ''
+    insert_text_method: 'replace'
+    search_mode: user                           # Only search user's prompt (will not trigger from LLM reply)
+    should_send_text: false
+    should_gen_image: false
+    flow:
+      - flow_base:
+          format_prompt: 'Provide a more detailed version of this prompt: {llm_0}'
+          save_history: False
+          load_history: -1
+          swap_character: M1nty-SDXL
+          should_send_text: false
+          should_gen_image: false
+      - flow_step: Request more details
+        flow_step_loops: 3                      # this flow_step will execute 3 times (reminder: includes flow_base)
+        should_gen_image: false
+      - flow_step: Gen with extra detailed prompt
+        should_gen_image: true                  # finally, generate the image
+        should_send_text: true                  # finally, send the reply to channel
+
   # Tag to trigger M1nty to make a more elaborate prompt from user's prompt
   - trigger: 'draw,generate'
     insert_text: ''               # Replace the matched phrase with an empty string
@@ -59,50 +105,6 @@ base_tags:
     search_mode: user
     should_gen_image: true
     format_prompt: '''[SYSTEM] You have been tasked with taking a selfie. Include your appearance, your surroundings, and what you are doing right now: "{prompt}"'''
-
-  # Tag that triggers a 'Flow' which asks 'Imgmodel_Selector' to review the prompt
-  #    which was written by 'M1inty' to assign the best Image Model for the prompt.
-  - trigger: 'check imgmodel'                   # Inteded to be used with a prompt like 'draw _______ check imgmodel'
-    insert_text: ''
-    insert_text_method: 'replace'
-    should_send_text: false                     # Suppress text response (still generate text)
-    should_gen_image: false                     # Suppress image generation (won't send an image by default)
-    flow:                                       # The actual 'Flow' tag value
-      - flow_base:                              # Flow_base are tags that apply to every flow_step
-          save_history: False                   # Do not write these interactions to the main chat history
-          load_history: -1                      # 0 = default (all history), -1 = excludes chat history, > 1 = LLM sees this many recent exchanges.
-      - flow_step: Ask LLM for best Image Model # text displayed in discord embed
-        format_prompt: '{llm_0}'                # Replace prompt with the most recent LLM reply (from M1nty - the image prompt)
-        swap_character: Imgmodel_Selector       # Swap to character finetuned for choosing Image models
-        should_send_text: false                 # Suppress text response
-        should_gen_image: false                 # Suppress image generation
-      - flow_step: Gen image with LLM's chosen Img Model
-        format_prompt: '{llm_1}'                # Replace prompt with the 2nd most recent LLM reply (from M1nty - the image prompt)
-        change_imgmodel: '{llm_0}'              # Use the reply from Imgmodel_Selector
-        should_gen_image: true                  # Generate image
-        should_gen_text: false                  # ** IF NO TEXT GEN - the prompt will be used directly for Image Generation **
-        should_send_text: true                  # Send the prompt to channel
-
-  # Tag that triggers a 'Flow' which asks M1nty-SDXL repeatedly to add more details to it's previous reply.
-  - trigger: 'loopback'                         # Inteded to be used with a prompt like 'draw _______ loopback'
-    insert_text: ''
-    insert_text_method: 'replace'
-    should_send_text: false
-    should_gen_image: false
-    flow:
-      - flow_base:
-          format_prompt: 'Provide a more detailed version of this prompt: {llm_0}'
-          save_history: False
-          load_history: -1
-          swap_character: M1nty-SDXL
-          should_send_text: false
-          should_gen_image: false
-      - flow_step: Request more details
-        flow_step_loops: 3                      # this flow_step will execute 3 times (reminder: includes flow_base)
-        should_gen_image: false
-      - flow_step: Gen with extra detailed prompt
-        should_gen_image: true                  # finally, generate the image
-        should_send_text: true                  # finally, send the reply to channel
 
   # Example of a tag for triggering SD Forge Couple extension (if enabled in config.py)
   - trigger: forgewide # you could also make another such as 'forgetall' to set 'forge_couple: Vertical'
