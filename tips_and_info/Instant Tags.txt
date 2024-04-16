@@ -26,3 +26,5 @@ EXAMPLE (Multiple tags):
 This is a good way to add specific extension parameters on-demand!!
 
 See dict_base_settings.yaml for complete list of extension parameters
+
+WORKS FOR ALL TAG VALUES... EVEN [LIST] AND {DICTIONARY} VALUES.

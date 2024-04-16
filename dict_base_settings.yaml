@@ -72,6 +72,7 @@ imgmodel:
             ["0:0.5", "0.0:1.0", "1.0"],
             ["0.5:1.0","0.0:1.0","1.0"]
           ]
+          global_weight: 0.5            # The Weight of the Global Effect.
       layerdiffuse:         # layerdiffuse extension arguments
         args:               
           enabled: false                  # Enable layerdiffuse

@@ -1,4 +1,7 @@
-List of currently available variables that can be used in your prompt, or with 'tags' (such as 'format_prompt' tag, 'insert_text' tag, etc)
+List of currently available variables that can be used in your prompt and with 'format_prompt' tag.
+
+** They can also be used in any tag values nested in "Flows" feature tags **
+
 
 Syntax is {variable}
 

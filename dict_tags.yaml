@@ -5,99 +5,120 @@
 # - 'trigger' key is recommended for most tags (except 'global_tag_keys' and 'tag_preset_name').
 # - Multiple comma-separated trigger phrases can be used per each tag (trigger: 'a boy,a dog' can match either 'a boy' or 'a dog')
 # - You may simplify triggers using this syntax: 'a {boy|dog}' --- the script will read this as 'a boy,a dog'
-# - The behavior of tags listed higher may override ones listed lower. Sources are also prioritized: character > imgmodel > base_tags > global_base_tags
+# - The behavior of tags listed higher may override ones listed lower. Sources are also prioritized: character > imgmodel > base_tags
 # - Valid tag keys are detailed at the end of this file and on GitHub
 
-# 'global_tag_keys' apply to ALL tag definitions. Keys defined in your tags will override global tag keys.
+# 'global_tag_keys' apply to ALL tag definitions. Keys defined elsewhere will override global tag keys.
 global_tag_keys:
-  search_mode: userllm          # Search method for trigger matching. 'user' = user prompt only / 'llm' = bot reply only / 'userllm' = search both for matches
-  case_sensitive: false         # If your triggers are case sensitive
-  text_joining: ' '               # Relevant to 'insert_text'. Method of joining the inserted text to the user's llm prompt.
-  img_text_joining: ', '          # Relevant to 'positive_prompt' (and '_prefix' / '_suffix'). Method of joining the inserted text to the img prompt.
+  search_mode: userllm            # 'user' = search user prompt / 'llm' = search bot reply / 'userllm' = search both
+  case_sensitive: false           # If triggers are case sensitive
+  text_joining: ' '               # Relevant to 'insert_text'. Method of joining insert_text to text prompt
+  img_text_joining: ', '          # Relevant to 'positive_prompt' (and '_prefix' / '_suffix'). Method of joining the positive_prompt to the img prompt
   positive_prompt_method: after   # Relevant in tags with key 'positive_prompt'. 'after' = insert value after matched text / 'before' = before text / 'replace' = replace text
 
 # 'base_tags' are always in effect. Base tags have lower priority than tags defined anywhere else.
 base_tags:
   - sd_output_dir: 'ad_discordbot/sd_outputs/' # generated images will be saved at this location.
 
-    # Use {time} or {date} written anywhere in your prompts, which will be replaced with the current date/time. The tags 'offset' and '(date/time)_format' will apply to the result.
-  - time_offset: 0.0        # 0 = today's date (system time). -0.5 shifts the current date to be 12 hours ago. (UOM = days).
-    time_format: '%H:%M:%S' # Examples: '%H:%M:%S' (HH:MM:SS), '%I:%M:%S %p' (12HR:MM:SS AM/PM)
-    date_format: '%Y-%m-%d' # Examples: '%Y-%m-%d' (YYYY-MM-DD), '%A, %B %d, %Y' (DayName, MonthName DD, YYYY)
+  # Use {time} or {date} written anywhere in your prompts, which will be replaced with the current date/time. The tags 'offset' and '(date/time)_format' will apply to the result.
+  - time_offset: 0.0              # 0 = today's date (system time). -0.5 shifts the current date to be 12 hours ago. (UOM = days).
+    time_format: '%H:%M:%S'       # Examples: '%H:%M:%S' (HH:MM:SS), '%I:%M:%S %p' (12HR:MM:SS AM/PM)
+    date_format: '%Y-%m-%d'       # Examples: '%Y-%m-%d' (YYYY-MM-DD), '%A, %B %d, %Y' (DayName, MonthName DD, YYYY)
 
-# Stable Diffusion payload and textgen-webui params can be randomly modified within specified ranges, or a list of strings (ex: sampler names), or from a boolean value. Must be formatted as a dictionary.
+# Stable Diffusion payload and textgen-webui params can be randomly modified within specified ranges, or a list of strings (ex: sampler names), or from a boolean value.
 # These examples are commented out by default - you should uncomment and experiment :D
 #  - img_param_variances: {cfg_scale: [-2,4], steps: [-5,5], hr_scale: [-0.50,0.15], hr_enable: false, sampler_name: ['Euler A', 'DPM++ 2M Karras', 'DPM++ 2M']}
 #  - llm_param_variances: {repetition_penalty: [-0.25,0.25], temperature_last: false}
 
+  # Tag for image censoring feature
   - trigger: 'nude,erotic'
-    img_censoring: 0            # 0 = disabled / 1 = blur image / 2 = block image from being generated
+    img_censoring: 0              # 0 = disabled / 1 = blur image / 2 = block image from being generated
 
+  # Tag to trigger Instruct mode with better reasoning params
+  - trigger: 'calculate,define'
+    on_prefix_only: true
+    state: {preset: 'Divine Intellect', mode: instruct} # Update values for textgen-webui state parameters.
+
+  # Tag to trigger M1nty to make a more elaborate prompt from user's prompt
   - trigger: 'draw,generate'
-    search_mode: user           # Only search user's prompt
-    on_prefix_only: true        # Only triggers if matched at very beginning
-    should_gen_image: true        # The LLM's reply will be used for Stable Diffusion img generation
-    swap_character: Minty-SDXL  # Filename of character in /characters.
-    insert_text: ''
-    insert_text_method: replace
-    load_history: -1            # 0 = default (all history included) / -1 = prompt excludes chat history / > 1 = llm only sees this many recent exchanges.
-    save_history: false         # Whether to save this interaction to history or not.
+    insert_text: ''               # Replace the matched phrase with an empty string
+    insert_text_method: replace   # Other methods are 'before' and 'after', but 'replace' is correct for this...
+    search_mode: user             # Only search user's prompt (will not trigger from LLM reply)
+    on_prefix_only: true          # Only triggers if matched at very beginning
+    should_gen_image: true        # Triggers an image generation (will send to channel afterwards by default - cann be suppressed with 'should_send_image' tag)
+    swap_character: M1nty-SDXL    # Swap to character finetuned for writing more elaborate image prompts from simple prompts
+    load_history: -1              # 0 = default (all history included) / -1 = prompt excludes chat history / > 1 = llm only sees this many recent exchanges.
+    save_history: false           # Do not write this interaction to the main chat history
 
+  # Some tags to trigger/enhance image responses using the current character including chat history
   - trigger: 'take a photo,take {a|another} picture'
     search_mode: user
     should_gen_image: true
     format_prompt: '''[SYSTEM] You have been tasked with creating a text-to-image prompt. Describe the scene in concise and vivid detail: "{prompt}"'''
-
   - trigger: 'selfie,self portrait'
     search_mode: user
     should_gen_image: true
     format_prompt: '''[SYSTEM] You have been tasked with taking a selfie. Include your appearance, your surroundings, and what you are doing right now: "{prompt}"'''
 
-  - trigger: 'calculate,define'
-    on_prefix_only: true
-    state: {preset: 'Divine Intellect'} # Update values for textgen-webui state parameters. Must be formatted as a dictionary.
-
-# Example of the 'Flow' tag feature... THE MOST ADVANCED FEATURE IN THIS BOT.
-# Creates a message loop, injecting the 'tags' from each flow_step. Paired with the 'format_tag' prompt, the possibilities are ENDLESS (seemingly!)
-  # Note: a triggered "flow" is executed after the initial message response is completed.  It does not immediately hijack the bot behavior.
-  - trigger: 'loopback' # Try a prompt such as 'loopback ____________'
-    insert_text: ''                   # the tags here are anything you want to happen on the initial pass before the 'flow' actually kicks in
+  # Tag that triggers a 'Flow' which asks 'Imgmodel_Selector' to review the prompt
+  #    which was written by 'M1inty' to assign the best Image Model for the prompt.
+  - trigger: 'check imgmodel'                   # Inteded to be used with a prompt like 'draw _______ check imgmodel'
+    insert_text: ''
     insert_text_method: 'replace'
-    save_history: False
-    load_history: -1
-    swap_character: M1nty-SDXL
-    should_send_text: false # modify default behavior which is "true"
-    should_gen_image: false # modify default behavior which is "true"
+    should_send_text: false                     # Suppress text response (still generate text)
+    should_gen_image: false                     # Suppress image generation (won't send an image by default)
+    flow:                                       # The actual 'Flow' tag value
+      - flow_base:                              # Flow_base are tags that apply to every flow_step
+          save_history: False                   # Do not write these interactions to the main chat history
+          load_history: -1                      # 0 = default (all history), -1 = excludes chat history, > 1 = LLM sees this many recent exchanges.
+      - flow_step: Ask LLM for best Image Model # text displayed in discord embed
+        format_prompt: '{llm_0}'                # Replace prompt with the most recent LLM reply (from M1nty - the image prompt)
+        swap_character: Imgmodel_Selector       # Swap to character finetuned for choosing Image models
+        should_send_text: false                 # Suppress text response
+        should_gen_image: false                 # Suppress image generation
+      - flow_step: Gen image with LLM's chosen Img Model
+        format_prompt: '{llm_1}'                # Replace prompt with the 2nd most recent LLM reply (from M1nty - the image prompt)
+        change_imgmodel: '{llm_0}'              # Use the reply from Imgmodel_Selector
+        should_gen_image: true                  # Generate image
+        should_gen_text: false                  # ** IF NO TEXT GEN - the prompt will be used directly for Image Generation **
+        should_send_text: true                  # Send the prompt to channel
+
+  # Tag that triggers a 'Flow' which asks M1nty-SDXL repeatedly to add more details to it's previous reply.
+  - trigger: 'loopback'                         # Inteded to be used with a prompt like 'draw _______ loopback'
+    insert_text: ''
+    insert_text_method: 'replace'
+    should_send_text: false
+    should_gen_image: false
     flow:
-      - flow_base:  # If flow_base is provided, its tags will apply to all flow_steps. flow_step tags will overwrite flow_base tags.
+      - flow_base:
           format_prompt: 'Provide a more detailed version of this prompt: {llm_0}'
           save_history: False
           load_history: -1
           swap_character: M1nty-SDXL
           should_send_text: false
           should_gen_image: false
-      - flow_step: Request more details # value will display in the message embed while processing
-        flow_step_loops: 3              # this flow_step will execute 3 times (remember: includes flow_base)
+      - flow_step: Request more details
+        flow_step_loops: 3                      # this flow_step will execute 3 times (reminder: includes flow_base)
         should_gen_image: false
       - flow_step: Gen with extra detailed prompt
-        should_gen_image: true          # finally, generate the image
-        should_send_text: true          # finally, send the reply to channel
+        should_gen_image: true                  # finally, generate the image
+        should_send_text: true                  # finally, send the reply to channel
 
-# Example of a tag for triggering SD Forge Couple extension (if enabled in config.py)
-  - trigger: forgewide # or also another such as 'forgetall' to set 'forge_couple: Vertical'
+  # Example of a tag for triggering SD Forge Couple extension (if enabled in config.py)
+  - trigger: forgewide # you could also make another such as 'forgetall' to set 'forge_couple: Vertical'
     insert_text: ''
     insert_text_method: 'replace'
     forge_couple: Horizontal
     couple_sep: 'SEP' # Separator for prompting regions. They are assigned in order from left to right (Horizontal) and top to bottom (Vertical).
-    sd_output_dir: 'ad_discordbot/sd_outputs/forge_couple/'
+    sd_output_dir: 'ad_discordbot/sd_outputs/forge_couple/' # custom output directory
 
 
-# 'tag_presets' are not in effect by default - they will be imported anywhere you use a 'tag_preset_name' tag.
+# 'tag_presets' will be imported anywhere you use a 'tag_preset_name' tag.
 # Useful for when you want to use the same set of tags for mulitple uses (a few characters, a few imgmodels, etc).
 # Example: '- tag_preset_name: SDXL Tags' would be a simple way to share tags among all your SDXL imgmodels defined in dict_imgmodels.yaml.
 tag_presets:
   - tag_preset_name: SDXL Turbo Payload   # Each tag preset must be named
-    tags:                                 # Tag presets must have their tag definitions nested under a 'tags' key
+    tags:                                 # Tag presets must be nested under a 'tags' key
       - payload: {width: 896, height: 1152, cfg_scale: 2, steps: 5, sampler_name: 'DPM++ SDE Karras'} # Stable Diffusion payload can be modified using 'payload'. Must be formatted as a dictionary.
       #- img_param_variances: {cfg_scale: [-0.5,0.5], steps: [-1,1], hr_scale: [-0.1,0.1], hr_enabled: true}
   
@@ -117,17 +138,17 @@ tag_presets:
       - trigger: 'plain'
         payload: {override_settings: {CLIP_stop_at_last_layers: 2}} # Nested payload dictionary settings can also be modified. Must be formatted as a dictionary.
 
+      # Tag to trigger layerdiffuse (Forge extension)
       - trigger: '{no|without|clear|empty|transparent} {bg|background}'
-        layerdiffuse: '(SDXL) Only Generate Transparent Image (Attention Injection)'  # enables 'layerdiffuse' extension while applying specified method. See tag references at bottom for list of methods and advanced usage.
-      #  Use 'payload' tag if you need more complex triggered settings for layerdiffuse
-      #  payload: {'alwayson_scripts': {'layerdiffuse': {'args': [true,'Only Generate Transparent Image (Attention Injection)',0.2,1.0,null,null,null,'Crop and Resize']}}}
+        layerdiffuse: '(SDXL) Only Generate Transparent Image (Attention Injection)'  # See comments at bottom
 
+      # Some examples for triggering LORAs
       - trigger: 'grimace'
         positive_prompt: '<lora:PE_Grimace_v1.0:0.75>'
 
       - trigger: '{ps1|playstation} {style|art|graphics},style of {ps1|playstation}'
         positive_prompt: 'ps1 style <lora:ps1_style_SDXL_v2:1.0>'
-        negative_prompt: 'blurry' # 'negative_prompt' = inserted at the end of the negative prompt (does not behave like 'positive_prompt' which is relative to the matched text)
+        negative_prompt: 'blurry'
         trumps: 'low poly' # If any other matched tag has a trigger phrase matching a 'trump' phrase, it will not be used. (*can be comma separated to trump multiple tags*)
 
       - trigger: 'low {poly|polygon}'
@@ -139,9 +160,9 @@ tag_presets:
       - payload: {width: 512, height: 512, cfg_scale: 10, steps: 40, sampler_name: 'DPM++ 2M Karras', hr_scale: 2, hr_enabled: true, denoise_strength: 0.5}
       #- img_param_variances: {cfg_scale: [-3,1], steps: [-10,10], hr_scale: [-0.5,0.2]}
 
-      - positive_prompt_prefix: 'masterpiece, detailed, ' # '_prefix' makes this inserted at the beginning of the image prompt
-        positive_prompt_suffix: ' <lora:more_details:0.5> <lora:epiNoiseoffset_v2Pynoise:0.5>' # '_suffix' makes this inserted at the end of the image prompt
-        negative_prompt_prefix: '<kkw-Extreme-Neg:0.5>, <negative_hand-neg:0.5>, by <bad-artist:0.5>, ' # same logic as positive_prompt. Can similarly use '_suffix' (or just 'negative_prompt')
+      - positive_prompt_prefix: 'masterpiece, detailed, '                                                 # '_prefix' makes this inserted at the beginning of the image prompt
+        positive_prompt_suffix: ' <lora:more_details:0.5> <lora:epiNoiseoffset_v2Pynoise:0.5>'            # '_suffix' makes this inserted at the end of the image prompt
+        negative_prompt_prefix: '<kkw-Extreme-Neg:0.5>, <negative_hand-neg:0.5>, by <bad-artist:0.5>, '   # same logic as positive_prompt. Can similarly use '_suffix' (or just 'negative_prompt')
 
       - trigger: 'selfie,self photo'
         positive_prompt: '(taking a selfie:1.2), (arms outstretched:1.1)'
@@ -155,14 +176,16 @@ tag_presets:
 
 # List of all available tag keys:
 #
-# Relevant to all tags:
+# Conditional tags:
 #   search_mode: userllm              Search method for trigger matching. 'user' = user prompt only / 'llm' = bot reply only / 'userllm' = search both for matches
 #   trigger: 'trigger,another one'    Recommended for most tags (except 'global_tag_keys' and 'tag_preset_name').
 #   random: 0.5                       Chance for tag to process. 0.0 = 0% chance and 1.0 = 100% chance.
 #   case_sensitive: (true/false)      If the triggers are case sensitive
 #   on_prefix_only: (true/false)      If triggers must be matched at beginning of the searched text
 
-# Most advanced tag (Relevant to all):
+# Relevant to both text/img generation:
+#   send_user_image: 'string'         Sends a local image to the channel. Value values: Image in 'user_images' (png/jpg/txt in base64) -OR- Directory name in '/user_images/'
+#                                       (Picks a random image or random image from random subdirectory)
 #   flow: {list}                      A list of 'flow_steps'. When a 'flow' tag is triggered, it creates a message loop for each defined 'loop_step'
 #   flow_step: {dict}                 The tags you want to apply in each flow step.  Without a trigger, they will auto-apply.  'format_prompt' is very useful in each flow_step
 #   flow_step_loops: int              The number of times you want to loop a particular flow_step.
@@ -185,7 +208,6 @@ tag_presets:
 #   save_history: (true/false)        Whether to save this interaction to history or not.
 #   state: {dictionary}               Update values for textgen-webui state parameters. Must be formatted as a dictionary.
 #   llm_param_variances: {dictionary} Randomization ranges for textgen-webui state parameters. Must be formatted as a dictionary.
-#   send_user_image: 'string'         Sends a local image to the channel. Value values: Image in 'user_images' (png/jpg/txt in base64) -OR- Directory name in '/user_images/' (Picks a random image or random image from random subdirectory)
 
 # Relevant to img generation (A1111 / Forge):
 #   sd_output_dir: 'string'           Location to save any generated images. Default: 'ad_discordbot/sd_outputs/'
@@ -212,6 +234,7 @@ tag_presets:
 #       EXAMPLE (Single tag):     [[reactor_max_faces:6]]
 #       EXAMPLE (Multiple tags):  [[reactor_save_original:True | laydiff_weight:0.5]]
 #   ** This is a good way to add specific extension parameters on-demand!! **
+
 
 # ControlNet specific tags (A1111/Forge extension):
 #   controlnet: 'string'              Simplified tag to both **apply** ControlNet image/folder AND **enable** ControlNet.
@@ -243,7 +266,7 @@ tag_presets:
 
 # ReActor specific tags (A1111/Forge extension):
 #   reactor: 'string'                 Simplified tag to both **apply** face image/folder/model AND **enable** ReActor.
-#                                     Value values: Image in 'user_images' (png/jpg/txt in base64) -OR- Directory name in '/user_images/' (Picks a random image or random image from random subdirectory) -OR- Face model in '{SD_CLIENT}\models\reactor\faces' example 'Minty.safetensors'
+#                                     Value values: Image in 'user_images' (png/jpg/txt in base64) -OR- Directory name in '/user_images/' (Picks a random image or random image from random subdirectory) -OR- Face model in '{SD_CLIENT}\models\reactor\faces' example 'M1nty.safetensors'
 #   reactor_{key}                     ANY key can be used (see dict_base_settings.yaml for complete list).
 #                                     Recommended to use in combination with 'reactor' tag - otherwise, you can't use "single face image method"
 #                                     (technically, you could send a base64 string... and you would need to include 'reactor_enabled: True')

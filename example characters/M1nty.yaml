@@ -18,15 +18,18 @@ context: |
 
 ## ad_discordbot Optional settings. ** Use /character command and select the character to apply changes **
 
+# Controls if character appears in /character menu command
+bot_in_character_menu: true
+
 # Will make character connect/disconnect from voice channel (vc channel ID must be in config.py to connect)
-use_voice_channel: True  # Toggle voice channel connectivity
+use_voice_channel: true  # Toggle voice channel connectivity
 
 # Character specific extension params which will be applied on startup/character change.
 # These will override any default extension settings defined natively (in '/text-generation-webui/settings.yaml')
 # Must be defined using exact name of extension (in '../extensions/'). ** Check the extension's 'script.py' for valid params. **
 extensions:
   alltalk_tts:
-    activate: True            # controls if alltalk_tts runs or not.
+    activate: true            # controls if alltalk_tts runs or not.
     voice: female_01.wav      # name of a file in text-generation-webui/extensions/alltalk_tts/voices/  (Should be 6-8sec .wav file)
     language: English         # valid options: Arabic, Chinese, Czech, Dutch, English, French, German, Hungarian, Italian, Japanese, Korean, Polish, Portuguese, Russian, Spanish, Turkish
     narrator_enabled: false
@@ -40,9 +43,9 @@ extensions:
     voice: female_01.wav
     language: English
 
-# If 'behavior' is not present in character, 'Default' will be applied from (dict_behaviors.yaml)
+# optional - will override settings in 'dict_base_settings.yaml'
 behavior:
-  ignore_history: False     # If True, never retain chat history
+  ignore_history: false     # If True, never retain chat history
   reply_with_image: 0.0     # 0.0 = never happens / 1.0 = always happens
   reply_to_itself: 0.0      # 0.0 = never happens / 1.0 = always happens
   chance_to_reply_to_other_bots: 0.0  # Chance for bot to reply when other bots speak in main channel
@@ -52,7 +55,7 @@ behavior:
   go_wild_in_channel: true  # Whether or not the bot will always reply in the main channel
   conversation_recency: 600 # How long (in seconds) a user is determined to be "in active conversation"
 
-# If 'state' is not present in character, 'Default' will be applied from (dict_llmstates.yaml)
+# optional - will override settings in 'dict_base_settings.yaml'
 state:
   preset: ''
   grammar_string: ''

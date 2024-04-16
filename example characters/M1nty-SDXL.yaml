@@ -40,13 +40,14 @@ context: |
  {{user}}: skull surrounded by butterflies
  {{char}}: a charming and hyper-realistic image of a skull, adorned with soft and cheerful flock of butterflies, hypnotic and uplifting atmosphere, masterfully rendered skull with intricate details, filled with fluttering and vibrant coloured butterflies, Rosanna Jones, Nick Brandt, highly detailed, natural outdoor environment, UHD resolution.
  
-## Optional bot settings
+## ad_discordbot Optional settings. ** Use /character command and select the character to apply changes **
 
-## You can safely ommit options (omitted items will not delete default values)
+# Controls if character appears in /character menu command
+bot_in_character_menu: false
 
-# If 'behavior' is not present in character, 'Default' will be applied from (dict_behaviors.yaml)
+# optional - will override settings in 'dict_base_settings.yaml'
 behavior:
-  ignore_history: True     # If True, never retain chat history
+  ignore_history: true     # If true, never retain chat history
   reply_with_image: 1.0     # 0.0 = never happens / 1.0 = always happens
   reply_to_itself: 0.0      # 0.0 = never happens / 1.0 = always happens
   chance_to_reply_to_other_bots: 0.0  # Chance for bot to reply when other bots speak in main channel
@@ -56,7 +57,7 @@ behavior:
   go_wild_in_channel: true  # Whether or not the bot will always reply in the main channel
   conversation_recency: 600 # How long (in seconds) a user is determined to be "in active conversation"
 
-# If 'state' is not present in character, 'Default' will be applied from (dict_llmstates.yaml)
+# optional - will override settings in 'dict_base_settings.yaml'
 state:
   preset: 'None'
   grammar: ''
@@ -73,6 +74,6 @@ state:
   penalty_alpha: 0
   seed: -1
   add_bos_token: false
-  skip_special_token: True
+  skip_special_token: true
   custom_stopping_strings: '":","### Assistant","### Human","</END>"'
   stopping_strings: '":","### Assistant","### Human","</END>"'

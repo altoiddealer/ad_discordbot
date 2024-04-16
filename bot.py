@@ -41,7 +41,7 @@ TOKEN = config.discord['TOKEN']
 
 logging.basicConfig(format='%(levelname)s [%(asctime)s]: %(message)s (Line: %(lineno)d in %(funcName)s, %(filename)s )',
                     datefmt='%Y-%m-%d %H:%M:%S', 
-                    level=logging.DEBUG)
+                    level=logging.INFO) # logging.DEBUG)
 
 handler = logging.FileHandler(filename='discord.log', encoding='utf-8', mode='w')
 handler = logging.handlers.RotatingFileHandler(
@@ -53,23 +53,28 @@ handler = logging.handlers.RotatingFileHandler(
 
 # Intercept custom bot arguments
 import sys
-bot_arg_list = ["--limit-history", "--token"]
-bot_argv = []
-for arg in bot_arg_list:
-    try:
-        index = sys.argv.index(arg)
-    except:
-        index = None
-    
-    if index is not None:
-        bot_argv.append(sys.argv.pop(index))
-        bot_argv.append(sys.argv.pop(index))
 
-import argparse
-parser = argparse.ArgumentParser(formatter_class=lambda prog: argparse.HelpFormatter(prog, max_help_position=54))
-parser.add_argument("--token", type=str, help="Discord bot token to use their API.")
-parser.add_argument("--limit-history", type=int, help="When the history gets too large, performance issues can occur. Limit the history to improve performance.")
-bot_args = parser.parse_args(bot_argv)
+def parse_bot_args():
+    bot_arg_list = ["--limit-history", "--token"]
+    bot_argv = []
+    for arg in bot_arg_list:
+        try:
+            index = sys.argv.index(arg)
+        except:
+            index = None
+        
+        if index is not None:
+            bot_argv.append(sys.argv.pop(index))
+            bot_argv.append(sys.argv.pop(index))
+
+    import argparse
+    parser = argparse.ArgumentParser(formatter_class=lambda prog: argparse.HelpFormatter(prog, max_help_position=54))
+    parser.add_argument("--token", type=str, help="Discord bot token to use their API.")
+    parser.add_argument("--limit-history", type=int, help="When the history gets too large, performance issues can occur. Limit the history to improve performance.")
+    bot_args = parser.parse_args(bot_argv)
+    return bot_args
+    
+bot_args = parse_bot_args()
 
 os.environ['GRADIO_ANALYTICS_ENABLED'] = 'False'
 os.environ["BITSANDBYTES_NOWELCOME"] = "1"
@@ -533,12 +538,12 @@ async def start_auto_update_imgmodel_task():
 async def load_chat():
     try:
         # This will be either the char name found in activesettings.yaml, or the default char name
-        source = client.settings['llmcontext']['name']
+        source = bot_settings.settings['llmcontext']['name']
         # If name doesn't match the bot's discord username, try to figure out best char data to initialize with
         if source != client.user.display_name:
             sources = [
                 client.user.display_name, # Try current bot name
-                client.settings['llmcontext']['name'] # Try last known name
+                bot_settings.settings['llmcontext']['name'] # Try last known name
             ]
             for source in sources:
                 logging.info(f'Trying to load character "{source}"...')
@@ -565,7 +570,8 @@ async def load_instruct():
         if llmmodel_metadata:
             instruction_template_str = llmmodel_metadata.get('instruction_template_str', '')
             if instruction_template_str:
-                client.settings['llmstate']['state']['instruction_template_str'] = instruction_template_str
+                settings_dict = bot_settings.get_settings_dict()
+                settings_dict['llmstate']['state']['instruction_template_str'] = instruction_template_str
                 logging.info(f'The metadata for model "{shared.model_name}" includes an instruction template which will be used.')
             else:
                 logging.warning(f'The metadata for model "{shared.model_name}" does not include an instruction template. Using default.')    
@@ -618,7 +624,7 @@ async def first_run():
         c.execute('''UPDATE first_run SET is_first_run = ?''', (0,)) # log "0" for false
         conn.commit()
         conn.close()
-        client.database = Database()
+        bot_settings.database = Database()
 
 # Unpack tag presets and add global tag keys
 async def update_tags(tags):
@@ -651,17 +657,18 @@ async def update_tags(tags):
         logging.error(f"Error loading tag presets: {e}")
         return tags
 
-async def update_client_base_tags():
+async def update_bot_base_tags():
     try:
         tags_data = load_file('ad_discordbot/dict_tags.yaml')
         base_tags_data = tags_data.get('base_tags', [])
         base_tags = copy.deepcopy(base_tags_data)
-        client.settings['tags'] = await update_tags(base_tags)
+        settings_dict = bot_settings.get_settings_dict()
+        settings_dict['tags'] = await update_tags(base_tags)
     except Exception as e:
         logging.error(f"Error updating client base tags: {e}")
 
 # Function to overwrite default settings with activesettings
-async def update_client_settings():
+async def update_bot_settings():
     try:
         defaults = Settings() # Instance of the default settings
         defaults = defaults.settings_to_dict() # Convert instance to dict
@@ -670,13 +677,13 @@ async def update_client_settings():
         active_settings = dict(active_settings)
         # Add any missing required settings
         fixed_settings = fix_dict(active_settings, defaults)
-        # Commit fixed settings to the discord client (always accessible)
-        client.settings = fixed_settings
+        # Commit fixed settings to bot_settings (always accessible)
+        bot_settings.settings = fixed_settings
         # Update client behavior
-        client.behavior = Behavior() # Instance of the default behavior
+        bot_settings.behavior = Behavior() # Instance of the default behavior
         behavior = active_settings['behavior']
-        client.behavior.update_behavior_dict(behavior)
-        await update_client_base_tags() # base tags from dict_tags.yaml
+        bot_settings.behavior.update_behavior_dict(behavior)
+        await update_bot_base_tags() # base tags from dict_tags.yaml
     except Exception as e:
         logging.error(f"Error updating client settings: {e}")
 
@@ -686,13 +693,12 @@ async def update_client_settings():
 @client.event
 async def on_ready():
     try:
-        await update_client_settings() # initialize with defaults, updated by current activesettings.yaml
-        client.database = Database() # general bot settings
+        await update_bot_base_tags()
         # If first time running bot
-        if client.database.first_run:
+        if bot_settings.database.first_run:
             await first_run()
         # Set the mode (chat / chat-instruct / instruct)
-        mode = client.settings['llmstate']['state']['mode']
+        mode = bot_settings.settings['llmstate']['state']['mode']
         logging.info(f'Initializing in {mode} mode')
         # Get instruction template if not 'chat'
         if mode != 'chat':
@@ -789,8 +795,8 @@ async def voice_channel(vc_setting):
                 else:
                     logging.warning(f'Bot launched with {tts_client}, but no voice channel is specified in config.py')
             else:
-                if not client.database.was_warned('char_tts'):
-                    client.database.update_was_warned('char_tts', 1)
+                if not bot_settings.database.was_warned('char_tts'):
+                    bot_settings.database.update_was_warned('char_tts', 1)
                     logging.warning(f'Character "use_voice_channel" = True, and "voice channel" is specified in config.py, but no "tts_client" is specified in config.py')
         except Exception as e:
             logging.error(f"An error occurred while connecting to voice channel: {e}")
@@ -1124,70 +1130,88 @@ def collect_llm_tag_values(tags):
         if 'flow' in tag and llm_payload_mods['flow'] is None:
             llm_payload_mods['flow'] = tag.pop('flow')
         if 'save_history' in tag and llm_payload_mods['save_history'] is None:
-            llm_payload_mods['save_history'] = tag.pop('save_history')
+            llm_payload_mods['save_history'] = bool(tag.pop('save_history'))
         if 'load_history' in tag and llm_payload_mods['load_history'] is None:
-            llm_payload_mods['load_history'] = tag.pop('load_history')
+            llm_payload_mods['load_history'] = int(tag.pop('load_history'))
         if 'change_character' in tag and llm_payload_mods['change_character'] is None:
-            llm_payload_mods['change_character'] = tag.pop('change_character')
+            llm_payload_mods['change_character'] = str(tag.pop('change_character'))
         if 'swap_character' in tag and llm_payload_mods['swap_character'] is None:
-            llm_payload_mods['swap_character'] = tag.pop('swap_character')
+            llm_payload_mods['swap_character'] = str(tag.pop('swap_character'))
         if 'change_llmmodel' in tag and llm_payload_mods['change_llmmodel'] is None:
-            llm_payload_mods['change_llmmodel'] = tag.pop('change_llmmodel')
+            llm_payload_mods['change_llmmodel'] = str(tag.pop('change_llmmodel'))
         if 'swap_llmmodel' in tag and llm_payload_mods['swap_llmmodel'] is None:
-            llm_payload_mods['swap_llmmodel'] = tag.pop('swap_llmmodel')
+            llm_payload_mods['swap_llmmodel'] = str(tag.pop('swap_llmmodel'))
         if 'send_user_image' in tag and llm_payload_mods['send_user_image'] is None:
             user_image_file = tag.pop('send_user_image')
-            llm_payload_mods['send_user_image'] = get_image_tag_args(user_image_file, 'User image')
+            llm_payload_mods['send_user_image'] = get_image_tag_args(str(user_image_file), 'User image')
         if 'format_prompt' in tag and formatting['format_prompt'] is None:
-            formatting['format_prompt'] = tag.pop('format_prompt')
+            formatting['format_prompt'] = str(tag.pop('format_prompt'))
         # Values that may apply repeatedly
         if 'time_offset' in tag:
-            formatting['time_offset'] = tag.pop('time_offset')
+            formatting['time_offset'] = float(tag.pop('time_offset'))
         if 'time_format' in tag:
-            formatting['time_format'] = tag.pop('time_format')
+            formatting['time_format'] = str(tag.pop('time_format'))
         if 'date_format' in tag:
-            formatting['date_format'] = tag.pop('date_format')
+            formatting['date_format'] = str(tag.pop('date_format'))
         if 'llm_param_variances' in tag:
-            llm_param_variances = tag.pop('llm_param_variances')
-            llm_payload_mods['param_variances'].update(llm_param_variances) # Allow multiple to accumulate.
+            llm_param_variances = dict(tag.pop('llm_param_variances'))
+            try:
+                llm_payload_mods['param_variances'].update(llm_param_variances) # Allow multiple to accumulate.
+            except:
+                logging.warning("Error processing a matched 'llm_param_variances' tag; ensure it is a dictionary.")
         if 'state' in tag:
-            state = tag.pop('state')
-            llm_payload_mods['state'].update(state) # Allow multiple to accumulate.
+            state = dict(tag.pop('state'))
+            try:
+                llm_payload_mods['state'].update(state) # Allow multiple to accumulate.
+            except:
+                logging.warning("Error processing a matched 'state' tag; ensure it is a dictionary.")
     return llm_payload_mods, formatting
 
 def process_tag_insertions(prompt, tags):
     try:
-        updated_matches = []
-        matches = tags['matches']
-        matches.sort(key=lambda x: -x[1] if isinstance(x, tuple) else float('inf')) # reverse the sort order so insertion indexes are processed from back to front.
-        for item in matches:
-            if not isinstance(item, tuple):
-                updated_matches.append(item) # Skip dictionaries, only tuples are being inserted
+        # iterate over a copy of the matches, preserving the structure of the original matches list
+        tuple_matches = copy.deepcopy(tags['matches'])
+        tuple_matches = [item for item in tuple_matches if isinstance(item, tuple)]  # Filter out only tuples
+        tuple_matches.sort(key=lambda x: -x[1])  # Sort the tuple matches in reverse order by their second element (start index)
+        for item in tuple_matches:
+            tag, start, end = item # unpack tuple
+            phase = tag['phase']
+            if phase == 'llm':
+                insert_text = tag.pop('insert_text', None)
+                insert_method = tag.pop('insert_text_method', 'after')  # Default to 'after'
+                join = tag.pop('text_joining', ' ')
             else:
-                tag, start, end = item # unpack tuple
-                phase = tag['phase']
-                if phase == 'llm':
-                    insert_text = tag.pop('insert_text', None)
-                    join = tag.pop('text_joining', ' ')
-                    insert_method = tag.pop('insert_text_method', 'after')  # Default to 'after'
-                else:
-                    insert_text = tag.get('positive_prompt', None)
-                    join = tag.pop('img_text_joining', ' ')
-                    insert_method = tag.pop('positive_prompt_method', 'after')  # Default to 'after'
-                if insert_text is None:
-                    logging.error(f"Error processing matched tag {item}. Skipping this tag.")
-                else:
-                    if insert_method == 'replace':
-                        if insert_text == '':
-                            prompt = prompt[:start] + prompt[end:].lstrip()
-                        else:
-                            prompt = prompt[:start] + insert_text + prompt[end:]
-                    elif insert_method == 'after':
-                        prompt = prompt[:end] + join + insert_text + prompt[end:]
-                    elif insert_method == 'before':
-                        prompt = prompt[:start] + insert_text + join + prompt[start:]
-                updated_matches.append(tag)
-        updated_matches.reverse()
+                insert_text = tag.get('positive_prompt', None)
+                insert_method = tag.pop('positive_prompt_method', 'after')  # Default to 'after'
+                join = tag.pop('img_text_joining', ' ')
+            if insert_text is None:
+                logging.error(f"Error processing matched tag {item}. Skipping this tag.")
+            else:
+                if insert_method == 'replace':
+                    if insert_text == '':
+                        prompt = prompt[:start] + prompt[end:].lstrip()
+                    else:
+                        prompt = prompt[:start] + insert_text + prompt[end:]
+                elif insert_method == 'after':
+                    prompt = prompt[:end] + join + insert_text + prompt[end:]
+                elif insert_method == 'before':
+                    prompt = prompt[:start] + insert_text + join + prompt[start:]
+        # clean up the original matches list
+        updated_matches = []
+        for item in tags['matches']:
+            if isinstance(item, tuple):
+                tag, start, end = item
+            else:
+                tag = item
+            phase = tag['phase']
+            if phase == 'llm':
+                tag.pop('insert_text', None)
+                tag.pop('insert_text_method', None)
+                tag.pop('text_joining', None)
+            else:
+                tag.pop('img_text_joining', None)
+                tag.pop('positive_prompt_method', None)
+            updated_matches.append(tag)
         tags['matches'] = updated_matches
         return prompt, tags
     except Exception as e:
@@ -1321,7 +1345,7 @@ async def expand_triggers(all_tags):
     except Exception as e:
         logging.error(f"Error expanding tags: {e}")
         return all_tags
-        
+
 # Function to convert string values to bool/int/float
 def extract_value(value_str):
     try:
@@ -1343,24 +1367,67 @@ def extract_value(value_str):
     except Exception as e:
         logging.error(f"Error converting string to bool/int/float: {e}")
 
+def parse_tag_from_text_value(value_str):
+    try:
+        if value_str.startswith('{') and value_str.endswith('}'):
+            inner_text = value_str[1:-1]  # Remove outer curly brackets
+            key_value_pairs = inner_text.split(',')
+            result_dict = {}
+            for pair in key_value_pairs:
+                key, value = parse_key_pair_from_text(pair)
+                result_dict[key] = value
+            return result_dict
+        elif value_str.startswith('[') and value_str.endswith(']'):
+            inner_text = value_str[1:-1]
+            result_list = []
+            # if list of lists
+            if inner_text.startswith('[') and inner_text.endswith(']'):
+                sublist_strings = re.findall(r'\[[^\[\]]*\]', inner_text)
+                for sublist_string in sublist_strings:
+                    sublist_string = sublist_string.strip()
+                    sublist_values = parse_tag_from_text_value(sublist_string)
+                    result_list.append(sublist_values)
+            # if single list
+            else:
+                list_strings = inner_text.split(',')
+                for list_str in list_strings:
+                    list_str = list_str.strip()
+                    list_value = parse_tag_from_text_value(list_str)
+                    result_list.append(list_value)
+            return result_list
+        else:
+            if (value_str.startswith("'") and value_str.endswith("'")):
+                return value_str.strip("'")
+            elif (value_str.startswith('"') and value_str.endswith('"')):
+                return value_str.strip('"')
+            else:
+                return extract_value(value_str)
+    except Exception as e:
+        logging.error(f"Error parsing nested value: {e}")
+
+def parse_key_pair_from_text(kv_pair):
+    try:
+        key_value = kv_pair.split(':')
+        key = key_value[0].strip()
+        value_str = ':'.join(key_value[1:]).strip()
+        value = parse_tag_from_text_value(value_str)
+        return key, value
+    except Exception as e:
+        logging.error(f"Error parsing nested value: {e}")
+
 # Matches [[this:syntax]] and creates 'tags' from matches
+# Can handle any structure including dictionaries, lists, even nested sublists.
 def get_tags_from_text(text):
     try:
         tags_from_text = []
-        pattern = r'\[\[(.*?)\]\]'
+        pattern = r'\[\[([^\[\]]*?(?:\[\[.*?\]\][^\[\]]*?)*?)\]\]'
         matches = re.findall(pattern, text)
         detagged_text = re.sub(pattern, '', text)
         for match in matches:
             tag_dict = {}
             tag_pairs = match.split('|')
             for pair in tag_pairs:
-                key_value = pair.split(':')
-                key = key_value[0].strip()
-                value_str = ':'.join(key_value[1:]).strip()
-                if value_str.startswith('{') and value_str.endswith('}'):
-                    value = eval(value_str)
-                else:
-                    value = extract_value(value_str)
+                key, value = parse_key_pair_from_text(pair)
                 tag_dict[key] = value
             tags_from_text.append(tag_dict)
         return detagged_text, tags_from_text
@@ -1373,9 +1440,9 @@ async def get_tags(text):
         flow_step_tags = []
         if flow_queue.qsize() > 0:
             flow_step_tags = [await flow_queue.get()]
-        base_tags = client.settings.get('tags', []) # base tags
-        imgmodel_tags = client.settings['imgmodel'].get('tags', []) # imgmodel specific tags
-        char_tags = client.settings['llmcontext'].get('tags', []) # character specific tags
+        base_tags = bot_settings.settings.get('tags', []) # base tags
+        imgmodel_tags = bot_settings.settings['imgmodel'].get('tags', []) # imgmodel specific tags
+        char_tags = bot_settings.settings['llmcontext'].get('tags', []) # character specific tags
         detagged_text, tags_from_text = get_tags_from_text(text)
         all_tags = char_tags + base_tags + imgmodel_tags + tags_from_text + flow_step_tags # merge tags to one dictionary
         sorted_tags = sort_tags(all_tags) # sort tags into phases (user / llm / userllm)
@@ -1385,11 +1452,11 @@ async def get_tags(text):
         return text, []      
 
 async def initialize_llm_payload(user, text):
-    llm_payload = copy.deepcopy(client.settings['llmstate'])
+    llm_payload = copy.deepcopy(bot_settings.settings['llmstate'])
     llm_payload['text'] = text
     name1 = user
-    name2 = client.settings['llmcontext']['name']
-    context = client.settings['llmcontext']['context']
+    name2 = bot_settings.settings['llmcontext']['name']
+    context = bot_settings.settings['llmcontext']['context']
     llm_payload['state']['name1'] = name1
     llm_payload['state']['name2'] = name2
     llm_payload['state']['name1_instruct'] = name1
@@ -1398,7 +1465,7 @@ async def initialize_llm_payload(user, text):
     llm_payload['state']['context'] = context
     # check for ignore history setting / start with default history settings
     llm_payload['save_history'] = True
-    if not client.behavior.ignore_history:
+    if not bot_settings.behavior.ignore_history:
         llm_payload['state']['history'] = session_history
     return llm_payload
 
@@ -1407,8 +1474,8 @@ async def on_message(i):
     try:
         ctx = Context(message=i,prefix=None,bot=client,view=None)
         text = await commands.clean_content().convert(ctx, i.content)
-        if not client.behavior.bot_should_reply(i, text): return # Check that bot should reply or not
-        if not client.database.main_channels and client.user.mentioned_in(i): await main(i) # if None, set channel as main
+        if not bot_settings.behavior.bot_should_reply(i, text): return # Check that bot should reply or not
+        if not bot_settings.database.main_channels and client.user.mentioned_in(i): await main(i) # if None, set channel as main
         # if @ mentioning bot, remove the @ mention from user prompt
         if text.startswith(f"@{client.user.display_name} "):
             text = text.replace(f"@{client.user.display_name} ", "", 1)
@@ -1433,7 +1500,8 @@ async def on_message_gen(user, channel, source, text):
             should_gen_image = should_bot_do('should_gen_image', default=False, tags=tags)
             if should_gen_image:
                 if await sd_online(channel):
-                    await channel.send(f'Bot was triggered by Tags to not respond with text.\n**Processing image generation using your input as the prompt ...**') # msg for if LLM model is unloaded
+                    gen_warning = await channel.send(f'Bot was triggered by Tags to not respond with text.\n**Processing image generation using your input as the prompt ...**') # msg for if LLM model is unloaded
+                    asyncio.create_task(delete_message_after(gen_warning, 5))
                 llm_prompt = copy.copy(text)
                 await img_gen(user.name, channel, source, llm_prompt, params, tags)
             return
@@ -1473,15 +1541,16 @@ async def hybrid_llm_img_gen(user, channel, source, text, tags, llm_payload, par
         if should_gen_image:
             if await sd_online(channel):
                 if shared.model_name == 'None':
-                    await channel.send('**Processing image generation using message as the image prompt ...**') # msg for if LLM model is unloaded
+                    gen_warning = await channel.send('**Processing image generation using message as the image prompt ...**') # msg for if LLM model is unloaded
+                    asyncio.create_task(delete_message_after(gen_warning, 5))
                 else:
                     img_embed_info.title = "Prompting ..."
                     img_embed_info.description = " "
                     img_gen_embed = await channel.send(embed=img_embed_info)
         # if no LLM model is loaded, notify that no text will be generated     
         if shared.model_name == 'None':
-            if not client.database.was_warned('no_llmmodel'):
-                client.database.update_was_warned('no_llmmodel', 1)
+            if not bot_settings.database.was_warned('no_llmmodel'):
+                bot_settings.database.update_was_warned('no_llmmodel', 1)
                 warn_msg = await channel.send(f'(Cannot process text request: No LLM model is currently loaded. Use "/llmmodel" to load a model.)')
                 asyncio.create_task(delete_message_after(warn_msg, 10))
                 logging.warning(f'Bot tried to generate text for {user}, but no LLM model was loaded')
@@ -1541,7 +1610,7 @@ def manage_history(prompt, reply, save_history):
             oldest_message = recent_messages[key].pop()
     # Retain chat history
     global session_history
-    if not client.behavior.ignore_history and save_history:
+    if not bot_settings.behavior.ignore_history and save_history:
         session_history['internal'].append([prompt, reply])
         session_history['visible'].append([prompt, reply])
 
@@ -1668,7 +1737,7 @@ async def speak_gen(user, channel, text, params):
         info_embed.title = f'{user.name} requested tts:'
         info_embed.description = f"**Params:** {tts_args}\n**Text:** {text}"
         await channel.send(embed=info_embed)
-        await update_extensions(client.settings['llmcontext'].get('extensions', {})) # Restore character specific extension settings
+        await update_extensions(bot_settings.settings['llmcontext'].get('extensions', {})) # Restore character specific extension settings
         if params.get('user_voice'): os.remove(params['user_voice'])
     except Exception as e:
         logging.error(f"An error occurred while generating tts for '/speak': {e}")
@@ -1683,7 +1752,6 @@ async def speak_gen(user, channel, text, params):
 async def change_imgmodel_task(user, channel, params):
     try:
         await sd_online(channel) # Can't change Img model if not online!
-        embed = None
         imgmodel_params = params.get('imgmodel')
         imgmodel_name = imgmodel_params.get('imgmodel_name', '')
         mode = imgmodel_params.get('mode', 'change')    # default to 'change
@@ -1693,42 +1761,43 @@ async def change_imgmodel_task(user, channel, params):
         # Was not 'None' and did not match any known model names/checkpoints
         if len(imgmodel) < 3:
             if channel:
-                info_embed.title = 'Failed to change Img model:'
-                info_embed.description = f'Img model not found: {imgmodel_name}'
-                await channel.send(embed=info_embed)
-            return
+                change_embed_info.title = 'Failed to change Img model:'
+                change_embed_info.description = f'Img model not found: {imgmodel_name}'
+                change_embed = await channel.send(embed=change_embed_info)
+            return False
         # if imgmodel_name != 'None': ### IF API IMG MODEL UNLOADING GETS EVER DEBUGGED
         if channel: # Auto-select imgmodel feature may not have a configured channel
-            info_embed.title = f'{verb} Img model ... '
-            info_embed.description = f'{verb} to {imgmodel_name}'
-            embed = await channel.send(embed=info_embed)
+            change_embed_info.title = f'{verb} Img model ... '
+            change_embed_info.description = f'{verb} to {imgmodel_name}'
+            change_embed = await channel.send(embed=change_embed_info)
         # Merge selected imgmodel/tag data with base settings
         imgmodel, imgmodel_name, imgmodel_tags = await merge_imgmodel_data(imgmodel)
         # Soft Img model update if swapping
         if mode == 'swap' or mode == 'swap_back':
             model_data = imgmodel.get('override_settings') or imgmodel['payload'].get('override_settings')
             _ = await sd_api(endpoint='/sdapi/v1/options', method='post', json=model_data)
-            if embed: await embed.delete()
-            return
+            if change_embed: await change_embed.delete()
+            return True
         # Change Img model settings
         await update_imgmodel(channel, imgmodel, imgmodel_tags)
         # if imgmodel_name != 'None': ### IF API IMG MODEL UNLOADING GETS EVER DEBUGGED
         if channel:
-            await embed.delete()
-            info_embed.title = f"{user} changed Img model:"
+            await change_embed.delete()
+            change_embed_info.title = f"{user} changed Img model:"
             url = imgmodel.get('imgmodel_url', '')
             if url: url = " <" + url + ">"
-            info_embed.description = f'**{imgmodel_name}**{url}'
-            await channel.send(embed=info_embed)
+            change_embed_info.description = f'**{imgmodel_name}**{url}'
+            change_embed = await channel.send(embed=change_embed_info)
             logging.info(f"Image model changed to: {imgmodel_name}")
         if config.discord['post_active_settings']['enabled']:
             await bg_task_queue.put(post_active_settings())
     except Exception as e:
         logging.error(f"Error changing Img model: {e}")
-        info_embed.title = "An error occurred while changing Img model"
-        info_embed.description = e
-        try: await embed.edit(embed=info_embed)
+        change_embed_info.title = "An error occurred while changing Img model"
+        change_embed_info.description = e
+        try: await change_embed.edit(embed=change_embed_info)
         except: pass
+        return False
 
 # Process selected LLM model
 async def change_llmmodel_task(user, channel, params):
@@ -1747,7 +1816,7 @@ async def change_llmmodel_task(user, channel, params):
                 unload_model()                  # If an LLM model is loaded, unload it
             shared.model_name = llmmodel_name   # set to new LLM model
             if shared.model_name != 'None':
-                client.database.update_was_warned('no_llmmodel', 0) # Reset warning message
+                bot_settings.database.update_was_warned('no_llmmodel', 0) # Reset warning message
                 loader = get_llm_model_loader(llmmodel_name)    # Try getting loader from user-config.yaml to prevent errors
                 load_llm_model(loader)                          # Load an LLM model if specified
             if mode == 'swap':
@@ -1782,7 +1851,7 @@ async def change_char_task(user, channel, source, params):
         char_embed = await channel.send(embed=char_embed_info)
         # Change character
         await change_character(channel, char_name)
-        greeting = client.settings['llmcontext']['greeting']
+        greeting = bot_settings.settings['llmcontext']['greeting']
         if greeting:
             greeting = greeting.replace('{{user}}', 'user')
             greeting = greeting.replace('{{char}}', char_name)
@@ -1813,7 +1882,7 @@ def should_bot_do(key, default, tags={}):   # Used to check if should:
                 else:
                     tag = item
                 if key in tag:
-                    return tag.get(key, default)
+                    return bool(tag.get(key, default))
         return default
     except Exception as e:
         logging.error(f"An error occurred while checking if bot should do '{key}': {e}")
@@ -1903,15 +1972,36 @@ async def process_tasks():
 #################################################################
 ########################## QUEUED FLOW ##########################
 #################################################################
+
+def format_next_flow(next_flow, user, text):
+    flow_name = ''
+    formatted_flow_tags = {}
+    for key, value in next_flow.items():
+        # see if any tag values have dynamic formatting (user prompt, LLM reply, etc)
+        if isinstance(value, str):
+            formatted_value = format_prompt_with_recent_msgs(user, value)       # output will be a string
+            if formatted_value != value:                                        # if the value changed,
+                formatted_value = parse_tag_from_text_value(formatted_value)    # convert new string to correct value type
+            formatted_flow_tags[key] = formatted_value
+        # get name for message embed
+        if key == 'flow_step':
+            flow_name = f": {value}"
+        # format prompt before feeding it back into on_message_gen()
+        elif key == 'format_prompt':
+            formatting = {'format_prompt': value}
+            text = process_tag_formatting(user, text, formatting)
+    next_flow.update(formatted_flow_tags) # commit updates
+    return flow_name, text
+
 # function to get a copy of the next queue item while maintaining the original queue
-async def peek(queue):
+async def peek_flow_queue(queue, user, text):
     temp_queue = asyncio.Queue()
     total_queue_size = queue.qsize()
-    first_item = None
+    first_flow = None
     while queue.qsize() > 0:
         if queue.qsize() == total_queue_size:
             item = await queue.get()
-            first_item = copy.copy(item)
+            flow_name, formatted_text = format_next_flow(item, user, text)
         else:
             item = await queue.get()
         await temp_queue.put(item)
@@ -1919,29 +2009,25 @@ async def peek(queue):
     while temp_queue.qsize() > 0:
         item_to_put_back = await temp_queue.get()
         await queue.put(item_to_put_back)
-    return first_item
+    return flow_name, formatted_text
 
 async def process_flow(user, channel, source, text):
     try:
         total_flow_steps = flow_queue.qsize()
         flow_embed_info.title = f'Processing Flow for {user} with {total_flow_steps} steps'
-        flow_embed_info.description = f'Processing step 1/{total_flow_steps}'
+        flow_embed_info.description = ''
+        # flow_embed_info.description = f'Processing step 1/{total_flow_steps}'
         flow_embed = await channel.send(embed=flow_embed_info)
         flow_event.set()                # flag that a flow is being processed. Check with 'if flow_event.is_set():'
         while flow_queue.qsize() > 0:   # flow_queue items are removed in get_tags()
-            next_flow = await peek(flow_queue)
-            flow_name = ''
-            if 'flow_step' in next_flow:    # format prompt before feeding it back into on_message_gen()
-                flow_name = f": {next_flow['flow_step']}"
+            flow_name, text = await peek_flow_queue(flow_queue, user, text)
             remaining_flow_steps = flow_queue.qsize()
-            flow_embed_info.description = f'Processing step {total_flow_steps + 1 - remaining_flow_steps}/{total_flow_steps}{flow_name} '
+            flow_embed_info.description = flow_embed_info.description.replace("**Processing", ":white_check_mark: **")
+            flow_embed_info.description += f'**Processing Step {total_flow_steps + 1 - remaining_flow_steps}/{total_flow_steps}**{flow_name}\n'
             await flow_embed.edit(embed=flow_embed_info)
-            if 'format_prompt' in next_flow:    # format prompt before feeding it back into on_message_gen()
-                formatting = {'format_prompt': next_flow['format_prompt']}
-                text = process_tag_formatting(user, text, formatting)
             await on_message_gen(user, channel, source, text)
-        flow_embed_info.title = f"Flow completed "
-        flow_embed_info.description = f'{user} triggered a Flow with {total_flow_steps} steps'
+        flow_embed_info.title = f"Flow completed for {user}"
+        flow_embed_info.description = flow_embed_info.description.replace("**Processing", ":white_check_mark: **")
         await flow_embed.edit(embed=flow_embed_info)
         flow_event.clear()              # flag that flow is no longer processing
         flow_queue.task_done()          # flow queue task is complete      
@@ -2042,6 +2128,7 @@ async def layerdiffuse_hack(temp_dir, img_payload, images, pnginfo):
 async def save_images_and_return(temp_dir, img_payload, endpoint):
     images = []
     pnginfo = None
+    # save .json for debugging
     # with open("img_payload.json", "w") as file:
     #     json.dump(img_payload, file)
     r = await sd_api(endpoint=endpoint, method='post', json=img_payload)
@@ -2134,10 +2221,10 @@ def clean_img_payload(img_payload):
             if SD_CLIENT != 'SD WebUI Forge':
                 if img_payload['alwayson_scripts']['forge_couple']['args'].get('enabled', False):
                     logging.warning(f'forge_couple is not known to be compatible with "{SD_CLIENT}". Not applying forge_couple...')
-                    client.database.update_was_warned('forgecouple', 1)
+                    bot_settings.database.update_was_warned('forgecouple', 1)
                 if img_payload['alwayson_scripts']['layerdiffuse']['args'].get('enabled', False):
                     logging.warning(f'layerdiffuse is not known to be compatible with "{SD_CLIENT}". Not applying layerdiffuse...')
-                    client.database.update_was_warned('layerdiffuse', 1)
+                    bot_settings.database.update_was_warned('layerdiffuse', 1)
             # Clean ControlNet
             if not config.sd['extensions'].get('controlnet_enabled', False):
                 del img_payload['alwayson_scripts']['controlnet'] # Delete all 'controlnet' keys if disabled by config
@@ -2175,8 +2262,8 @@ def clean_img_payload(img_payload):
 def apply_loractl(tags):
     try:
         if SD_CLIENT != 'A1111 SD WebUI':
-            if not client.database.was_warned('loractl'):
-                client.database.update_was_warned('loractl', 1)
+            if not bot_settings.database.was_warned('loractl'):
+                bot_settings.database.update_was_warned('loractl', 1)
                 logging.warning(f'loractl is not known to be compatible with "{SD_CLIENT}". Not applying loractl...')
             return tags
         scaling_settings = [v for k, v in config.sd.get('extensions', {}).get('lrctl', {}).items() if 'scaling' in k]
@@ -2251,16 +2338,16 @@ def process_img_prompt_tags(img_payload, tags):
             if 'positive_prompt_prefix' in tag:
                 updated_positive_prompt = tag['positive_prompt_prefix'] + join + updated_positive_prompt
             if 'positive_prompt_suffix' in tag:
-                updated_positive_prompt += join + tag['positive_prompt_suffix']
+                updated_positive_prompt = updated_positive_prompt + join + tag['positive_prompt_suffix']
             if 'negative_prompt_prefix' in tag:
                 join = join if updated_negative_prompt else ''
                 updated_negative_prompt = tag['negative_prompt_prefix'] + join + updated_negative_prompt
             if 'negative_prompt' in tag:
                 join = join if updated_negative_prompt else ''
-                updated_negative_prompt += join + tag['negative_prompt']
+                updated_negative_prompt = updated_negative_prompt + join + tag['negative_prompt']
             if 'negative_prompt_suffix' in tag:
                 join = join if updated_negative_prompt else ''
-                updated_negative_prompt += join + tag['negative_prompt_suffix']
+                updated_negative_prompt = updated_negative_prompt + join + tag['negative_prompt_suffix']
         img_payload['prompt'] = updated_positive_prompt
         img_payload['negative_prompt'] = updated_negative_prompt
         return img_payload
@@ -2424,7 +2511,7 @@ async def process_img_payload_tags(img_payload, mods, params):
                     ## if not change_imgmodel and swap_imgmodel and swap_imgmodel == 'None':
                         # _ = await sd_api(endpoint='/sdapi/v1/unload-checkpoint', method='post', json=None)
                 # 'change_imgmodel' will trump 'swap_imgmodel'
-                current_imgmodel = client.settings['imgmodel'].get('override_settings', {}).get('sd_model_checkpoint') or client.settings['imgmodel']['payload'].get('override_settings', {}).get('sd_model_checkpoint') or ''
+                current_imgmodel = bot_settings.settings['imgmodel'].get('override_settings', {}).get('sd_model_checkpoint') or bot_settings.settings['imgmodel']['payload'].get('override_settings', {}).get('sd_model_checkpoint') or ''
                 if imgmodel_params == current_imgmodel:
                     logging.info(f'[TAGS] Img model was triggered to change, but it is the same as current ("{current_imgmodel}").')
                     imgmodel_params = None # return None
@@ -2451,6 +2538,7 @@ async def process_img_payload_tags(img_payload, mods, params):
             # forge_couple handling
             if forge_couple and config.sd['extensions'].get('forgecouple_enabled', False):
                 img_payload['alwayson_scripts']['forge_couple']['args'].update(forge_couple)
+                img_payload['alwayson_scripts']['forge_couple']['args']['enable'] = True
                 logging.info(f"[TAGS] Enabled forge_couple: {forge_couple}")
             # layerdiffuse handling
             if layerdiffuse and config.sd['extensions'].get('layerdiffuse_enabled', False):
@@ -2498,7 +2586,7 @@ def collect_img_tag_values(tags):
         forge_couple_args = {}
         layerdiffuse_args = {}
         reactor_args = {}
-        for tag in reversed(tags['matches']):
+        for tag in tags['matches']:
             if isinstance(tag, tuple):
                 tag = tag[0] # For tags with prompt insertion indexes
             # WIP CODE...
@@ -2508,71 +2596,75 @@ def collect_img_tag_values(tags):
             #         if len(values) == 1:
             for key, value in tag.items():
                 if key == 'sd_output_dir':
-                    sd_output_dir = value
+                    sd_output_dir = str(value)
                 elif key == 'img_censoring' and img_payload_mods['img_censoring'] is None:
-                    img_payload_mods['img_censoring'] = value
+                    img_payload_mods['img_censoring'] = int(value)
                 elif key == 'change_imgmodel' and img_payload_mods['change_imgmodel'] is None:
-                    img_payload_mods['change_imgmodel'] = value
+                    img_payload_mods['change_imgmodel'] = str(value)
                 elif key == 'swap_imgmodel' and img_payload_mods['swap_imgmodel'] is None:
-                    img_payload_mods['swap_imgmodel'] = value
+                    img_payload_mods['swap_imgmodel'] = str(value)
                 elif key == 'payload': # Allow multiple to accumulate
-                    if isinstance(tag['payload'], dict):
-                        update_dict(img_payload_mods['payload'], value)
-                    else:
-                        logging.warning("A tag was matched with invalid 'payload'; must be a dictionary.")
+                    try:
+                        update_dict(img_payload_mods['payload'], dict(value))
+                    except:
+                        logging.warning("Error processing a matched 'payload' tag; ensure it is a dictionary.")
                 elif key == 'img_param_variances': # Allow multiple to accumulate
-                    if isinstance(tag['img_param_variances'], dict):
-                        update_dict(img_payload_mods['param_variances'], value)
-                    else:
-                        logging.warning("A tag was matched with invalid 'img_param_variances'; must be a dictionary.")
+                    try:
+                        update_dict(img_payload_mods['param_variances'], dict(value))
+                    except:
+                        logging.warning("Error processing a matched 'img_param_variances' tag; ensure it is a dictionary.")
                 # get controlnet tag params
                 elif key.startswith('controlnet'):
                     index = int(key[len('controlnet'):]) if key != 'controlnet' else 0  # Determine the index (cnet unit) for main controlnet args
-                    cnet = get_image_tag_args(value, 'ControlNet Image')                       # Get 'image' and 'enabled'
+                    cnet = get_image_tag_args(str(value), 'ControlNet Image')                       # Get 'image' and 'enabled'
                     controlnet_args.setdefault(index, {}).update(cnet)         # Update controlnet args at the specified index
                 elif key.startswith('cnet'):
                     # Determine the index for controlnet_args sublist
                     if key.startswith('cnet_'): index = 0                                       # Determine the index (cnet unit) for additional controlnet args
                     else: index = int(key.split('_')[0][len('cnet'):])
                     if key.endswith('mask_image'):
-                        mask_args = get_image_tag_args(value, 'ControlNet Mask')
+                        mask_args = get_image_tag_args(str(value), 'ControlNet Mask')
                         value = mask_args['image']
                     controlnet_args.setdefault(index, {}).update({key.split('_', 1)[-1]: value})   # Update controlnet args at the specified index
                 # get forge_couple tag params                    
                 elif key == 'forge_couple':
-                    if isinstance(value, list): img_payload_mods['forge_couple']['mapping']['data'] = value
-                    else: img_payload_mods['forge_couple']['direction'] = value
+                    if value.startswith('['):
+                        img_payload_mods['forge_couple']['maps'] = list(value)
+                    else: img_payload_mods['forge_couple']['direction'] = str(value)
                     img_payload_mods['forge_couple']['enable'] = True
                 elif key.startswith('couple_'):
                     forge_couple_key = key[len('couple_'):]
-                    forge_couple_args[forge_couple_key] = value
+                    if value.startswith('['):
+                        forge_couple_args[forge_couple_key] = list(value)
+                    else:
+                        forge_couple_args[forge_couple_key] = str(value)
                 # get layerdiffuse tag params                    
                 elif key == 'layerdiffuse':
-                    img_payload_mods['layerdiffuse']['method'] = value
+                    img_payload_mods['layerdiffuse']['method'] = str(value)
                     img_payload_mods['layerdiffuse']['enabled'] = True
                 elif key.startswith('laydiff_'):
-                    if key == 'laydiff_method': img_payload_mods['layerdiffuse']['enabled'] = True # enable it automatically
                     laydiff_key = key[len('laydiff_'):]
                     layerdiffuse_args[laydiff_key] = value
+                    img_payload_mods['layerdiffuse']['enabled'] = True
                 # get reactor tag params
                 elif key == 'reactor':
-                    reactor = get_image_tag_args(value, 'ReActor Enabled')
+                    reactor = get_image_tag_args(str(value), 'ReActor Enabled')
                     img_payload_mods['reactor'] = reactor
                 elif key.startswith('reactor_'):
                     reactor_key = key[len('reactor_'):]
                     reactor_args[reactor_key] = value
                 # get any user image
                 elif key == 'send_user_image':
-                    img_payload_mods['send_user_image'] = get_image_tag_args(value, 'User image')
+                    img_payload_mods['send_user_image'] = get_image_tag_args(str(value), 'User image')
                 # get any img2img
                 elif key == 'img2img':
-                    img_payload_mods['img2img'] = get_image_tag_args(value, 'Img2Img')
+                    img_payload_mods['img2img'] = get_image_tag_args(str(value), 'Img2Img')
                 # get any inpaint mask
                 elif key == 'img2img_mask':
-                    img_payload_mods['img2img_mask'] = get_image_tag_args(value, 'Img2Img Mask')
+                    img_payload_mods['img2img_mask'] = get_image_tag_args(str(value), 'Img2Img Mask')
         # Add the collected SD WebUI extension args to the img_payload_mods dict
         for index in sorted(set(controlnet_args.keys())):   # This flattens down any gaps between collected ControlNet units (ensures lowest index is 0, next is 1, and so on)
-            cnet_basesettings = copy.copy(client.settings['imgmodel']['payload']['alwayson_scripts']['controlnet']['args'][0])  # Copy of required dict items
+            cnet_basesettings = copy.copy(bot_settings.settings['imgmodel']['payload']['alwayson_scripts']['controlnet']['args'][0])  # Copy of required dict items
             cnet_unit_args = controlnet_args.get(index, {})
             cnet_unit = update_dict(cnet_basesettings, cnet_unit_args)
             img_payload_mods['controlnet'].append(cnet_unit)
@@ -2589,9 +2681,9 @@ def initialize_img_payload(img_prompt, neg_prompt):
         # Initialize img_payload settings
         img_payload = {"prompt": img_prompt, "negative_prompt": neg_prompt, "width": 512, "height": 512, "steps": 20, "resize_mode": 1}
         # Apply settings from imgmodel configuration
-        imgmodel_img_payload = copy.deepcopy(client.settings['imgmodel'].get('payload', {}))
+        imgmodel_img_payload = copy.deepcopy(bot_settings.settings['imgmodel'].get('payload', {}))
         img_payload.update(imgmodel_img_payload)
-        img_payload['override_settings'] = copy.deepcopy(client.settings['imgmodel'].get('override_settings', {}))
+        img_payload['override_settings'] = copy.deepcopy(bot_settings.settings['imgmodel'].get('override_settings', {}))
         return img_payload
     except Exception as e:
         logging.error(f"Error initializing img payload: {e}")
@@ -2621,11 +2713,10 @@ def match_img_tags(img_prompt, tags):
 
 async def img_gen(user, channel, source, img_prompt, params, tags={}):
     try:
-        check_key = client.settings['imgmodel'].get('override_settings') or client.settings['imgmodel']['payload'].get('override_settings')
+        check_key = bot_settings.settings['imgmodel'].get('override_settings') or bot_settings.settings['imgmodel']['payload'].get('override_settings')
         if check_key.get('sd_model_checkpoint') == 'None': # Model currently unloaded
             await channel.send("**Cannot process image request:** No Img model is currently loaded")
             logging.warning(f'Bot tried to generate image for {user}, but no Img model was loaded')
-        img_gen_embed = await channel.send(embed=img_embed_info)
         if not tags:
             img_prompt, tags = await get_tags(img_prompt)
             if 'user' in tags['unmatched']: del tags['unmatched']['user'] # Tags intended for pre-LLM processing should be removed
@@ -2648,22 +2739,27 @@ async def img_gen(user, channel, source, img_prompt, params, tags={}):
         # Clean anything up that gets messy
         img_payload = clean_img_payload(img_payload)
         # Change imgmodel if triggered by tags
-        swap_embed = None
+        should_swap = False
         if imgmodel_params:
             img_payload['override_settings']['sd_model_checkpoint'] = imgmodel_params['imgmodel'].get('imgmodel_name')
             current_imgmodel = imgmodel_params['imgmodel'].get('current_imgmodel', '')
-            swap_embed = await change_imgmodel_task(user, channel, imgmodel_params)
+            should_swap = await change_imgmodel_task(user, channel, imgmodel_params)
         # Generate and send images
+        img_gen_embed = await channel.send(embed=img_embed_info)
         endpoint = params.get('endpoint', '/sdapi/v1/txt2img')
         await process_image_gen(img_payload, img_gen_embed, channel, tags, endpoint, sd_output_dir)
-        # If switching back to original Img model
-        if swap_embed: await change_imgmodel_task(user, channel, params={'imgmodel': {'imgmodel_name': current_imgmodel, 'mode': 'swap_back', 'verb': 'Swapping', 'embed': swap_embed}})
-        if source == 'image':
-            image_embed_info = discord.Embed(title = f"{user} requested an image:", description=params['message'], url='https://github.com/altoiddealer/ad_discordbot')
+        should_send_text = should_bot_do('should_send_text', default=True, tags=tags)
+        should_gen_text = should_bot_do('should_gen_text', default=True, tags=tags)
+        if source == 'image' or (should_send_text and not should_gen_text):
+            image_embed_info = discord.Embed(title = f"{user} requested an image:", description=params.get('message', img_prompt), url='https://github.com/altoiddealer/ad_discordbot')
             await channel.send(embed=image_embed_info)
         if send_user_image:
             send_user_image = discord.File(send_user_image)
             await channel.send(file=send_user_image)
+        # If switching back to original Img model
+        if should_swap:
+            await change_imgmodel_task(user, channel, params={'imgmodel': {'imgmodel_name': current_imgmodel, 'mode': 'swap_back', 'verb': 'Swapping back to'}})
+        return
     except Exception as e:
         logging.error(f"An error occurred in img_gen(): {e}")
 
@@ -2969,18 +3065,18 @@ async def main(i):
     try:
         conn = sqlite3.connect('bot.db')
         c = conn.cursor()
-        if i.channel.id in client.database.main_channels:
-            client.database.main_channels.remove(i.channel.id) # If the channel is already in the main channels, remove it
+        if i.channel.id in bot_settings.database.main_channels:
+            bot_settings.database.main_channels.remove(i.channel.id) # If the channel is already in the main channels, remove it
             c.execute('''DELETE FROM main_channels WHERE channel_id = ?''', (i.channel.id,))
             action_message = f'Removed {i.channel.mention} from main channels. Use "/main" again if you want to add it back.'
         else:
             # If the channel is not in the main channels, add it
-            client.database.main_channels.append(i.channel.id)
+            bot_settings.database.main_channels.append(i.channel.id)
             c.execute('''INSERT OR REPLACE INTO main_channels (channel_id) VALUES (?)''', (i.channel.id,))
             action_message = f'Added {i.channel.mention} to main channels. Use "/main" again to remove it.'
         conn.commit()
         conn.close()
-        client.database = Database()
+        bot_settings.database = Database()
         await i.reply(action_message)
     except Exception as e:
         logging.error(f"Error toggling main channel setting: {e}")
@@ -3049,7 +3145,7 @@ async def character_loader(source):
         # Merge with basesettings
         char_data = merge_base(char_data, 'llmcontext')
         # Reset warning for character specific TTS
-        client.database.update_was_warned('char_tts', 0)
+        bot_settings.database.update_was_warned('char_tts', 0)
         # Gather context specific keys from the character data
         char_llmcontext = {}
         for key, value in char_data.items():
@@ -3069,10 +3165,11 @@ async def character_loader(source):
         # Collect llmstate data
         char_llmstate = char_data.get('state', {})
         char_llmstate = merge_base(char_llmstate, 'llmstate,state')
-        # Commit the character data to client.settings
-        client.settings['llmcontext'] = dict(char_llmcontext) # Replace the entire dictionary key
-        update_dict(client.settings['behavior'], dict(char_behavior))
-        update_dict(client.settings['llmstate']['state'], dict(char_llmstate))
+        # Commit the character data to bot_settings.settings
+        settings_dict = bot_settings.get_settings_dict()
+        settings_dict['llmcontext'] = dict(char_llmcontext) # Replace the entire dictionary key
+        update_dict(settings_dict['behavior'], dict(char_behavior))
+        update_dict(settings_dict['llmstate']['state'], dict(char_llmstate))
         # Data for saving to activesettings.yaml (skipped in on_ready())
         return char_llmcontext, char_behavior, char_llmstate
     except Exception as e:
@@ -3088,7 +3185,7 @@ def update_last_change():
         c.execute('''UPDATE last_change SET timestamp = ?''', (formatted_now,))
         conn.commit()
         conn.close()
-        client.database = Database()
+        bot_settings.database = Database()
     except Exception as e:
         logging.error(f"An error occurred while logging time of profile update to bot.db: {e}")
 
@@ -3123,7 +3220,7 @@ async def update_client_profile(channel, char_name):
             with open(picture_path, 'rb') as f:
                 avatar = f.read()
         # Check for cooldown before allowing profile change
-        last_change = client.database.last_change
+        last_change = bot_settings.database.last_change
         last_change = datetime.strptime(last_change, '%Y-%m-%d %H:%M:%S')
         last_cooldown = last_change + timedelta(minutes=10)
         if datetime.now() >= last_cooldown:
@@ -3153,7 +3250,7 @@ async def change_character(channel, char_name):
         active_settings['llmstate']['state'] = char_llmstate
         save_yaml_file('ad_discordbot/activesettings.yaml', active_settings)
         # Ensure all settings are synchronized
-        await update_client_settings() # Sync updated user settings to client
+        await update_bot_settings() # Sync updated user settings
         # Clear chat history
         reset_session_history()
     except Exception as e:
@@ -3171,37 +3268,51 @@ async def process_character(i, selected_character_value):
     except Exception as e:
         logging.error(f"Error processing selected character from /character command: {e}")
 
-all_characters = []
+def get_all_characters():
+    all_characters = []
+    filtered_characters = []
+    try:
+        for file in sorted(Path("characters").glob("*")):
+            if file.suffix in [".json", ".yml", ".yaml"]:
+                character = {}
+                character['name'] = file.stem
+                all_characters.append(character)
+                try:
+                    char_data = load_file(file)
+                    char_data = dict(char_data)
+                    if char_data.get('bot_in_character_menu', True):
+                        filtered_characters.append(character)
+                except Exception as e:
+                    logging.error(f"An error occurred while filtering /character list: {e}")
+    except Exception as e:
+        logging.error(f"An error occurred while getting all characters: {e}")
+    return all_characters, filtered_characters
 
-for file in sorted(Path("characters").glob("*")):
-    if file.suffix in [".json", ".yml", ".yaml"]:
-        character = {}
-        character['name'] = file.stem
-        all_characters.append(character)
+all_characters, filtered_characters = get_all_characters()
 
-if all_characters:
-    character_options = [app_commands.Choice(name=character["name"], value=character["name"]) for character in all_characters[:25]]
+if filtered_characters:
+    character_options = [app_commands.Choice(name=character["name"], value=character["name"]) for character in filtered_characters[:25]]
     character_options_label = f'{character_options[0].name[0]}-{character_options[-1].name[0]}'.lower()
-    if len(all_characters) > 25:
-        character_options1 = [app_commands.Choice(name=character["name"], value=character["name"]) for character in all_characters[25:50]]
+    if len(filtered_characters) > 25:
+        character_options1 = [app_commands.Choice(name=character["name"], value=character["name"]) for character in filtered_characters[25:50]]
         character_options1_label = f'{character_options1[0].name[0]}-{character_options1[-1].name[0]}'.lower()
         if character_options1_label == character_options_label:
             character_options1_label = f'{character_options1_label}_1'
-        if len(all_characters) > 50:
-            character_options2 = [app_commands.Choice(name=character["name"], value=character["name"]) for character in all_characters[50:75]]
+        if len(filtered_characters) > 50:
+            character_options2 = [app_commands.Choice(name=character["name"], value=character["name"]) for character in filtered_characters[50:75]]
             character_options2_label = f'{character_options2[0].name[0]}-{character_options2[-1].name[0]}'.lower()
             if character_options2_label == character_options_label or character_options2_label == character_options1_label:
                 character_options2_label = f'{character_options2_label}_2'
-            if len(all_characters) > 75:
-                character_options3 = [app_commands.Choice(name=character["name"], value=character["name"]) for character in all_characters[75:100]]
+            if len(filtered_characters) > 75:
+                character_options3 = [app_commands.Choice(name=character["name"], value=character["name"]) for character in filtered_characters[75:100]]
                 character_options3_label = f'{character_options3[0].name[0]}-{character_options3[-1].name[0]}'.lower()
                 if character_options3_label == character_options_label or character_options3_label == character_options1_label or character_options3_label == character_options2_label:
                     character_options3_label = f'{character_options2_label}_3'
-                if len(all_characters) > 100:
-                    all_characters = all_characters[:100]
+                if len(filtered_characters) > 100:
+                    filtered_characters = filtered_characters[:100]
                     logging.warning("'/character' command only allows up to 100 characters. Some characters were omitted.")
 
-    if len(all_characters) <= 25:
+    if len(filtered_characters) <= 25:
         @client.hybrid_command(name="character", description='Choose an character')
         @app_commands.rename(characters=f'characters_{character_options_label}')
         @app_commands.describe(characters=f'characters {character_options_label.upper()}')
@@ -3210,7 +3321,7 @@ if all_characters:
             selected_character = characters.value if characters is not None else ''
             await process_character(i, selected_character)
 
-    elif 25 < len(all_characters) <= 50:
+    elif 25 < len(filtered_characters) <= 50:
         @client.hybrid_command(name="character", description='Choose an character (pick only one)')
         @app_commands.rename(characters_1=f'characters_{character_options_label}')
         @app_commands.describe(characters_1=f'characters {character_options_label.upper()}')
@@ -3224,7 +3335,7 @@ if all_characters:
             selected_character = ((characters_1 or characters_2) and (characters_1 or characters_2).value) or ''
             await process_character(i, selected_character)
 
-    elif 50 < len(all_characters) <= 75:
+    elif 50 < len(filtered_characters) <= 75:
         @client.hybrid_command(name="character", description='Choose an character (pick only one)')
         @app_commands.rename(characters_1=f'characters_{character_options_label}')
         @app_commands.describe(characters_1=f'characters {character_options_label.upper()}')
@@ -3241,7 +3352,7 @@ if all_characters:
             selected_character = ((characters_1 or characters_2 or characters_3) and (characters_1 or characters_2 or characters_3).value) or ''
             await process_character(i, selected_character)
 
-    elif 75 < len(all_characters) <= 100:
+    elif 75 < len(filtered_characters) <= 100:
         @client.hybrid_command(name="character", description='Choose an character (pick only one)')
         @app_commands.rename(characters_1=f'characters_{character_options_label}')
         @app_commands.describe(characters_1=f'characters {character_options_label.upper()}')
@@ -3313,7 +3424,7 @@ async def update_imgmodel(channel, selected_imgmodel, selected_imgmodel_tags):
         active_settings['imgmodel'] = selected_imgmodel
         active_settings['imgmodel']['tags'] = selected_imgmodel_tags
         save_yaml_file('ad_discordbot/activesettings.yaml', active_settings)
-        await update_client_settings() # Sync updated user settings to client
+        await update_bot_settings() # Sync updated user settings
         ### IF API IMG MODEL UNLOADING GETS EVER DEBUGGED
         # if selected_imgmodel['imgmodel_name'] == 'None':
         # _ = await sd_api(endpoint='/sdapi/v1/unload-checkpoint', method='post', json=None)
@@ -3347,10 +3458,16 @@ async def guess_model_data(selected_imgmodel):
             filter_list = preset.pop('filter', [])
             exclude_list = preset.pop('exclude', [])            
             match_count = 0
-            if (filter_list or exclude_list) and \
-                ((not filter_list or all(re.search(re.escape(filter_text), filename, re.IGNORECASE) for filter_text in filter_list)) and \
-                (not exclude_list or not any(re.search(re.escape(exclude_text), filename, re.IGNORECASE) for exclude_text in exclude_list))):
-                match_count += 1
+            if filter_list:
+                if all(re.search(re.escape(filter_text), filename, re.IGNORECASE) for filter_text in filter_list):
+                    match_count += 1
+                else:
+                    match_count -= 1
+            if exclude_list:
+                if not any(re.search(re.escape(exclude_text), filename, re.IGNORECASE) for exclude_text in exclude_list):
+                    match_count += 1
+                else:
+                    match_count -= 1
             if 'max_filesize' in preset and preset['max_filesize'] > file_size_gb:
                 match_count += 1
                 del preset['max_filesize']
@@ -3397,6 +3514,7 @@ async def merge_imgmodel_data(selected_imgmodel):
 
 async def get_selected_imgmodel_data(selected_imgmodel_value):
     try:
+        selected_imgmodel = {}
         ### IF API IMG MODEL UNLOADING GETS EVER DEBUGGED
         # Unloading the current Img model
         # if selected_imgmodel_value == 'None':
@@ -3405,7 +3523,6 @@ async def get_selected_imgmodel_data(selected_imgmodel_value):
         # if selected_imgmodel_value == 'Exit':
         #      selected_imgmodel = {'imgmodel_name': 'None were selected'}
         #     return selected_imgmodel
-        selected_imgmodel = {}
         all_imgmodel_data = copy.deepcopy(all_imgmodels)
         for imgmodel in all_imgmodel_data:
             # imgmodel_checkpoint should match for API method
@@ -3422,11 +3539,12 @@ async def get_selected_imgmodel_data(selected_imgmodel_value):
                 break
             # Error handling
         if not selected_imgmodel:
-            selected_imgmodel['imgmodel_name'] = selected_imgmodel_value
             logging.error(f'Img model not found: {selected_imgmodel_value}')
-        return selected_imgmodel
+            return {}
+        return selected_imgmodel 
     except Exception as e:
         logging.error(f"Error getting selected imgmodel data: {e}")
+        return {}
 
 async def process_imgmodel(i, selected_imgmodel_value):
     try:
@@ -3893,7 +4011,7 @@ class Behavior:
         if i.mention_everyone or i.author == client.user:
             return False
         # Whether to reply to other bots
-        if i.author.bot and client.user.display_name.lower() in text.lower() and i.channel.id in client.database.main_channels:
+        if i.author.bot and client.user.display_name.lower() in text.lower() and i.channel.id in bot_settings.database.main_channels:
             if 'bye' in text.lower(): # don't reply if another bot is saying goodbye
                 return False
             return self.probability_to_reply(self.reply_to_bots_when_adressed)
@@ -3901,13 +4019,13 @@ class Behavior:
         if self.ignore_parentheses and (i.content.startswith('(') and i.content.endswith(')')) or (i.content.startswith('<:') and i.content.endswith(':>')):
             return False
         # Whether to reply if only speak when spoken to
-        if (self.only_speak_when_spoken_to and (client.user.mentioned_in(i) or any(word in i.content.lower() for word in client.user.display_name.lower().split()))) or (self.in_active_conversation(i.author.id) and i.channel.id in client.database.main_channels):
+        if (self.only_speak_when_spoken_to and (client.user.mentioned_in(i) or any(word in i.content.lower() for word in client.user.display_name.lower().split()))) or (self.in_active_conversation(i.author.id) and i.channel.id in bot_settings.database.main_channels):
             return True
         reply = False
         # few more conditions
-        if i.author.bot and i.channel.id in client.database.main_channels:
+        if i.author.bot and i.channel.id in bot_settings.database.main_channels:
             reply = self.probability_to_reply(self.chance_to_reply_to_other_bots)
-        if self.go_wild_in_channel and i.channel.id in client.database.main_channels:
+        if self.go_wild_in_channel and i.channel.id in bot_settings.database.main_channels:
             reply = True
         if reply:
             self.update_user_dict(i.author.id)
@@ -3931,7 +4049,7 @@ class ImgModel:
                     'args': {'enabled': False, 'method': '(SDXL) Only Generate Transparent Image (Attention Injection)', 'weight': 1.0, 'stop_at': 1.0, 'foreground': None, 'background': None, 'blending': None, 'resize_mode': 'Crop and Resize', 'output_mat_for_i2i': False, 'fg_prompt': '', 'bg_prompt': '', 'blended_prompt': ''}
                 },
                 'forge_couple': {
-                    'args': {'enable': False, 'direction': 'Horizontal', 'global_effect': 'First Line', 'sep': 'SEP', 'mode': 'Basic', 'maps': [["0:0.5", "0.0:1.0", "1.0"],["0.5:1.0","0.0:1.0","1.0"]]}
+                    'args': {'enable': False, 'direction': 'Horizontal', 'global_effect': 'First Line', 'sep': 'SEP', 'mode': 'Basic', 'maps': [['0:0.5', '0.0:1.0', '1.0'],['0.5:1.0', '0.0:1.0', '1.0']], 'global_weight': 0.5}
                 },                
                 'reactor': {
                     'args': {'image': '', 'enabled': False, 'source_faces': '0', 'target_faces': '0', 'model': 'inswapper_128.onnx', 'restore_face': 'CodeFormer', 'restore_visibility': 1, 'restore_upscale': True, 'upscaler': '4x_NMKD-Superscale-SP_178000_G', 'scale': 1.5, 'upscaler_visibility': 1, 'swap_in_source_img': False, 'swap_in_gen_img': True, 'log_level': 1, 'gender_detect_source': 0, 'gender_detect_target': 0, 'save_original': False, 'codeformer_weight': 0.8, 'source_img_hash_check': False, 'target_img_hash_check': False, 'system': 'CUDA', 'face_mask_correction': True, 'source_type': 0, 'face_model': '', 'source_folder': '', 'multiple_source_images': None, 'random_img': True, 'force_upscale': True, 'threshold': 0.6, 'max_faces': 2}
@@ -4125,5 +4243,21 @@ class Database:
         c.execute('''UPDATE warned_once SET value = ? WHERE flag_name = ?''', (value, flag_name))
         conn.commit()
         conn.close()
+
+class BotSettings:
+    def __init__(self):
+        self.defaults = Settings() # Instance of the default settings
+        self.defaults = self.defaults.settings_to_dict() # Convert instance to dict
+        self.active_settings = load_file('ad_discordbot/activesettings.yaml')
+        self.active_settings = dict(self.active_settings)
+        self.settings = fix_dict(self.active_settings, self.defaults)
+        self.behavior = Behavior()
+        self.behavior.update_behavior_dict(self.active_settings['behavior'])
+        self.database = Database()
+
+    def get_settings_dict(self):
+        return self.settings
+
+bot_settings = BotSettings()
 
 client.run(bot_args.token if bot_args.token else TOKEN, root_logger=True, log_handler=handler)
