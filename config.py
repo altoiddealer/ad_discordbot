@@ -22,6 +22,9 @@ discord = {
     }   # YOU CAN GET CHANNEL ID BY ENABLING DEVELOPER MODE IN YOUR DISCORD ACCOUNT
 }       # THEN SIMPLY RIGHT CLICK CHANNEL > GET CHANNEL ID
 
+# Dynamic Prompting - allows all the same syntax and usage as the SD WebUI extension 'sd-dynamic-prompts'.
+dynamic_prompting_enabled = True # For usage see here: 'https://github.com/adieyal/sd-dynamic-prompts/blob/main/docs/SYNTAX.md'
+
 sd = {
     'SD_URL': "http://127.0.0.1:7860",   # Default URL for A1111 API. Adjust if you have issues connecting.
     # Bot has integrations with the following extensions. **Only enable them if they are installed AND enabled in A1111.**
