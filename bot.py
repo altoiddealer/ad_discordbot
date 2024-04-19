@@ -349,12 +349,12 @@ async def delete_message_after(message, delay):
 async def ireply(i, process):
     try:
         if task_event.is_set():  # If a queued item is currently being processed
-            ireply = await i.reply(f'Your {process} request was added to the task queue', ephemeral=True)
-            del_time = 5
+            ireply = await i.reply(f'Your {process} request was added to the task queue', ephemeral=True, delete_after=5)
+            # del_time = 5
         else:
-            ireply = await i.reply(f'Processing your {process} request', ephemeral=True)
-            del_time = 1
-        asyncio.create_task(delete_message_after(ireply, del_time))
+            ireply = await i.reply(f'Processing your {process} request', ephemeral=True, delete_after=3)
+        #     del_time = 1
+        # asyncio.create_task(delete_message_after(ireply, del_time))
     except Exception as e:
         logging.error(f"Error sending message response to user's interaction command: {e}")
 
@@ -525,14 +525,75 @@ async def auto_update_imgmodel_task(mode='random'):
 
 imgmodel_update_task = None # Global variable allows process to be cancelled and restarted (reset sleep timer)
 
-# Helper function to start auto-select imgmodel
-async def start_auto_update_imgmodel_task():
-    global imgmodel_update_task
-    if imgmodel_update_task:
-        imgmodel_update_task.cancel()
-    if config.imgmodels['auto_change_imgmodels'].get('enabled', False):
+# Register command for helper function to toggle auto-select imgmodel
+if config.imgmodels['auto_change_imgmodels'].get('enabled', False):
+    @client.hybrid_command(description='Toggles the automatic Imgmodel changing task')
+    async def toggle_auto_change_imgmodels(ctx):
+        global imgmodel_update_task
+        if imgmodel_update_task and not imgmodel_update_task.done():
+            imgmodel_update_task.cancel()
+            if ctx: await ctx.send("Auto-change Imgmodels task was cancelled.", ephemeral=True, delete_after=5)
+            logging.info("Auto-change Imgmodels task was cancelled via '/toggle_auto_change_imgmodels_task'")
+        else:
+            await bg_task_queue.put(start_auto_change_imgmodels())
+            if ctx: await ctx.send(f"Auto-change Imgmodels task was started.", ephemeral=True, delete_after=5)
+
+    # helper function to begin auto-select imgmodel task
+    async def start_auto_change_imgmodels():
+        global imgmodel_update_task
         mode = config.imgmodels['auto_change_imgmodels'].get('mode', 'random')
         imgmodel_update_task = client.loop.create_task(auto_update_imgmodel_task(mode))
+        logging.info(f"Auto-change Imgmodels task was started in '{mode}' mode")
+
+
+# Task to auto-select an imgmodel at user defined interval
+# async def auto_prompting_task(frequency=1.0):
+#     while True:
+#         frequency = config.imgmodels['auto_change_imgmodels'].get('frequency', 1.0)
+#         duration = frequency*3600 # 3600 = 1 hour
+#         await asyncio.sleep(duration)
+#         try:
+
+#             queue_item = {'i': None, 'user': 'Auto-Prompter', 'channel': None, 'source': 'on_message', 'text': text} 
+#             await task_queue.put(queue_item)
+
+#             active_settings = load_file('ad_discordbot/activesettings.yaml')
+#             current_imgmodel_name = active_settings.get('imgmodel', {}).get('imgmodel_name', '')
+#             imgmodel_names = [imgmodel.get('imgmodel_name', '') for imgmodel in all_imgmodels]           
+#             # Select an imgmodel automatically
+#             selected_imgmodel = await auto_select_imgmodel(current_imgmodel_name, imgmodel_names, mode)
+#             channel = config.imgmodels['auto_change_imgmodels'].get('channel_announce', None)
+#             if channel: channel = client.get_channel(channel)
+#             # offload to ai_gen queue
+#             queue_item = {'user': 'Automatically', 'channel': channel, 'source': 'imgmodel', 'params': {'imgmodel': selected_imgmodel}}
+#             await task_queue.put(queue_item)
+#         except Exception as e:
+#             logging.error(f"Error automatically updating image model: {e}")
+#         #await asyncio.sleep(duration)
+
+# auto_prompt_task = None # Global variable allows process to be cancelled and restarted (reset sleep timer)
+
+# # Register command for helper function to toggle auto-prompting
+# if config.imgmodels['auto_prompting'].get('enabled', False):
+#     @client.hybrid_command(description='Toggles the auto-prompting task')
+#     async def toggle_auto_prompting(ctx):
+#         global auto_prompt_task
+#         if auto_prompt_task and not auto_prompt_task.done():
+#             auto_prompt_task.cancel()
+#             if ctx: await ctx.send("Auto-prompting task was cancelled.", ephemeral=True, delete_after=5)
+#             logging.info("Auto-prompting task was cancelled via '/toggle_auto_prompting'")
+#         else:
+#             frequency = config.imgmodels['auto_prompting'].get('frequency', 1.0)
+#             auto_prompt_task = client.loop.create_task(auto_prompting_task(frequency))
+#             if ctx: await ctx.send(f"Auto-prompting task was started.", ephemeral=True, delete_after=5)
+#             logging.info("Auto-prompting task was enabled via '/toggle_auto_prompting'")
+
+#     # helper function to begin auto-select imgmodel task
+#     async def start_auto_prompting():
+#         global auto_prompt_task
+#         frequency = config.imgmodels['auto_prompting'].get('frequency', 1.0)
+#         auto_prompt_task = client.loop.create_task(auto_prompting_task(frequency))
+#         logging.info(f"Auto-prompting task was initialized.")
 
 # Initialize in chat mode
 async def load_chat():
@@ -710,8 +771,11 @@ async def on_ready():
         client.loop.create_task(process_tasks())
         # Create background task processing queue
         client.loop.create_task(process_tasks_in_background())
-        await bg_task_queue.put(client.tree.sync()) # Process discord client tree sync in the background
-        await bg_task_queue.put(start_auto_update_imgmodel_task()) # Process task to change image models automatically in the background
+        # Start background task to sync the discord client tree
+        await bg_task_queue.put(client.tree.sync())
+        # Start background task to to change image models automatically
+        if config.imgmodels['auto_change_imgmodels'].get('enabled', False):
+            await bg_task_queue.put(start_auto_change_imgmodels())
         logging.info("Bot is ready")
     except Exception as e:
         logging.error(f"Error with on_ready: {e}")
@@ -1588,13 +1652,15 @@ async def dynamic_prompting(user, text, i=None):
     wildcard_dir = 'ad_discordbot/wildcards'
     os.makedirs(wildcard_dir, exist_ok=True)
     # define patterns
-    braces_pat = r'{([^{}]+?)}(?=[^\w$:]|$$|$)'          # {this syntax|separate items can be divided|another item}
-    wildcard_pat = r'##[\w-]+(?=[^\w-]|$)'         # ##this-syntax represents a wildcard .txt file
+    braces_pat = r'{([^{}]+?)}(?=[^\w$:]|$$|$)' # {this syntax|separate items can be divided|another item}
+    wildcard_pat = r'##[\w-]+(?=[^\w-]|$)'      # ##this-syntax represents a wildcard .txt file
     # Process braces patterns
+    braces_start_indexes = []
     braces_matches = re.finditer(braces_pat, text)
     braces_matches = sorted(braces_matches, key=lambda x: -x.start())  # Sort matches in reverse order by their start indices
     for match in braces_matches:
-        matched_text = match.group(1)       # Extract the text inside the braces
+        braces_start_indexes.append(match.start())  # retain all start indexes for updating 'text_with_comments' for wildcard match phase
+        matched_text = match.group(1)               # Extract the text inside the braces
         replaced_text = get_braces_value(matched_text)   
         # Replace matched text
         text = text.replace(match.group(0), replaced_text, 1)
@@ -1611,10 +1677,10 @@ async def dynamic_prompting(user, text, i=None):
             start, end = match.start(), match.end()
             # Replace matched text
             text = text[:start] + replaced_text + text[end:]
-            previous_highlight_length = len(braces_matches) * 2 # we use 6 characters for highlighting
-            # Update comment
-            adjusted_start = start + previous_highlight_length
-            adjusted_end = end + previous_highlight_length
+            # Calculate offset based on the number of braces matches with lower start indexes
+            offset = sum(1 for idx in braces_start_indexes if idx < start) * 2
+            adjusted_start = start + offset
+            adjusted_end = end + offset
             highlighted_changes = '`' + replaced_text + '`'
             text_with_comments = (text_with_comments[:adjusted_start] + highlighted_changes + text_with_comments[adjusted_end:])
     # send a message showing the selected options
@@ -1827,9 +1893,11 @@ async def llm_gen(llm_payload):
 
         return last_resp, tts_resp
     except Exception as e:
+        if str(e).startswith('list index out of range'):
+            logging.error(f'Note: "regen" and "continue" commands only work if bot sent message during current session.')
         logging.error(f'An error occurred in llm_gen(): {e}')
 
-async def cont_regen_gen(user, text, channel, source, message):
+async def cont_regen_gen(i, user, text, channel, source, message):
     try:
         cmd = ''
         llm_payload = await initialize_llm_payload(user, text)
@@ -1854,15 +1922,18 @@ async def cont_regen_gen(user, text, channel, source, message):
         fetched_message = await channel.fetch_message(message)
         await fetched_message.delete()
         if tts_resp: await process_tts_resp(channel, tts_resp)
+        await i.followup.send('__Regenerated text:__', silent=True)
         await send_long_message(channel, last_resp)
     except Exception as e:
-        logging.error(f'An error occurred while "{cmd}": {e}')
-        if str(e).startswith('list index out of range'):
-            logging.error(f'{cmd} only works if bot sent message during current session.')
-        info_embed.title = f'An error occurred while processing "{cmd}"'
-        info_embed.description = e
-        if embed: await embed.edit(embed=info_embed)
-        else: await channel.send(embed=info_embed)
+        e_msg = f'An error occurred while processing "{cmd}"'
+        logging.error(f'{e_msg}: {e}')
+        if str(e).startswith('cannot unpack non-iterable NoneType object'):
+            none_msg = f'Error: {cmd} only works on messages sent from the bot during current session.'
+            logging.error(none_msg)
+            await i.followup.send(none_msg, silent=True)
+        else:
+            await i.followup.send(e_msg, silent=True)
+        await embed.delete()
 
 async def speak_gen(user, channel, text, params):
     try:
@@ -2110,7 +2181,7 @@ async def process_tasks():
                     elif source == 'image': # from '/image' command
                         await img_gen(user, channel, source, text, params, i, tags={})
                     elif source == 'cont' or source == 'regen':
-                        await cont_regen_gen(user, text, channel, source, message)
+                        await cont_regen_gen(i, user, text, channel, source, message)
                     elif source == 'on_message':
                         await on_message_gen(user, channel, source, text, i)
                     else:
@@ -3261,18 +3332,20 @@ async def reset(ctx: discord.ext.commands.Context):
 @client.tree.context_menu(name="regenerate")
 async def regen_llm_gen(i: discord.Interaction, message: discord.Message):
     text = message.content
+    await i.response.defer(thinking=False)
     # await ireply(i, 'regenerate') # send a response msg to the user
     # offload to ai_gen queue
-    queue_item = {'user': i.user.display_name, 'channel': i.channel, 'source': 'regen', 'text': text, 'message': message.id}
+    queue_item = {'i': i, 'user': i.user.display_name, 'channel': i.channel, 'source': 'regen', 'text': text, 'message': message.id}
     await task_queue.put(queue_item)
 
 # Context menu command to Continue last reply
 @client.tree.context_menu(name="continue")
 async def continue_llm_gen(i: discord.Interaction, message: discord.Message):
     text = message.content
+    await i.response.defer(thinking=False)
     # await ireply(i, 'continue') # send a response msg to the user
     # offload to ai_gen queue
-    queue_item = {'user': i.user.display_name, 'channel': i.channel, 'source': 'cont', 'text': text, 'message': message.id}
+    queue_item = {'i': i, 'user': i.user.display_name, 'channel': i.channel, 'source': 'cont', 'text': text, 'message': message.id}
     await task_queue.put(queue_item)
 
 async def load_character_data(char_name):
