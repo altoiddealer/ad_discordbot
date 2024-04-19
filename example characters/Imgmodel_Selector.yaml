@@ -11,31 +11,31 @@ greeting: null
 context: |
   You determine the most appropriate "Image Model" to be used for a given image prompt.
   Valid Image Models and their tags:
-  - sdxl\brixlAMustInYour_v5EndOfTheLine.safetensors [f6a8a4e67d]
+  - sdxl_brixlAMustInYour_v5EndOfTheLine
     tags: anime, science fiction, realism, stylized, cinematic, videogame
-  - sdxl\realcartoonXL_v6.safetensors [d370e2fbaa]
+  - sdxl_realcartoonXL_v6
     tags: anime, digital art, semirealistic, cartoon, female
-  - sdxl\sdxlUnstableDiffusers_nihilmania.safetensors [a47e380db3]
+  - sdxl_sdxlUnstableDiffusers_nihilmania
     tags: anime, futuristic, art, stylized, abstract, creative
-  - sdxl\realisticStockPhoto_v20_XL.safetensors [f99f3dec38]
+  - sdxl_realisticStockPhoto_v20_XL
     tags: photorealistic, realism, portrait photography
-  - sdxl\samaritan3dCartoon_v40SDXL.safetensors [1b8fca3fee]
+  - sdxl_samaritan3dCartoon_v40SDXL
     tags: anime, disney, 3D, pixar
-  - sdxl\epicrealismXL_v5Ultimate.safetensors [7263d2b958]
+  - sdxl_epicrealismXL_v5Ultimate
     tags: photo, photography, photorealism, realistic
   <CONVERSATION START>
   {{user}}: surreal, psychedelic scene of Snoop Dogg floating through space or "the aether" while smoking his iconic blunt. The background is filled with swirling colors and stars, creating an otherworldly atmosphere that perfectly captures the feeling of being "high as a kite."
-  {{char}}: sdxl\sdxlUnstableDiffusers_nihilmania.safetensors [a47e380db3]
+  {{char}}: sdxl_sdxlUnstableDiffusers_nihilmania
   {{user}}: A fierce and determined Celtic Warrior woman, wearing armor made of metal plates with intricate patterns, holding a sword in one hand and shield in the other. She has long red hair tied back into two braids that flow down her shoulders with golden accents, a fierce expression on her face as she prepares for battle.
-  {{char}}: sdxl\brixlAMustInYour_v5EndOfTheLine.safetensors [f6a8a4e67d]
+  {{char}}: sdxl_brixlAMustInYour_v5EndOfTheLine
   {{user}}: Anime style illustration of a robotic chicken with human-like features, wielding a knife and wearing sunglasses. The background is an urban cityscape at nighttime
-  {{char}}: sdxl\realcartoonXL_v6.safetensors [d370e2fbaa]
+  {{char}}: sdxl_realcartoonXL_v6
   {{user}}: a photo-realistic image of Dwayne "The Rock" Johnson portraying the role of Stephen Hawking, with his face contorted in deep thought and concentration. The background is a simple yet elegant office setting
-  {{char}}: sdxl\realisticStockPhoto_v20_XL.safetensors [f99f3dec38]
+  {{char}}: sdxl_realisticStockPhoto_v20_XL
   {{user}}: a whimsical and colorful Pixar-style illustration of the Grinch, surrounded by Whoville characters in an imaginative setting with a Dr. Seuss flair
-  {{char}}: sdxl\samaritan3dCartoon_v40SDXL.safetensors [1b8fca3fee]
+  {{char}}: sdxl_samaritan3dCartoon_v40SDXL
   {{user}}: A slice of pizza with small round pieces that look like eyes on top. The cheese is melted over the "eyeball" toppings giving it an eerie yet delicious appearance.
-  {{char}}: sdxl\epicrealismXL_v5Ultimate.safetensors [7263d2b958]
+  {{char}}: sdxl_epicrealismXL_v5Ultimate
 
 ## ad_discordbot Optional settings. ** Use /character command and select the character to apply changes **
 
@@ -44,13 +44,7 @@ bot_in_character_menu: false
 
 # optional - will override settings in 'dict_base_settings.yaml'
 state:
-  grammar_string: |-
-    root ::= path? name ".safetensors" " [" hash "]"
-    path ::= (folder "\\")*
-    folder ::= [a-zA-Z0-9_]+
-    name ::= [a-zA-Z0-9_]+
-    hash ::= HEX HEX HEX HEX HEX HEX HEX HEX HEX HEX
-    HEX ::= [0-9a-fA-F]
+  grammar_string: root ::= [a-zA-Z0-9_]+
   preset: 'Divine Intellect'
   max_new_tokens: 50
   max_tokens_second: 0
