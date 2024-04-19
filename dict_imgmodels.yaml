@@ -1,24 +1,64 @@
-# Options for /imgmodels command
-# Duplicate and update to add more models to the list.
+# All Img models are fetched via API (A1111 / Forge).
+# To control VAE for your models, set a "preferred VAE" for each model in SD WebUI (A111 / Forge), by clicking "Checkpoints" tab, then the Tool icon for each model ("Edit Metadata")
+
+settings:
+  # Filter - Only collect models which include matching text. [''] = No filtering (loads all models)
+  filter: ['']
+  # Exclude - Omit models which include matching text.
+  exclude: ['inpaint', 'refiner', 'base']
+  # Feature to periodically switch Img models. Can be toggled in discord via '/toggle_auto_change_imgmodels' command.
+  auto_change_imgmodels:
+    enabled: false
+    mode: random          # 'random' = picks model at random / 'cycle' = sequential order
+    frequency: 2.0        # How often to change models (hours). 0.5 = 30 minutes
+    channel_announce: 1111111111111111111  # channel ID to send a discord Embed announcing model change. Use number value.
+  # Controls whether to check the presets below when updating models. Otherwise, most params can only be updated manually via 'activesettings.yaml'
+  guess_model_params: true
+
+
+# When changing imgmodels, Presets are scored by matching/failing 'filter', 'exclude', and 'max_filesize' criteria.
+# For single model presets (exact_matches), use the 'title' from the values listed here: (http://127.0.0.1:7860/docs#/default/get_sd_models_sdapi_v1_sd_models_get)
+
+# Duplicate and update to add more presets to the list.
 # Valid payload options listed here: (http://127.0.0.1:7860/docs#/default/text2imgapi_sdapi_v1_txt2img_post)
-# Valid checkpoints listed here: (http://127.0.0.1:7860/docs#/default/get_sd_models_sdapi_v1_sd_models_get)
-# You can safely ommit options (omitted items will not delete default values)
-- imgmodel_name: (SDXL) Base Model v1.0, 0.9 VAE
-  imgmodel_url: 'https://huggingface.co/stabilityai/stable-diffusion-xl-base-0.9' # For announcements
-  payload: {height: 896, width: 1152}    # 'width', 'height' and 'override_settings' are the minimum required params needed to be defined outside of 'tags'.
-  override_settings: {sd_model_checkpoint: "sdxl\\sd_xl_base_1.0_0.9vae.safetensors [e6bb9ea85b]", sd_vae: "Automatic", CLIP_stop_at_last_layers: 1}
-  tags:
-    - tag_preset_name: SDXL Tags    # tag presets should be single list items (prefixed by a hyphen -) / not grouped with any other tags
-    - tag_preset_name: SDXL Payload
+# It is recommended to use tag presets for your payload settings *** BUT "width" and "height" are very important here as they affect the '/image' Size options!! ***
+presets:
+  - max_filesize: 6.0
+    filter: ['']
+    exclude: ['xl']
+    exact_match: ''
+    payload:
+      width: 512
+      height: 512
+    tags:
+      - tag_preset_name: SD15 Tags
 
-- imgmodel_name: (SDXL) RealVisXL
-  imgmodel_url: 'https://civitai.com/models/128607'
-  payload: {height: 896, width: 1152}
-  override_settings: {sd_model_checkpoint: "sdxl\\realvisxlV30_v30Bakedvae.safetensors [364cecf630]", sd_vae: "Automatic", CLIP_stop_at_last_layers: 1}
-  tags:
-    - tag_preset_name: SDXL Tags
-    - tag_preset_name: SDXL Payload
-    - negative_prompt_prefix: '(worst quality, low quality, illustration, 3d, 2d, painting, cartoons, sketch), open mouth'
+  - max_filesize: 100.0
+    filter: ['turbo']
+    exclude: ['']
+    exact_match: ''
+    payload:
+      width: 1024
+      height: 1024
+    tags:
+      - tag_preset_name: SDXL Turbo Payload
+      - tag_preset_name: SDXL Tags
 
-    # You may load multiple tag presets (again, as separate list items)
-    # You may define additional imgmodel specific tags such as a special 'negative_prompt', 'positive_prompt_prefix', etc.
+  - max_filesize: 100.0
+    filter: ['xl']
+    exclude: ['turbo']
+    exact_match: ''
+    payload:
+      width: 1024
+      height: 1024
+    tags:
+      - tag_preset_name: SDXL Payload
+      - tag_preset_name: SDXL Tags
+
+  - exact_match: 'sdxl_realvisxlV40_v40Bakedvae'
+    payload:
+      width: 1024
+      height: 1024
+    tags:
+      - tag_preset_name: SDXL Payload
+      - tag_preset_name: SDXL Tags

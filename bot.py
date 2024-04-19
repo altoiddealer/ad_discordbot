@@ -103,7 +103,6 @@ async def sd_api(endpoint, method='get', json=None):
                     r = await response.json()
                     return r
                 else:
-                    print("response:", response)
                     logging.error(f'{SD_URL}{endpoint} response: "{response.status}"')
     except Exception as e:
         logging.error(f'Error getting data from "{SD_URL}{endpoint}": {e}')
@@ -349,12 +348,12 @@ async def delete_message_after(message, delay):
 async def ireply(i, process):
     try:
         if task_event.is_set():  # If a queued item is currently being processed
-            ireply = await i.reply(f'Your {process} request was added to the task queue', ephemeral=True)
-            del_time = 5
+            ireply = await i.reply(f'Your {process} request was added to the task queue', ephemeral=True, delete_after=5)
+            # del_time = 5
         else:
-            ireply = await i.reply(f'Processing your {process} request', ephemeral=True)
-            del_time = 1
-        asyncio.create_task(delete_message_after(ireply, del_time))
+            ireply = await i.reply(f'Processing your {process} request', ephemeral=True, delete_after=3)
+        #     del_time = 1
+        # asyncio.create_task(delete_message_after(ireply, del_time))
     except Exception as e:
         logging.error(f"Error sending message response to user's interaction command: {e}")
 
@@ -503,10 +502,14 @@ async def auto_select_imgmodel(current_imgmodel_name, imgmodel_names, mode='rand
         logging.error(f"Error automatically selecting image model: {e}")
 
 # Task to auto-select an imgmodel at user defined interval
-async def auto_update_imgmodel_task(mode='random'):
+async def auto_update_imgmodel_task():
     while True:
-        frequency = config.imgmodels['auto_change_imgmodels'].get('frequency', 1.0)
+        imgmodels_data = load_file('ad_discordbot/dict_imgmodels.yaml')
+        auto_change_settings = imgmodels_data.get('settings', {}).get('auto_change_imgmodels', {})
+        mode = auto_change_settings.get('mode', 'random')
+        frequency = auto_change_settings.get('frequency', 1.0)
         duration = frequency*3600 # 3600 = 1 hour
+        logging.info(f"Auto-change Imgmodels task was started (Mode: '{mode}', Frequency: {frequency} hours).")
         await asyncio.sleep(duration)
         try:
             active_settings = load_file('ad_discordbot/activesettings.yaml')
@@ -514,7 +517,8 @@ async def auto_update_imgmodel_task(mode='random'):
             imgmodel_names = [imgmodel.get('imgmodel_name', '') for imgmodel in all_imgmodels]           
             # Select an imgmodel automatically
             selected_imgmodel = await auto_select_imgmodel(current_imgmodel_name, imgmodel_names, mode)
-            channel = config.imgmodels['auto_change_imgmodels'].get('channel_announce', None)
+            channel = auto_change_settings.get('channel_announce', None)
+            if channel == 11111111111111111111: channel = None
             if channel: channel = client.get_channel(channel)
             # offload to ai_gen queue
             queue_item = {'user': 'Automatically', 'channel': channel, 'source': 'imgmodel', 'params': {'imgmodel': selected_imgmodel}}
@@ -525,14 +529,22 @@ async def auto_update_imgmodel_task(mode='random'):
 
 imgmodel_update_task = None # Global variable allows process to be cancelled and restarted (reset sleep timer)
 
-# Helper function to start auto-select imgmodel
-async def start_auto_update_imgmodel_task():
+# Register command for helper function to toggle auto-select imgmodel
+@client.hybrid_command(description='Toggles the automatic Imgmodel changing task')
+async def toggle_auto_change_imgmodels(ctx):
     global imgmodel_update_task
-    if imgmodel_update_task:
+    if imgmodel_update_task and not imgmodel_update_task.done():
         imgmodel_update_task.cancel()
-    if config.imgmodels['auto_change_imgmodels'].get('enabled', False):
-        mode = config.imgmodels['auto_change_imgmodels'].get('mode', 'random')
-        imgmodel_update_task = client.loop.create_task(auto_update_imgmodel_task(mode))
+        if ctx: await ctx.send("Auto-change Imgmodels task was cancelled.", ephemeral=True, delete_after=5)
+        logging.info("Auto-change Imgmodels task was cancelled via '/toggle_auto_change_imgmodels_task'")
+    else:
+        await bg_task_queue.put(start_auto_change_imgmodels())
+        if ctx: await ctx.send(f"Auto-change Imgmodels task was started.", ephemeral=True, delete_after=5)
+
+# helper function to begin auto-select imgmodel task
+async def start_auto_change_imgmodels():
+    global imgmodel_update_task
+    imgmodel_update_task = client.loop.create_task(auto_update_imgmodel_task())
 
 # Initialize in chat mode
 async def load_chat():
@@ -710,8 +722,12 @@ async def on_ready():
         client.loop.create_task(process_tasks())
         # Create background task processing queue
         client.loop.create_task(process_tasks_in_background())
-        await bg_task_queue.put(client.tree.sync()) # Process discord client tree sync in the background
-        await bg_task_queue.put(start_auto_update_imgmodel_task()) # Process task to change image models automatically in the background
+        # Start background task to sync the discord client tree
+        await bg_task_queue.put(client.tree.sync())
+        # Start background task to to change image models automatically
+        imgmodels_data = load_file('ad_discordbot/dict_imgmodels.yaml')
+        if imgmodels_data.get('settings', {}).get('auto_change_imgmodels', {}).get('enabled', False):
+            await bg_task_queue.put(start_auto_change_imgmodels())
         logging.info("Bot is ready")
     except Exception as e:
         logging.error(f"Error with on_ready: {e}")
@@ -1588,13 +1604,15 @@ async def dynamic_prompting(user, text, i=None):
     wildcard_dir = 'ad_discordbot/wildcards'
     os.makedirs(wildcard_dir, exist_ok=True)
     # define patterns
-    braces_pat = r'{([^{}]+?)}(?=[^\w$:]|$$|$)'          # {this syntax|separate items can be divided|another item}
-    wildcard_pat = r'##[\w-]+(?=[^\w-]|$)'         # ##this-syntax represents a wildcard .txt file
+    braces_pat = r'{([^{}]+?)}(?=[^\w$:]|$$|$)' # {this syntax|separate items can be divided|another item}
+    wildcard_pat = r'##[\w-]+(?=[^\w-]|$)'      # ##this-syntax represents a wildcard .txt file
     # Process braces patterns
+    braces_start_indexes = []
     braces_matches = re.finditer(braces_pat, text)
     braces_matches = sorted(braces_matches, key=lambda x: -x.start())  # Sort matches in reverse order by their start indices
     for match in braces_matches:
-        matched_text = match.group(1)       # Extract the text inside the braces
+        braces_start_indexes.append(match.start())  # retain all start indexes for updating 'text_with_comments' for wildcard match phase
+        matched_text = match.group(1)               # Extract the text inside the braces
         replaced_text = get_braces_value(matched_text)   
         # Replace matched text
         text = text.replace(match.group(0), replaced_text, 1)
@@ -1611,10 +1629,10 @@ async def dynamic_prompting(user, text, i=None):
             start, end = match.start(), match.end()
             # Replace matched text
             text = text[:start] + replaced_text + text[end:]
-            previous_highlight_length = len(braces_matches) * 2 # we use 6 characters for highlighting
-            # Update comment
-            adjusted_start = start + previous_highlight_length
-            adjusted_end = end + previous_highlight_length
+            # Calculate offset based on the number of braces matches with lower start indexes
+            offset = sum(1 for idx in braces_start_indexes if idx < start) * 2
+            adjusted_start = start + offset
+            adjusted_end = end + offset
             highlighted_changes = '`' + replaced_text + '`'
             text_with_comments = (text_with_comments[:adjusted_start] + highlighted_changes + text_with_comments[adjusted_end:])
     # send a message showing the selected options
@@ -1657,7 +1675,7 @@ async def on_message_gen(user, channel, source, text, i):
                     gen_warning = await channel.send(f'Bot was triggered by Tags to not respond with text.\n**Processing image generation using your input as the prompt ...**') # msg for if LLM model is unloaded
                     asyncio.create_task(delete_message_after(gen_warning, 5))
                 llm_prompt = copy.copy(text)
-                await img_gen(user.name, channel, source, llm_prompt, params, tags)
+                await img_gen(user.name, channel, source, llm_prompt, params, i, tags)
             return
         # build llm_payload with defaults
         llm_payload = await initialize_llm_payload(user.name, text)
@@ -1673,11 +1691,12 @@ async def on_message_gen(user, channel, source, text, i):
         llm_prompt = process_tag_formatting(user.name, llm_prompt, formatting)
         # offload to ai_gen queue
         llm_payload['text'] = llm_prompt
-        await hybrid_llm_img_gen(user, channel, source, text, tags, llm_payload, params)
+        await hybrid_llm_img_gen(user, channel, source, text, tags, llm_payload, params, i)
+        return
     except Exception as e:
         logging.error(f"An error occurred processing on_message request: {e}")
 
-async def hybrid_llm_img_gen(user, channel, source, text, tags, llm_payload, params):
+async def hybrid_llm_img_gen(user, channel, source, text, tags, llm_payload, params, i=None):
     try:
         change_embed = None
         img_gen_embed = None
@@ -1727,7 +1746,7 @@ async def hybrid_llm_img_gen(user, channel, source, text, tags, llm_payload, par
             should_gen_image = should_bot_do('should_gen_image', default=False, tags=tags) # Check again post-LLM
         if should_gen_image:
             if img_gen_embed: await img_gen_embed.delete()
-            await img_gen(user, channel, source, last_resp, params, tags)
+            await img_gen(user, channel, source, last_resp, params, i, tags)
         if tts_resp: await process_tts_resp(channel, tts_resp)
         mention_resp = update_mention(user.mention, last_resp) # @mention non-consecutive users
         should_send_text = should_bot_do('should_send_text', default=True, tags=tags)
@@ -1736,6 +1755,7 @@ async def hybrid_llm_img_gen(user, channel, source, text, tags, llm_payload, par
         if send_user_image:
             send_user_image = discord.File(send_user_image)
             await channel.send(file=send_user_image)
+        return
     except Exception as e:
         logging.error(f'An error occurred while processing "{source}" request: {e}')
         change_embed_info.title = f'An error occurred while processing "{source}" request'
@@ -1827,9 +1847,11 @@ async def llm_gen(llm_payload):
 
         return last_resp, tts_resp
     except Exception as e:
+        if str(e).startswith('list index out of range'):
+            logging.error(f'Note: "regen" and "continue" commands only work if bot sent message during current session.')
         logging.error(f'An error occurred in llm_gen(): {e}')
 
-async def cont_regen_gen(user, text, channel, source, message):
+async def cont_regen_gen(i, user, text, channel, source, message):
     try:
         cmd = ''
         llm_payload = await initialize_llm_payload(user, text)
@@ -1854,15 +1876,18 @@ async def cont_regen_gen(user, text, channel, source, message):
         fetched_message = await channel.fetch_message(message)
         await fetched_message.delete()
         if tts_resp: await process_tts_resp(channel, tts_resp)
+        await i.followup.send('__Regenerated text:__', silent=True)
         await send_long_message(channel, last_resp)
     except Exception as e:
-        logging.error(f'An error occurred while "{cmd}": {e}')
-        if str(e).startswith('list index out of range'):
-            logging.error(f'{cmd} only works if bot sent message during current session.')
-        info_embed.title = f'An error occurred while processing "{cmd}"'
-        info_embed.description = e
-        if embed: await embed.edit(embed=info_embed)
-        else: await channel.send(embed=info_embed)
+        e_msg = f'An error occurred while processing "{cmd}"'
+        logging.error(f'{e_msg}: {e}')
+        if str(e).startswith('cannot unpack non-iterable NoneType object'):
+            none_msg = f'Error: {cmd} only works on messages sent from the bot during current session.'
+            logging.error(none_msg)
+            await i.followup.send(none_msg, silent=True)
+        else:
+            await i.followup.send(e_msg, silent=True)
+        await embed.delete()
 
 async def speak_gen(user, channel, text, params):
     try:
@@ -1910,7 +1935,7 @@ async def change_imgmodel_task(user, channel, params):
         imgmodel_name = imgmodel_params.get('imgmodel_name', '')
         mode = imgmodel_params.get('mode', 'change')    # default to 'change
         verb = imgmodel_params.get('verb', 'Changing')  # default to 'Changing'
-        imgmodel = await get_selected_imgmodel_data(imgmodel_name) # params will be either model name (yaml method) or checkpoint name (API method)
+        imgmodel = await get_selected_imgmodel_data(imgmodel_name) # params will be checkpoint name
         imgmodel_name = imgmodel.get('imgmodel_name', '')
         # Was not 'None' and did not match any known model names/checkpoints
         if len(imgmodel) < 3:
@@ -1938,9 +1963,7 @@ async def change_imgmodel_task(user, channel, params):
         if channel:
             await change_embed.delete()
             change_embed_info.title = f"{user} changed Img model:"
-            url = imgmodel.get('imgmodel_url', '')
-            if url: url = " <" + url + ">"
-            change_embed_info.description = f'**{imgmodel_name}**{url}'
+            change_embed_info.description = f'**{imgmodel_name}**'
             change_embed = await channel.send(embed=change_embed_info)
             logging.info(f"Image model changed to: {imgmodel_name}")
         if config.discord['post_active_settings']['enabled']:
@@ -2110,7 +2133,7 @@ async def process_tasks():
                     elif source == 'image': # from '/image' command
                         await img_gen(user, channel, source, text, params, i, tags={})
                     elif source == 'cont' or source == 'regen':
-                        await cont_regen_gen(user, text, channel, source, message)
+                        await cont_regen_gen(i, user, text, channel, source, message)
                     elif source == 'on_message':
                         await on_message_gen(user, channel, source, text, i)
                     else:
@@ -2904,11 +2927,12 @@ async def img_gen(user, channel, source, img_prompt, params, i=None, tags={}):
         endpoint = params.get('endpoint', '/sdapi/v1/txt2img')
         await process_image_gen(img_payload, img_gen_embed, channel, tags, endpoint, sd_output_dir)
         should_send_text = should_bot_do('should_send_text', default=True, tags=tags)
-        should_gen_text = should_bot_do('should_gen_text', default=True, tags=tags)
-        if source == 'image' or (should_send_text and not should_gen_text):
+        should_gen_text = should_bot_do('should_gen_text', default=False, tags=tags)
+        if source == 'image' or should_send_text:
             image_embed_info = discord.Embed(title = f"{user} requested an image:", description=params.get('message', img_prompt), url='https://github.com/altoiddealer/ad_discordbot')
             if i:
-                await i.reply(embed=image_embed_info)
+                if hasattr(i, 'followup'): await i.followup.reply(embed=image_embed_info)
+                else: await i.reply(embed=image_embed_info)
             else: await channel.send(embed=image_embed_info)
         if send_user_image:
             send_user_image = discord.File(send_user_image)
@@ -3019,7 +3043,7 @@ async def ext_online(ext, endpoint):
             if online: return True
             else: return False
         except:
-            logging.warning(f"{ext} is enabled in config.py, but was not responsive via API. Omitting option from '/image' command.")
+            logging.warning(f"{ext} is enabled in config.py, but was not responsive from {SD_CLIENT} API. Omitting option from '/image' command.")
     return False
 
 cnet_online = asyncio.run(ext_online('controlnet', '/controlnet/model_list'))
@@ -3075,7 +3099,6 @@ async def process_image(ctx, selections):
     face_swap = selections.get('face_swap', None)
     cnet = selections.get('cnet', None)
     # Defaults
-    message = f"**Prompt:** {prompt}"
     endpoint = '/sdapi/v1/txt2img'
     neg_style_prompt = ""
     size_dict = {}
@@ -3083,7 +3106,8 @@ async def process_image(ctx, selections):
     img2img_dict = {}
     cnet_dict = {}
     try:
-        prompt = await dynamic_prompting(user, prompt, i=None)
+        prompt = await dynamic_prompting(ctx.author, prompt, i=None)
+        message = f"**Prompt:** {prompt}"
         if size:
             selected_size = next((option for option in size_options if option['name'] == size), None)
             if selected_size:
@@ -3261,18 +3285,20 @@ async def reset(ctx: discord.ext.commands.Context):
 @client.tree.context_menu(name="regenerate")
 async def regen_llm_gen(i: discord.Interaction, message: discord.Message):
     text = message.content
+    await i.response.defer(thinking=False)
     # await ireply(i, 'regenerate') # send a response msg to the user
     # offload to ai_gen queue
-    queue_item = {'user': i.user.display_name, 'channel': i.channel, 'source': 'regen', 'text': text, 'message': message.id}
+    queue_item = {'i': i, 'user': i.user.display_name, 'channel': i.channel, 'source': 'regen', 'text': text, 'message': message.id}
     await task_queue.put(queue_item)
 
 # Context menu command to Continue last reply
 @client.tree.context_menu(name="continue")
 async def continue_llm_gen(i: discord.Interaction, message: discord.Message):
     text = message.content
+    await i.response.defer(thinking=False)
     # await ireply(i, 'continue') # send a response msg to the user
     # offload to ai_gen queue
-    queue_item = {'user': i.user.display_name, 'channel': i.channel, 'source': 'cont', 'text': text, 'message': message.id}
+    queue_item = {'i': i, 'user': i.user.display_name, 'channel': i.channel, 'source': 'cont', 'text': text, 'message': message.id}
     await task_queue.put(queue_item)
 
 async def load_character_data(char_name):
@@ -3535,8 +3561,9 @@ if filtered_characters:
 # Apply user defined filters to imgmodel list
 async def filter_imgmodels(imgmodels):
     try:
-        filter_list = config.imgmodels.get('filter', None)
-        exclude_list = config.imgmodels.get('exclude', None)
+        imgmodels_data = load_file('ad_discordbot/dict_imgmodels.yaml')
+        filter_list = imgmodels_data.get('settings', {}).get('filter', None)
+        exclude_list = imgmodels_data.get('settings', {}).get('exclude', None)
         if filter_list or exclude_list:
             imgmodels = [
                 imgmodel for imgmodel in imgmodels
@@ -3552,21 +3579,17 @@ async def filter_imgmodels(imgmodels):
 # Build list of imgmodels depending on user preference (user .yaml / API)
 async def fetch_imgmodels():
     try:
-        if not config.imgmodels['get_imgmodels_via_api']['enabled']:
-            imgmodels_data = load_file('ad_discordbot/dict_imgmodels.yaml')
-            imgmodels = copy.deepcopy(imgmodels_data)
-        else:
-            try:
-                imgmodels = await sd_api(endpoint='/sdapi/v1/sd-models', method='get', json=None)
-                # Update 'title' keys in fetched list to be uniform with .yaml method
-                for imgmodel in imgmodels:
-                    if 'title' in imgmodel:
-                        imgmodel['sd_model_checkpoint'] = imgmodel.pop('title')
-            except Exception as e:
-                logging.error(f"Error fetching image models via API: {e}")
-                if str(e).startswith('Cannot connect to host'):
-                    logging.warning('"/imgmodels" command will initialize as an empty list. Stable Diffusion must be running before launching ad_discordbot.')
-                return ''
+        try:
+            imgmodels = await sd_api(endpoint='/sdapi/v1/sd-models', method='get', json=None)
+            # Update 'title' keys in fetched list for uniformity
+            for imgmodel in imgmodels:
+                if 'title' in imgmodel:
+                    imgmodel['sd_model_checkpoint'] = imgmodel.pop('title')
+        except Exception as e:
+            logging.error(f"Error fetching image models from {SD_CLIENT} API: {e}")
+            if str(e).startswith('Cannot connect to host'):
+                logging.warning('"/imgmodels" command will initialize as an empty list. Stable Diffusion must be running before launching ad_discordbot.')
+            return ''
         if imgmodels:
             imgmodels = await filter_imgmodels(imgmodels)
             return imgmodels
@@ -3601,7 +3624,7 @@ async def update_imgmodel(channel, selected_imgmodel, selected_imgmodel_tags):
         logging.error(f"Error updating settings with the selected imgmodel data: {e}")
 
 # Check filesize/filters with selected imgmodel to assume resolution / tags
-async def guess_model_data(selected_imgmodel):
+async def guess_model_data(selected_imgmodel, presets):
     try:
         filename = selected_imgmodel.get('filename', None)
         if not filename:
@@ -3609,11 +3632,16 @@ async def guess_model_data(selected_imgmodel):
         # Check filesize of selected imgmodel to assume resolution and tags 
         file_size_bytes = os.path.getsize(filename)
         file_size_gb = file_size_bytes / (1024 ** 3)  # 1 GB = 1024^3 bytes
-        presets = copy.deepcopy(config.imgmodels['get_imgmodels_via_api']['presets'])
         match_counts = []
         for preset in presets:
+            # no guessing needed for exact match
+            exact_match = preset.pop('exact_match', '')
+            if exact_match and selected_imgmodel.get('imgmodel_name') == exact_match:
+                logging.info(f'Applying exact match imgmodel preset for {selected_imgmodel}.')
+                return preset
+            # score presets by how close they match the selected imgmodel
             filter_list = preset.pop('filter', [])
-            exclude_list = preset.pop('exclude', [])            
+            exclude_list = preset.pop('exclude', [])
             match_count = 0
             if filter_list:
                 if all(re.search(re.escape(filter_text), filename, re.IGNORECASE) for filter_text in filter_list):
@@ -3643,24 +3671,19 @@ async def merge_imgmodel_data(selected_imgmodel):
         #     selected_imgmodel_tags = []
         #     return selected_imgmodel, selected_imgmodel_name, selected_imgmodel_tags
         # Get tags if defined
-        selected_imgmodel_tags = selected_imgmodel.get('tags', [])
-        # Create proper dictionary if API method
-        if config.imgmodels['get_imgmodels_via_api']['enabled']:
-            imgmodel_settings = {'payload': {}, 'override_settings': {}}
-            if config.imgmodels['get_imgmodels_via_api'].get('guess_model_data') or config.imgmodels['get_imgmodels_via_api'].get('guess_model_res'):
-                matched_preset = await guess_model_data(selected_imgmodel)
-                if matched_preset:
-                    selected_imgmodel_tags = matched_preset.pop('tags', None)
-                    # Deprecated code
-                    if 'tag_preset_name' in matched_preset:
-                        selected_imgmodel_tags = [{'tag_preset_name': matched_preset['tag_preset_name']}]
-                        del matched_preset['tag_preset_name']
-                    imgmodel_settings['payload'] = matched_preset # Deprecated code
-            imgmodel_settings['override_settings']['sd_model_checkpoint'] = selected_imgmodel['sd_model_checkpoint']
-            imgmodel_settings['imgmodel_name'] = selected_imgmodel_name
-            imgmodel_settings['imgmodel_url'] = ''
-            # Replace input dictionary
-            selected_imgmodel = imgmodel_settings
+        selected_imgmodel_tags = None
+        imgmodel_settings = {'payload': {}, 'override_settings': {}}
+        imgmodels_data = load_file('ad_discordbot/dict_imgmodels.yaml')
+        if imgmodels_data.get('settings', {}).get('auto_change_imgmodels', {}).get('guess_model_params', True):
+            imgmodel_presets = copy.deepcopy(imgmodels_data.get('presets', []))
+            matched_preset = await guess_model_data(selected_imgmodel, imgmodel_presets)
+            if matched_preset:
+                selected_imgmodel_tags = matched_preset.pop('tags', None)
+                imgmodel_settings['payload'] = matched_preset.get('payload', {})
+        imgmodel_settings['override_settings']['sd_model_checkpoint'] = selected_imgmodel['sd_model_checkpoint']
+        imgmodel_settings['imgmodel_name'] = selected_imgmodel_name
+        # Replace input dictionary
+        selected_imgmodel = imgmodel_settings
         # Merge the selected imgmodel data with base imgmodel data
         selected_imgmodel = merge_base(selected_imgmodel, 'imgmodel')
         # Unpack any tag presets
@@ -3675,29 +3698,23 @@ async def get_selected_imgmodel_data(selected_imgmodel_value):
         ### IF API IMG MODEL UNLOADING GETS EVER DEBUGGED
         # Unloading the current Img model
         # if selected_imgmodel_value == 'None':
-        #     selected_imgmodel = {'override_settings': {'sd_model_checkpoint': 'None'}, 'imgmodel_name': 'None', 'imgmodel_url': ''}
+        #     selected_imgmodel = {'override_settings': {'sd_model_checkpoint': 'None'}, 'imgmodel_name': 'None'}
         #     return selected_imgmodel
         # if selected_imgmodel_value == 'Exit':
         #      selected_imgmodel = {'imgmodel_name': 'None were selected'}
         #     return selected_imgmodel
         all_imgmodel_data = copy.deepcopy(all_imgmodels)
         for imgmodel in all_imgmodel_data:
-            # imgmodel_checkpoint should match for API method
-            if imgmodel.get('sd_model_checkpoint') == selected_imgmodel_value:
+            # check that the value matches a valid checkpoint
+            if imgmodel.get('imgmodel_name') == selected_imgmodel_value:
                 selected_imgmodel = {
                     "sd_model_checkpoint": imgmodel["sd_model_checkpoint"],
                     "imgmodel_name": imgmodel.get("imgmodel_name"),
                     "filename": imgmodel.get("filename", None)
                 }
                 break
-            # imgmodel_name should match for .yaml method
-            if imgmodel.get('imgmodel_name') == selected_imgmodel_value:
-                selected_imgmodel = imgmodel
-                break
-            # Error handling
         if not selected_imgmodel:
             logging.error(f'Img model not found: {selected_imgmodel_value}')
-            return {}
         return selected_imgmodel 
     except Exception as e:
         logging.error(f"Error getting selected imgmodel data: {e}")
@@ -4195,7 +4212,6 @@ def probability_to_reply(probability):
 class ImgModel:
     def __init__(self):
         self.imgmodel_name = '' # label used for /imgmodel command
-        self.imgmodel_url = ''
         self.override_settings = {}
         self.img_payload = {
             'alwayson_scripts': {
