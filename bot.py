@@ -546,55 +546,6 @@ async def start_auto_change_imgmodels():
     global imgmodel_update_task
     imgmodel_update_task = client.loop.create_task(auto_update_imgmodel_task())
 
-# Task to auto-select an imgmodel at user defined interval
-# async def auto_prompting_task(frequency=1.0):
-#     while True:
-#         frequency = config.imgmodels['auto_change_imgmodels'].get('frequency', 1.0)
-#         duration = frequency*3600 # 3600 = 1 hour
-#         await asyncio.sleep(duration)
-#         try:
-
-#             queue_item = {'i': None, 'user': 'Auto-Prompter', 'channel': None, 'source': 'on_message', 'text': text} 
-#             await task_queue.put(queue_item)
-
-#             active_settings = load_file('ad_discordbot/activesettings.yaml')
-#             current_imgmodel_name = active_settings.get('imgmodel', {}).get('imgmodel_name', '')
-#             imgmodel_names = [imgmodel.get('imgmodel_name', '') for imgmodel in all_imgmodels]           
-#             # Select an imgmodel automatically
-#             selected_imgmodel = await auto_select_imgmodel(current_imgmodel_name, imgmodel_names, mode)
-#             channel = config.imgmodels['auto_change_imgmodels'].get('channel_announce', None)
-#             if channel: channel = client.get_channel(channel)
-#             # offload to ai_gen queue
-#             queue_item = {'user': 'Automatically', 'channel': channel, 'source': 'imgmodel', 'params': {'imgmodel': selected_imgmodel}}
-#             await task_queue.put(queue_item)
-#         except Exception as e:
-#             logging.error(f"Error automatically updating image model: {e}")
-#         #await asyncio.sleep(duration)
-
-# auto_prompt_task = None # Global variable allows process to be cancelled and restarted (reset sleep timer)
-
-# # Register command for helper function to toggle auto-prompting
-# if config.imgmodels['auto_prompting'].get('enabled', False):
-#     @client.hybrid_command(description='Toggles the auto-prompting task')
-#     async def toggle_auto_prompting(ctx):
-#         global auto_prompt_task
-#         if auto_prompt_task and not auto_prompt_task.done():
-#             auto_prompt_task.cancel()
-#             if ctx: await ctx.send("Auto-prompting task was cancelled.", ephemeral=True, delete_after=5)
-#             logging.info("Auto-prompting task was cancelled via '/toggle_auto_prompting'")
-#         else:
-#             frequency = config.imgmodels['auto_prompting'].get('frequency', 1.0)
-#             auto_prompt_task = client.loop.create_task(auto_prompting_task(frequency))
-#             if ctx: await ctx.send(f"Auto-prompting task was started.", ephemeral=True, delete_after=5)
-#             logging.info("Auto-prompting task was enabled via '/toggle_auto_prompting'")
-
-#     # helper function to begin auto-select imgmodel task
-#     async def start_auto_prompting():
-#         global auto_prompt_task
-#         frequency = config.imgmodels['auto_prompting'].get('frequency', 1.0)
-#         auto_prompt_task = client.loop.create_task(auto_prompting_task(frequency))
-#         logging.info(f"Auto-prompting task was initialized.")
-
 # Initialize in chat mode
 async def load_chat():
     try:
