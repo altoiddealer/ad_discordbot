@@ -2927,8 +2927,8 @@ async def img_gen(user, channel, source, img_prompt, params, i=None, tags={}):
         endpoint = params.get('endpoint', '/sdapi/v1/txt2img')
         await process_image_gen(img_payload, img_gen_embed, channel, tags, endpoint, sd_output_dir)
         should_send_text = should_bot_do('should_send_text', default=True, tags=tags)
-        should_gen_text = should_bot_do('should_gen_text', default=False, tags=tags)
-        if source == 'image' or should_send_text:
+        should_gen_text = should_bot_do('should_gen_text', default=True, tags=tags)
+        if source == 'image' or (should_send_text and not should_gen_text):
             image_embed_info = discord.Embed(title = f"{user} requested an image:", description=params.get('message', img_prompt), url='https://github.com/altoiddealer/ad_discordbot')
             if i:
                 if hasattr(i, 'followup'): await i.followup.reply(embed=image_embed_info)
@@ -3228,7 +3228,7 @@ async def process_image(ctx, selections):
         params = {'neg_prompt': neg_style_prompt, 'size': size_dict, 'img2img': img2img_dict, 'face_swap': faceswapimg, 'controlnet': cnet_dict, 'endpoint': endpoint, 'message': message}
         await ireply(ctx, 'image') # send a response msg to the user
         # offload to ai_gen queue
-        queue_item = {'i': ctx, 'user': ctx.author, 'channel': ctx.channel, 'source': 'image', 'text': prompt, 'params': params}
+        queue_item = {'user': ctx.author, 'channel': ctx.channel, 'source': 'image', 'text': prompt, 'params': params}
         await task_queue.put(queue_item)
     except Exception as e:
         logging.error(f"An error occurred in image(): {e}")
