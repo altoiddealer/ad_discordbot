@@ -1487,7 +1487,7 @@ async def initialize_llm_payload(user, text):
 
 def get_wildcard_value(matched_text, dir_path='ad_discordbot/wildcards'):
     selected_option = None
-    braces_pat = r'{([^{}]+?)}(?=[^\w$:]|$$|$)'          # {this syntax|separate items can be divided|another item}
+    braces_pat = r'{{([^{}]+?)}}(?=[^\w$:]|$$|$)'   # {{this syntax|separate items can be divided|another item}}
     search_phrase = matched_text[2:] if matched_text.startswith('##') else matched_text
     search_path = f"{search_phrase}.txt"
     # List files in the directory
@@ -1604,8 +1604,8 @@ async def dynamic_prompting(user, text, i=None):
     wildcard_dir = 'ad_discordbot/wildcards'
     os.makedirs(wildcard_dir, exist_ok=True)
     # define patterns
-    braces_pat = r'{([^{}]+?)}(?=[^\w$:]|$$|$)' # {this syntax|separate items can be divided|another item}
-    wildcard_pat = r'##[\w-]+(?=[^\w-]|$)'      # ##this-syntax represents a wildcard .txt file
+    braces_pat = r'{{([^{}]+?)}}(?=[^\w$:]|$$|$)'   # {{this syntax|separate items can be divided|another item}}
+    wildcard_pat = r'##[\w-]+(?=[^\w-]|$)'          # ##this-syntax represents a wildcard .txt file
     # Process braces patterns
     braces_start_indexes = []
     braces_matches = re.finditer(braces_pat, text)
