@@ -2,6 +2,8 @@
 
 ### Uniting LLM ([text-generation-webui](https://github.com/oobabooga/text-generation-webui)) and Img Gen ([A1111](https://github.com/AUTOMATIC1111/stable-diffusion-webui) / [Forge](https://github.com/lllyasviel/stable-diffusion-webui-forge)) for chat & professional use.
 
+Note: **text-generation-webui** and **Stable Diffusion** features can be independently enabled/disabled in main config file. Neither is **"required"**.
+
 ---
 
 <img width="560" alt="Screenshot 2023-09-22 224716" src="https://github.com/altoiddealer/ad_discordbot/assets/1613484/5ffb5037-29d2-4a2f-9966-3ef6bd35b1f9">
@@ -20,6 +22,14 @@
 
 <details>
   <summary>click to expand</summary>
+
+   **04/21/2024:** Revamped Main Config. Made textgenwebui and SD WebUI Optional!
+  
+    - replaced config.py with config.yaml
+    - Config.py will still work, but is now unsupported and will receive no updates.
+    - Textgenwebui and SD WebUI are now optional elements of the bot that can be disabled in config.yaml
+    
+  ---
 
    **04/19/2024:** Overhauled Img Model handling. Now "API" Method only.
    
