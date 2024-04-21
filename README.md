@@ -20,6 +20,28 @@
 
 <details>
   <summary>click to expand</summary>
+
+   **04/19/2024:** Overhauled Img Model handling. Now "API" Method only.
+   
+  At first, there was only the '.YAML method' - each model required its own definition.
+  
+  Later, fetching models via API became a secondary option.
+  
+  Now, I noticed that all the improvements to API method have made the 'YAML method' obsolete:
+  
+    - Filter / Exclusion settings to control models that get loaded
+    - Sophisticated calculations for 'Sizes' menu in '/image' command
+    - Apply model settings and 'Tags' based on intelligent filter matching
+    - Now, additional check for 'exact_match' if necessary.
+
+  **Please take care migrating to this change**:
+
+    - Fetch the new version of 'dict_imgmodels.yaml' which is now the settings panel for the API method.
+    - Migrate your 'imgmodel' settings from config.py
+    - Delete the whole 'imgmodels' block in config.py!
+
+  ---
+    
   
    **04/18/2024:** New Feature: Dynamic Prompting.
 
