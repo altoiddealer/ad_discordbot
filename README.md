@@ -21,6 +21,39 @@
 <details>
   <summary>click to expand</summary>
 
+   **04/19/2024:** Overhauled Img Model handling. Now "API" Method only.
+   
+  At first, there was only the '.YAML method' - each model required its own definition.
+  
+  Later, fetching models via API became a secondary option.
+  
+  Now, I noticed that all the improvements to API method have made the 'YAML method' obsolete:
+  
+    - Filter / Exclusion settings to control models that get loaded
+    - Sophisticated calculations for 'Sizes' menu in '/image' command
+    - Apply model settings and 'Tags' based on intelligent filter matching
+    - Now, additional check for 'exact_match' if necessary.
+
+  **Please take care migrating to this change**:
+
+    - Fetch the new version of 'dict_imgmodels.yaml' which is now the settings panel for the API method.
+    - Migrate your 'imgmodel' settings from config.py
+    - Delete the whole 'imgmodels' block in config.py!
+
+  ---
+    
+  
+   **04/18/2024:** New Feature: Dynamic Prompting.
+
+   Works ~~exactly~~ _**very similarly**_ to the SD WebUI extension [sd-dynamic-prompts](https://github.com/adieyal/sd-dynamic-prompts)
+
+   **[Read up on it here!](https://github.com/altoiddealer/ad_discordbot/wiki/dynamic-prompting)**
+
+  <img width="959" alt="Screenshot 2024-04-20 202457" src="https://github.com/altoiddealer/ad_discordbot/assets/1613484/6d1c0498-fc4d-4869-807e-904392ab44d2">
+
+  ---
+
+
    **04/16/2024:** Enhanced Flows and "Instant Tags". Many other improvements.
 
     - Changed the 'Logging Level' from DEBUG to INFO - LESS SPAM!
