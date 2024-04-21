@@ -30,15 +30,62 @@ from itertools import product
 from threading import Lock, Thread
 from pydub import AudioSegment
 import copy
-
-# Import config.py
-from ad_discordbot import config
+import sys
 
 #################################################################
 #################### DISCORD / BOT STARTUP ######################
 #################################################################
-TOKEN = config.discord['TOKEN']
+# Resolve legacy config method
+class Config:
+    def __init__(self):
+        self.config = {}
 
+    def legacy_required_values(self):
+        from ad_discordbot import config
+        required_configs = ['discord', 'sd', 'textgenwebui']
+        for config_name in required_configs:
+            try:
+                config_value = getattr(config, config_name)
+                self.config[config_name] = config_value
+            except AttributeError:
+                logging.warning(f"'config.py' is missing the '{config_name}' configuration.")
+            else:
+                if not config_value:
+                    logging.warning(f"'config.py' has an empty value for '{config_name}' configuration.")
+        try:
+            self.config['dynamic_prompting'] = config.dynamic_prompting_enabled
+        except:
+            logging.warning("'config.py' is missing a new parameter 'dynamic_prompting_enabled'. Defaulting to 'True' (enabled) ")
+            self.config['dynamic_prompting'] = True
+
+    def init_config(self):
+        try:
+            config_path = os.path.join('ad_discordbot', 'config.yaml')
+            with open(config_path, 'r', encoding='utf-8') as file:
+                self.config = yaml.safe_load(file)
+        except FileNotFoundError:
+            logging.error("Main bot config file 'config.yaml' not found.")
+            try:
+                self.legacy_required_values()
+                logging.info("Found legacy 'config.py'. Please migrate your settings from 'config.py' as it will soon be unsupported.")
+            except FileNotFoundError:
+                logging.error("Legacy config file 'config.py' not found.")
+                sys.exit(2)
+        except yaml.YAMLError as e:
+            logging.error(f"Error loading 'config.yaml': {e}")
+            sys.exit(2)            
+
+    def get_config_dict(self):
+        return self.config
+
+config = Config()
+config.init_config()
+config = config.get_config_dict()
+
+# Discord bot token
+TOKEN = config['discord'].get('TOKEN', None)
+
+# Start logger
 logging.basicConfig(format='%(levelname)s [%(asctime)s]: %(message)s (Line: %(lineno)d in %(funcName)s, %(filename)s )',
                     datefmt='%Y-%m-%d %H:%M:%S', 
                     level=logging.INFO) # logging.DEBUG)
@@ -52,8 +99,6 @@ handler = logging.handlers.RotatingFileHandler(
 )
 
 # Intercept custom bot arguments
-import sys
-
 def parse_bot_args():
     bot_arg_list = ["--limit-history", "--token"]
     bot_argv = []
@@ -76,11 +121,18 @@ def parse_bot_args():
     
 bot_args = parse_bot_args()
 
+# Check bot token
+bot_token = bot_args.token if bot_args.token else TOKEN
+if not bot_token:
+    logging.error("Discord bot token is required. Please refer to install instructions (https://github.com/altoiddealer/ad_discordbot).")
+    sys.exit(2)
+
 os.environ['GRADIO_ANALYTICS_ENABLED'] = 'False'
 os.environ["BITSANDBYTES_NOWELCOME"] = "1"
 warnings.filterwarnings("ignore", category=UserWarning, message="TypedStorage is deprecated")
 warnings.filterwarnings("ignore", category=UserWarning, message="You have modified the pretrained model configuration to control generation")
 
+# Set discord intents
 intents = discord.Intents.default()
 intents.message_content = True
 intents.reactions = True  # Enable reaction events
@@ -90,9 +142,11 @@ client = commands.Bot(command_prefix=".", intents=intents)
 #################################################################
 ################### Stable Diffusion Startup ####################
 #################################################################
-SD_URL = config.sd.get('SD_URL', None) # Get the URL from config.py
+sd_enabled = config['sd'].get('enabled', True)
+
+SD_URL = config['sd'].get('SD_URL', None) # Get the URL from config.yaml
 if SD_URL is None:
-    SD_URL = config.sd.get('A1111', 'http://127.0.0.1:7860')
+    SD_URL = config['sd'].get('A1111', 'http://127.0.0.1:7860')
 
 async def sd_api(endpoint, method='get', json=None):
     try:
@@ -108,6 +162,8 @@ async def sd_api(endpoint, method='get', json=None):
         logging.error(f'Error getting data from "{SD_URL}{endpoint}": {e}')
 
 async def get_sd_sysinfo():
+    if not sd_enabled:
+        return ''
     try:
         r = await sd_api(endpoint='/sdapi/v1/cmd-flags', method='get', json=None)
         ui_settings_file = r.get("ui_settings_file", "")
@@ -123,39 +179,50 @@ async def get_sd_sysinfo():
 
 SD_CLIENT = asyncio.run(get_sd_sysinfo()) # Stable Diffusion client name to use in messages, warnings, etc
 
+if SD_CLIENT:
+    logging.info(f"Initializing with SD WebUI enabled: '{SD_CLIENT}")
+
 #################################################################
 ##################### TEXTGENWEBUI STARTUP ######################
 #################################################################
-import modules.extensions as extensions_module
-from modules.chat import chatbot_wrapper, load_character
-from modules import shared
-from modules import chat, utils
-from modules import LoRA
-from modules.models import load_model, unload_model
-from modules.models_settings import get_model_metadata, update_model_parameters, get_fallback_settings, infer_loader
+if not 'textgenwebui' in config:
+    logging.warning("'config.py' is missing a new dictionary 'textgenwebui'. Enabling TGWUI by default.")
+    textgenwebui_enabled = True
+else:
+    textgenwebui_enabled = config['textgenwebui'].get('enabled', True)
+
+if textgenwebui_enabled:
+    import modules.extensions as extensions_module
+    from modules.chat import chatbot_wrapper, load_character
+    from modules import shared
+    from modules import chat, utils
+    from modules import LoRA
+    from modules.models import load_model, unload_model
+    from modules.models_settings import get_model_metadata, update_model_parameters, get_fallback_settings, infer_loader
 
 ## Majority of this code section is copypasta from modules/server.py
-# Loading custom settings
-settings_file = None
-# Check if a settings file is provided and exists
-if shared.args.settings is not None and Path(shared.args.settings).exists():
-    settings_file = Path(shared.args.settings)
-# Check if settings file exists
-elif Path("settings.json").exists():
-    settings_file = Path("settings.json")
-elif Path("settings.yaml").exists():
-    settings_file = Path("settings.yaml")
-if settings_file is not None:
-    logging.info(f"Loading settings from {settings_file}...")
-    file_contents = open(settings_file, 'r', encoding='utf-8').read()
-    new_settings = json.loads(file_contents) if settings_file.suffix == "json" else yaml.safe_load(file_contents)
-    shared.settings.update(new_settings)
 
-# Fallback settings for models
-shared.model_config['.*'] = get_fallback_settings()
-shared.model_config.move_to_end('.*', last=False)  # Move to the beginning
+def init_textgenwebui_settings():
+    # Loading custom settings
+    settings_file = None
+    # Check if a settings file is provided and exists
+    if shared.args.settings is not None and Path(shared.args.settings).exists():
+        settings_file = Path(shared.args.settings)
+    # Check if settings file exists
+    elif Path("settings.json").exists():
+        settings_file = Path("settings.json")
+    elif Path("settings.yaml").exists():
+        settings_file = Path("settings.yaml")
+    if settings_file is not None:
+        logging.info(f"Loading settings from {settings_file}...")
+        file_contents = open(settings_file, 'r', encoding='utf-8').read()
+        new_settings = json.loads(file_contents) if settings_file.suffix == "json" else yaml.safe_load(file_contents)
+        shared.settings.update(new_settings)
 
-# Load Extensions
+    # Fallback settings for models
+    shared.model_config['.*'] = get_fallback_settings()
+    shared.model_config.move_to_end('.*', last=False)  # Move to the beginning
+
 # legacy version of load_extensions() which allows extension params to be updated during runtime
 def load_extensions(extensions, available_extensions):
     extensions_module.state = {}
@@ -178,71 +245,80 @@ def load_extensions(extensions, available_extensions):
             except:
                 logging.error(f'Failed to load the extension "{name}".')
 
-# monkey patch load_extensions behavior from pre-commit b3fc2cd
-extensions_module.load_extensions = load_extensions
+tts_settings = {}
+try:
+    tts_settings = config.get('textgenwebui', {}).get('tts_settings', {})
+except:
+    tts_settings = config['discord'].get('tts_settings', {})
 
-shared.args.extensions = []
-extensions_module.available_extensions = utils.get_available_extensions()
+def init_textgenwebui_extensions():
+    # monkey patch load_extensions behavior from pre-commit b3fc2cd
+    extensions_module.load_extensions = load_extensions
 
-# If any TTS extension defined in config.py, set tts bot vars and add extension to shared.args.extensions
-supported_tts_clients = ['alltalk_tts', 'coqui_tts', 'silero_tts', 'elevenlabs_tts']
-tts_client = config.discord['tts_settings'].get('extension', '') # tts client
-tts_api_key = None
-if tts_client:
-    if tts_client not in supported_tts_clients:
-        logging.warning(f'tts client "{tts_client}" is not yet confirmed to be work. The "/speak" command will not be registered. List of supported tts_clients: {supported_tts_clients}')
+    shared.args.extensions = []
+    extensions_module.available_extensions = utils.get_available_extensions()
 
-    tts_api_key = config.discord['tts_settings'].get('api_key', None)
-    if tts_client == 'alltalk_tts':
-        tts_voice_key = 'voice'
-        tts_lang_key = 'language'
-    if tts_client == 'coqui_tts':
-        tts_voice_key = 'voice'
-        tts_lang_key = 'language'
-    if tts_client == 'silero_tts':
-        tts_voice_key = 'speaker'
-        tts_lang_key = 'language'
-    if tts_client == 'elevenlabs_tts':
-        tts_voice_key = 'selected_voice'
-        tts_lang_key = ''
-    if tts_client not in shared.args.extensions:
-        shared.args.extensions.append(tts_client)
+    # If any TTS extension defined in config.py, set tts bot vars and add extension to shared.args.extensions
+    supported_tts_clients = ['alltalk_tts', 'coqui_tts', 'silero_tts', 'elevenlabs_tts']
+    tts_client = tts_settings.get('extension', '') # tts client
+    tts_api_key = None
+    tts_voice_key = None
+    tts_lang_key = None
+    if tts_client:
+        if tts_client not in supported_tts_clients:
+            logging.warning(f'tts client "{tts_client}" is not yet confirmed to be work. The "/speak" command will not be registered. List of supported tts_clients: {supported_tts_clients}')
 
-# Activate the extensions
-for extension in shared.settings['default_extensions']:
-    shared.args.extensions = shared.args.extensions or []
-    if extension not in shared.args.extensions:
-        shared.args.extensions.append(extension)
+        tts_api_key = tts_settings.get('api_key', None)
+        if tts_client == 'alltalk_tts':
+            tts_voice_key = 'voice'
+            tts_lang_key = 'language'
+        if tts_client == 'coqui_tts':
+            tts_voice_key = 'voice'
+            tts_lang_key = 'language'
+        if tts_client == 'silero_tts':
+            tts_voice_key = 'speaker'
+            tts_lang_key = 'language'
+        if tts_client == 'elevenlabs_tts':
+            tts_voice_key = 'selected_voice'
+            tts_lang_key = ''
+        if tts_client not in shared.args.extensions:
+            shared.args.extensions.append(tts_client)
 
-if shared.args.extensions and len(shared.args.extensions) > 0:
-    extensions_module.load_extensions(extensions_module.extensions, extensions_module.available_extensions)
+    # Activate the extensions
+    for extension in shared.settings['default_extensions']:
+        shared.args.extensions = shared.args.extensions or []
+        if extension not in shared.args.extensions:
+            shared.args.extensions.append(extension)
 
-# Get list of available models
-all_llmmodels = utils.get_available_models()
+    if shared.args.extensions and len(shared.args.extensions) > 0:
+        extensions_module.load_extensions(extensions_module.extensions, extensions_module.available_extensions)
 
-# Model defined through --model
-if shared.args.model is not None:
-    shared.model_name = shared.args.model
+    return tts_client, tts_api_key, tts_voice_key, tts_lang_key
 
-# Only one model is available
-elif len(all_llmmodels) == 1:
-    shared.model_name = all_llmmodels[0]
+def init_textgenwebui_llmmodels():
+    # Model defined through --model
+    if shared.args.model is not None:
+        shared.model_name = shared.args.model
 
-# Select the model from a command-line menu
-elif shared.args.model_menu:
-    if len(all_llmmodels) == 0:
-        logging.error("No LLM models are available! Please download at least one.")
-        sys.exit(0)
-    else:
-        print('The following LLM models are available:\n')
-        for index, model in enumerate(all_llmmodels):
-            print(f'{index+1}. {model}')
+    # Only one model is available
+    elif len(all_llmmodels) == 1:
+        shared.model_name = all_llmmodels[0]
 
-        print(f'\nWhich one do you want to load? 1-{len(all_llmmodels)}\n')
-        i = int(input()) - 1
-        print()
+    # Select the model from a command-line menu
+    elif shared.args.model_menu:
+        if len(all_llmmodels) == 0:
+            logging.error("No LLM models are available! Please download at least one.")
+            sys.exit(0)
+        else:
+            print('The following LLM models are available:\n')
+            for index, model in enumerate(all_llmmodels):
+                print(f'{index+1}. {model}')
 
-    shared.model_name = all_llmmodels[i]
+            print(f'\nWhich one do you want to load? 1-{len(all_llmmodels)}\n')
+            i = int(input()) - 1
+            print()
+
+        shared.model_name = all_llmmodels[i]
 
 # Check user settings (models/config-user.yaml) to determine loader
 def get_llm_model_loader(model):
@@ -278,9 +354,14 @@ def load_llm_model(loader=None):
         if shared.args.lora:
             add_lora_to_model(shared.args.lora)
 
-load_llm_model()
-
-shared.generation_lock = Lock()
+if textgenwebui_enabled:
+    init_textgenwebui_settings()
+    tts_client, tts_api_key, tts_voice_key, tts_lang_key = init_textgenwebui_extensions()
+    # Get list of available models
+    all_llmmodels = utils.get_available_models()
+    init_textgenwebui_llmmodels()
+    load_llm_model()
+    shared.generation_lock = Lock()
 
 #################################################################
 ##################### BACKGROUND QUEUE TASK #####################
@@ -529,17 +610,18 @@ async def auto_update_imgmodel_task():
 
 imgmodel_update_task = None # Global variable allows process to be cancelled and restarted (reset sleep timer)
 
-# Register command for helper function to toggle auto-select imgmodel
-@client.hybrid_command(description='Toggles the automatic Imgmodel changing task')
-async def toggle_auto_change_imgmodels(ctx):
-    global imgmodel_update_task
-    if imgmodel_update_task and not imgmodel_update_task.done():
-        imgmodel_update_task.cancel()
-        if ctx: await ctx.send("Auto-change Imgmodels task was cancelled.", ephemeral=True, delete_after=5)
-        logging.info("Auto-change Imgmodels task was cancelled via '/toggle_auto_change_imgmodels_task'")
-    else:
-        await bg_task_queue.put(start_auto_change_imgmodels())
-        if ctx: await ctx.send(f"Auto-change Imgmodels task was started.", ephemeral=True, delete_after=5)
+if sd_enabled:
+    # Register command for helper function to toggle auto-select imgmodel
+    @client.hybrid_command(description='Toggles the automatic Imgmodel changing task')
+    async def toggle_auto_change_imgmodels(ctx):
+        global imgmodel_update_task
+        if imgmodel_update_task and not imgmodel_update_task.done():
+            imgmodel_update_task.cancel()
+            if ctx: await ctx.send("Auto-change Imgmodels task was cancelled.", ephemeral=True, delete_after=5)
+            logging.info("Auto-change Imgmodels task was cancelled via '/toggle_auto_change_imgmodels_task'")
+        else:
+            await bg_task_queue.put(start_auto_change_imgmodels())
+            if ctx: await ctx.send(f"Auto-change Imgmodels task was started.", ephemeral=True, delete_after=5)
 
 # helper function to begin auto-select imgmodel task
 async def start_auto_change_imgmodels():
@@ -709,15 +791,16 @@ async def on_ready():
         # If first time running bot
         if bot_settings.database.first_run:
             await first_run()
-        # Set the mode (chat / chat-instruct / instruct)
-        mode = bot_settings.settings['llmstate']['state']['mode']
-        logging.info(f'Initializing in {mode} mode')
-        # Get instruction template if not 'chat'
-        if mode != 'chat':
-            await load_instruct()
-        # Get character info if not 'instruct'
-        if mode != 'instruct':
-            await load_chat()
+        if textgenwebui_enabled:
+            # Set the mode (chat / chat-instruct / instruct)
+            mode = bot_settings.settings['llmstate']['state']['mode']
+            logging.info(f'Initializing in {mode} mode')
+            # Get instruction template if not 'chat'
+            if mode != 'chat':
+                await load_instruct()
+            # Get character info if not 'instruct'
+            if mode != 'instruct':
+                await load_chat()
         # Create main task processing queue
         client.loop.create_task(process_tasks())
         # Create background task processing queue
@@ -725,9 +808,10 @@ async def on_ready():
         # Start background task to sync the discord client tree
         await bg_task_queue.put(client.tree.sync())
         # Start background task to to change image models automatically
-        imgmodels_data = load_file('ad_discordbot/dict_imgmodels.yaml')
-        if imgmodels_data.get('settings', {}).get('auto_change_imgmodels', {}).get('enabled', False):
-            await bg_task_queue.put(start_auto_change_imgmodels())
+        if sd_enabled:
+            imgmodels_data = load_file('ad_discordbot/dict_imgmodels.yaml')
+            if imgmodels_data.get('settings', {}).get('auto_change_imgmodels', {}).get('enabled', False):
+                await bg_task_queue.put(start_auto_change_imgmodels())
         logging.info("Bot is ready")
     except Exception as e:
         logging.error(f"Error with on_ready: {e}")
@@ -745,21 +829,22 @@ except FileNotFoundError:
 
 @client.event
 async def on_raw_reaction_add(endorsed_img):
-    if not config.discord.get('starboard', {}).get('enabled', False):
+    if not config['discord'].get('starboard', {}).get('enabled', False):
         return
     channel = await client.fetch_channel(endorsed_img.channel_id)
     message = await channel.fetch_message(endorsed_img.message_id)
     total_reaction_count = 0
-    if config.discord['starboard'].get('emoji_specific', False):
-        for emoji in config.discord['starboard'].get('react_emojis', []):
+    if config['discord']['starboard'].get('emoji_specific', False):
+        for emoji in config['discord']['starboard'].get('react_emojis', []):
             reaction = discord.utils.get(message.reactions, emoji=emoji)
             if reaction:
                 total_reaction_count += reaction.count
     else:
         for reaction in message.reactions:
             total_reaction_count += reaction.count
-    if total_reaction_count >= config.discord['starboard'].get('min_reactions', 2):
-        target_channel = client.get_channel(config.discord['starboard'].get('target_channel_id', ''))
+    if total_reaction_count >= config['discord']['starboard'].get('min_reactions', 2):
+        target_channel = client.get_channel(config['discord']['starboard'].get('target_channel_id', ''))
+        if target_channel == 11111111111111111111: target_channel = None
         if target_channel and message.id not in starboard_posted_messages:
             # Create the message link
             message_link = f'[Original Message]({message.jump_url})'
@@ -778,9 +863,10 @@ async def on_raw_reaction_add(endorsed_img):
 
 # Post settings to a dedicated channel
 async def post_active_settings():
-    if config.discord['post_active_settings'].get('target_channel_id', ''):
-        channel = await client.fetch_channel(config.discord['post_active_settings']['target_channel_id'])
-        if channel:
+    if config['discord']['post_active_settings'].get('target_channel_id', ''):
+        target_channel = await client.fetch_channel(config['discord']['post_active_settings'].get('target_channel_id', None))
+        if target_channel == 11111111111111111111: target_channel = None
+        if target_channel:
             active_settings = load_file('ad_discordbot/activesettings.yaml')
             settings_content = yaml.dump(active_settings, default_flow_style=False)
             # Fetch and delete all existing messages in the channel
@@ -802,11 +888,11 @@ voice_client = None
 async def voice_channel(vc_setting):
     global voice_client
     # Start voice client if configured, and not explicitly deactivated in character settings
-    if voice_client is None and (vc_setting is None or vc_setting) and int(config.discord.get('tts_settings', {}).get('play_mode', 0)) != 1:
+    if voice_client is None and (vc_setting is None or vc_setting) and int(tts_settings.get('play_mode', 0)) != 1:
         try:
             if tts_client and tts_client in shared.args.extensions:
-                if config.discord['tts_settings'].get('voice_channel', ''):
-                    voice_channel = client.get_channel(config.discord['tts_settings']['voice_channel'])
+                if tts_settings.get('voice_channel', ''):
+                    voice_channel = client.get_channel(tts_settings['voice_channel'])
                     voice_client = await voice_channel.connect()
                 else:
                     logging.warning(f'Bot launched with {tts_client}, but no voice channel is specified in config.py')
@@ -861,7 +947,7 @@ def after_playback(file, error):
     if error:
         logging.info(f'Message from audio player: {error}, output: {error.stderr.decode("utf-8")}')
     # Check save mode setting
-    if int(config.discord['tts_settings'].get('save_mode', 0)) > 0:
+    if int(tts_settings.get('save_mode', 0)) > 0:
         try:
             os.remove(file)
         except Exception as e:
@@ -895,7 +981,7 @@ async def upload_tts_file(channel, tts_resp):
             tts_file = File(file, filename=filename)
         await channel.send(file=tts_file) # lossless .wav output
     else: # convert to mp3
-        bit_rate = int(config.discord['tts_settings'].get('mp3_bit_rate', 128))
+        bit_rate = int(tts_settings.get('mp3_bit_rate', 128))
         mp3_filename = os.path.splitext(filename)[0] + '.mp3'
         mp3_path = os.path.join(directory, mp3_filename)
         audio = AudioSegment.from_wav(tts_resp)
@@ -910,7 +996,7 @@ async def upload_tts_file(channel, tts_resp):
         # if save_mode > 0: os.remove(mp3_path) # currently broken
 
 async def process_tts_resp(channel, tts_resp):
-    play_mode = int(config.discord.get('tts_settings', {}).get('play_mode', 0))
+    play_mode = int(tts_settings.get('play_mode', 0))
     # Upload to interaction channel
     if play_mode > 0:
         await upload_tts_file(channel, tts_resp)
@@ -1589,13 +1675,10 @@ def get_braces_value(matched_text):
     return replaced_text
 
 async def dynamic_prompting(user, text, i=None):
-    try:
-        dynamic_prompting = config.dynamic_prompting_enabled
-    except:
+    if not config.get('dynamic_prompting_enabled', True):
         if not bot_settings.database.was_warned('dynaprompt'):
             bot_settings.database.update_was_warned('dynaprompt', 1)
-            logging.warning("'config.py' is missing a new parameter 'dynamic_prompting_enabled'. Defaulting to 'True' (enabled) ")
-        dynamic_prompting = True
+            logging.warning("'config.yaml' is missing a new parameter 'dynamic_prompting_enabled'. Defaulting to 'True' (enabled) ")
     if not dynamic_prompting:
         return text
     # copy text for adding comments
@@ -1644,7 +1727,7 @@ async def dynamic_prompting(user, text, i=None):
 async def on_message(i):
     try:
         text = i.clean_content # primarly converts @mentions to actual user names
-        if not bot_settings.behavior.bot_should_reply(i, text): return # Check that bot should reply or not
+        if textgenwebui_enabled and not bot_settings.behavior.bot_should_reply(i, text): return # Check that bot should reply or not
         if not bot_settings.database.main_channels and client.user.mentioned_in(i): await main(i) # if None, set channel as main
         # if @ mentioning bot, remove the @ mention from user prompt
         if text.startswith(f"@{client.user.display_name} "):
@@ -1668,31 +1751,30 @@ async def on_message_gen(user, channel, source, text, i):
         tags = match_tags(text, tags)
         # check if triggered to not respond with text
         should_gen_text = should_bot_do('should_gen_text', default=True, tags=tags)
-        if not should_gen_text:
-            should_gen_image = should_bot_do('should_gen_image', default=False, tags=tags)
-            if should_gen_image:
-                if await sd_online(channel):
-                    gen_warning = await channel.send(f'Bot was triggered by Tags to not respond with text.\n**Processing image generation using your input as the prompt ...**') # msg for if LLM model is unloaded
-                    asyncio.create_task(delete_message_after(gen_warning, 5))
-                llm_prompt = copy.copy(text)
-                await img_gen(user.name, channel, source, llm_prompt, params, i, tags)
+        if should_gen_text:
+            # build llm_payload with defaults
+            llm_payload = await initialize_llm_payload(user.name, text)
+            # make working copy of user's request (without @ mention)
+            llm_prompt = copy.copy(text)
+            # apply tags to prompt
+            llm_prompt, tags = process_tag_insertions(llm_prompt, tags)
+            # collect matched tag values
+            llm_payload_mods, formatting = collect_llm_tag_values(tags)
+            # apply tags relevant to LLM payload
+            llm_payload, llm_prompt, params = await process_llm_payload_tags(user.name, channel, llm_payload, llm_prompt, llm_payload_mods)
+            # apply formatting tags to LLM prompt
+            llm_prompt = process_tag_formatting(user.name, llm_prompt, formatting)
+            # offload to ai_gen queue
+            llm_payload['text'] = llm_prompt
+            await hybrid_llm_img_gen(user, channel, source, text, tags, llm_payload, params, i)
             return
-        # build llm_payload with defaults
-        llm_payload = await initialize_llm_payload(user.name, text)
-        # make working copy of user's request (without @ mention)
-        llm_prompt = copy.copy(text)
-        # apply tags to prompt
-        llm_prompt, tags = process_tag_insertions(llm_prompt, tags)
-        # collect matched tag values
-        llm_payload_mods, formatting = collect_llm_tag_values(tags)
-        # apply tags relevant to LLM payload
-        llm_payload, llm_prompt, params = await process_llm_payload_tags(user.name, channel, llm_payload, llm_prompt, llm_payload_mods)
-        # apply formatting tags to LLM prompt
-        llm_prompt = process_tag_formatting(user.name, llm_prompt, formatting)
-        # offload to ai_gen queue
-        llm_payload['text'] = llm_prompt
-        await hybrid_llm_img_gen(user, channel, source, text, tags, llm_payload, params, i)
-        return
+        should_gen_image = should_bot_do('should_gen_image', default=False, tags=tags)
+        if should_gen_image:
+            if await sd_online(channel):
+                gen_warning = await channel.send(f'Bot was triggered by Tags to not respond with text.\n**Processing image generation using your input as the prompt ...**') # msg for if LLM model is unloaded
+                asyncio.create_task(delete_message_after(gen_warning, 5))
+            llm_prompt = copy.copy(text)
+            await img_gen(user.name, channel, source, llm_prompt, params, i, tags)
     except Exception as e:
         logging.error(f"An error occurred processing on_message request: {e}")
 
@@ -1700,6 +1782,7 @@ async def hybrid_llm_img_gen(user, channel, source, text, tags, llm_payload, par
     try:
         change_embed = None
         img_gen_embed = None
+        tts_resp = None
         img_note = ''
         # Check params to see if an LLM model change/swap was triggered by Tags
         llmmodel_params = params.get('llmmodel', {})
@@ -1711,7 +1794,7 @@ async def hybrid_llm_img_gen(user, channel, source, text, tags, llm_payload, par
             if mode == 'swap': await change_embed.delete()                      # Delete embed before the second call
         # make a 'Prompting...' embed when generating text for an image response
         should_gen_image = should_bot_do('should_gen_image', default=False, tags=tags)
-        if should_gen_image:
+        if should_gen_image and textgenwebui_enabled:
             if await sd_online(channel):
                 if shared.model_name == 'None':
                     gen_warning = await channel.send('**Processing image generation using message as the image prompt ...**') # msg for if LLM model is unloaded
@@ -1721,32 +1804,34 @@ async def hybrid_llm_img_gen(user, channel, source, text, tags, llm_payload, par
                     img_embed_info.description = " "
                     img_gen_embed = await channel.send(embed=img_embed_info)
         # if no LLM model is loaded, notify that no text will be generated     
-        if shared.model_name == 'None':
-            if not bot_settings.database.was_warned('no_llmmodel'):
-                bot_settings.database.update_was_warned('no_llmmodel', 1)
-                warn_msg = await channel.send(f'(Cannot process text request: No LLM model is currently loaded. Use "/llmmodel" to load a model.)')
-                asyncio.create_task(delete_message_after(warn_msg, 10))
-                logging.warning(f'Bot tried to generate text for {user}, but no LLM model was loaded')
-        # generate text with textgen-webui
-        last_resp, tts_resp = await llm_gen(llm_payload)
-        # If no text was generated, treat user input at the response
-        if last_resp is not None:
-            logging.info("reply sent: \"" + user.name + ": {'text': '" + llm_payload["text"] + "', 'response': '" + last_resp + "'}\"")
-        else:
-            if should_gen_image: last_resp = copy.copy(text)
-            else: return
-        # if LLM model swapping was triggered
-        if mode == 'swap':
-            params['llmmodel']['llmmodel_name'] = orig_llmmodel
-            change_embed = await change_llmmodel_task(user, channel, params)   # Swap LLM Model back
-            if change_embed: await change_embed.delete()                                # Delete embed again after the second call
+        if textgenwebui_enabled:
+            if shared.model_name == 'None':
+                if not bot_settings.database.was_warned('no_llmmodel'):
+                    bot_settings.database.update_was_warned('no_llmmodel', 1)
+                    warn_msg = await channel.send(f'(Cannot process text request: No LLM model is currently loaded. Use "/llmmodel" to load a model.)')
+                    asyncio.create_task(delete_message_after(warn_msg, 10))
+                    logging.warning(f'Bot tried to generate text for {user}, but no LLM model was loaded')
+            # generate text with textgen-webui
+            last_resp, tts_resp = await llm_gen(llm_payload)
+            # If no text was generated, treat user input at the response
+            if last_resp is not None:
+                logging.info("reply sent: \"" + user.name + ": {'text': '" + llm_payload["text"] + "', 'response': '" + last_resp + "'}\"")
+            else:
+                if should_gen_image and sd_enabled: last_resp = copy.copy(text)
+                else: return
+            # if LLM model swapping was triggered
+            if mode == 'swap':
+                params['llmmodel']['llmmodel_name'] = orig_llmmodel
+                change_embed = await change_llmmodel_task(user, channel, params)    # Swap LLM Model back
+                if change_embed: await change_embed.delete()                        # Delete embed again after the second call
         # process image generation (A1111 / Forge)
-        tags = match_img_tags(last_resp, tags)
-        if not should_gen_image:
-            should_gen_image = should_bot_do('should_gen_image', default=False, tags=tags) # Check again post-LLM
-        if should_gen_image:
-            if img_gen_embed: await img_gen_embed.delete()
-            await img_gen(user, channel, source, last_resp, params, i, tags)
+        if sd_enabled:
+            tags = match_img_tags(last_resp, tags)
+            if not should_gen_image:
+                should_gen_image = should_bot_do('should_gen_image', default=False, tags=tags) # Check again post-LLM
+            if should_gen_image:
+                if img_gen_embed: await img_gen_embed.delete()
+                await img_gen(user, channel, source, last_resp, params, i, tags)
         if tts_resp: await process_tts_resp(channel, tts_resp)
         mention_resp = update_mention(user.mention, last_resp) # @mention non-consecutive users
         should_send_text = should_bot_do('should_send_text', default=True, tags=tags)
@@ -1966,7 +2051,7 @@ async def change_imgmodel_task(user, channel, params):
             change_embed_info.description = f'**{imgmodel_name}**'
             change_embed = await channel.send(embed=change_embed_info)
             logging.info(f"Image model changed to: {imgmodel_name}")
-        if config.discord['post_active_settings']['enabled']:
+        if config['discord']['post_active_settings']['enabled']:
             await bg_task_queue.put(post_active_settings())
     except Exception as e:
         logging.error(f"Error changing Img model: {e}")
@@ -2051,6 +2136,12 @@ async def change_char_task(user, channel, source, params):
 #################################################################
 def should_bot_do(key, default, tags={}):   # Used to check if should:
     try:                                    # - generate text
+        if not sd_enabled:
+            if key == 'should_gen_image' or key == 'should_send_image':
+                return False
+        if not textgenwebui_enabled:
+            if key == 'should_gen_text' or key == 'should_send_text':
+                return False
         matches = tags.get('matches', {})   # - generate image
         if matches:                         # - send text response
             for item in matches:            # - send image response
@@ -2068,7 +2159,7 @@ def should_bot_do(key, default, tags={}):   # Used to check if should:
 # For @ mentioning users who were not last replied to
 previous_user_id = ''
 
-def update_mention(user_id, last_resp):
+def update_mention(user_id, last_resp=''):
     global previous_user_id
     mention_resp = copy.copy(last_resp)                    
     if user_id != previous_user_id:
@@ -2405,21 +2496,21 @@ def clean_img_payload(img_payload):
                     logging.warning(f'layerdiffuse is not known to be compatible with "{SD_CLIENT}". Not applying layerdiffuse...')
                     bot_settings.database.update_was_warned('layerdiffuse', 1)
             # Clean ControlNet
-            if not config.sd['extensions'].get('controlnet_enabled', False):
+            if not config['sd']['extensions'].get('controlnet_enabled', False):
                 del img_payload['alwayson_scripts']['controlnet'] # Delete all 'controlnet' keys if disabled by config
             # Clean ReActor
-            if not config.sd['extensions'].get('reactor_enabled', False):
+            if not config['sd']['extensions'].get('reactor_enabled', False):
                 del img_payload['alwayson_scripts']['reactor'] # Delete all 'reactor' keys if disabled by config
             else:
                 img_payload['alwayson_scripts']['reactor']['args'] = list(img_payload['alwayson_scripts']['reactor']['args'].values()) # convert dictionary to list
             # Clean Forge Couple
-            if not config.sd['extensions'].get('forgecouple_enabled', False) or img_payload.get('init_images', False):
+            if not config['sd']['extensions'].get('forgecouple_enabled', False) or img_payload.get('init_images', False):
                 del img_payload['alwayson_scripts']['forge_couple'] # Delete all 'forge_couple' keys if disabled by config
             else:
                 img_payload['alwayson_scripts']['forge_couple']['args'] = list(img_payload['alwayson_scripts']['forge_couple']['args'].values()) # convert dictionary to list
                 img_payload['alwayson_scripts']['forge couple'] = img_payload['alwayson_scripts'].pop('forge_couple') # Add the required space between "forge" and "couple" ("forge couple")
             # Clean layerdiffuse
-            if not config.sd['extensions'].get('layerdiffuse_enabled', False):
+            if not config['sd']['extensions'].get('layerdiffuse_enabled', False):
                 del img_payload['alwayson_scripts']['layerdiffuse'] # Delete all 'layerdiffuse' keys if disabled by config
             else:
                 img_payload['alwayson_scripts']['layerdiffuse']['args'] = list(img_payload['alwayson_scripts']['layerdiffuse']['args'].values()) # convert dictionary to list
@@ -2445,13 +2536,13 @@ def apply_loractl(tags):
                 bot_settings.database.update_was_warned('loractl', 1)
                 logging.warning(f'loractl is not known to be compatible with "{SD_CLIENT}". Not applying loractl...')
             return tags
-        scaling_settings = [v for k, v in config.sd.get('extensions', {}).get('lrctl', {}).items() if 'scaling' in k]
+        scaling_settings = [v for k, v in config['sd'].get('extensions', {}).get('lrctl', {}).items() if 'scaling' in k]
         scaling_settings = scaling_settings if scaling_settings else ['']
         # Flatten the matches dictionary values to get a list of all tags (including those within tuples)
         matched_tags = [tag if isinstance(tag, dict) else tag[0] for tag in tags['matches']]
         # Filter the matched tags to include only those with certain patterns in their text fields
         lora_tags = [tag for tag in matched_tags if any(re.findall(r'<lora:[^:]+:[^>]+>', text) for text in (tag.get('positive_prompt', ''), tag.get('positive_prompt_prefix', ''), tag.get('positive_prompt_suffix', '')))]
-        if len(lora_tags) >= config.sd['extensions']['lrctl']['min_loras']:
+        if len(lora_tags) >= config['sd']['extensions']['lrctl']['min_loras']:
             for index, tag in enumerate(lora_tags):
                 # Determine the key with a non-empty value among the specified keys
                 used_key = next((key for key in ['positive_prompt', 'positive_prompt_prefix', 'positive_prompt_suffix'] if tag.get(key, '')), None)
@@ -2465,7 +2556,7 @@ def apply_loractl(tags):
                                 lora_weight = float(lora_weight_match.group())
                                 # Selecting the appropriate scaling based on the index
                                 scaling_key = f'lora_{index + 1}_scaling' if index+1 < len(scaling_settings) else 'additional_loras_scaling'
-                                scaling_values = config.sd.get('extensions', {}).get('lrctl', {}).get(scaling_key, '')
+                                scaling_values = config['sd'].get('extensions', {}).get('lrctl', {}).get(scaling_key, '')
                                 if scaling_values:
                                     scaling_factors = [round(float(factor.split('@')[0]) * lora_weight, 2) for factor in scaling_values.split(',')]
                                     scaling_steps = [float(step.split('@')[1]) for step in scaling_values.split(',')]
@@ -2712,19 +2803,19 @@ async def process_img_payload_tags(img_payload, mods, params):
                 logging.info(f"[TAGS] Applied Param Variances: '{processed_params}'")
                 sum_update_dict(img_payload, processed_params)
             # Controlnet handling
-            if controlnet and config.sd['extensions'].get('controlnet_enabled', False):       
+            if controlnet and config['sd']['extensions'].get('controlnet_enabled', False):       
                 img_payload['alwayson_scripts']['controlnet']['args'] = controlnet
             # forge_couple handling
-            if forge_couple and config.sd['extensions'].get('forgecouple_enabled', False):
+            if forge_couple and config['sd']['extensions'].get('forgecouple_enabled', False):
                 img_payload['alwayson_scripts']['forge_couple']['args'].update(forge_couple)
                 img_payload['alwayson_scripts']['forge_couple']['args']['enable'] = True
                 logging.info(f"[TAGS] Enabled forge_couple: {forge_couple}")
             # layerdiffuse handling
-            if layerdiffuse and config.sd['extensions'].get('layerdiffuse_enabled', False):
+            if layerdiffuse and config['sd']['extensions'].get('layerdiffuse_enabled', False):
                 img_payload['alwayson_scripts']['layerdiffuse']['args'].update(layerdiffuse)
                 logging.info(f"[TAGS] Enabled layerdiffuse: {layerdiffuse}")
             # ReActor face swap handling
-            if reactor and config.sd['extensions'].get('reactor_enabled', False):
+            if reactor and config['sd']['extensions'].get('reactor_enabled', False):
                 img_payload['alwayson_scripts']['reactor']['args'].update(reactor)
             # Img2Img handling
             if img2img:
@@ -2909,7 +3000,7 @@ async def img_gen(user, channel, source, img_prompt, params, i=None, tags={}):
         # Apply tags relevant to Img gen
         img_payload, imgmodel_params, params = await process_img_payload_tags(img_payload, img_payload_mods, params)
         # Process loractl
-        if config.sd['extensions'].get('lrctl', {}).get('enabled', False):
+        if config['sd']['extensions'].get('lrctl', {}).get('enabled', False):
             tags = apply_loractl(tags)
         # Apply tags relevant to Img prompts
         img_payload = process_img_prompt_tags(img_payload, tags)
@@ -3034,205 +3125,206 @@ async def get_imgcmd_options():
     except Exception as e:
         logging.error(f"An error occurred while building options for /image: {e}")
 
-size_options, style_options = asyncio.run(get_imgcmd_options())
-size_choices, style_choices = asyncio.run(get_imgcmd_choices(size_options, style_options))
+if sd_enabled:
+    size_options, style_options = asyncio.run(get_imgcmd_options())
+    size_choices, style_choices = asyncio.run(get_imgcmd_choices(size_options, style_options))
 
-async def ext_online(ext, endpoint):
-    if config.sd['extensions'].get(f'{ext}_enabled', False):
+    async def ext_online(ext, endpoint):
+        if config['sd']['extensions'].get(f'{ext}_enabled', False):
+            try:
+                online = await sd_api(endpoint=endpoint, method='get', json=None)
+                if online: return True
+                else: return False
+            except:
+                logging.warning(f"{ext} is enabled in config.py, but was not responsive from {SD_CLIENT} API. Omitting option from '/image' command.")
+        return False
+
+    cnet_online = asyncio.run(ext_online('controlnet', '/controlnet/model_list'))
+    reactor_online = asyncio.run(ext_online('reactor', '/reactor/models'))
+
+    if cnet_online and reactor_online:
+        @client.hybrid_command(name="image", description=f'Generate an image using {SD_CLIENT}')
+        @app_commands.choices(size=size_choices)
+        @app_commands.choices(style=style_choices)
+        async def image(ctx: discord.ext.commands.Context, prompt: str, size: typing.Optional[app_commands.Choice[str]], style: typing.Optional[app_commands.Choice[str]], neg_prompt: typing.Optional[str], img2img: typing.Optional[discord.Attachment], img2img_mask: typing.Optional[discord.Attachment],
+            face_swap: typing.Optional[discord.Attachment], cnet: typing.Optional[discord.Attachment]):
+            user_selections = {"prompt": prompt, "size": size.value if size else None, "style": style.value if style else None, "neg_prompt": neg_prompt, "img2img": img2img if img2img else None, "img2img_mask": img2img_mask if img2img_mask else None,
+            "face_swap": face_swap if face_swap else None, "cnet": cnet if cnet else None}
+            await process_image(ctx, user_selections)
+    elif cnet_online and not reactor_online:
+        @client.hybrid_command(name="image", description=f'Generate an image using {SD_CLIENT}')
+        @app_commands.choices(size=size_choices)
+        @app_commands.choices(style=style_choices)
+        async def image(ctx: discord.ext.commands.Context, prompt: str, size: typing.Optional[app_commands.Choice[str]], style: typing.Optional[app_commands.Choice[str]], neg_prompt: typing.Optional[str], img2img: typing.Optional[discord.Attachment], img2img_mask: typing.Optional[discord.Attachment],
+            cnet: typing.Optional[discord.Attachment]):
+            user_selections = {"prompt": prompt, "size": size.value if size else None, "style": style.value if style else None, "neg_prompt": neg_prompt, "img2img": img2img if img2img else None, "img2img_mask": img2img_mask if img2img_mask else None,
+            "cnet": cnet if cnet else None}
+            await process_image(ctx, user_selections)
+    elif reactor_online and not cnet_online:
+        @client.hybrid_command(name="image", description=f'Generate an image using {SD_CLIENT}')
+        @app_commands.choices(size=size_choices)
+        @app_commands.choices(style=style_choices)
+        async def image(ctx: discord.ext.commands.Context, prompt: str, size: typing.Optional[app_commands.Choice[str]], style: typing.Optional[app_commands.Choice[str]], neg_prompt: typing.Optional[str], img2img: typing.Optional[discord.Attachment], img2img_mask: typing.Optional[discord.Attachment], 
+            face_swap: typing.Optional[discord.Attachment]):
+            user_selections = {"prompt": prompt, "size": size.value if size else None, "style": style.value if style else None, "neg_prompt": neg_prompt, "img2img": img2img if img2img else None, "img2img_mask": img2img_mask if img2img_mask else None,
+            "face_swap": face_swap if face_swap else None}
+            await process_image(ctx, user_selections)
+    else:
+        @client.hybrid_command(name="image", description=f'Generate an image using {SD_CLIENT}')
+        @app_commands.choices(size=size_choices)
+        @app_commands.choices(style=style_choices)
+        async def image(ctx: discord.ext.commands.Context, prompt: str,  size: typing.Optional[app_commands.Choice[str]], style: typing.Optional[app_commands.Choice[str]], neg_prompt: typing.Optional[str], img2img: typing.Optional[discord.Attachment], img2img_mask: typing.Optional[discord.Attachment]):
+            user_selections = {"prompt": prompt, "size": size.value if size else None, "style": style.value if style else None, "neg_prompt": neg_prompt, "img2img": img2img if img2img else None, "img2img_mask": img2img_mask if img2img_mask else None}
+            await process_image(ctx, user_selections)
+
+    async def process_image(ctx, selections):
+        # Do not process if SD WebUI is offline
+        if not await sd_online(ctx.channel):
+            await ctx.defer()
+            return
+        # User inputs from /image command
+        prompt = selections.get('prompt', '')  
+        size = selections.get('size', None)
+        style = selections.get('style', None)
+        neg_prompt = selections.get('neg_prompt', '')
+        img2img = selections.get('img2img', None)
+        img2img_mask = selections.get('img2img_mask', None)
+        face_swap = selections.get('face_swap', None)
+        cnet = selections.get('cnet', None)
+        # Defaults
+        endpoint = '/sdapi/v1/txt2img'
+        neg_style_prompt = ""
+        size_dict = {}
+        faceswapimg = None
+        img2img_dict = {}
+        cnet_dict = {}
         try:
-            online = await sd_api(endpoint=endpoint, method='get', json=None)
-            if online: return True
-            else: return False
-        except:
-            logging.warning(f"{ext} is enabled in config.py, but was not responsive from {SD_CLIENT} API. Omitting option from '/image' command.")
-    return False
-
-cnet_online = asyncio.run(ext_online('controlnet', '/controlnet/model_list'))
-reactor_online = asyncio.run(ext_online('reactor', '/reactor/models'))
-
-if cnet_online and reactor_online:
-    @client.hybrid_command(name="image", description=f'Generate an image using {SD_CLIENT}')
-    @app_commands.choices(size=size_choices)
-    @app_commands.choices(style=style_choices)
-    async def image(ctx: discord.ext.commands.Context, prompt: str, size: typing.Optional[app_commands.Choice[str]], style: typing.Optional[app_commands.Choice[str]], neg_prompt: typing.Optional[str], img2img: typing.Optional[discord.Attachment], img2img_mask: typing.Optional[discord.Attachment],
-        face_swap: typing.Optional[discord.Attachment], cnet: typing.Optional[discord.Attachment]):
-        user_selections = {"prompt": prompt, "size": size.value if size else None, "style": style.value if style else None, "neg_prompt": neg_prompt, "img2img": img2img if img2img else None, "img2img_mask": img2img_mask if img2img_mask else None,
-        "face_swap": face_swap if face_swap else None, "cnet": cnet if cnet else None}
-        await process_image(ctx, user_selections)
-elif cnet_online and not reactor_online:
-    @client.hybrid_command(name="image", description=f'Generate an image using {SD_CLIENT}')
-    @app_commands.choices(size=size_choices)
-    @app_commands.choices(style=style_choices)
-    async def image(ctx: discord.ext.commands.Context, prompt: str, size: typing.Optional[app_commands.Choice[str]], style: typing.Optional[app_commands.Choice[str]], neg_prompt: typing.Optional[str], img2img: typing.Optional[discord.Attachment], img2img_mask: typing.Optional[discord.Attachment],
-        cnet: typing.Optional[discord.Attachment]):
-        user_selections = {"prompt": prompt, "size": size.value if size else None, "style": style.value if style else None, "neg_prompt": neg_prompt, "img2img": img2img if img2img else None, "img2img_mask": img2img_mask if img2img_mask else None,
-        "cnet": cnet if cnet else None}
-        await process_image(ctx, user_selections)
-elif reactor_online and not cnet_online:
-    @client.hybrid_command(name="image", description=f'Generate an image using {SD_CLIENT}')
-    @app_commands.choices(size=size_choices)
-    @app_commands.choices(style=style_choices)
-    async def image(ctx: discord.ext.commands.Context, prompt: str, size: typing.Optional[app_commands.Choice[str]], style: typing.Optional[app_commands.Choice[str]], neg_prompt: typing.Optional[str], img2img: typing.Optional[discord.Attachment], img2img_mask: typing.Optional[discord.Attachment], 
-        face_swap: typing.Optional[discord.Attachment]):
-        user_selections = {"prompt": prompt, "size": size.value if size else None, "style": style.value if style else None, "neg_prompt": neg_prompt, "img2img": img2img if img2img else None, "img2img_mask": img2img_mask if img2img_mask else None,
-        "face_swap": face_swap if face_swap else None}
-        await process_image(ctx, user_selections)
-else:
-    @client.hybrid_command(name="image", description=f'Generate an image using {SD_CLIENT}')
-    @app_commands.choices(size=size_choices)
-    @app_commands.choices(style=style_choices)
-    async def image(ctx: discord.ext.commands.Context, prompt: str,  size: typing.Optional[app_commands.Choice[str]], style: typing.Optional[app_commands.Choice[str]], neg_prompt: typing.Optional[str], img2img: typing.Optional[discord.Attachment], img2img_mask: typing.Optional[discord.Attachment]):
-        user_selections = {"prompt": prompt, "size": size.value if size else None, "style": style.value if style else None, "neg_prompt": neg_prompt, "img2img": img2img if img2img else None, "img2img_mask": img2img_mask if img2img_mask else None}
-        await process_image(ctx, user_selections)
-
-async def process_image(ctx, selections):
-    # Do not process if SD WebUI is offline
-    if not await sd_online(ctx.channel):
-        await ctx.defer()
-        return
-    # User inputs from /image command
-    prompt = selections.get('prompt', '')  
-    size = selections.get('size', None)
-    style = selections.get('style', None)
-    neg_prompt = selections.get('neg_prompt', '')
-    img2img = selections.get('img2img', None)
-    img2img_mask = selections.get('img2img_mask', None)
-    face_swap = selections.get('face_swap', None)
-    cnet = selections.get('cnet', None)
-    # Defaults
-    endpoint = '/sdapi/v1/txt2img'
-    neg_style_prompt = ""
-    size_dict = {}
-    faceswapimg = None
-    img2img_dict = {}
-    cnet_dict = {}
-    try:
-        prompt = await dynamic_prompting(ctx.author, prompt, i=None)
-        message = f"**Prompt:** {prompt}"
-        if size:
-            selected_size = next((option for option in size_options if option['name'] == size), None)
-            if selected_size:
-                size_dict['width'] = selected_size.get('width')
-                size_dict['height'] = selected_size.get('height')
-            message += f" | **Size:** {size}"
-        if style:
-            selected_style_option = next((option for option in style_options if option['name'] == style), None)
-            if selected_style_option:
-                prompt = selected_style_option.get('positive').format(prompt)
-                neg_style_prompt = selected_style_option.get('negative')
-            message += f" | **Style:** {style}"
-        if neg_prompt:
-            neg_style_prompt = f"{neg_prompt}, {neg_style_prompt}"
-            message += f" | **Negative Prompt:** {neg_prompt}"
-        if img2img:
-            async def process_image_img2img(img2img, img2img_dict, endpoint, message):
-                #Convert attached image to base64
-                attached_i2i_img = await img2img.read()
-                i2i_image = base64.b64encode(attached_i2i_img).decode('utf-8')
-                img2img_dict['image'] = i2i_image
-                # Ask user to select a Denoise Strength
-                denoise_options = []
-                for value in [round(0.05 * index, 2) for index in range(int(1 / 0.05) + 1)]:
-                    denoise_options.append(discord.SelectOption(label=str(value), value=str(value), default=True if value == 0.40 else False))
-                denoise_options = denoise_options[:25]
-                denoise_select = discord.ui.Select(custom_id="denoise", options=denoise_options)
-                # Send Denoise Strength select menu in a view
-                submit_button = discord.ui.Button(style=discord.ButtonStyle.primary, label="Submit")
-                view = discord.ui.View()
-                view.add_item(denoise_select)
-                view.add_item(submit_button)
-                select_message = await ctx.send("Select denoise strength for img2img:", view=view, ephemeral=True)
-                interaction = await client.wait_for("interaction", check=lambda interaction: interaction.message.id == select_message.id)
-                denoising_strength = interaction.data.get("values", ["0.40"])[0]
-                img2img_dict['denoising_strength'] = float(denoising_strength)
-                await interaction.response.defer() # defer response for this interaction
-                await select_message.delete()
-                endpoint = '/sdapi/v1/img2img' # Change API endpoint to img2img
-                message += f" | **Img2Img**, denoise strength: {denoising_strength}"
-                return img2img_dict, endpoint, message
-            try:
-                img2img_dict, endpoint, message = await process_image_img2img(img2img, img2img_dict, endpoint, message)
-            except Exception as e:
-                logging.error(f"An error occurred while configuring Img2Img for /image command: {e}")
-        if img2img_mask:
+            prompt = await dynamic_prompting(ctx.author, prompt, i=None)
+            message = f"**Prompt:** {prompt}"
+            if size:
+                selected_size = next((option for option in size_options if option['name'] == size), None)
+                if selected_size:
+                    size_dict['width'] = selected_size.get('width')
+                    size_dict['height'] = selected_size.get('height')
+                message += f" | **Size:** {size}"
+            if style:
+                selected_style_option = next((option for option in style_options if option['name'] == style), None)
+                if selected_style_option:
+                    prompt = selected_style_option.get('positive').format(prompt)
+                    neg_style_prompt = selected_style_option.get('negative')
+                message += f" | **Style:** {style}"
+            if neg_prompt:
+                neg_style_prompt = f"{neg_prompt}, {neg_style_prompt}"
+                message += f" | **Negative Prompt:** {neg_prompt}"
             if img2img:
-                attached_img2img_mask_img = await img2img_mask.read()
-                img2img_mask_img = base64.b64encode(attached_img2img_mask_img).decode('utf-8')
-                img2img_dict['mask'] = img2img_mask_img
-                message += f" | **Inpainting:** Image Provided"
-            else:
-                await channel.send("Inpainting requires im2img. Not applying img2img_mask mask...", ephemeral=True)
-        if face_swap:
-            attached_face_img = await face_swap.read()
-            faceswapimg = base64.b64encode(attached_face_img).decode('utf-8')
-            message += f" | **Face Swap:** Image Provided"
-        if cnet:
-            async def process_image_controlnet(cnet, cnet_dict, message):
-                # Convert attached image to base64
-                attached_cnet_img = await cnet.read()
-                cnetimage = base64.b64encode(attached_cnet_img).decode('utf-8')
-                cnet_dict['image'] = cnetimage
-                # Ask user for model
-                options = load_file('ad_discordbot/dict_cmdoptions.yaml')
-                options = dict(options)
-                cnet_options = options.get('controlnet', {})
-                cnet_model_options = [discord.SelectOption(label=option['name'], value=option['name']) for option in cnet_options]
-                cnet_model_select = discord.ui.Select(custom_id="cnet_model_select", placeholder="Select ControlNet Model", options=cnet_model_options)
-                # Send ControlNet model select menu in a view
-                view = discord.ui.View()
-                view.add_item(cnet_model_select)
-                # Wait for user selection
-                select_message = await ctx.send("Select ControlNet Model:", view=view, ephemeral=True)
-                interaction = await client.wait_for("interaction", check=lambda interaction: interaction.message.id == select_message.id)
-                cnet_model = interaction.data["values"][0]
-                selected_cnet_option = next((option for option in cnet_options if option['name'] == cnet_model), None)
-                if selected_cnet_option:
-                    cnet_dict['model'] = selected_cnet_option.get('model')
-                    cnet_dict['module'] = selected_cnet_option.get('module')
-                    cnet_dict['guidance_end'] = selected_cnet_option.get('guidance_end')
-                    cnet_dict['weight'] = selected_cnet_option.get('weight')
-                    cnet_dict['enabled'] = True
-                    message += f" | **ControlNet:** Model: {cnet_model}"
-                await interaction.response.defer() # defer response for this interaction
-                await select_message.delete()
-                # Ask about map
-                cnet_map_select = discord.ui.Select(custom_id="cnet_map_select", options=[
-                        discord.SelectOption(label="No, my image is not a ControlNet map", value="no_map", default=True),
-                        discord.SelectOption(label="Yes, my image is a map on a black background", value="map"),
-                        discord.SelectOption(label="Yes, my image is a map on a white background", value="invert_map")])
-                submit_button = discord.ui.Button(style=discord.ButtonStyle.primary, label="Submit")
-                view = discord.ui.View()
-                view.add_item(cnet_map_select)
-                view.add_item(submit_button)
-                # Wait for user selection
-                select_message = await ctx.send('Is your ControlNet input image a "map"?', view=view, ephemeral=True)
-                interaction = await client.wait_for("interaction", check=lambda interaction: interaction.message.id == select_message.id)
-                selected_cnet_map = interaction.data.get("values", ["no_map"])[0]
-                if not selected_cnet_map:
-                    selected_cnet_map = "no_map"
-                    cnet_dict['module'] = selected_cnet_option.get('module')
-                    message += f", Module: {cnet_dict['module']}"
+                async def process_image_img2img(img2img, img2img_dict, endpoint, message):
+                    #Convert attached image to base64
+                    attached_i2i_img = await img2img.read()
+                    i2i_image = base64.b64encode(attached_i2i_img).decode('utf-8')
+                    img2img_dict['image'] = i2i_image
+                    # Ask user to select a Denoise Strength
+                    denoise_options = []
+                    for value in [round(0.05 * index, 2) for index in range(int(1 / 0.05) + 1)]:
+                        denoise_options.append(discord.SelectOption(label=str(value), value=str(value), default=True if value == 0.40 else False))
+                    denoise_options = denoise_options[:25]
+                    denoise_select = discord.ui.Select(custom_id="denoise", options=denoise_options)
+                    # Send Denoise Strength select menu in a view
+                    submit_button = discord.ui.Button(style=discord.ButtonStyle.primary, label="Submit")
+                    view = discord.ui.View()
+                    view.add_item(denoise_select)
+                    view.add_item(submit_button)
+                    select_message = await ctx.send("Select denoise strength for img2img:", view=view, ephemeral=True)
+                    interaction = await client.wait_for("interaction", check=lambda interaction: interaction.message.id == select_message.id)
+                    denoising_strength = interaction.data.get("values", ["0.40"])[0]
+                    img2img_dict['denoising_strength'] = float(denoising_strength)
+                    await interaction.response.defer() # defer response for this interaction
+                    await select_message.delete()
+                    endpoint = '/sdapi/v1/img2img' # Change API endpoint to img2img
+                    message += f" | **Img2Img**, denoise strength: {denoising_strength}"
+                    return img2img_dict, endpoint, message
+                try:
+                    img2img_dict, endpoint, message = await process_image_img2img(img2img, img2img_dict, endpoint, message)
+                except Exception as e:
+                    logging.error(f"An error occurred while configuring Img2Img for /image command: {e}")
+            if img2img_mask:
+                if img2img:
+                    attached_img2img_mask_img = await img2img_mask.read()
+                    img2img_mask_img = base64.b64encode(attached_img2img_mask_img).decode('utf-8')
+                    img2img_dict['mask'] = img2img_mask_img
+                    message += f" | **Inpainting:** Image Provided"
                 else:
-                    if selected_cnet_map == "map":
-                        cnet_dict['module'] = "none"
-                    elif selected_cnet_map == "invert_map":
-                        cnet_dict['module'] = "invert (from white bg & black line)"
-                    message += f", Map: {selected_cnet_map}"
-                await interaction.response.defer() # defer response for this interaction
-                await select_message.delete()
-                return cnet_dict, message
-            try:
-                cnet_dict, message = await process_image_controlnet(cnet, cnet_dict, message)
-            except Exception as e:
-                logging.error(f"An error occurred while configuring ControlNet for /image command: {e}")
+                    await channel.send("Inpainting requires im2img. Not applying img2img_mask mask...", ephemeral=True)
+            if face_swap:
+                attached_face_img = await face_swap.read()
+                faceswapimg = base64.b64encode(attached_face_img).decode('utf-8')
+                message += f" | **Face Swap:** Image Provided"
+            if cnet:
+                async def process_image_controlnet(cnet, cnet_dict, message):
+                    # Convert attached image to base64
+                    attached_cnet_img = await cnet.read()
+                    cnetimage = base64.b64encode(attached_cnet_img).decode('utf-8')
+                    cnet_dict['image'] = cnetimage
+                    # Ask user for model
+                    options = load_file('ad_discordbot/dict_cmdoptions.yaml')
+                    options = dict(options)
+                    cnet_options = options.get('controlnet', {})
+                    cnet_model_options = [discord.SelectOption(label=option['name'], value=option['name']) for option in cnet_options]
+                    cnet_model_select = discord.ui.Select(custom_id="cnet_model_select", placeholder="Select ControlNet Model", options=cnet_model_options)
+                    # Send ControlNet model select menu in a view
+                    view = discord.ui.View()
+                    view.add_item(cnet_model_select)
+                    # Wait for user selection
+                    select_message = await ctx.send("Select ControlNet Model:", view=view, ephemeral=True)
+                    interaction = await client.wait_for("interaction", check=lambda interaction: interaction.message.id == select_message.id)
+                    cnet_model = interaction.data["values"][0]
+                    selected_cnet_option = next((option for option in cnet_options if option['name'] == cnet_model), None)
+                    if selected_cnet_option:
+                        cnet_dict['model'] = selected_cnet_option.get('model')
+                        cnet_dict['module'] = selected_cnet_option.get('module')
+                        cnet_dict['guidance_end'] = selected_cnet_option.get('guidance_end')
+                        cnet_dict['weight'] = selected_cnet_option.get('weight')
+                        cnet_dict['enabled'] = True
+                        message += f" | **ControlNet:** Model: {cnet_model}"
+                    await interaction.response.defer() # defer response for this interaction
+                    await select_message.delete()
+                    # Ask about map
+                    cnet_map_select = discord.ui.Select(custom_id="cnet_map_select", options=[
+                            discord.SelectOption(label="No, my image is not a ControlNet map", value="no_map", default=True),
+                            discord.SelectOption(label="Yes, my image is a map on a black background", value="map"),
+                            discord.SelectOption(label="Yes, my image is a map on a white background", value="invert_map")])
+                    submit_button = discord.ui.Button(style=discord.ButtonStyle.primary, label="Submit")
+                    view = discord.ui.View()
+                    view.add_item(cnet_map_select)
+                    view.add_item(submit_button)
+                    # Wait for user selection
+                    select_message = await ctx.send('Is your ControlNet input image a "map"?', view=view, ephemeral=True)
+                    interaction = await client.wait_for("interaction", check=lambda interaction: interaction.message.id == select_message.id)
+                    selected_cnet_map = interaction.data.get("values", ["no_map"])[0]
+                    if not selected_cnet_map:
+                        selected_cnet_map = "no_map"
+                        cnet_dict['module'] = selected_cnet_option.get('module')
+                        message += f", Module: {cnet_dict['module']}"
+                    else:
+                        if selected_cnet_map == "map":
+                            cnet_dict['module'] = "none"
+                        elif selected_cnet_map == "invert_map":
+                            cnet_dict['module'] = "invert (from white bg & black line)"
+                        message += f", Map: {selected_cnet_map}"
+                    await interaction.response.defer() # defer response for this interaction
+                    await select_message.delete()
+                    return cnet_dict, message
+                try:
+                    cnet_dict, message = await process_image_controlnet(cnet, cnet_dict, message)
+                except Exception as e:
+                    logging.error(f"An error occurred while configuring ControlNet for /image command: {e}")
 
-        params = {'neg_prompt': neg_style_prompt, 'size': size_dict, 'img2img': img2img_dict, 'face_swap': faceswapimg, 'controlnet': cnet_dict, 'endpoint': endpoint, 'message': message}
-        await ireply(ctx, 'image') # send a response msg to the user
-        # offload to ai_gen queue
-        queue_item = {'user': ctx.author, 'channel': ctx.channel, 'source': 'image', 'text': prompt, 'params': params}
-        await task_queue.put(queue_item)
-    except Exception as e:
-        logging.error(f"An error occurred in image(): {e}")
+            params = {'neg_prompt': neg_style_prompt, 'size': size_dict, 'img2img': img2img_dict, 'face_swap': faceswapimg, 'controlnet': cnet_dict, 'endpoint': endpoint, 'message': message}
+            await ireply(ctx, 'image') # send a response msg to the user
+            # offload to ai_gen queue
+            queue_item = {'user': ctx.author, 'channel': ctx.channel, 'source': 'image', 'text': prompt, 'params': params}
+            await task_queue.put(queue_item)
+        except Exception as e:
+            logging.error(f"An error occurred in image(): {e}")
 
 #################################################################
 ######################### MISC COMMANDS #########################
@@ -3275,37 +3367,38 @@ async def sync(ctx: discord.ext.commands.Context):
 #################################################################
 ######################### LLM COMMANDS ##########################
 #################################################################
-# /reset command - Resets current character
-@client.hybrid_command(description="Reset the conversation with current character")
-async def reset(ctx: discord.ext.commands.Context):
-    try:
-        shared.stop_everything = True
-        await ireply(ctx, 'character reset') # send a response msg to the user
+if textgenwebui_enabled:
+    # /reset command - Resets current character
+    @client.hybrid_command(description="Reset the conversation with current character")
+    async def reset(ctx: discord.ext.commands.Context):
+        try:
+            shared.stop_everything = True
+            await ireply(ctx, 'character reset') # send a response msg to the user
+            # offload to ai_gen queue
+            queue_item = {'user': ctx.author, 'channel': ctx.channel, 'source': 'reset', 'params': {'character': {'char_name': client.user.display_name, 'verb': 'Resetting', 'mode': 'reset'}}}
+            await task_queue.put(queue_item)
+        except Exception as e:
+            logging.error(f"Error with /reset: {e}")
+
+    # Context menu command to Regenerate last reply
+    @client.tree.context_menu(name="regenerate")
+    async def regen_llm_gen(i: discord.Interaction, message: discord.Message):
+        text = message.content
+        await i.response.defer(thinking=False)
+        # await ireply(i, 'regenerate') # send a response msg to the user
         # offload to ai_gen queue
-        queue_item = {'user': ctx.author, 'channel': ctx.channel, 'source': 'reset', 'params': {'character': {'char_name': client.user.display_name, 'verb': 'Resetting', 'mode': 'reset'}}}
+        queue_item = {'i': i, 'user': i.user.display_name, 'channel': i.channel, 'source': 'regen', 'text': text, 'message': message.id}
         await task_queue.put(queue_item)
-    except Exception as e:
-        logging.error(f"Error with /reset: {e}")
 
-# Context menu command to Regenerate last reply
-@client.tree.context_menu(name="regenerate")
-async def regen_llm_gen(i: discord.Interaction, message: discord.Message):
-    text = message.content
-    await i.response.defer(thinking=False)
-    # await ireply(i, 'regenerate') # send a response msg to the user
-    # offload to ai_gen queue
-    queue_item = {'i': i, 'user': i.user.display_name, 'channel': i.channel, 'source': 'regen', 'text': text, 'message': message.id}
-    await task_queue.put(queue_item)
-
-# Context menu command to Continue last reply
-@client.tree.context_menu(name="continue")
-async def continue_llm_gen(i: discord.Interaction, message: discord.Message):
-    text = message.content
-    await i.response.defer(thinking=False)
-    # await ireply(i, 'continue') # send a response msg to the user
-    # offload to ai_gen queue
-    queue_item = {'i': i, 'user': i.user.display_name, 'channel': i.channel, 'source': 'cont', 'text': text, 'message': message.id}
-    await task_queue.put(queue_item)
+    # Context menu command to Continue last reply
+    @client.tree.context_menu(name="continue")
+    async def continue_llm_gen(i: discord.Interaction, message: discord.Message):
+        text = message.content
+        await i.response.defer(thinking=False)
+        # await ireply(i, 'continue') # send a response msg to the user
+        # offload to ai_gen queue
+        queue_item = {'i': i, 'user': i.user.display_name, 'channel': i.channel, 'source': 'cont', 'text': text, 'message': message.id}
+        await task_queue.put(queue_item)
 
 async def load_character_data(char_name):
     char_data = None
@@ -3477,89 +3570,89 @@ def get_all_characters():
         logging.error(f"An error occurred while getting all characters: {e}")
     return all_characters, filtered_characters
 
-all_characters, filtered_characters = get_all_characters()
+if textgenwebui_enabled:
+    all_characters, filtered_characters = get_all_characters()
+    if filtered_characters:
+        character_options = [app_commands.Choice(name=character["name"], value=character["name"]) for character in filtered_characters[:25]]
+        character_options_label = f'{character_options[0].name[0]}-{character_options[-1].name[0]}'.lower()
+        if len(filtered_characters) > 25:
+            character_options1 = [app_commands.Choice(name=character["name"], value=character["name"]) for character in filtered_characters[25:50]]
+            character_options1_label = f'{character_options1[0].name[0]}-{character_options1[-1].name[0]}'.lower()
+            if character_options1_label == character_options_label:
+                character_options1_label = f'{character_options1_label}_1'
+            if len(filtered_characters) > 50:
+                character_options2 = [app_commands.Choice(name=character["name"], value=character["name"]) for character in filtered_characters[50:75]]
+                character_options2_label = f'{character_options2[0].name[0]}-{character_options2[-1].name[0]}'.lower()
+                if character_options2_label == character_options_label or character_options2_label == character_options1_label:
+                    character_options2_label = f'{character_options2_label}_2'
+                if len(filtered_characters) > 75:
+                    character_options3 = [app_commands.Choice(name=character["name"], value=character["name"]) for character in filtered_characters[75:100]]
+                    character_options3_label = f'{character_options3[0].name[0]}-{character_options3[-1].name[0]}'.lower()
+                    if character_options3_label == character_options_label or character_options3_label == character_options1_label or character_options3_label == character_options2_label:
+                        character_options3_label = f'{character_options2_label}_3'
+                    if len(filtered_characters) > 100:
+                        filtered_characters = filtered_characters[:100]
+                        logging.warning("'/character' command only allows up to 100 characters. Some characters were omitted.")
 
-if filtered_characters:
-    character_options = [app_commands.Choice(name=character["name"], value=character["name"]) for character in filtered_characters[:25]]
-    character_options_label = f'{character_options[0].name[0]}-{character_options[-1].name[0]}'.lower()
-    if len(filtered_characters) > 25:
-        character_options1 = [app_commands.Choice(name=character["name"], value=character["name"]) for character in filtered_characters[25:50]]
-        character_options1_label = f'{character_options1[0].name[0]}-{character_options1[-1].name[0]}'.lower()
-        if character_options1_label == character_options_label:
-            character_options1_label = f'{character_options1_label}_1'
-        if len(filtered_characters) > 50:
-            character_options2 = [app_commands.Choice(name=character["name"], value=character["name"]) for character in filtered_characters[50:75]]
-            character_options2_label = f'{character_options2[0].name[0]}-{character_options2[-1].name[0]}'.lower()
-            if character_options2_label == character_options_label or character_options2_label == character_options1_label:
-                character_options2_label = f'{character_options2_label}_2'
-            if len(filtered_characters) > 75:
-                character_options3 = [app_commands.Choice(name=character["name"], value=character["name"]) for character in filtered_characters[75:100]]
-                character_options3_label = f'{character_options3[0].name[0]}-{character_options3[-1].name[0]}'.lower()
-                if character_options3_label == character_options_label or character_options3_label == character_options1_label or character_options3_label == character_options2_label:
-                    character_options3_label = f'{character_options2_label}_3'
-                if len(filtered_characters) > 100:
-                    filtered_characters = filtered_characters[:100]
-                    logging.warning("'/character' command only allows up to 100 characters. Some characters were omitted.")
+        if len(filtered_characters) <= 25:
+            @client.hybrid_command(name="character", description='Choose an character')
+            @app_commands.rename(characters=f'characters_{character_options_label}')
+            @app_commands.describe(characters=f'characters {character_options_label.upper()}')
+            @app_commands.choices(characters=character_options)
+            async def character(ctx: discord.ext.commands.Context, characters: typing.Optional[app_commands.Choice[str]]):
+                selected_character = characters.value if characters is not None else ''
+                await process_character(ctx, selected_character)
 
-    if len(filtered_characters) <= 25:
-        @client.hybrid_command(name="character", description='Choose an character')
-        @app_commands.rename(characters=f'characters_{character_options_label}')
-        @app_commands.describe(characters=f'characters {character_options_label.upper()}')
-        @app_commands.choices(characters=character_options)
-        async def character(ctx: discord.ext.commands.Context, characters: typing.Optional[app_commands.Choice[str]]):
-            selected_character = characters.value if characters is not None else ''
-            await process_character(ctx, selected_character)
+        elif 25 < len(filtered_characters) <= 50:
+            @client.hybrid_command(name="character", description='Choose an character (pick only one)')
+            @app_commands.rename(characters_1=f'characters_{character_options_label}')
+            @app_commands.describe(characters_1=f'characters {character_options_label.upper()}')
+            @app_commands.choices(characters_1=character_options)
+            @app_commands.rename(characters_2=f'characters_{character_options1_label}')
+            @app_commands.describe(characters_2=f'characters {character_options1_label.upper()}')
+            @app_commands.choices(characters_2=character_options1)
+            async def character(ctx: discord.ext.commands.Context, characters_1: typing.Optional[app_commands.Choice[str]], characters_2: typing.Optional[app_commands.Choice[str]]):
+                if characters_1 and characters_2:
+                    await ctx.send("More than one character was selected. Using the first selection.", ephemeral=True)
+                selected_character = ((characters_1 or characters_2) and (characters_1 or characters_2).value) or ''
+                await process_character(ctx, selected_character)
 
-    elif 25 < len(filtered_characters) <= 50:
-        @client.hybrid_command(name="character", description='Choose an character (pick only one)')
-        @app_commands.rename(characters_1=f'characters_{character_options_label}')
-        @app_commands.describe(characters_1=f'characters {character_options_label.upper()}')
-        @app_commands.choices(characters_1=character_options)
-        @app_commands.rename(characters_2=f'characters_{character_options1_label}')
-        @app_commands.describe(characters_2=f'characters {character_options1_label.upper()}')
-        @app_commands.choices(characters_2=character_options1)
-        async def character(ctx: discord.ext.commands.Context, characters_1: typing.Optional[app_commands.Choice[str]], characters_2: typing.Optional[app_commands.Choice[str]]):
-            if characters_1 and characters_2:
-                await ctx.send("More than one character was selected. Using the first selection.", ephemeral=True)
-            selected_character = ((characters_1 or characters_2) and (characters_1 or characters_2).value) or ''
-            await process_character(ctx, selected_character)
+        elif 50 < len(filtered_characters) <= 75:
+            @client.hybrid_command(name="character", description='Choose an character (pick only one)')
+            @app_commands.rename(characters_1=f'characters_{character_options_label}')
+            @app_commands.describe(characters_1=f'characters {character_options_label.upper()}')
+            @app_commands.choices(characters_1=character_options)
+            @app_commands.rename(characters_2=f'characters_{character_options1_label}')
+            @app_commands.describe(characters_2=f'characters {character_options1_label.upper()}')
+            @app_commands.choices(characters_2=character_options1)
+            @app_commands.rename(characters_3=f'characters_{character_options2_label}')
+            @app_commands.describe(characters_3=f'characters {character_options2_label.upper()}')
+            @app_commands.choices(characters_3=character_options2)
+            async def character(ctx: discord.ext.commands.Context, characters_1: typing.Optional[app_commands.Choice[str]], characters_2: typing.Optional[app_commands.Choice[str]], characters_3: typing.Optional[app_commands.Choice[str]]):
+                if sum(1 for v in (characters_1, characters_2, characters_3) if v) > 1:
+                    await ctx.send("More than one character was selected. Using the first selection.", ephemeral=True)
+                selected_character = ((characters_1 or characters_2 or characters_3) and (characters_1 or characters_2 or characters_3).value) or ''
+                await process_character(ctx, selected_character)
 
-    elif 50 < len(filtered_characters) <= 75:
-        @client.hybrid_command(name="character", description='Choose an character (pick only one)')
-        @app_commands.rename(characters_1=f'characters_{character_options_label}')
-        @app_commands.describe(characters_1=f'characters {character_options_label.upper()}')
-        @app_commands.choices(characters_1=character_options)
-        @app_commands.rename(characters_2=f'characters_{character_options1_label}')
-        @app_commands.describe(characters_2=f'characters {character_options1_label.upper()}')
-        @app_commands.choices(characters_2=character_options1)
-        @app_commands.rename(characters_3=f'characters_{character_options2_label}')
-        @app_commands.describe(characters_3=f'characters {character_options2_label.upper()}')
-        @app_commands.choices(characters_3=character_options2)
-        async def character(ctx: discord.ext.commands.Context, characters_1: typing.Optional[app_commands.Choice[str]], characters_2: typing.Optional[app_commands.Choice[str]], characters_3: typing.Optional[app_commands.Choice[str]]):
-            if sum(1 for v in (characters_1, characters_2, characters_3) if v) > 1:
-                await ctx.send("More than one character was selected. Using the first selection.", ephemeral=True)
-            selected_character = ((characters_1 or characters_2 or characters_3) and (characters_1 or characters_2 or characters_3).value) or ''
-            await process_character(ctx, selected_character)
-
-    elif 75 < len(filtered_characters) <= 100:
-        @client.hybrid_command(name="character", description='Choose an character (pick only one)')
-        @app_commands.rename(characters_1=f'characters_{character_options_label}')
-        @app_commands.describe(characters_1=f'characters {character_options_label.upper()}')
-        @app_commands.choices(characters_1=character_options)
-        @app_commands.rename(characters_2=f'characters_{character_options1_label}')
-        @app_commands.describe(characters_2=f'characters {character_options1_label.upper()}')
-        @app_commands.choices(characters_2=character_options1)
-        @app_commands.rename(characters_3=f'characters_{character_options2_label}')
-        @app_commands.describe(characters_3=f'characters {character_options2_label.upper()}')
-        @app_commands.choices(characters_3=character_options2)
-        @app_commands.rename(characters_4=f'characters_{character_options3_label}')
-        @app_commands.describe(characters_4=f'characters {character_options3_label.upper()}')
-        @app_commands.choices(characters_4=character_options3)
-        async def character(ctx: discord.ext.commands.Context, characters_1: typing.Optional[app_commands.Choice[str]], characters_2: typing.Optional[app_commands.Choice[str]], characters_3: typing.Optional[app_commands.Choice[str]], characters_4: typing.Optional[app_commands.Choice[str]]):
-            if sum(1 for v in (characters_1, characters_2, characters_3, characters_4) if v) > 1:
-                await ctx.send("More than one character was selected. Using the first selection.", ephemeral=True)
-            selected_character = ((characters_1 or characters_2 or characters_3 or characters_4) and (characters_1 or characters_2 or characters_3 or characters_4).value) or ''
-            await process_character(ctx, selected_character)
+        elif 75 < len(filtered_characters) <= 100:
+            @client.hybrid_command(name="character", description='Choose an character (pick only one)')
+            @app_commands.rename(characters_1=f'characters_{character_options_label}')
+            @app_commands.describe(characters_1=f'characters {character_options_label.upper()}')
+            @app_commands.choices(characters_1=character_options)
+            @app_commands.rename(characters_2=f'characters_{character_options1_label}')
+            @app_commands.describe(characters_2=f'characters {character_options1_label.upper()}')
+            @app_commands.choices(characters_2=character_options1)
+            @app_commands.rename(characters_3=f'characters_{character_options2_label}')
+            @app_commands.describe(characters_3=f'characters {character_options2_label.upper()}')
+            @app_commands.choices(characters_3=character_options2)
+            @app_commands.rename(characters_4=f'characters_{character_options3_label}')
+            @app_commands.describe(characters_4=f'characters {character_options3_label.upper()}')
+            @app_commands.choices(characters_4=character_options3)
+            async def character(ctx: discord.ext.commands.Context, characters_1: typing.Optional[app_commands.Choice[str]], characters_2: typing.Optional[app_commands.Choice[str]], characters_3: typing.Optional[app_commands.Choice[str]], characters_4: typing.Optional[app_commands.Choice[str]]):
+                if sum(1 for v in (characters_1, characters_2, characters_3, characters_4) if v) > 1:
+                    await ctx.send("More than one character was selected. Using the first selection.", ephemeral=True)
+                selected_character = ((characters_1 or characters_2 or characters_3 or characters_4) and (characters_1 or characters_2 or characters_3 or characters_4).value) or ''
+                await process_character(ctx, selected_character)
 
 #################################################################
 ####################### /IMGMODEL COMMAND #######################
@@ -3735,115 +3828,116 @@ async def process_imgmodel(ctx, selected_imgmodel_value):
     except Exception as e:
         logging.error(f"Error processing selected imgmodel from /imgmodel command: {e}")
 
-all_imgmodels = []
-all_imgmodels = asyncio.run(fetch_imgmodels())
+if sd_enabled:
+    all_imgmodels = []
+    all_imgmodels = asyncio.run(fetch_imgmodels())
 
-if all_imgmodels:
-    for imgmodel in all_imgmodels:
-        if 'model_name' in imgmodel:
-            imgmodel['imgmodel_name'] = imgmodel.pop('model_name')
-    
-    ### IF API IMG MODEL UNLOADING GETS EVER DEBUGGED
-    # unload_options = [app_commands.Choice(name="Unload Model", value="None"),
-    # app_commands.Choice(name="Do Not Unload Model", value="Exit")]
+    if all_imgmodels:
+        for imgmodel in all_imgmodels:
+            if 'model_name' in imgmodel:
+                imgmodel['imgmodel_name'] = imgmodel.pop('model_name')
+        
+        ### IF API IMG MODEL UNLOADING GETS EVER DEBUGGED
+        # unload_options = [app_commands.Choice(name="Unload Model", value="None"),
+        # app_commands.Choice(name="Do Not Unload Model", value="Exit")]
 
-    imgmodel_options = [app_commands.Choice(name=imgmodel["imgmodel_name"], value=imgmodel["imgmodel_name"]) for imgmodel in all_imgmodels[:25]]
-    imgmodel_options_label = f'{imgmodel_options[0].name[0]}-{imgmodel_options[-1].name[0]}'.lower()
-    if len(all_imgmodels) > 25:
-        imgmodel_options1 = [app_commands.Choice(name=imgmodel["imgmodel_name"], value=imgmodel["imgmodel_name"]) for imgmodel in all_imgmodels[25:50]]
-        imgmodel_options1_label = f'{imgmodel_options1[0].name[0]}-{imgmodel_options1[-1].name[0]}'.lower()
-        if imgmodel_options1_label == imgmodel_options_label:
-            imgmodel_options1_label = f'{imgmodel_options1_label}_1'
-        if len(all_imgmodels) > 50:
-            imgmodel_options2 = [app_commands.Choice(name=imgmodel["imgmodel_name"], value=imgmodel["imgmodel_name"]) for imgmodel in all_imgmodels[50:75]]
-            imgmodel_options2_label = f'{imgmodel_options2[0].name[0]}-{imgmodel_options2[-1].name[0]}'.lower()
-            if imgmodel_options2_label == imgmodel_options_label or imgmodel_options2_label == imgmodel_options1_label:
-                imgmodel_options2_label = f'{imgmodel_options2_label}_2'
-            if len(all_imgmodels) > 75:
-                imgmodel_options3 = [app_commands.Choice(name=imgmodel["imgmodel_name"], value=imgmodel["imgmodel_name"]) for imgmodel in all_imgmodels[75:100]]
-                imgmodel_options3_label = f'{imgmodel_options3[0].name[0]}-{imgmodel_options3[-1].name[0]}'.lower()
-                if imgmodel_options3_label == imgmodel_options_label or imgmodel_options3_label == imgmodel_options1_label or imgmodel_options3_label == imgmodel_options2_label:
-                    imgmodel_options3_label = f'{imgmodel_options2_label}_3'
-                if len(all_imgmodels) > 100:
-                    all_imgmodels = all_imgmodels[:100]
-                    logging.warning("'/imgmodel' command only allows up to 100 image models. Some models were omitted.")
+        imgmodel_options = [app_commands.Choice(name=imgmodel["imgmodel_name"], value=imgmodel["imgmodel_name"]) for imgmodel in all_imgmodels[:25]]
+        imgmodel_options_label = f'{imgmodel_options[0].name[0]}-{imgmodel_options[-1].name[0]}'.lower()
+        if len(all_imgmodels) > 25:
+            imgmodel_options1 = [app_commands.Choice(name=imgmodel["imgmodel_name"], value=imgmodel["imgmodel_name"]) for imgmodel in all_imgmodels[25:50]]
+            imgmodel_options1_label = f'{imgmodel_options1[0].name[0]}-{imgmodel_options1[-1].name[0]}'.lower()
+            if imgmodel_options1_label == imgmodel_options_label:
+                imgmodel_options1_label = f'{imgmodel_options1_label}_1'
+            if len(all_imgmodels) > 50:
+                imgmodel_options2 = [app_commands.Choice(name=imgmodel["imgmodel_name"], value=imgmodel["imgmodel_name"]) for imgmodel in all_imgmodels[50:75]]
+                imgmodel_options2_label = f'{imgmodel_options2[0].name[0]}-{imgmodel_options2[-1].name[0]}'.lower()
+                if imgmodel_options2_label == imgmodel_options_label or imgmodel_options2_label == imgmodel_options1_label:
+                    imgmodel_options2_label = f'{imgmodel_options2_label}_2'
+                if len(all_imgmodels) > 75:
+                    imgmodel_options3 = [app_commands.Choice(name=imgmodel["imgmodel_name"], value=imgmodel["imgmodel_name"]) for imgmodel in all_imgmodels[75:100]]
+                    imgmodel_options3_label = f'{imgmodel_options3[0].name[0]}-{imgmodel_options3[-1].name[0]}'.lower()
+                    if imgmodel_options3_label == imgmodel_options_label or imgmodel_options3_label == imgmodel_options1_label or imgmodel_options3_label == imgmodel_options2_label:
+                        imgmodel_options3_label = f'{imgmodel_options2_label}_3'
+                    if len(all_imgmodels) > 100:
+                        all_imgmodels = all_imgmodels[:100]
+                        logging.warning("'/imgmodel' command only allows up to 100 image models. Some models were omitted.")
 
-    if len(all_imgmodels) <= 25:
-        @client.hybrid_command(name="imgmodel", description='Choose an imgmodel')
-        @app_commands.rename(imgmodels=f'imgmodels_{imgmodel_options_label}')
-        @app_commands.describe(imgmodels=f'Imgmodels {imgmodel_options_label.upper()}')
-        @app_commands.choices(imgmodels=imgmodel_options)
-        async def imgmodel(ctx: discord.ext.commands.Context, imgmodels: typing.Optional[app_commands.Choice[str]]):
-       # @app_commands.choices(unload=unload_options) ### IF API IMG MODEL UNLOADING GETS EVER DEBUGGED
-       # async def imgmodel(ctx: discord.ext.commands.Context, imgmodels: typing.Optional[app_commands.Choice[str]], unload: typing.Optional[app_commands.Choice[str]]):
-       #     if imgmodels and unload:
-       #         await ctx.send("More than one option was selected. Using the first selection.", ephemeral=True)
-       #     selected_imgmodel = ((imgmodels or unload) and (imgmodels or unload).value) or ''
-            selected_imgmodel = imgmodels.value if imgmodels is not None else ''
-            await process_imgmodel(ctx, selected_imgmodel)
+        if len(all_imgmodels) <= 25:
+            @client.hybrid_command(name="imgmodel", description='Choose an imgmodel')
+            @app_commands.rename(imgmodels=f'imgmodels_{imgmodel_options_label}')
+            @app_commands.describe(imgmodels=f'Imgmodels {imgmodel_options_label.upper()}')
+            @app_commands.choices(imgmodels=imgmodel_options)
+            async def imgmodel(ctx: discord.ext.commands.Context, imgmodels: typing.Optional[app_commands.Choice[str]]):
+        # @app_commands.choices(unload=unload_options) ### IF API IMG MODEL UNLOADING GETS EVER DEBUGGED
+        # async def imgmodel(ctx: discord.ext.commands.Context, imgmodels: typing.Optional[app_commands.Choice[str]], unload: typing.Optional[app_commands.Choice[str]]):
+        #     if imgmodels and unload:
+        #         await ctx.send("More than one option was selected. Using the first selection.", ephemeral=True)
+        #     selected_imgmodel = ((imgmodels or unload) and (imgmodels or unload).value) or ''
+                selected_imgmodel = imgmodels.value if imgmodels is not None else ''
+                await process_imgmodel(ctx, selected_imgmodel)
 
-    elif 25 < len(all_imgmodels) <= 50:
-        @client.hybrid_command(name="imgmodel", description='Choose an imgmodel (pick only one)')
-        @app_commands.rename(models_1=f'imgmodels_{imgmodel_options_label}')
-        @app_commands.describe(models_1=f'Imgmodels {imgmodel_options_label.upper()}')
-        @app_commands.choices(models_1=imgmodel_options)
-        @app_commands.rename(models_2=f'imgmodels_{imgmodel_options1_label}')
-        @app_commands.describe(models_2=f'Imgmodels {imgmodel_options1_label.upper()}')
-        @app_commands.choices(models_2=imgmodel_options1)
-        async def imgmodel(ctx: discord.ext.commands.Context, models_1: typing.Optional[app_commands.Choice[str]], models_2: typing.Optional[app_commands.Choice[str]]):
-       # @app_commands.choices(unload=unload_options) ### IF API IMG MODEL UNLOADING GETS EVER DEBUGGED
-       # async def imgmodel(ctx: discord.ext.commands.Context, models_1: typing.Optional[app_commands.Choice[str]], models_2: typing.Optional[app_commands.Choice[str]], unload: typing.Optional[app_commands.Choice[str]]):
-       #     if sum(1 for v in (models_1, models_2, unload) if v) > 1:
-            if models_1 and models_2:
-                await ctx.send("More than one option was selected. Using the first selection.", ephemeral=True)
-       #     selected_imgmodel = ((models_1 or models_2 or unload) and (models_1 or models_2 or unload).value) or ''
-            selected_imgmodel = ((models_1 or models_2) and (models_1 or models_2).value) or ''
-            await process_imgmodel(ctx, selected_imgmodel)
+        elif 25 < len(all_imgmodels) <= 50:
+            @client.hybrid_command(name="imgmodel", description='Choose an imgmodel (pick only one)')
+            @app_commands.rename(models_1=f'imgmodels_{imgmodel_options_label}')
+            @app_commands.describe(models_1=f'Imgmodels {imgmodel_options_label.upper()}')
+            @app_commands.choices(models_1=imgmodel_options)
+            @app_commands.rename(models_2=f'imgmodels_{imgmodel_options1_label}')
+            @app_commands.describe(models_2=f'Imgmodels {imgmodel_options1_label.upper()}')
+            @app_commands.choices(models_2=imgmodel_options1)
+            async def imgmodel(ctx: discord.ext.commands.Context, models_1: typing.Optional[app_commands.Choice[str]], models_2: typing.Optional[app_commands.Choice[str]]):
+        # @app_commands.choices(unload=unload_options) ### IF API IMG MODEL UNLOADING GETS EVER DEBUGGED
+        # async def imgmodel(ctx: discord.ext.commands.Context, models_1: typing.Optional[app_commands.Choice[str]], models_2: typing.Optional[app_commands.Choice[str]], unload: typing.Optional[app_commands.Choice[str]]):
+        #     if sum(1 for v in (models_1, models_2, unload) if v) > 1:
+                if models_1 and models_2:
+                    await ctx.send("More than one option was selected. Using the first selection.", ephemeral=True)
+        #     selected_imgmodel = ((models_1 or models_2 or unload) and (models_1 or models_2 or unload).value) or ''
+                selected_imgmodel = ((models_1 or models_2) and (models_1 or models_2).value) or ''
+                await process_imgmodel(ctx, selected_imgmodel)
 
-    elif 50 < len(all_imgmodels) <= 75:
-        @client.hybrid_command(name="imgmodel", description='Choose an imgmodel (pick only one)')
-        @app_commands.rename(models_1=f'imgmodels_{imgmodel_options_label}')
-        @app_commands.describe(models_1=f'Imgmodels {imgmodel_options_label.upper()}')
-        @app_commands.choices(models_1=imgmodel_options)
-        @app_commands.rename(models_2=f'imgmodels_{imgmodel_options1_label}')
-        @app_commands.describe(models_2=f'Imgmodels {imgmodel_options1_label.upper()}')
-        @app_commands.choices(models_2=imgmodel_options1)
-        @app_commands.rename(models_3=f'imgmodels_{imgmodel_options2_label}')
-        @app_commands.describe(models_3=f'Imgmodels {imgmodel_options2_label.upper()}')
-        @app_commands.choices(models_3=imgmodel_options2)
-        async def imgmodel(ctx: discord.ext.commands.Context, models_1: typing.Optional[app_commands.Choice[str]], models_2: typing.Optional[app_commands.Choice[str]], models_3: typing.Optional[app_commands.Choice[str]]):
-       # @app_commands.choices(unload=unload_options) ### IF API IMG MODEL UNLOADING GETS EVER DEBUGGED
-       # async def imgmodel(ctx: discord.ext.commands.Context, models_1: typing.Optional[app_commands.Choice[str]], models_2: typing.Optional[app_commands.Choice[str]], models_3: typing.Optional[app_commands.Choice[str]], unload: typing.Optional[app_commands.Choice[str]]):
-       #     if sum(1 for v in (models_1, models_2, models_3, unload) if v) > 1:
-            if sum(1 for v in (models_1, models_2, models_3) if v) > 1:
-                await ctx.send("More than one option was selected. Using the first selection.", ephemeral=True)
-       #     selected_imgmodel = ((models_1 or models_2 or models_3 or unload) and (models_1 or models_2 or models_3 or unload).value) or ''
-            selected_imgmodel = ((models_1 or models_2 or models_3) and (models_1 or models_2 or models_3).value) or ''
-            await process_imgmodel(ctx, selected_imgmodel)
+        elif 50 < len(all_imgmodels) <= 75:
+            @client.hybrid_command(name="imgmodel", description='Choose an imgmodel (pick only one)')
+            @app_commands.rename(models_1=f'imgmodels_{imgmodel_options_label}')
+            @app_commands.describe(models_1=f'Imgmodels {imgmodel_options_label.upper()}')
+            @app_commands.choices(models_1=imgmodel_options)
+            @app_commands.rename(models_2=f'imgmodels_{imgmodel_options1_label}')
+            @app_commands.describe(models_2=f'Imgmodels {imgmodel_options1_label.upper()}')
+            @app_commands.choices(models_2=imgmodel_options1)
+            @app_commands.rename(models_3=f'imgmodels_{imgmodel_options2_label}')
+            @app_commands.describe(models_3=f'Imgmodels {imgmodel_options2_label.upper()}')
+            @app_commands.choices(models_3=imgmodel_options2)
+            async def imgmodel(ctx: discord.ext.commands.Context, models_1: typing.Optional[app_commands.Choice[str]], models_2: typing.Optional[app_commands.Choice[str]], models_3: typing.Optional[app_commands.Choice[str]]):
+        # @app_commands.choices(unload=unload_options) ### IF API IMG MODEL UNLOADING GETS EVER DEBUGGED
+        # async def imgmodel(ctx: discord.ext.commands.Context, models_1: typing.Optional[app_commands.Choice[str]], models_2: typing.Optional[app_commands.Choice[str]], models_3: typing.Optional[app_commands.Choice[str]], unload: typing.Optional[app_commands.Choice[str]]):
+        #     if sum(1 for v in (models_1, models_2, models_3, unload) if v) > 1:
+                if sum(1 for v in (models_1, models_2, models_3) if v) > 1:
+                    await ctx.send("More than one option was selected. Using the first selection.", ephemeral=True)
+        #     selected_imgmodel = ((models_1 or models_2 or models_3 or unload) and (models_1 or models_2 or models_3 or unload).value) or ''
+                selected_imgmodel = ((models_1 or models_2 or models_3) and (models_1 or models_2 or models_3).value) or ''
+                await process_imgmodel(ctx, selected_imgmodel)
 
-    elif 75 < len(all_imgmodels) <= 100:
-        @client.hybrid_command(name="imgmodel", description='Choose an imgmodel (pick only one)')
-        @app_commands.rename(models_1=f'imgmodels_{imgmodel_options_label}')
-        @app_commands.describe(models_1=f'Imgmodels {imgmodel_options_label.upper()}')
-        @app_commands.choices(models_1=imgmodel_options)
-        @app_commands.rename(models_2=f'imgmodels_{imgmodel_options1_label}')
-        @app_commands.describe(models_2=f'Imgmodels {imgmodel_options1_label.upper()}')
-        @app_commands.choices(models_2=imgmodel_options1)
-        @app_commands.rename(models_3=f'imgmodels_{imgmodel_options2_label}')
-        @app_commands.describe(models_3=f'Imgmodels {imgmodel_options2_label.upper()}')
-        @app_commands.choices(models_3=imgmodel_options2)
-        @app_commands.rename(models_4=f'imgmodels_{imgmodel_options3_label}')
-        @app_commands.describe(models_4=f'Imgmodels {imgmodel_options3_label.upper()}')
-        @app_commands.choices(models_4=imgmodel_options3)
-        async def imgmodel(ctx: discord.ext.commands.Context, models_1: typing.Optional[app_commands.Choice[str]], models_2: typing.Optional[app_commands.Choice[str]], models_3: typing.Optional[app_commands.Choice[str]], models_4: typing.Optional[app_commands.Choice[str]]):
-       # @app_commands.choices(unload=unload_options) ### IF API IMG MODEL UNLOADING GETS EVER DEBUGGED
-       # async def imgmodel(ctx: discord.ext.commands.Context, models_1: typing.Optional[app_commands.Choice[str]], models_2: typing.Optional[app_commands.Choice[str]], models_3: typing.Optional[app_commands.Choice[str]], models_4: typing.Optional[app_commands.Choice[str]], unload: typing.Optional[app_commands.Choice[str]]):
-       #     if sum(1 for v in (models_1, models_2, models_3, models_4, unload) if v) > 1:
-            if sum(1 for v in (models_1, models_2, models_3, models_4) if v) > 1:
-                await ctx.send("More than one option was selected. Using the first selection.", ephemeral=True)
-       #     selected_imgmodel = ((models_1 or models_2 or models_3 or models_4 or unload) and (models_1 or models_2 or models_3 or models_4 or unload).value) or ''
-            selected_imgmodel = ((models_1 or models_2 or models_3 or models_4) and (models_1 or models_2 or models_3 or models_4).value) or ''
-            await process_imgmodel(ctx, selected_imgmodel)
+        elif 75 < len(all_imgmodels) <= 100:
+            @client.hybrid_command(name="imgmodel", description='Choose an imgmodel (pick only one)')
+            @app_commands.rename(models_1=f'imgmodels_{imgmodel_options_label}')
+            @app_commands.describe(models_1=f'Imgmodels {imgmodel_options_label.upper()}')
+            @app_commands.choices(models_1=imgmodel_options)
+            @app_commands.rename(models_2=f'imgmodels_{imgmodel_options1_label}')
+            @app_commands.describe(models_2=f'Imgmodels {imgmodel_options1_label.upper()}')
+            @app_commands.choices(models_2=imgmodel_options1)
+            @app_commands.rename(models_3=f'imgmodels_{imgmodel_options2_label}')
+            @app_commands.describe(models_3=f'Imgmodels {imgmodel_options2_label.upper()}')
+            @app_commands.choices(models_3=imgmodel_options2)
+            @app_commands.rename(models_4=f'imgmodels_{imgmodel_options3_label}')
+            @app_commands.describe(models_4=f'Imgmodels {imgmodel_options3_label.upper()}')
+            @app_commands.choices(models_4=imgmodel_options3)
+            async def imgmodel(ctx: discord.ext.commands.Context, models_1: typing.Optional[app_commands.Choice[str]], models_2: typing.Optional[app_commands.Choice[str]], models_3: typing.Optional[app_commands.Choice[str]], models_4: typing.Optional[app_commands.Choice[str]]):
+        # @app_commands.choices(unload=unload_options) ### IF API IMG MODEL UNLOADING GETS EVER DEBUGGED
+        # async def imgmodel(ctx: discord.ext.commands.Context, models_1: typing.Optional[app_commands.Choice[str]], models_2: typing.Optional[app_commands.Choice[str]], models_3: typing.Optional[app_commands.Choice[str]], models_4: typing.Optional[app_commands.Choice[str]], unload: typing.Optional[app_commands.Choice[str]]):
+        #     if sum(1 for v in (models_1, models_2, models_3, models_4, unload) if v) > 1:
+                if sum(1 for v in (models_1, models_2, models_3, models_4) if v) > 1:
+                    await ctx.send("More than one option was selected. Using the first selection.", ephemeral=True)
+        #     selected_imgmodel = ((models_1 or models_2 or models_3 or models_4 or unload) and (models_1 or models_2 or models_3 or models_4 or unload).value) or ''
+                selected_imgmodel = ((models_1 or models_2 or models_3 or models_4) and (models_1 or models_2 or models_3 or models_4).value) or ''
+                await process_imgmodel(ctx, selected_imgmodel)
 
 #################################################################
 ####################### /LLMMODEL COMMAND #######################
@@ -3858,7 +3952,7 @@ async def process_llmmodel(ctx, selected_llmmodel):
     except Exception as e:
         logging.error(f"Error processing /llmmodel command: {e}")
 
-if all_llmmodels:
+if textgenwebui_enabled and all_llmmodels:
     llmmodel_options = [app_commands.Choice(name=llmmodel, value=llmmodel) for llmmodel in all_llmmodels[:25]]
     llmmodel_options_label = f'{llmmodel_options[1].name[0]}-{llmmodel_options[-1].name[0]}'.lower() # Using second "Name" since first name is "None"
     if len(all_llmmodels) > 25:
@@ -4082,7 +4176,7 @@ async def fetch_speak_options():
     except Exception as e:
         logging.error(f"Error building options for '/speak' command: {e}")
 
-if tts_client and tts_client in supported_tts_clients:
+if textgenwebui_enabled and tts_client and tts_client in supported_tts_clients:
     lang_list, all_voices = asyncio.run(fetch_speak_options())
     voice_options = [app_commands.Choice(name=voice_name.replace('_', ' ').title(), value=f'{voice_name}') for voice_name in all_voices[:25]]
     voice_options_label = f'{voice_options[0].name[0]}-{voice_options[-1].name[0]}'.lower()
@@ -4439,4 +4533,4 @@ class BotSettings:
 
 bot_settings = BotSettings()
 
-client.run(bot_args.token if bot_args.token else TOKEN, root_logger=True, log_handler=handler)
+client.run(bot_token, root_logger=True, log_handler=handler)

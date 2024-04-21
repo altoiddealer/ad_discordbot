@@ -1,0 +1,63 @@
+# Channel IDs can be obtained by enabling "Developer Mode" for your discord account. Then, simply right-click on a channel and "Get Channel ID"
+
+# Main Discord settings
+discord:
+
+  # **BOT TOKEN IS REQUIRED** (https://discordpy.readthedocs.io/en/stable/discord.html)
+  TOKEN: ""
+  
+  # Feature for bot to copy current settings in a dedicated channel when changing settings via commands (ei: /imgmodel),
+  post_active_settings:
+    enabled: false
+    target_channel_id: 11111111111111111111 # Bot requires permissions to message this channel.
+  # Feature for bot to automatically send a copy of image to starboard channel.
+  starboard:
+    enabled: true
+    min_reactions: 2                        # number of reactions
+    emoji_specific: false
+    react_emojis: ['✅', '👏']             # for if 'emoji_specific: true'
+    target_channel_id: 11111111111111111111 # bot requires message / msg management permissions
+
+
+# Dynamic Prompting feature. Uses similar syntax and usage as the SD WebUI extension 'sd-dynamic-prompts'.
+# More details here: https://github.com/altoiddealer/ad_discordbot/wiki/dynamic-prompting
+dynamic_prompting_enabled: true
+
+
+# Main textgen-webui settings
+# Note: Many native textgen-webui settings are honored: 'CMD_FLAGS.txt' (extensions) / 'settings.yaml' / 'models/config-user.yaml' (LLM model settings)
+textgenwebui:
+  enabled: true                         # Controls whether TGWUI is part of the bot (does not register relavent commands for discord, etc)
+  TGWUI_URL: "http://127.0.0.1:7861"    # Currently a placeholder value for if this bot switches to using the TGWUI API
+  # Supported TTS Clients: 'alltalk_tts', 'coqui_tts', 'silero_tts', and 'elevenlabs_tts' have been tested. Other tts extensions may work.
+  # REQUIRES: 'pip install pynacl' in textgen-webui venv for bot to join a voice channel
+  tts_settings:
+    extension: ''                       # '' = Disabled. Ex: 'alltalk_tts' (Loads automatically. Don't include in '--extensions' launch flag)
+    api_key: ''                         # May be required for some tts extensions (ex: elevenlabs_tts)
+    voice_channel: 11111111111111111111 # Bot requires voice & channel permissions.
+    play_mode: 2                        # 0 = use voice channel / 1 = upload file to chat channel / 2 = both (use voice & upload file)
+    mp3_bit_rate: 128                   # If play_mode = 1 or 2, and the output (.wav) exceeds 8MB (discord limit), it will convert to .mp3 before uploading.
+    save_mode: 1                        # 0 = save outputs / 1 = try deleting outputs. Note: Can't delete outputs uploaded to channel. (../extensions/coqui_tts/outputs)
+
+
+# Main SD WebUI settings
+sd:
+  enabled: true                         # Controls whether SD WebUI is part of the bot (does not register relavent commands for discord, etc)
+  SD_URL: "http://127.0.0.1:7860"       # Default URL for A1111 API. Adjust if you have issues connecting.
+  extensions:                           # Only set extensions as True if they are installed AND active in your A1111.
+    controlnet_enabled: false           # Requires: sd-webui-controlnet (https://github.com/Mikubill/sd-webui-controlnet) AND configuring 'dict_cmdoptions.yaml'
+    forgecouple_enabled: false          # Requires: sd-forge-couple (https://github.com/Haoming02/sd-forge-couple) **Only works for Forge, not A1111**
+    layerdiffuse_enabled: false         # Requires: sd-forge-layerdiffuse (https://github.com/layerdiffusion/sd-forge-layerdiffuse) **Only works for Forge, not A1111**
+    reactor_enabled: false              # Requires: sd-webui-reactor (https://github.com/Gourieff/sd-webui-reactor)
+    # 'sd-loractl' extension enhances LORA processing by allowing adjustable weights during image generation.
+    # This bot can automatically calculate and apply weight scaling as defined below.
+    lrctl:                              # Requires: sd-webui-loractl (https://github.com/cheald/sd-webui-loractl)
+      enabled: false                    # **Only works for A1111, not Forge**
+      min_loras: 2                      # Minimum number of loras in the prompt to trigger the following weight scaling definitions.
+      # format is (% of existing lora weight)@(step percent),(more step definitions). These are not static weights- these are multiplied by the existing LORA weight. '1.0@0' = begin generation with existing LORA weight.
+      # You can define as many steps as you want. ex1: '0.5@0' would just cut the LORA weight in half. ex2: '0.0@0,1.0@0.5,0.0@1.0' would look like a pyramid on the graph.
+      lora_1_scaling: '1.0@0,0.5@0.5'
+      lora_2_scaling: '0.5@0,1.0@0.5'
+      # More scaling definitions can be added ex: 'lora_3_scaling' etc
+      # Applies to LORAs when there are more in the prompt than defined above. ei: If 4 loras are found in prompt, but only defined up to lora_2_scaling, then the last 2 LORAs would be scaled by this definition.
+      additional_loras_scaling: '0.4@0.0,0.8@0.5'
