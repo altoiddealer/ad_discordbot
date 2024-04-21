@@ -47,8 +47,8 @@ Note: **text-generation-webui** and **Stable Diffusion** features can be indepen
   **Please take care migrating to this change**:
 
     - Fetch the new version of 'dict_imgmodels.yaml' which is now the settings panel for the API method.
-    - Migrate your 'imgmodel' settings from config.py
-    - Delete the whole 'imgmodels' block in config.py!
+    - Migrate your 'imgmodel' settings from config.yaml
+    - Delete the whole 'imgmodels' block in config.yaml!
 
   ---
     
@@ -107,7 +107,7 @@ Note: **text-generation-webui** and **Stable Diffusion** features can be indepen
    
     - Upgraded the /image command:
     
-      - ControlNet and ReActor now only appear in the select options if enabled in config.py
+      - ControlNet and ReActor now only appear in the select options if enabled in config.yaml
       - 'img2img' has been added. If an image is attached, it will prompt for the Denoise Strength.
       - ControlNet now follows up asking for model/map if an image is attached, to simplify the main menu.
       
@@ -192,7 +192,7 @@ Note: **text-generation-webui** and **Stable Diffusion** features can be indepen
   - **/llmmodel** - Change LLM model
 
 - **Dynamic settings handling:**
-  - Core bot settings managed in **`config.py`** (bot behavior, discord features, extensions, etc.)
+  - Core bot settings managed in **`config.yaml`** (bot behavior, discord features, extensions, etc.)
   - The "Tags" system is configured in **`dict_tags.yaml`** (global Tags, default Tag params, Tag presets, etc.)
   - Foundational layer of user settings configured in **`base_settings.yaml`**.
   - Character files can include custom Tags, TTS settings, LLM state parameters, and special behaviors, which prioritize over basesettings.
@@ -239,7 +239,7 @@ Note: **text-generation-webui** and **Stable Diffusion** features can be indepen
    
    `/text-generation-webui/ad_discordbot/(remaining files)`
 
-5. **Add the bot token (from Step 2) into **/ad_discordbot/config.py**
+5. **Add the bot token (from Step 2) into **/ad_discordbot/config.yaml**
    
 6. **Run the .cmd file** in text-generation-webui directory (**ex: cmd_windows.bat**), and performing the following commands:
    ```
@@ -309,7 +309,7 @@ Note: **text-generation-webui** and **Stable Diffusion** features can be indepen
 
 5. Ensure that your bot has sufficient permissions to use the Voice channel and/or upload files (From your bot invite/Discord Developer portal, and your Discord server/channel settings)
 
-6. Configure **config.py** in the section **discord** > **tts_settings**
+6. Configure **config.yaml** in the section **discord** > **tts_settings**
 
 7. If necessary, model file(s) should download on first launch of the bot.  If not, then first launch textgen-webui normally and enable the extension.
 
@@ -332,16 +332,16 @@ Note: **text-generation-webui** and **Stable Diffusion** features can be indepen
    
    /text-generation-webui/ad_discordbot/(remaining files)
 
-3. **IF other files have changed ('config.py', 'dict_X.yaml', etc:**
+3. **IF other files have changed ('config.yaml', 'dict_X.yaml', etc:**
   
    **You will need to compare changes, and either:**
    - migrate the changes into your active setup, OR
    - migrate values from your active setup into the fresh new files
 
-   **Example**: config.py gets updated with a new feature.
+   **Example**: config.yaml gets updated with a new feature.
    
    Solution is to either:
 
-   * Update your existing config.py with the new feature, OR
+   * Update your existing config.yaml with the new feature, OR
      
-   * Make a copy of the new config.py and update it with your settings.
+   * Make a copy of the new config.yaml and update it with your settings.
