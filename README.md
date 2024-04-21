@@ -20,6 +20,17 @@
 
 <details>
   <summary>click to expand</summary>
+  
+   **04/18/2024:** New Feature: Dynamic Prompting.
+
+   Works ~~exactly~~ _**very similarly**_ to the SD WebUI extension [sd-dynamic-prompts](https://github.com/adieyal/sd-dynamic-prompts)
+
+   **[Read up on it here!](https://github.com/altoiddealer/ad_discordbot/wiki/dynamic-prompting)**
+
+  <img width="959" alt="Screenshot 2024-04-20 202457" src="https://github.com/altoiddealer/ad_discordbot/assets/1613484/6d1c0498-fc4d-4869-807e-904392ab44d2">
+
+  ---
+
 
    **04/16/2024:** Enhanced Flows and "Instant Tags". Many other improvements.
 
