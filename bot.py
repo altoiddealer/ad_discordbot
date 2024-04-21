@@ -4194,7 +4194,7 @@ class Behavior:
         if i.author.bot and client.user.display_name.lower() in text.lower() and i.channel.id in bot_settings.database.main_channels:
             if 'bye' in text.lower(): # don't reply if another bot is saying goodbye
                 return False
-            return self.probability_to_reply(self.reply_to_bots_when_adressed)
+            return probability_to_reply(self.reply_to_bots_when_adressed)
         # Whether to reply when text is nested in parentheses
         if self.ignore_parentheses and (i.content.startswith('(') and i.content.endswith(')')) or (i.content.startswith('<:') and i.content.endswith(':>')):
             return False
@@ -4204,16 +4204,16 @@ class Behavior:
         reply = False
         # few more conditions
         if i.author.bot and i.channel.id in bot_settings.database.main_channels:
-            reply = self.probability_to_reply(self.chance_to_reply_to_other_bots)
+            reply = probability_to_reply(self.chance_to_reply_to_other_bots)
         if self.go_wild_in_channel and i.channel.id in bot_settings.database.main_channels:
             reply = True
         if reply:
             self.update_user_dict(i.author.id)
         return reply
 
-    def probability_to_reply(probability):
-        # Determine if the bot should reply based on a probability
-        return random.random() < probability
+def probability_to_reply(probability):
+    # Determine if the bot should reply based on a probability
+    return random.random() < probability
 
 class ImgModel:
     def __init__(self):
