@@ -1649,6 +1649,8 @@ async def on_message(i):
         # if @ mentioning bot, remove the @ mention from user prompt
         if text.startswith(f"@{client.user.display_name} "):
             text = text.replace(f"@{client.user.display_name} ", "", 1)
+        # apply wildcards
+        text = await dynamic_prompting(i.author, text, i)
         queue_item = {'i': i, 'user': i.author, 'channel': i.channel, 'source': 'on_message', 'text': text} 
         await task_queue.put(queue_item)
     except Exception as e:
@@ -1662,8 +1664,6 @@ async def on_message_gen(user, channel, source, text, i):
         params = {}
         # collects all tags, sorted into sub-lists by phase (user / llm / userllm)
         text, tags = await get_tags(text)
-        # apply wildcards
-        text = await dynamic_prompting(user, text, i)
         # match tags labeled for user / userllm.
         tags = match_tags(text, tags)
         # check if triggered to not respond with text
@@ -2150,8 +2150,7 @@ async def process_tasks():
 #################################################################
 ########################## QUEUED FLOW ##########################
 #################################################################
-
-def format_next_flow(next_flow, user, text):
+async def format_next_flow(next_flow, user, text):
     flow_name = ''
     formatted_flow_tags = {}
     for key, value in next_flow.items():
@@ -2168,6 +2167,8 @@ def format_next_flow(next_flow, user, text):
         elif key == 'format_prompt':
             formatting = {'format_prompt': value}
             text = process_tag_formatting(user, text, formatting)
+        # apply wildcards
+        text = await dynamic_prompting(user, text, i=None)
     next_flow.update(formatted_flow_tags) # commit updates
     return flow_name, text
 
@@ -2179,7 +2180,7 @@ async def peek_flow_queue(queue, user, text):
     while queue.qsize() > 0:
         if queue.qsize() == total_queue_size:
             item = await queue.get()
-            flow_name, formatted_text = format_next_flow(item, user, text)
+            flow_name, formatted_text = await format_next_flow(item, user, text)
         else:
             item = await queue.get()
         await temp_queue.put(item)
@@ -3264,7 +3265,12 @@ async def main(i):
 
 @client.hybrid_command(description="Update dropdown menus without restarting bot script.")
 async def sync(ctx: discord.ext.commands.Context):
-    await task_queue.put(client.tree.sync()) # Process this in the background
+    try:
+        await ctx.reply('Syncing client tree. Note: Menus may not update instantly.', ephemeral=True, delete_after=10)
+        logging.info(f"{ctx.author} used '/sync' to sync the client.tree (refresh commands).")
+        await bg_task_queue.put(client.tree.sync()) # Process this in the background
+    except Exception as e:
+        logging.error(f"Error syncing client.tree with '/sync': {e}")
 
 #################################################################
 ######################### LLM COMMANDS ##########################
@@ -4205,9 +4211,9 @@ class Behavior:
             self.update_user_dict(i.author.id)
         return reply
 
-def probability_to_reply(probability):
-    # Determine if the bot should reply based on a probability
-    return random.random() < probability
+    def probability_to_reply(probability):
+        # Determine if the bot should reply based on a probability
+        return random.random() < probability
 
 class ImgModel:
     def __init__(self):
