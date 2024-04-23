@@ -35,6 +35,19 @@ import sys
 #################################################################
 #################### DISCORD / BOT STARTUP ######################
 #################################################################
+# Start logger
+logging.basicConfig(format='%(levelname)s [%(asctime)s]: %(message)s (Line: %(lineno)d in %(funcName)s, %(filename)s )',
+                    datefmt='%Y-%m-%d %H:%M:%S', 
+                    level=logging.INFO) # logging.DEBUG)
+
+handler = logging.FileHandler(filename='discord.log', encoding='utf-8', mode='w')
+handler = logging.handlers.RotatingFileHandler(
+    filename='discord.log',
+    encoding='utf-8',
+    maxBytes=32 * 1024 * 1024,  # 32 MiB
+    backupCount=5,  # Rotate through 5 files
+)
+
 # Resolve legacy config method
 class Config:
     def __init__(self):
@@ -84,19 +97,6 @@ config = config.get_config_dict()
 
 # Discord bot token
 TOKEN = config['discord'].get('TOKEN', None)
-
-# Start logger
-logging.basicConfig(format='%(levelname)s [%(asctime)s]: %(message)s (Line: %(lineno)d in %(funcName)s, %(filename)s )',
-                    datefmt='%Y-%m-%d %H:%M:%S', 
-                    level=logging.INFO) # logging.DEBUG)
-
-handler = logging.FileHandler(filename='discord.log', encoding='utf-8', mode='w')
-handler = logging.handlers.RotatingFileHandler(
-    filename='discord.log',
-    encoding='utf-8',
-    maxBytes=32 * 1024 * 1024,  # 32 MiB
-    backupCount=5,  # Rotate through 5 files
-)
 
 # Intercept custom bot arguments
 def parse_bot_args():
@@ -1350,10 +1350,11 @@ def process_tag_trumps(matches, trump_params=[]):
         logging.error(f"Error processing matched tags: {e}")
         return matches  # return original matches if error occurs
 
-def match_tags(search_text, tags):
+def match_tags(search_text, tags, phase='llm'):
     try:
-        phase = 'llm' if 'user' in tags['unmatched'] else 'img' # 'user' list gets omitted on second phase
-        llm_tags = tags['unmatched'].pop('llm', []) if 'user' in tags['unmatched'] else []  # Remove 'llm' tags if pre-LLM phase
+        # Remove 'llm' tags if pre-LLM phase, to be added back to unmatched tags list at the end of function
+        if phase == 'llm':
+            llm_tags = tags['unmatched'].pop('llm', []) if 'user' in tags['unmatched'] else []
         updated_tags = copy.deepcopy(tags)
         matches = updated_tags['matches']
         unmatched = updated_tags['unmatched']
@@ -1375,7 +1376,7 @@ def match_tags(search_text, tags):
                     if trigger_match:
                         if not (tag.get('on_prefix_only', False) and trigger_match.start() != 0):
                             unmatched[list_name].remove(tag)
-                            tag['phase'] = phase if tag.get('phase', None) is None else 'userllm'
+                            tag['phase'] = phase
                             tag['matched_trigger'] = trigger  # retain the matched trigger phrase
                             if (('insert_text' in tag and phase == 'llm') or ('positive_prompt' in tag and phase == 'img')):
                                 matches.append((tag, trigger_match.start(), trigger_match.end()))  # Add as a tuple with start/end indexes if inserting text later
@@ -1390,8 +1391,9 @@ def match_tags(search_text, tags):
                             matches.append(tag)
         if matches:
             updated_tags['matches'], updated_tags['trump_params'] = process_tag_trumps(matches, tags['trump_params']) # trump tags
-        # Adjust the return value depending on which phase match_tags() was called on
-        unmatched['llm'] = llm_tags
+        # Add LLM sublist back to unmatched tags list if LLM phase
+        if phase == 'llm':
+            unmatched['llm'] = llm_tags
         if 'user' in unmatched:
             del unmatched['user'] # Remove after first phase. Controls the 'llm' tag processing at function start.
         return updated_tags
@@ -1748,7 +1750,7 @@ async def on_message_gen(user, channel, source, text, i):
         # collects all tags, sorted into sub-lists by phase (user / llm / userllm)
         text, tags = await get_tags(text)
         # match tags labeled for user / userllm.
-        tags = match_tags(text, tags)
+        tags = match_tags(text, tags, phase='llm')
         # check if triggered to not respond with text
         should_gen_text = should_bot_do('should_gen_text', default=True, tags=tags)
         if should_gen_text:
@@ -2395,34 +2397,64 @@ async def layerdiffuse_hack(temp_dir, img_payload, images, pnginfo):
     except Exception as e:
         logging.error(f'Error processing layerdiffuse images: {e}')
 
+async def apply_reactor_mask(temp_dir, images, pnginfo, reactor_mask):
+    try:
+        reactor_mask = Image.open(io.BytesIO(base64.b64decode(reactor_mask))).convert('L')
+        orig_image = images[0]                                          # Open original image
+        face_image = images.pop(1)                                      # Open image with faceswap applied
+        face_image.putalpha(reactor_mask)                               # Apply reactor mask as alpha to faceswap image
+        orig_image.paste(face_image, (0, 0), face_image)                # Paste the masked faceswap image onto the original
+        orig_image.save(f'{temp_dir}/temp_img_0.png', pnginfo=pnginfo)  # Save the image with correct pnginfo
+        images[0] = orig_image                                          # Replace first image in images list
+        return images
+    except Exception as e:
+        logging.error(f'Error masking ReActor output images: {e}')
+
 async def save_images_and_return(temp_dir, img_payload, endpoint):
     images = []
     pnginfo = None
     # save .json for debugging
     # with open("img_payload.json", "w") as file:
     #     json.dump(img_payload, file)
-    r = await sd_api(endpoint=endpoint, method='post', json=img_payload)
-    for i, img_data in enumerate(r.get('images')):
-        image = Image.open(io.BytesIO(base64.b64decode(img_data.split(",", 1)[0])))
-        png_payload = {"image": "data:image/png;base64," + img_data}
-        r2 = await sd_api(endpoint='/sdapi/v1/png-info', method='post', json=png_payload) 
-        png_info_data = r2.get("info")
-        if i == 0:  # Only capture pnginfo from the first png_img_data
-            pnginfo = PngImagePlugin.PngInfo()
-            pnginfo.add_text("parameters", png_info_data)
-        image.save(f'{temp_dir}/temp_img_{i}.png', pnginfo=pnginfo) # save image to temp directory
-        images.append(image) # collect a list of PIL images
+    try:
+        r = await sd_api(endpoint=endpoint, method='post', json=img_payload)
+        for i, img_data in enumerate(r.get('images')):
+            image = Image.open(io.BytesIO(base64.b64decode(img_data.split(",", 1)[0])))
+            png_payload = {"image": "data:image/png;base64," + img_data}
+            r2 = await sd_api(endpoint='/sdapi/v1/png-info', method='post', json=png_payload) 
+            png_info_data = r2.get("info")
+            if i == 0:  # Only capture pnginfo from the first png_img_data
+                pnginfo = PngImagePlugin.PngInfo()
+                pnginfo.add_text("parameters", png_info_data)
+            image.save(f'{temp_dir}/temp_img_{i}.png', pnginfo=pnginfo) # save image to temp directory
+            images.append(image) # collect a list of PIL images
+    except Exception as e:
+        logging.error(f'Error processing images: {e}')
+        return [], e
     return images, pnginfo
 
 async def sd_img_gen(temp_dir, img_payload, img_gen_embed, endpoint):
     try:
-        # Start progress task and generation task concurrently
+       # reactor_mask = img_payload.get('alwayson_scripts', {}).get('reactor', {}).get('args', []).pop('mask', None)
+        reactor_args = img_payload.get('alwayson_scripts', {}).get('reactor', {}).get('args', [])
+        last_item = reactor_args[-1] if reactor_args else None
+        reactor_mask = reactor_args.pop() if isinstance(last_item, dict) else None
+        #Start progress task and generation task concurrently
         images_task = asyncio.create_task(save_images_and_return(temp_dir, img_payload, endpoint))
         progress_task = asyncio.create_task(track_progress(img_gen_embed))
         # Wait for both tasks to complete
         await asyncio.gather(images_task, progress_task)
         # Get the list of images and copy of pnginfo after both tasks are done
         images, pnginfo = await images_task
+        if not images:
+            img_embed_info.title = 'Error processing images'
+            img_embed_info.description = pnginfo # error
+            await img_gen_embed.edit()
+            return None
+        # Apply ReActor mask
+        reactor = img_payload.get('alwayson_scripts', {}).get('reactor', {})
+        if len(images) > 1 and reactor and reactor_mask:
+            images = await apply_reactor_mask(temp_dir, images, pnginfo, reactor_mask['mask'])
         # Workaround for layerdiffuse output
         layerdiffuse = img_payload.get('alwayson_scripts', {}).get('layerdiffuse', {})
         if len(images) > 1 and layerdiffuse and layerdiffuse['args'][0]:
@@ -2745,7 +2777,6 @@ def get_image_tag_args(value, ext):
                     if not method: # will already have value if random img picked from dir
                         method = 'Image file'
         if method:
-            args['enabled'] = True # enable extension
             logging.info(f'[TAGS] {ext}: "{value}" ({method}).')
         return args
     except Exception as e:
@@ -2817,6 +2848,8 @@ async def process_img_payload_tags(img_payload, mods, params):
             # ReActor face swap handling
             if reactor and config['sd']['extensions'].get('reactor_enabled', False):
                 img_payload['alwayson_scripts']['reactor']['args'].update(reactor)
+                if reactor.get('mask'):
+                    img_payload['alwayson_scripts']['reactor']['args']['save_original'] = True
             # Img2Img handling
             if img2img:
                 base64_img = img2img['image']
@@ -2886,7 +2919,8 @@ def collect_img_tag_values(tags):
                 # get controlnet tag params
                 elif key.startswith('controlnet'):
                     index = int(key[len('controlnet'):]) if key != 'controlnet' else 0  # Determine the index (cnet unit) for main controlnet args
-                    cnet = get_image_tag_args(str(value), 'ControlNet Image')                       # Get 'image' and 'enabled'
+                    cnet = get_image_tag_args(str(value), 'ControlNet Image')                       # Get 'image'
+                    cnet['enabled'] = True
                     controlnet_args.setdefault(index, {}).update(cnet)         # Update controlnet args at the specified index
                 elif key.startswith('cnet'):
                     # Determine the index for controlnet_args sublist
@@ -2920,7 +2954,11 @@ def collect_img_tag_values(tags):
                 elif key == 'reactor':
                     reactor = get_image_tag_args(str(value), 'ReActor Enabled')
                     img_payload_mods['reactor'] = reactor
+                    img_payload_mods['reactor']['enabled'] = True
                 elif key.startswith('reactor_'):
+                    if key.endswith('mask'):
+                        value = get_image_tag_args(str(value), 'ReActor Mask')
+                        value['mask'] = value.pop('image', '')
                     reactor_key = key[len('reactor_'):]
                     reactor_args[reactor_key] = value
                 # get any user image
@@ -2967,8 +3005,8 @@ def match_img_tags(img_prompt, tags):
                 unmatched_userllm_tags.append(tag)
                 tags['matches'].remove(tag)
         tags['unmatched']['userllm'] = unmatched_userllm_tags # previously matched tags with a 'positive_prompt' are still accounted for but now unmatched
-        # match tags labeled for llm / userllm.
-        tags = match_tags(img_prompt, tags)
+        # match tags for 'img' phase.
+        tags = match_tags(img_prompt, tags, phase='img')
         # Rematch any previously matched tags that failed to match text in img_prompt
         matches = copy.deepcopy(tags['matches'])
         for tag in tags['unmatched']['userllm'][:]:  # Iterate over a copy of the list
@@ -2989,7 +3027,6 @@ async def img_gen(user, channel, source, img_prompt, params, i=None, tags={}):
             logging.warning(f'Bot tried to generate image for {user}, but no Img model was loaded')
         if not tags:
             img_prompt, tags = await get_tags(img_prompt)
-            if 'user' in tags['unmatched']: del tags['unmatched']['user'] # Tags intended for pre-LLM processing should be removed
             tags = match_img_tags(img_prompt, tags)
         # Initialize img_payload
         neg_prompt = params.get('neg_prompt', '')
@@ -4316,13 +4353,13 @@ class ImgModel:
         self.img_payload = {
             'alwayson_scripts': {
                 'controlnet': {
-                    'args': [{'enabled': False, 'image': None, 'mask_image': None, 'model': 'None', 'module': 'None', 'weight': 1.0, 'processor_res': 64, 'pixel_perfect': True, 'guidance_start': 0.0, 'guidance_end': 1.0, 'threshold_a': 64, 'threshold_b': 64, 'control_mode': 0, 'resize_mode': 1, 'lowvram': False}]
+                    'args': [{'enabled': False, 'image': None, 'mask_image': None, 'model': 'None', 'module': 'None', 'weight': 1.0, 'processor_res': 64, 'pixel_perfect': True, 'guidance_start': 0.0, 'guidance_end': 1.0, 'threshold_a': 64, 'threshold_b': 64, 'control_mode': 0, 'resize_mode': 1, 'lowvram': False, 'save_detected_map': False}]
                 },
                 'layerdiffuse': {
                     'args': {'enabled': False, 'method': '(SDXL) Only Generate Transparent Image (Attention Injection)', 'weight': 1.0, 'stop_at': 1.0, 'foreground': None, 'background': None, 'blending': None, 'resize_mode': 'Crop and Resize', 'output_mat_for_i2i': False, 'fg_prompt': '', 'bg_prompt': '', 'blended_prompt': ''}
                 },
                 'forge_couple': {
-                    'args': {'enable': False, 'direction': 'Horizontal', 'global_effect': 'First Line', 'sep': 'SEP', 'mode': 'Basic', 'maps': [['0:0.5', '0.0:1.0', '1.0'],['0.5:1.0', '0.0:1.0', '1.0']], 'global_weight': 0.5}
+                    'args': {'enable': False, 'mode': 'Basic', 'sep': 'SEP', 'direction': 'Horizontal', 'global_effect': 'First Line', 'global_weight': 0.5, 'maps': [['0:0.5', '0.0:1.0', '1.0'],['0.5:1.0', '0.0:1.0', '1.0']]}
                 },                
                 'reactor': {
                     'args': {'image': '', 'enabled': False, 'source_faces': '0', 'target_faces': '0', 'model': 'inswapper_128.onnx', 'restore_face': 'CodeFormer', 'restore_visibility': 1, 'restore_upscale': True, 'upscaler': '4x_NMKD-Superscale-SP_178000_G', 'scale': 1.5, 'upscaler_visibility': 1, 'swap_in_source_img': False, 'swap_in_gen_img': True, 'log_level': 1, 'gender_detect_source': 0, 'gender_detect_target': 0, 'save_original': False, 'codeformer_weight': 0.8, 'source_img_hash_check': False, 'target_img_hash_check': False, 'system': 'CUDA', 'face_mask_correction': True, 'source_type': 0, 'face_model': '', 'source_folder': '', 'multiple_source_images': None, 'random_img': True, 'force_upscale': True, 'threshold': 0.6, 'max_faces': 2}
