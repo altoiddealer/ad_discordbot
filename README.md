@@ -162,7 +162,7 @@ Note: **text-generation-webui** and **Stable Diffusion** features can be indepen
 - **Robust "Tags" system to manipulate bot behavior persistently or via trigger phrases, including:**
   - Trigger Text and/or Image response
   - Image censoring settings (None / Spoiler / Block)
-  - Powerful [ControlNet](https://github.com/Mikubill/sd-webui-controlnet), [ReActor](https://github.com/Gourieff/sd-webui-reactor), and [layerdiffuse](https://github.com/layerdiffusion/sd-forge-layerdiffuse) integration
+  - Powerful [ControlNet](https://github.com/Mikubill/sd-webui-controlnet), [ReActor](https://github.com/Gourieff/sd-webui-reactor), [Forge Couple](https://github.com/Haoming02/sd-forge-couple), and [layerdiffuse](https://github.com/layerdiffusion/sd-forge-layerdiffuse) integration
   - Automatically apply [loractl scaling](https://github.com/cheald/sd-webui-loractl) (Currently A1111 only)
   - Swapping / Changing LLM characters (ei: "draw... " can trigger character tailored for image prompting)
   - Swapping / Changing LLM models and Img models
