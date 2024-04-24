@@ -1548,7 +1548,7 @@ async def get_tags(text):
         imgmodel_tags = bot_settings.settings['imgmodel'].get('tags', []) # imgmodel specific tags
         char_tags = bot_settings.settings['llmcontext'].get('tags', []) # character specific tags
         detagged_text, tags_from_text = get_tags_from_text(text)
-        all_tags = char_tags + base_tags + imgmodel_tags + tags_from_text + flow_step_tags # merge tags to one dictionary
+        all_tags = tags_from_text + flow_step_tags + char_tags + imgmodel_tags + base_tags  # merge tags to one dictionary
         sorted_tags = sort_tags(all_tags) # sort tags into phases (user / llm / userllm)
         return detagged_text, sorted_tags
     except Exception as e:
@@ -1937,6 +1937,7 @@ async def llm_gen(llm_payload):
         if str(e).startswith('list index out of range'):
             logging.error(f'Note: "regen" and "continue" commands only work if bot sent message during current session.')
         logging.error(f'An error occurred in llm_gen(): {e}')
+        return None, None
 
 async def cont_regen_gen(i, user, text, channel, source, message):
     try:
@@ -1959,6 +1960,8 @@ async def cont_regen_gen(i, user, text, channel, source, message):
         embed = await channel.send(embed=info_embed)
         last_resp, tts_resp = await llm_gen(llm_payload)
         await embed.delete()
+        if last_resp is None:
+            return
         logging.info("reply sent: \"" + user + ": {'text': '" + llm_payload["text"] + "', 'response': '" + last_resp + "'}\"")
         fetched_message = await channel.fetch_message(message)
         await fetched_message.delete()
@@ -1994,8 +1997,10 @@ async def speak_gen(user, channel, text, params):
         tts_args = params.get('tts_args', {})
         await update_extensions(tts_args)
         _, tts_resp = await llm_gen(llm_payload)
-        await process_tts_resp(channel, tts_resp)
         await embed.delete()
+        if tts_resp is None:
+            return
+        await process_tts_resp(channel, tts_resp)
         # remove api key (don't want to share this to the world!)
         for sub_dict in tts_args.values():
             if 'api_key' in sub_dict:
@@ -2786,6 +2791,7 @@ def get_image_tag_args(value, ext):
 async def process_img_payload_tags(img_payload, mods, params):
     try:
         imgmodel_params = None
+        flow = mods.get('flow', None)
         img_censoring = mods.get('img_censoring', None)
         change_imgmodel = mods.get('change_imgmodel', None)
         swap_imgmodel = mods.get('swap_imgmodel', None)
@@ -2800,7 +2806,10 @@ async def process_img_payload_tags(img_payload, mods, params):
         send_user_image = mods.get('send_user_image', None)
         endpoint = '/sdapi/v1/txt2img'
         # Process the tag matches
-        if img_censoring or change_imgmodel or swap_imgmodel or payload or param_variances or controlnet or forge_couple or layerdiffuse or reactor or img2img or img2img_mask or send_user_image:
+        if flow or img_censoring or change_imgmodel or swap_imgmodel or payload or param_variances or controlnet or forge_couple or layerdiffuse or reactor or img2img or img2img_mask or send_user_image:
+            # Flow handling
+            if flow is not None and not flow_event.is_set():
+                await build_flow_queue(flow)
             # Img censoring handling
             if img_censoring and img_censoring > 0:
                 img_payload['img_censoring'] = img_censoring
@@ -2871,6 +2880,7 @@ def collect_img_tag_values(tags):
     try:
         sd_output_dir = 'ad_discordbot/sd_outputs/'
         img_payload_mods = {
+            'flow': None,
             'img_censoring': None,
             'change_imgmodel': None,
             'swap_imgmodel': None,
@@ -2900,6 +2910,8 @@ def collect_img_tag_values(tags):
             for key, value in tag.items():
                 if key == 'sd_output_dir':
                     sd_output_dir = str(value)
+                elif key == 'flow' and img_payload_mods['flow'] is None:
+                    img_payload_mods['flow'] = dict(value)
                 elif key == 'img_censoring' and img_payload_mods['img_censoring'] is None:
                     img_payload_mods['img_censoring'] = int(value)
                 elif key == 'change_imgmodel' and img_payload_mods['change_imgmodel'] is None:
