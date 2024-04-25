@@ -159,7 +159,7 @@ Note: **text-generation-webui** and **Stable Diffusion** features can be indepen
 
 ## Features:
 
-- **Robust "Tags" system to manipulate bot behavior persistently or via trigger phrases, including:**
+- **Robust ["Tags" system](https://github.com/altoiddealer/ad_discordbot/wiki/tags) to manipulate bot behavior persistently or via trigger phrases, including:**
   - Trigger Text and/or Image response
   - Image censoring settings (None / Spoiler / Block)
   - Powerful [ControlNet](https://github.com/Mikubill/sd-webui-controlnet), [ReActor](https://github.com/Gourieff/sd-webui-reactor), [Forge Couple](https://github.com/Haoming02/sd-forge-couple), and [layerdiffuse](https://github.com/layerdiffusion/sd-forge-layerdiffuse) integration
@@ -171,7 +171,7 @@ Note: **text-generation-webui** and **Stable Diffusion** features can be indepen
   - Modifying the user's prompt and LLM's reply with delete/insert/replace text, img LORAs, etc
   - Manipulate LLM history (Suppress history, limit history, save or do-no-save reply, etc)
   - **New Feature:** Flexible, Instant-Tags by using syntax [[key:value]] or [[key1:value1 | key2:value2 ]]
-  - New features being added frequently and easily due to the framework of the "Tags" system
+  - New features being added frequently and easily due to the framework of the ["Tags" system](https://github.com/altoiddealer/ad_discordbot/wiki/tags)
 
 - **TTS Support!**
   - [alltalk_tts](https://github.com/erew123/alltalk_tts), coqui_tts, silero_tts, and elevenlabs_tts
@@ -193,7 +193,7 @@ Note: **text-generation-webui** and **Stable Diffusion** features can be indepen
 
 - **Dynamic settings handling:**
   - Core bot settings managed in **`config.yaml`** (bot behavior, discord features, extensions, etc.)
-  - The "Tags" system is configured in **`dict_tags.yaml`** (global Tags, default Tag params, Tag presets, etc.)
+  - The ["Tags" system](https://github.com/altoiddealer/ad_discordbot/wiki/tags) is configured in **`dict_tags.yaml`** (global Tags, default Tag params, Tag presets, etc.)
   - Foundational layer of user settings configured in **`base_settings.yaml`**.
   - Character files can include custom Tags, TTS settings, LLM state parameters, and special behaviors, which prioritize over basesettings.
   - Custom Image models settings defined in **`dict_imgmodels.yaml`** (Tags, payload params) which prioritize over basesettings.
