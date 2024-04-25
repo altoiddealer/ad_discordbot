@@ -1245,7 +1245,9 @@ def collect_llm_tag_values(tags):
             llm_payload_mods['swap_llmmodel'] = str(tag.pop('swap_llmmodel'))
         if 'send_user_image' in tag and llm_payload_mods['send_user_image'] is None:
             user_image_file = tag.pop('send_user_image')
-            llm_payload_mods['send_user_image'] = get_image_tag_args(str(user_image_file), 'User image')
+            user_image_args = get_image_tag_args('User image', str(user_image_file), key=None, set_dir=None)
+            user_image_args.pop('selected_folder')
+            llm_payload_mods['send_user_image'] = user_image_args
         if 'format_prompt' in tag and formatting['format_prompt'] is None:
             formatting['format_prompt'] = str(tag.pop('format_prompt'))
         # Values that may apply repeatedly
@@ -2419,8 +2421,8 @@ async def save_images_and_return(temp_dir, img_payload, endpoint):
     images = []
     pnginfo = None
     # save .json for debugging
-    # with open("img_payload.json", "w") as file:
-    #     json.dump(img_payload, file)
+    with open("img_payload.json", "w") as file:
+        json.dump(img_payload, file)
     try:
         r = await sd_api(endpoint=endpoint, method='post', json=img_payload)
         for i, img_data in enumerate(r.get('images')):
@@ -2707,12 +2709,26 @@ def process_param_variances(param_variances):
         logging.error(f"Error processing param variances: {e}")
         return {}
 
-def select_random_image_or_subdir(directory):
+def select_random_image_or_subdir(directory=None, root_dir=None, key=None):
+    image_file_path = None
     contents = os.listdir(directory)    # List all files and directories in the given directory
     # Filter files to include only .png and .jpg extensions
     image_files = [f for f in contents if os.path.isfile(os.path.join(directory, f)) and f.lower().endswith(('.png', '.jpg'))]
     # If there are image files, choose one randomly
     if image_files:
+        if key is not None:
+            for filename in image_files:
+                filename_without_extension = os.path.splitext(filename)[0]
+                if filename_without_extension.lower() == key.lower():
+                    image_file_path = os.path.join(directory, filename)
+                    method = 'Random from folder'
+                    return image_file_path, method
+    # If no image files and root_dir is not None, try again one time using root_dir as the directory
+    if root_dir is not None:
+        image_file_path, method = select_random_image_or_subdir(directory=root_dir, root_dir=None, key=None)
+        method = 'Random from folder'
+        return image_file_path, method
+    if image_files and not image_file_path:
         random_image = random.choice(image_files)
         image_file_path = os.path.join(directory, random_image)
         method = 'Random from folder'
@@ -2721,25 +2737,24 @@ def select_random_image_or_subdir(directory):
     subdirectories = [d for d in contents if os.path.isdir(os.path.join(directory, d))]
     # If there are subdirectories, select one randomly and recursively call select_random_image
     if subdirectories:
-        random_subdirectory = random.choice(subdirectories)
-        subdirectory_path = os.path.join(directory, random_subdirectory)
-        return select_random_image_or_subdir(subdirectory_path)
-    
+        random_subdir = random.choice(subdirectories)
+        subdir_path = os.path.join(directory, random_subdir)
+        return select_random_image_or_subdir(directory=subdir_path, root_dir=root_dir, key=key)
     # If neither image files nor subdirectories found, return None
     return None, None
 
-def get_image_tag_args(value, ext):
+def get_image_tag_args(extension, value, key=None, set_dir=None):
     args = {}
     image_file_path = ''
     method = ''
     try:
-        home_path = os.path.join("ad_discordbot/user_images")
+        home_path = os.path.join('ad_discordbot', 'user_images')
         full_path = os.path.join(home_path, value)
         # If value contains valid image extension
         if any(ext in value for ext in (".txt", ".png", ".jpg")): # extension included in value
             image_file_path = os.path.join(home_path, value)
         # ReActor specific
-        elif ".safetensors" in value and ext == 'ReActor Enabled':
+        elif ".safetensors" in value and extension == 'ReActor Enabled':
             args['image'] = None
             args['source_type'] = 1
             args['face_model'] = value
@@ -2747,9 +2762,14 @@ def get_image_tag_args(value, ext):
         # If value was a directory to choose random image from
         elif os.path.isdir(full_path):
             cwd_path = os.getcwd()
-            os_path = os.path.join(cwd_path, full_path)
+            if set_dir:
+                os_path = set_dir
+                root_dir = full_path
+            else:
+                os_path = os.path.join(cwd_path, full_path)
+                root_dir = None
             while True:
-                image_file_path, method = select_random_image_or_subdir(os_path)
+                image_file_path, method = select_random_image_or_subdir(directory=os_path, root_dir=root_dir, key=key)
                 if image_file_path:
                     break  # Break the loop if an image is found and selected
                 else:
@@ -2768,7 +2788,7 @@ def get_image_tag_args(value, ext):
             if not found:
                 raise FileNotFoundError(f"File '{value}' not found with supported extensions (.txt, .png, .jpg)")
         if image_file_path and os.path.isfile(image_file_path):
-            if ext == "User image":
+            if extension == "User image":
                 return image_file_path # user image does not need to be converted to base64
             if image_file_path.endswith(".txt"):
                 with open(image_file_path, "r") as txt_file:
@@ -2782,10 +2802,12 @@ def get_image_tag_args(value, ext):
                     if not method: # will already have value if random img picked from dir
                         method = 'Image file'
         if method:
-            logging.info(f'[TAGS] {ext}: "{value}" ({method}).')
+            logging.info(f'[TAGS] {extension}: "{value}" ({method}).')
+            if method == 'Random from folder':
+                args['selected_folder'] = os.path.dirname(image_file_path)
         return args
     except Exception as e:
-        logging.error(f"[TAGS] Error processing {ext} tag: {e}")
+        logging.error(f"[TAGS] Error processing {extension} tag: {e}")
         return {}
 
 async def process_img_payload_tags(img_payload, mods, params):
@@ -2853,6 +2875,7 @@ async def process_img_payload_tags(img_payload, mods, params):
             # layerdiffuse handling
             if layerdiffuse and config['sd']['extensions'].get('layerdiffuse_enabled', False):
                 img_payload['alwayson_scripts']['layerdiffuse']['args'].update(layerdiffuse)
+                img_payload['alwayson_scripts']['layerdiffuse']['args']['enabled'] = True
                 logging.info(f"[TAGS] Enabled layerdiffuse: {layerdiffuse}")
             # ReActor face swap handling
             if reactor and config['sd']['extensions'].get('reactor_enabled', False):
@@ -2861,13 +2884,11 @@ async def process_img_payload_tags(img_payload, mods, params):
                     img_payload['alwayson_scripts']['reactor']['args']['save_original'] = True
             # Img2Img handling
             if img2img:
-                base64_img = img2img['image']
-                img_payload['init_images'] = [base64_img]
+                img_payload['init_images'] = [img2img]
                 params['endpoint'] = '/sdapi/v1/img2img'
             # Inpaint Mask handling
             if img2img_mask:
-                base64_img = img2img_mask['image']
-                img_payload['mask'] = base64_img
+                img_payload['mask'] = img2img_mask
             # Send User Image handling
             if send_user_image:
                 logging.info(f"[TAGS] Sending user image: {send_user_image}")
@@ -2876,37 +2897,123 @@ async def process_img_payload_tags(img_payload, mods, params):
         logging.error(f"Error processing Img tags: {e}")
         return img_payload, None
 
+# The methods of this function allow multiple extensions with an identical "select image from random folder" value to share the first selected folder.
+# The function will first try to find a specific image file based on the extension's key name (ex: 'canny.png' or 'img2img_mask.jpg')
+def collect_img_extension_mods(mods):
+    controlnet = mods.get('controlnet', [])
+    reactor = mods.get('reactor', None)
+    img2img = mods.get('img2img', None)
+    img2img_mask = mods.get('img2img_mask', None)
+    set_dir = None
+    if img2img:
+        try:
+            image = get_image_tag_args('Img2Img', img2img, key='img2img', set_dir=set_dir)
+            if not image:
+                mods['img2img'] = ''
+            else:
+                if set_dir is None:
+                    set_dir = image.pop('selected_folder', None)
+                else:
+                    image.pop('selected_folder')
+                mods['img2img'] = image['image']
+                if img2img_mask:
+                    image = get_image_tag_args('Img2Img Mask', img2img_mask, key='img2img_mask', set_dir=set_dir)
+                    if not image:
+                        mods['img2img_mask'] = ''
+                    else:
+                        if set_dir is None:
+                            set_dir = image.pop('selected_folder', None)
+                        else:
+                            image.pop('selected_folder')
+                        mods['img2img_mask'] = image['image']
+        except Exception as e:
+            logging.error(f"Error collecting img2img tag values: {e}")
+    if controlnet:
+        try:
+            for idx, controlnet_item in enumerate(controlnet):
+                control_type = controlnet_item.pop('control_type', None) # remove control_type
+                module = controlnet_item.get('module', None)
+                prefix = control_type or module or None
+                image = controlnet_item.get('image', None)
+                mask_image = controlnet_item.get('mask', None) or controlnet_item.get('mask_image', None)
+                # Update controlnet item with image information
+                if image:
+                    cnet_image = get_image_tag_args('ControlNet Image', image, key=prefix, set_dir=set_dir)
+                    if not cnet_image:
+                        controlnet[idx] = {}
+                    else:
+                        if set_dir is None:
+                            set_dir = cnet_image.pop('selected_folder', None)
+                        else:
+                            cnet_image.pop('selected_folder')
+                        controlnet[idx].update(cnet_image)
+                        controlnet[idx]['enabled'] = True
+                        # Update controlnet item with mask_image information
+                        if mask_image:
+                            key = f'{prefix}_mask' if prefix else None
+                            cnet_mask_image = get_image_tag_args('ControlNet Mask', mask_image, key=key, set_dir=set_dir)
+                            if not cnet_mask_image:
+                                controlnet[idx]['mask_image'] = None
+                            else:
+                                if set_dir is None:
+                                    set_dir = cnet_mask_image.pop('selected_folder', None)
+                                else:
+                                    cnet_mask_image.pop('selected_folder')
+                                controlnet[idx]['mask_image'] = cnet_mask_image['image']
+            mods['controlnet'] = controlnet
+        except Exception as e:
+            logging.error(f"Error collecting ControlNet tag values: {e}")
+    if reactor:
+        try:
+            image = reactor.get('image', None)
+            mask_image = reactor.get('mask', None)
+            if image:
+                reactor_image = get_image_tag_args('ReActor Enabled', image, key='reactor', set_dir=None)
+                if not reactor_image:
+                    mods['reactor']['image'] = ''
+                else:
+                    reactor_image.pop('selected_folder')
+                    mods['reactor'] = reactor_image
+                    mods['reactor']['enabled'] = True
+                    if mask_image:
+                        reactor_mask = get_image_tag_args('ReActor Mask', mask_image, key='reactor_mask', set_dir=set_dir)
+                        if not reactor_mask:
+                            mods['reactor']['mask'] = ''
+                        else:
+                            if set_dir is None:
+                                set_dir = reactor_mask.pop('selected_folder', None)
+                            else:
+                                reactor_mask.pop('selected_folder')
+                            mods['reactor']['mask'] = reactor_mask['image'] 
+        except Exception as e:
+            logging.error(f"Error collecting ReActor tag values: {e}")
+    return mods
+
 def collect_img_tag_values(tags):
+    sd_output_dir = 'ad_discordbot/sd_outputs/'
+    img_payload_mods = {
+        'flow': None,
+        'img_censoring': None,
+        'change_imgmodel': None,
+        'swap_imgmodel': None,
+        'payload': {},
+        'param_variances': {},
+        'controlnet': [],
+        'forge_couple': {},
+        'layerdiffuse': {},
+        'reactor': {},
+        'send_user_image': None,
+        'img2img': {},
+        'img2img_mask': {}
+        }
+    controlnet_args = {}
+    forge_couple_args = {}
+    layerdiffuse_args = {}
+    reactor_args = {}
     try:
-        sd_output_dir = 'ad_discordbot/sd_outputs/'
-        img_payload_mods = {
-            'flow': None,
-            'img_censoring': None,
-            'change_imgmodel': None,
-            'swap_imgmodel': None,
-            'payload': {},
-            'param_variances': {},
-            'controlnet': [],
-            'forge_couple': {},
-            'layerdiffuse': {},
-            'reactor': {},
-            'send_user_image': None,
-            'img2img': {},
-            'img2img_mask': {}
-            }
-        inpaint_args = {}
-        controlnet_args = {}
-        forge_couple_args = {}
-        layerdiffuse_args = {}
-        reactor_args = {}
         for tag in tags['matches']:
             if isinstance(tag, tuple):
                 tag = tag[0] # For tags with prompt insertion indexes
-            # WIP CODE...
-            # if 'controlnet' in tag or 'img2img' in tag or 'img2img_mask' in tag or :
-            #     if '.' not in tag['value']:
-            #         values = set(item['value'] for item in tags['matches'] if item['key'] == tag['key'])
-            #         if len(values) == 1:
             for key, value in tag.items():
                 if key == 'sd_output_dir':
                     sd_output_dir = str(value)
@@ -2928,60 +3035,49 @@ def collect_img_tag_values(tags):
                         update_dict(img_payload_mods['param_variances'], dict(value))
                     except:
                         logging.warning("Error processing a matched 'img_param_variances' tag; ensure it is a dictionary.")
-                # get controlnet tag params
-                elif key.startswith('controlnet'):
-                    index = int(key[len('controlnet'):]) if key != 'controlnet' else 0  # Determine the index (cnet unit) for main controlnet args
-                    cnet = get_image_tag_args(str(value), 'ControlNet Image')                       # Get 'image'
-                    cnet['enabled'] = True
-                    controlnet_args.setdefault(index, {}).update(cnet)         # Update controlnet args at the specified index
-                elif key.startswith('cnet'):
-                    # Determine the index for controlnet_args sublist
-                    if key.startswith('cnet_'): index = 0                                       # Determine the index (cnet unit) for additional controlnet args
-                    else: index = int(key.split('_')[0][len('cnet'):])
-                    if key.endswith('mask_image'):
-                        mask_args = get_image_tag_args(str(value), 'ControlNet Mask')
-                        value = mask_args['image']
-                    controlnet_args.setdefault(index, {}).update({key.split('_', 1)[-1]: value})   # Update controlnet args at the specified index
+                # get layerdiffuse tag params                    
+                elif key == 'layerdiffuse':
+                    img_payload_mods['layerdiffuse']['method'] = str(value)
+                elif key.startswith('laydiff_'):
+                    laydiff_key = key[len('laydiff_'):]
+                    layerdiffuse_args[laydiff_key] = value
+                # get any user image
+                elif key == 'send_user_image':
+                    user_image_args = get_image_tag_args('User image', str(value), key=None, set_dir=None)
+                    user_image_args.pop('selected_folder')
+                    img_payload_mods['send_user_image'] = user_image_args
+                # get reactor tag params
+                elif key == 'reactor':
+                    img_payload_mods['reactor']['image'] = value
+                elif key.startswith('reactor_'):
+                    reactor_key = key[len('reactor_'):]
+                    reactor_args[reactor_key] = value
                 # get forge_couple tag params                    
                 elif key == 'forge_couple':
                     if value.startswith('['):
                         img_payload_mods['forge_couple']['maps'] = list(value)
                     else: img_payload_mods['forge_couple']['direction'] = str(value)
-                    img_payload_mods['forge_couple']['enable'] = True
                 elif key.startswith('couple_'):
                     forge_couple_key = key[len('couple_'):]
                     if value.startswith('['):
                         forge_couple_args[forge_couple_key] = list(value)
                     else:
                         forge_couple_args[forge_couple_key] = str(value)
-                # get layerdiffuse tag params                    
-                elif key == 'layerdiffuse':
-                    img_payload_mods['layerdiffuse']['method'] = str(value)
-                    img_payload_mods['layerdiffuse']['enabled'] = True
-                elif key.startswith('laydiff_'):
-                    laydiff_key = key[len('laydiff_'):]
-                    layerdiffuse_args[laydiff_key] = value
-                    img_payload_mods['layerdiffuse']['enabled'] = True
-                # get reactor tag params
-                elif key == 'reactor':
-                    reactor = get_image_tag_args(str(value), 'ReActor Enabled')
-                    img_payload_mods['reactor'] = reactor
-                    img_payload_mods['reactor']['enabled'] = True
-                elif key.startswith('reactor_'):
-                    if key.endswith('mask'):
-                        value = get_image_tag_args(str(value), 'ReActor Mask')
-                        value['mask'] = value.pop('image', '')
-                    reactor_key = key[len('reactor_'):]
-                    reactor_args[reactor_key] = value
-                # get any user image
-                elif key == 'send_user_image':
-                    img_payload_mods['send_user_image'] = get_image_tag_args(str(value), 'User image')
+                # get controlnet tag params
+                elif key.startswith('controlnet'):
+                    index = int(key[len('controlnet'):]) if key != 'controlnet' else 0  # Determine the index (cnet unit) for main controlnet args
+                    controlnet_args.setdefault(index, {}).update({'image': value, 'enabled': True})         # Update controlnet args at the specified index
+                elif key.startswith('cnet'):
+                    # Determine the index for controlnet_args sublist
+                    if key.startswith('cnet_'):
+                        index = int(key.split('_')[0][len('cnet'):]) if not key.startswith('cnet_') else 0  # Determine the index (cnet unit) for additional controlnet args
+                    controlnet_args.setdefault(index, {}).update({key.split('_', 1)[-1]: value})   # Update controlnet args at the specified index
                 # get any img2img
                 elif key == 'img2img':
-                    img_payload_mods['img2img'] = get_image_tag_args(str(value), 'Img2Img')
+                    img_payload_mods['img2img'] = str(value) # get base64 in next function
                 # get any inpaint mask
                 elif key == 'img2img_mask':
-                    img_payload_mods['img2img_mask'] = get_image_tag_args(str(value), 'Img2Img Mask')
+                    img_payload_mods['img2img_mask'] = str(value) # get base64 in next function
         # Add the collected SD WebUI extension args to the img_payload_mods dict
         for index in sorted(set(controlnet_args.keys())):   # This flattens down any gaps between collected ControlNet units (ensures lowest index is 0, next is 1, and so on)
             cnet_basesettings = copy.copy(bot_settings.settings['imgmodel']['payload']['alwayson_scripts']['controlnet']['args'][0])  # Copy of required dict items
@@ -2991,10 +3087,12 @@ def collect_img_tag_values(tags):
         img_payload_mods['forge_couple'].update(forge_couple_args)
         img_payload_mods['layerdiffuse'].update(layerdiffuse_args)
         img_payload_mods['reactor'].update(reactor_args)
+
+        img_payload_mods = collect_img_extension_mods(img_payload_mods)
         return sd_output_dir, img_payload_mods
     except Exception as e:
         logging.error(f"Error collecting Img tag values: {e}")
-        return tags
+        return sd_output_dir, tags
 
 def initialize_img_payload(img_prompt, neg_prompt):
     try:

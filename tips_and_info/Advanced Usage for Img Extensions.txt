@@ -1,0 +1,36 @@
+As detailed in dict_tags.yaml, the values for image keys such as keys 'controlnet', cnet1_image, reactor_mask, etc - may be any of the following formats:
+
+"Face model" method (ReActor specific):
+face_model_name.safetensors
+
+"Image file" method:
+path/subir/including_extension.png
+
+"Random from folder" method:
+path or path/subdir etc
+
+
+"Face model" and "Image file" methods are straight forward.
+Continue reading for advanced usage of "Random from folder" method.
+
+
+For the "Random from folder" method, this is the logic:
+
+1.	The bot will first attempt to select an image file that exactly matches the key before selecting an image at random.
+	For example, if you have a triggered tag with key value 'img2img': 'path/subdir', it will first try to find an image called 'img2img(.jpg/.png)'
+	If the image is not found it will try selecting another image at random.
+	If there are no images in the folder, but there are other subdirectories, it will recursively choose subdirectories at random and repeat the steps above.
+
+2.	When an image is selected, that folder will be noted and checked first for subsequent "Random from folder" images.
+ 	For subsequent image searches, if the key name does not match a file in the set directory, it will fall back to its directory value rather than the one set previously,
+	and then repeat the logic from step 1.
+
+
+What this allows, is for users to make a number of subdirectories to choose from at random, allowing a predictable package of inputs to be used together (multi-controlnet, masks, etc).
+
+
+Limitations:
+
+- For ControlNet values to be obtained reliably, your tags need to include a 'cnet#_control_type' value such as 'canny' or 'depth' etc.  This will be used when trying to find an image like 'canny.png' or 'depth_mask.png'
+
+- If you have multiple controlnets of the same control type, it will be looking for the same image name.  It won't be looking for 'canny1.png' or 'depth2_mask.png' etc - that's getting too crazy with it even for me :D

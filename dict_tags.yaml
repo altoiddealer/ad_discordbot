@@ -243,7 +243,8 @@ tag_presets:
 #                                     Value values: Image in 'user_images' (png/jpg/txt in base64) -OR- Directory name in '/user_images/' (Picks a random image or random image from random subdirectory)
 #   cnet_{key}                        ANY key can be used (see dict_base_settings.yaml for complete list). A 'controlnet' tag must also be in effect when using these tags in order to properly assign the image.
 #   cnet#_{key}: 'string'             Optional syntax for multi-ControlNet parameters where # represents the ControlNet unit. ex: 'cnet0_weight: 0.5', 'cnet1_guidance_end: 0.8', etc.
-#   cnet#_mask_image: 'string'        The value for the 'cnet_mask_image' param will be handled exactly the same as the main controlnet (see writeup for 'controlnet' a few lines up)
+#   cnet#_mask: 'string'              The value for the 'cnet_mask_image' param will be handled exactly the same as the main controlnet (see writeup for 'controlnet' a few lines up). 'cnet#_mask_image' is also valid.
+#   cnet#_control_type: 'string'      Optional. If provided: for any controlnet image value (including mask) that is not a specific filename (ei: its directory name), it will try looking for this filename.
 
 # Forge Couple specific tags (Forge extension):
 #   forgecouple: 'string' OR [list]   Simplified tag to both **apply** AND **enable** Forge Couple.
