@@ -144,44 +144,45 @@ client = commands.Bot(command_prefix=".", intents=intents)
 #################################################################
 sd_enabled = config['sd'].get('enabled', True)
 
-SD_URL = config['sd'].get('SD_URL', None) # Get the URL from config.yaml
-if SD_URL is None:
-    SD_URL = config['sd'].get('A1111', 'http://127.0.0.1:7860')
+if sd_enabled:
+    SD_URL = config['sd'].get('SD_URL', None) # Get the URL from config.yaml
+    if SD_URL is None:
+        SD_URL = config['sd'].get('A1111', 'http://127.0.0.1:7860')
 
-async def sd_api(endpoint, method='get', json=None):
-    try:
-        async with aiohttp.ClientSession() as session:
-            request_method = getattr(session, method.lower())  
-            async with request_method(url=f'{SD_URL}{endpoint}', json=json) as response:
-                if response.status == 200:
-                    r = await response.json()
-                    return r
-                else:
-                    logging.error(f'{SD_URL}{endpoint} response: "{response.status}"')
-    except Exception as e:
-        logging.error(f'Error getting data from "{SD_URL}{endpoint}": {e}')
-        return {}
+    async def sd_api(endpoint, method='get', json=None):
+        try:
+            async with aiohttp.ClientSession() as session:
+                request_method = getattr(session, method.lower())  
+                async with request_method(url=f'{SD_URL}{endpoint}', json=json) as response:
+                    if response.status == 200:
+                        r = await response.json()
+                        return r
+                    else:
+                        logging.error(f'{SD_URL}{endpoint} response: "{response.status}"')
+        except Exception as e:
+            logging.error(f'Error getting data from "{SD_URL}{endpoint}": {e}')
+            return {}
 
-async def get_sd_sysinfo():
-    if not sd_enabled:
-        return 'DISABLED'
-    try:
-        r = await sd_api(endpoint='/sdapi/v1/cmd-flags', method='get', json=None)
-        ui_settings_file = r.get("ui_settings_file", "")
-        if "webui-forge" in ui_settings_file:
-            return 'SD WebUI Forge'
-        elif "webui" in ui_settings_file:
-            return 'A1111 SD WebUI'
-        else:
-            return 'OFFLINE'
-    except Exception as e:
-        logging.error(f"Error getting SD sysinfo API: {e}")
-        return 'OFFLINE'
+    async def get_sd_sysinfo():
+        try:
+            r = await sd_api(endpoint='/sdapi/v1/cmd-flags', method='get', json=None)
+            ui_settings_file = r.get("ui_settings_file", "")
+            if "webui-forge" in ui_settings_file:
+                return 'SD WebUI Forge'
+            elif "webui" in ui_settings_file:
+                return 'A1111 SD WebUI'
+            else:
+                return 'SD WebUI'
+        except Exception as e:
+            logging.error(f"Error getting SD sysinfo API: {e}")
+            return None
 
-SD_CLIENT = asyncio.run(get_sd_sysinfo()) # Stable Diffusion client name to use in messages, warnings, etc
+    SD_CLIENT = asyncio.run(get_sd_sysinfo()) # Stable Diffusion client name to use in messages, warnings, etc
 
-if SD_CLIENT:
-    logging.info(f"Initializing with SD WebUI: '{SD_CLIENT}'")
+    if SD_CLIENT:
+        logging.info(f"Initializing with SD WebUI enabled: '{SD_CLIENT}'")
+    else:
+        sd_enabled = False
 
 #################################################################
 ##################### TEXTGENWEBUI STARTUP ######################
@@ -4716,6 +4717,7 @@ class LLMState:
             'history': {'internal': [], 'visible': []},
             'max_new_tokens': 512,
             'max_tokens_second': 0,
+            'max_updates_second': 0,
             'min_p': 0.00,
             'mirostat_eta': 0.1,
             'mirostat_mode': 0,
