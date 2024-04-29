@@ -160,10 +160,11 @@ async def sd_api(endpoint, method='get', json=None):
                     logging.error(f'{SD_URL}{endpoint} response: "{response.status}"')
     except Exception as e:
         logging.error(f'Error getting data from "{SD_URL}{endpoint}": {e}')
+        return {}
 
 async def get_sd_sysinfo():
     if not sd_enabled:
-        return ''
+        return 'DISABLED'
     try:
         r = await sd_api(endpoint='/sdapi/v1/cmd-flags', method='get', json=None)
         ui_settings_file = r.get("ui_settings_file", "")
@@ -172,15 +173,15 @@ async def get_sd_sysinfo():
         elif "webui" in ui_settings_file:
             return 'A1111 SD WebUI'
         else:
-            return 'Stable Diffusion'
+            return 'OFFLINE'
     except Exception as e:
         logging.error(f"Error getting SD sysinfo API: {e}")
-        return 'Stable Diffusion'
+        return 'OFFLINE'
 
 SD_CLIENT = asyncio.run(get_sd_sysinfo()) # Stable Diffusion client name to use in messages, warnings, etc
 
 if SD_CLIENT:
-    logging.info(f"Initializing with SD WebUI enabled: '{SD_CLIENT}")
+    logging.info(f"Initializing with SD WebUI: '{SD_CLIENT}'")
 
 #################################################################
 ##################### TEXTGENWEBUI STARTUP ######################
@@ -2472,6 +2473,7 @@ async def sd_img_gen(temp_dir, img_payload, img_gen_embed, endpoint):
         img_embed_info.title = 'Error processing images'
         img_embed_info.description = e
         await img_gen_embed.edit(embed=img_embed_info)
+        return []
 
 async def process_image_gen(img_payload, img_gen_embed, channel, tags, endpoint, sd_output_dir='ad_discordbot/sd_outputs/'):
     try:
@@ -3186,95 +3188,125 @@ async def img_gen(user, channel, source, img_prompt, params, i=None, tags={}):
 #################################################################
 ######################## /IMAGE COMMAND #########################
 #################################################################
-# Function to update size options
-async def update_size_options(average):
-    global size_choices
-    options = load_file('ad_discordbot/dict_cmdoptions.yaml')
-    sizes = options.get('sizes', [])
-    aspect_ratios = [size.get("ratio") for size in sizes.get('ratios', [])]
-    size_choices.clear()  # Clear the existing list
-    ratio_options = calculate_aspect_ratio_sizes(average, aspect_ratios)
-    static_options = sizes.get('static_sizes', [])
-    size_options = (ratio_options or []) + (static_options or [])
-    size_choices.extend(
-        app_commands.Choice(name=option['name'], value=option['name'])
-        for option in size_options)
-    await client.tree.sync()
-
-def round_to_precision(val, prec):
-    return round(val / prec) * prec
-
-def res_to_model_fit(width, height, mp_target):
-    mp = width * height
-    scale = math.sqrt(mp_target / mp)
-    new_wid = int(round_to_precision(width * scale, 64))
-    new_hei = int(round_to_precision(height * scale, 64))
-    return new_wid, new_hei
-
-def calculate_aspect_ratio_sizes(avg, aspect_ratios):
-    ratio_options = []
-    mp_target = avg*avg
-    doubleavg = avg*2
-    for ratio in aspect_ratios:
-        ratio_parts = tuple(map(int, ratio.replace(':', '/').split('/')))
-        ratio_sum = ratio_parts[0]+ratio_parts[1]
-        # Approximate the width and height based on the average and aspect ratio
-        width = round((ratio_parts[0]/ratio_sum)*doubleavg)
-        height = round((ratio_parts[1]/ratio_sum)*doubleavg)
-        # Round to correct megapixel precision
-        width, height = res_to_model_fit(width, height, mp_target)
-        if width > height: aspect_type = "landscape"
-        elif width < height: aspect_type = "portrait"
-        else: aspect_type = "square"
-        # Format the result
-        size_name = f"{width} x {height} ({ratio} {aspect_type})"
-        ratio_options.append({'name': size_name, 'width': width, 'height': height})
-    return ratio_options
-
-def average_width_height(width, height):
-    avg = (width + height) // 2
-    if (width + height) % 2 != 0: avg += 1
-    return avg
-
-async def get_imgcmd_choices(size_options, style_options):
-    try:
-        size_choices = [
-            app_commands.Choice(name=option['name'], value=option['name'])
-            for option in size_options]
-        style_choices = [
-            app_commands.Choice(name=option['name'], value=option['name'])
-            for option in style_options]
-        return size_choices, style_choices
-    except Exception as e:
-        logging.error(f"An error occurred while building choices for /image: {e}")  
-
-async def get_imgcmd_options():
-    try:
-        options = load_file('ad_discordbot/dict_cmdoptions.yaml')
-        options = dict(options)
-        active_settings = load_file('ad_discordbot/activesettings.yaml')
-        active_settings = dict(active_settings)
-        # Get sizes and aspect ratios from 'dict_cmdoptions.yaml'
-        sizes = options.get('sizes', {})
-        aspect_ratios = [size.get("ratio") for size in sizes.get('ratios', [])]
-        # Calculate the average and aspect ratio sizes
-        width = active_settings.get('imgmodel', {}).get('payload', {}).get('width', 512)
-        height = active_settings.get('imgmodel', {}).get('payload', {}).get('height', 512)
-        average = average_width_height(width, height)
-        ratio_options = calculate_aspect_ratio_sizes(average, aspect_ratios)
-        # Collect any defined static sizes
-        static_options = sizes.get('static_sizes', [])
-        # Merge dynamic and static sizes
-        size_options = (ratio_options or []) + (static_options or [])
-        # Get style and controlnet options
-        style_options = options.get('styles', {})
-        return size_options, style_options
-    except Exception as e:
-        logging.error(f"An error occurred while building options for /image: {e}")
-
 if sd_enabled:
-    size_options, style_options = asyncio.run(get_imgcmd_options())
-    size_choices, style_choices = asyncio.run(get_imgcmd_choices(size_options, style_options))
+
+    # Updates size options for /image command
+    def update_size_options(average):
+        global size_choices
+        options = load_file('ad_discordbot/dict_cmdoptions.yaml')
+        sizes = options.get('sizes', [])
+        aspect_ratios = [size.get("ratio") for size in sizes.get('ratios', [])]
+        size_choices.clear()  # Clear the existing list
+        ratio_options = calculate_aspect_ratio_sizes(average, aspect_ratios)
+        static_options = sizes.get('static_sizes', [])
+        size_options = (ratio_options or []) + (static_options or [])
+        size_choices.extend(
+            app_commands.Choice(name=option['name'], value=option['name'])
+            for option in size_options)
+
+    # Updates size ControlNet data for /image command
+    async def update_cnet_options():
+        global cnet_data
+        if cnet_data:
+            cnet_data = await get_cnet_data()
+
+    # Update /image command options        
+    async def update_image_cmd_menus(average):
+        update_size_options(average)
+        await update_cnet_options()
+        await client.tree.sync()
+
+    def round_to_precision(val, prec):
+        return round(val / prec) * prec
+
+    def res_to_model_fit(width, height, mp_target):
+        mp = width * height
+        scale = math.sqrt(mp_target / mp)
+        new_wid = int(round_to_precision(width * scale, 64))
+        new_hei = int(round_to_precision(height * scale, 64))
+        return new_wid, new_hei
+
+    def calculate_aspect_ratio_sizes(avg, aspect_ratios):
+        ratio_options = []
+        mp_target = avg*avg
+        doubleavg = avg*2
+        for ratio in aspect_ratios:
+            ratio_parts = tuple(map(int, ratio.replace(':', '/').split('/')))
+            ratio_sum = ratio_parts[0]+ratio_parts[1]
+            # Approximate the width and height based on the average and aspect ratio
+            width = round((ratio_parts[0]/ratio_sum)*doubleavg)
+            height = round((ratio_parts[1]/ratio_sum)*doubleavg)
+            # Round to correct megapixel precision
+            width, height = res_to_model_fit(width, height, mp_target)
+            if width > height: aspect_type = "landscape"
+            elif width < height: aspect_type = "portrait"
+            else: aspect_type = "square"
+            # Format the result
+            size_name = f"{width} x {height} ({ratio} {aspect_type})"
+            ratio_options.append({'name': size_name, 'width': width, 'height': height})
+        return ratio_options
+
+    def average_width_height(width, height):
+        avg = (width + height) // 2
+        if (width + height) % 2 != 0: avg += 1
+        return avg
+
+    async def get_imgcmd_choices(size_options, style_options):
+        try:
+            size_choices = [
+                app_commands.Choice(name=option['name'], value=option['name'])
+                for option in size_options]
+            style_choices = [
+                app_commands.Choice(name=option['name'], value=option['name'])
+                for option in style_options]
+            return size_choices, style_choices
+        except Exception as e:
+            logging.error(f"An error occurred while building choices for /image: {e}")  
+
+    async def get_imgcmd_options():
+        try:
+            options = load_file('ad_discordbot/dict_cmdoptions.yaml')
+            options = dict(options)
+            active_settings = load_file('ad_discordbot/activesettings.yaml')
+            active_settings = dict(active_settings)
+            # Get sizes and aspect ratios from 'dict_cmdoptions.yaml'
+            sizes = options.get('sizes', {})
+            aspect_ratios = [size.get("ratio") for size in sizes.get('ratios', [])]
+            # Calculate the average and aspect ratio sizes
+            width = active_settings.get('imgmodel', {}).get('payload', {}).get('width', 512)
+            height = active_settings.get('imgmodel', {}).get('payload', {}).get('height', 512)
+            average = average_width_height(width, height)
+            ratio_options = calculate_aspect_ratio_sizes(average, aspect_ratios)
+            # Collect any defined static sizes
+            static_options = sizes.get('static_sizes', [])
+            # Merge dynamic and static sizes
+            size_options = (ratio_options or []) + (static_options or [])
+            # Get style and controlnet options
+            style_options = options.get('styles', {})
+            return size_options, style_options
+        except Exception as e:
+            logging.error(f"An error occurred while building options for /image: {e}")
+
+    async def get_cnet_data():
+        filtered_cnet_data = {}
+        if config['sd']['extensions'].get(f'controlnet_enabled', False):
+            try:
+                all_cnet_data = await sd_api(endpoint='/controlnet/control_types', method='get', json=None)
+                for key, value in all_cnet_data["control_types"].items():
+                    if key == "All":
+                        continue
+                    if key in ["Reference", "Revision", "Shuffle"]:
+                        value['name'] = key
+                        filtered_cnet_data[key] = value
+                    elif value["default_model"] != "None":
+                        value['name'] = key
+                        filtered_cnet_data[key] = value
+            except:
+                cnet_online = await ext_online('controlnet', '/controlnet/model_list')
+                if cnet_online:
+                    logging.warning("ControlNet is both enabled in config.py and detected. However, ad_discordbot relies on the '/controlnet/control_types' \
+                        API endpoint which is missing. See here: (https://github.com/altoiddealer/ad_discordbot/wiki/troubleshooting).")
+        return filtered_cnet_data
 
     async def ext_online(ext, endpoint):
         if config['sd']['extensions'].get(f'{ext}_enabled', False):
@@ -3285,30 +3317,47 @@ if sd_enabled:
             except:
                 logging.warning(f"{ext} is enabled in config.py, but was not responsive from {SD_CLIENT} API. Omitting option from '/image' command.")
         return False
-
-    cnet_online = asyncio.run(ext_online('controlnet', '/controlnet/model_list'))
+    # Get size and style options for /image command
+    size_options, style_options = asyncio.run(get_imgcmd_options())
+    size_choices, style_choices = asyncio.run(get_imgcmd_choices(size_options, style_options))
+    # Get filtered ControlNet data for /image command
+    cnet_data = asyncio.run(get_cnet_data())
+    # Test API reactor endpoint for /image command
     reactor_online = asyncio.run(ext_online('reactor', '/reactor/models'))
 
-    if cnet_online and reactor_online:
+    if cnet_data and reactor_online:
         @client.hybrid_command(name="image", description=f'Generate an image using {SD_CLIENT}')
+        @app_commands.describe(style='Applies a positive/negative prompt preset')
+        @app_commands.describe(img2img='Diffuses from an input image instead of pure latent noise.')
+        @app_commands.describe(img2img_mask='Masks the diffusion strength for the img2img input. Requires img2img.')
+        @app_commands.describe(face_swap='For best results, attach a square (1:1) cropped image of a face, to swap into the output.')
+        @app_commands.describe(controlnet='Guides image diffusion using an input image or map.')
         @app_commands.choices(size=size_choices)
         @app_commands.choices(style=style_choices)
         async def image(ctx: discord.ext.commands.Context, prompt: str, size: typing.Optional[app_commands.Choice[str]], style: typing.Optional[app_commands.Choice[str]], neg_prompt: typing.Optional[str], img2img: typing.Optional[discord.Attachment], img2img_mask: typing.Optional[discord.Attachment],
-            face_swap: typing.Optional[discord.Attachment], cnet: typing.Optional[discord.Attachment]):
+            face_swap: typing.Optional[discord.Attachment], controlnet: typing.Optional[discord.Attachment]):
             user_selections = {"prompt": prompt, "size": size.value if size else None, "style": style.value if style else None, "neg_prompt": neg_prompt, "img2img": img2img if img2img else None, "img2img_mask": img2img_mask if img2img_mask else None,
-            "face_swap": face_swap if face_swap else None, "cnet": cnet if cnet else None}
+            "face_swap": face_swap if face_swap else None, "cnet": controlnet if controlnet else None}
             await process_image(ctx, user_selections)
-    elif cnet_online and not reactor_online:
+    elif cnet_data and not reactor_online:
         @client.hybrid_command(name="image", description=f'Generate an image using {SD_CLIENT}')
+        @app_commands.describe(style='Applies a positive/negative prompt preset')
+        @app_commands.describe(img2img='Diffuses from an input image instead of pure latent noise.')
+        @app_commands.describe(img2img_mask='Masks the diffusion strength for the img2img input. Requires img2img.')
+        @app_commands.describe(controlnet='Guides image diffusion using an input image or map.')
         @app_commands.choices(size=size_choices)
         @app_commands.choices(style=style_choices)
         async def image(ctx: discord.ext.commands.Context, prompt: str, size: typing.Optional[app_commands.Choice[str]], style: typing.Optional[app_commands.Choice[str]], neg_prompt: typing.Optional[str], img2img: typing.Optional[discord.Attachment], img2img_mask: typing.Optional[discord.Attachment],
-            cnet: typing.Optional[discord.Attachment]):
+            controlnet: typing.Optional[discord.Attachment]):
             user_selections = {"prompt": prompt, "size": size.value if size else None, "style": style.value if style else None, "neg_prompt": neg_prompt, "img2img": img2img if img2img else None, "img2img_mask": img2img_mask if img2img_mask else None,
-            "cnet": cnet if cnet else None}
+            "cnet": controlnet if controlnet else None}
             await process_image(ctx, user_selections)
-    elif reactor_online and not cnet_online:
+    elif reactor_online and not cnet_data:
         @client.hybrid_command(name="image", description=f'Generate an image using {SD_CLIENT}')
+        @app_commands.describe(style='Applies a positive/negative prompt preset')
+        @app_commands.describe(img2img='Diffuses from an input image instead of pure latent noise.')
+        @app_commands.describe(img2img_mask='Masks the diffusion strength for the img2img input. Requires img2img.')
+        @app_commands.describe(face_swap='For best results, attach a square (1:1) cropped image of a face, to swap into the output.')
         @app_commands.choices(size=size_choices)
         @app_commands.choices(style=style_choices)
         async def image(ctx: discord.ext.commands.Context, prompt: str, size: typing.Optional[app_commands.Choice[str]], style: typing.Optional[app_commands.Choice[str]], neg_prompt: typing.Optional[str], img2img: typing.Optional[discord.Attachment], img2img_mask: typing.Optional[discord.Attachment], 
@@ -3318,6 +3367,9 @@ if sd_enabled:
             await process_image(ctx, user_selections)
     else:
         @client.hybrid_command(name="image", description=f'Generate an image using {SD_CLIENT}')
+        @app_commands.describe(style='Applies a positive/negative prompt preset')
+        @app_commands.describe(img2img='Diffuses from an input image instead of pure latent noise.')
+        @app_commands.describe(img2img_mask='Masks the diffusion strength for the img2img input. Requires img2img.')
         @app_commands.choices(size=size_choices)
         @app_commands.choices(style=style_choices)
         async def image(ctx: discord.ext.commands.Context, prompt: str,  size: typing.Optional[app_commands.Choice[str]], style: typing.Optional[app_commands.Choice[str]], neg_prompt: typing.Optional[str], img2img: typing.Optional[discord.Attachment], img2img_mask: typing.Optional[discord.Attachment]):
@@ -3407,64 +3459,210 @@ if sd_enabled:
                 message += f" | **Face Swap:** Image Provided"
             if cnet:
                 async def process_image_controlnet(cnet, cnet_dict, message):
-                    # Convert attached image to base64
-                    attached_cnet_img = await cnet.read()
-                    cnetimage = base64.b64encode(attached_cnet_img).decode('utf-8')
-                    cnet_dict['image'] = cnetimage
-                    # Ask user for model
-                    options = load_file('ad_discordbot/dict_cmdoptions.yaml')
-                    options = dict(options)
-                    cnet_options = options.get('controlnet', {})
-                    cnet_model_options = [discord.SelectOption(label=option['name'], value=option['name']) for option in cnet_options]
-                    cnet_model_select = discord.ui.Select(custom_id="cnet_model_select", placeholder="Select ControlNet Model", options=cnet_model_options)
-                    # Send ControlNet model select menu in a view
-                    view = discord.ui.View()
-                    view.add_item(cnet_model_select)
-                    # Wait for user selection
-                    select_message = await ctx.send("Select ControlNet Model:", view=view, ephemeral=True)
-                    interaction = await client.wait_for("interaction", check=lambda interaction: interaction.message.id == select_message.id)
-                    cnet_model = interaction.data["values"][0]
-                    selected_cnet_option = next((option for option in cnet_options if option['name'] == cnet_model), None)
-                    if selected_cnet_option:
-                        cnet_dict['model'] = selected_cnet_option.get('model')
-                        cnet_dict['module'] = selected_cnet_option.get('module')
-                        cnet_dict['guidance_end'] = selected_cnet_option.get('guidance_end')
-                        cnet_dict['weight'] = selected_cnet_option.get('weight')
-                        cnet_dict['enabled'] = True
-                        message += f" | **ControlNet:** Model: {cnet_model}"
-                    await interaction.response.defer() # defer response for this interaction
-                    await select_message.delete()
-                    # Ask about map
-                    cnet_map_select = discord.ui.Select(custom_id="cnet_map_select", options=[
-                            discord.SelectOption(label="No, my image is not a ControlNet map", value="no_map", default=True),
-                            discord.SelectOption(label="Yes, my image is a map on a black background", value="map"),
-                            discord.SelectOption(label="Yes, my image is a map on a white background", value="invert_map")])
-                    submit_button = discord.ui.Button(style=discord.ButtonStyle.primary, label="Submit")
-                    view = discord.ui.View()
-                    view.add_item(cnet_map_select)
-                    view.add_item(submit_button)
-                    # Wait for user selection
-                    select_message = await ctx.send('Is your ControlNet input image a "map"?', view=view, ephemeral=True)
-                    interaction = await client.wait_for("interaction", check=lambda interaction: interaction.message.id == select_message.id)
-                    selected_cnet_map = interaction.data.get("values", ["no_map"])[0]
-                    if not selected_cnet_map:
-                        selected_cnet_map = "no_map"
-                        cnet_dict['module'] = selected_cnet_option.get('module')
-                        message += f", Module: {cnet_dict['module']}"
-                    else:
-                        if selected_cnet_map == "map":
-                            cnet_dict['module'] = "none"
-                        elif selected_cnet_map == "invert_map":
-                            cnet_dict['module'] = "invert (from white bg & black line)"
-                        message += f", Map: {selected_cnet_map}"
-                    await interaction.response.defer() # defer response for this interaction
-                    await select_message.delete()
+                    try:
+                        # Convert attached image to base64
+                        attached_cnet_img = await cnet.read()
+                        cnetimage = base64.b64encode(attached_cnet_img).decode('utf-8')
+                        cnet_dict['image'] = cnetimage
+                    except:
+                        logging.error(f"Error decoding ControlNet input image for '/image' command: {e}")
+                    try:
+                        # Ask user to select a Control Type
+                        cnet_control_type_options = [discord.SelectOption(label=key, value=key) for key in cnet_data]
+                        control_type_select = discord.ui.Select(options=cnet_control_type_options, placeholder="Select ControlNet Control Type", custom_id="cnet_control_type_select")
+                        # Send Control Type select menu in a view
+                        view = discord.ui.View()
+                        view.add_item(control_type_select)
+                        select_message = await ctx.send("### Select ControlNet Control Type:", view=view, ephemeral=True)
+                        interaction = await client.wait_for("interaction", check=lambda interaction: interaction.message.id == select_message.id)
+                        selected_control_type = interaction.data.get("values")[0]
+                        selected_control_type = cnet_data[selected_control_type]
+                        await interaction.response.defer() # defer response for this interaction
+                        await select_message.delete()
+                    except Exception as e:
+                        logging.error(f"An error occurred while setting ControlNet Control Type in '/image' command: {e}")
+                    # View containing Selects for ControlNet Module, Model, Start and End
+                    class CnetControlView(discord.ui.View):
+                        def __init__(self, cnet_data, selected_control_type):
+                            super().__init__()
+                            self.cnet_dict = {'module': selected_control_type["default_option"], 'model': selected_control_type["default_model"], 'guidance_start': 0.00, 'guidance_end': 1.00}
+                        # Dropdown Menu for Module
+                        module_options = [discord.SelectOption(label=module_option, value=module_option, default=True if module_option == selected_control_type["default_option"] else False,
+                            description='Default' if module_option == selected_control_type["default_option"] else None) for module_option in selected_control_type["module_list"]]
+                        @discord.ui.select(options=module_options, placeholder="Select ControlNet Module", custom_id="cnet_module_select")
+                        async def module_select(self, select, interaction):
+                            self.cnet_dict['module'] = select.data['values'][0]
+                            await select.response.defer()
+                        # Dropdown Menu for Model
+                        model_options = [discord.SelectOption( label=model_option, value=model_option, default=True if model_option == selected_control_type["default_model"] else False,
+                            description='Default' if model_option == selected_control_type["default_model"] else '') for model_option in selected_control_type["model_list"]]
+                        @discord.ui.select(options=model_options, placeholder="Select ControlNet Model", custom_id="cnet_model_select", disabled=selected_control_type.get("default_model") == 'None')
+                        async def model_select(self, select, interaction):
+                            self.cnet_dict['model'] = select.data['values'][0]
+                            await select.response.defer()
+                        # Dropdown Menu for Start
+                        start_options = []
+                        for value in [round(0.05 * index, 2) for index in range(int(1 / 0.05) + 1)]:
+                            start_options.append(discord.SelectOption(label=str(value), value=str(value), default=True if value == 0.00 else False))
+                        @discord.ui.select(options=start_options, placeholder="Select Start Guidance (0.0 - 1.0)", custom_id="cnet_start_select")
+                        async def start_select(self, select, interaction):
+                            self.cnet_dict['guidance_start'] = float(select.data['values'][0])
+                            await select.response.defer()
+                        # Dropdown Menu for End
+                        end_options = []
+                        for value in [round(0.05 * index, 2) for index in range(int(1 / 0.05) + 1)]:
+                            end_options.append(discord.SelectOption(label=str(value), value=str(value), default=True if value == 1.00 else False))
+                        @discord.ui.select(options=end_options, placeholder="Select End Guidance (0.0 - 1.0)", custom_id="cnet_end_select")
+                        async def end_select(self, select, interaction):
+                            self.cnet_dict['guidance_end'] = float(select.data['values'][0])
+                            await select.response.defer()
+                        # Submit button
+                        @discord.ui.button(label='Submit', style=discord.ButtonStyle.primary, custom_id="cnet_submit")
+                        async def submit_button(self, button, interaction):
+                            await button.response.defer()
+                            self.stop()
+                    # Function to build Select Options based on the selected ControlNet Module
+                    def make_cnet_options(selected_module):
+                        # Defaults
+                        options_a = [discord.SelectOption(label='Not Applicable', value='64')]
+                        options_b = [discord.SelectOption(label='Not Applicable', value='64')]
+                        label_a = 'Not Applicable'
+                        label_b = 'Not Applicable'
+                        if (selected_module in ["canny", "mlsd", "normal_midas", "scribble_xdog", "softedge_teed"]
+                            or selected_module.startswith(('blur', 'depth_leres', 'recolor_', 'reference', 'CLIP-G', 'tile_colorfix'))):
+                            try:
+                                # Initialize Specific Options
+                                options_a = []
+                                options_b = []
+                                # Defaults
+                                round_a = 2
+                                range_a = 1
+                                default_a = 10
+                                round_b = 2
+                                range_b = 256
+                                default_b = 0
+                                if selected_module.startswith('blur'):
+                                    label_a = 'Sigma'
+                                    range_a = 64
+                                    default_a = 3
+                                elif selected_module == 'canny':
+                                    label_a = 'Low Threshold'
+                                    round_a = 0
+                                    range_a = 256
+                                    default_a = 7
+                                    label_b = 'High Threshold'
+                                    round_b = 0
+                                    default_b = 16
+                                elif selected_module.startswith('depth_leres'):
+                                    label_a = 'Remove Near %'
+                                    round_a = 1
+                                    range_a = 100
+                                    default_a = 0
+                                    label_b = 'Remove Background %'
+                                    round_b = 1
+                                    range_b = 100
+                                elif selected_module == 'mlsd':
+                                    label_a = 'MLSD Value Threshold'
+                                    range_a = 2
+                                    default_a = 0
+                                    label_b = 'MLSD Distance Threshold'
+                                    range_b = 20
+                                elif selected_module == 'normal_midas':
+                                    label_a = 'Normal Background Threshold'
+                                    default_a = 8
+                                elif selected_module.startswith('recolor'):
+                                    label_a = 'Gamma Correction'
+                                    round_a = 3
+                                    range_a = 2
+                                elif selected_module.startswith('reference'):
+                                    label_a = 'Style Fidelity'
+                                elif selected_module.startswith('CLIP-G'): # AKA 'Revision'
+                                    label_a = 'Noise Augmentation'
+                                    default_a = 0
+                                elif selected_module == 'scribble_xdog':
+                                    label_a = 'XDoG Threshold'
+                                    range_a = 64
+                                elif selected_module == 'softedge_teed':
+                                    label_a = 'Safe Steps'
+                                    default_a = 8
+                                    range_a = 10
+                                    round_a = 0
+                                elif selected_module.startswith('tile_colorfix'):
+                                    label_a = 'Variation'
+                                    round_a = 0
+                                    range_a = 32
+                                    default_a = 5
+                                    if selected_module == 'tile_colorfix+sharp':
+                                        label_b = 'Sharpness'
+                                        round_b = 0
+                                        range_b = 2
+                                        default_b = 10
+                                for index, value in enumerate([round(index * (range_a / 20), round_a) for index in range(20 + 1)]):
+                                    value = float(value) if round_a else int(value)
+                                    options_a.append(discord.SelectOption(label=str(value), value=str(value), default=index == default_a))
+                                for index, value in enumerate([round(index * (range_b / 20), round_b) for index in range(20 + 1)]):
+                                    value = float(value) if round_b else int(value)
+                                    options_b.append(discord.SelectOption(label=str(value), value=str(value), default=index == default_b))
+                            except:
+                                logging.error(f"Error building ControlNet options for '/image' command: {e}")
+                                return [discord.SelectOption(label='Not Applicable', value='64')], 'Not Applicable', [discord.SelectOption(label='Not Applicable', value='64')], 'Not Applicable'
+                        return options_a, label_a, options_b, label_b
+                    try:
+                        cnet_control_view = CnetControlView(cnet_data, selected_control_type)
+                        view_message = await ctx.send('### Select ControlNet Options\n • **Module**\n • **Model**\n • **Start** (0.0 - 1.0)\n • **End** (0.0 - 1.0)\n(if unsure, just Submit with Defaults)', 
+                            view=cnet_control_view, ephemeral=True)
+                        await cnet_control_view.wait()
+                        cnet_dict.update(cnet_control_view.cnet_dict)
+                        selected_module = cnet_dict['module']   # For next step
+                        await view_message.delete()
+                        options_a, label_a, options_b, label_b = make_cnet_options(selected_module)
+                    except Exception as e:
+                        logging.error(f"An error occurred while configuring initial ControlNet options from '/image' command: {e}")
+                    # View containing Selects for ControlNet Weight and Additional Options
+                    class CnetOptionsView(discord.ui.View):
+                        def __init__(self, options_a, label_a, options_b, label_b):
+                            super().__init__()
+                            self.cnet_dict = {'weight': 1.00}
+                        # Dropdown Menu for Weight
+                        weight_options = []
+                        for value in [round(0.05 * index, 2) for index in range(int(1 / 0.05) + 1)]:
+                            weight_options.append(discord.SelectOption(label=str(value), value=str(value), default=True if value == 1.00 else False))
+                        @discord.ui.select(options=weight_options, placeholder="Select ControlNet Weight", custom_id="cnet_weight_select")
+                        async def weight_select(self, select, interaction):
+                            self.cnet_dict['weight'] = float(select.data['values'][0])
+                            await select.response.defer()
+                        # Dropdown Menu for Options A
+                        @discord.ui.select(options=options_a, placeholder=label_a, custom_id="cnet_options_a_select", disabled=label_a == 'Not Applicable')
+                        async def thresh_a_select(self, select, interaction):
+                            self.cnet_dict['threshold_a'] = float(select.data['values'][0]) if '.' in select.data['values'][0] else int(select.data['values'][0])
+                            await select.response.defer()
+                        # Dropdown Menu for Options B
+                        @discord.ui.select(options=options_b, placeholder=label_b, custom_id="cnet_options_b_select", disabled=label_b == 'Not Applicable')
+                        async def options_b_select(self, select, interaction):
+                            self.cnet_dict['threshold_b'] = float(select.data['values'][0]) if '.' in select.data['values'][0] else int(select.data['values'][0])
+                            await select.response.defer()
+                        # Submit button
+                        @discord.ui.button(label='Submit', style=discord.ButtonStyle.primary, custom_id="cnet_submit")
+                        async def submit_button(self, button, interaction):
+                            await button.response.defer()
+                            self.stop()
+                    try:
+                        view = CnetOptionsView(options_a, label_a, options_b, label_b)
+                        message_a = f'\n • **{label_a}**' if label_a != 'Not Applicable' else ''
+                        message_b = f'\n • **{label_b}**' if label_b != 'Not Applicable' else ''
+                        view_message = await ctx.send(f'### Select ControlNet Options\n • **Weight** (0.0 - 1.0){message_a}{message_b}\n(if unsure, just Submit with Defaults)', view=view, ephemeral=True) 
+                        await view.wait()
+                        cnet_dict.update(view.cnet_dict)
+                        await view_message.delete()
+                    except Exception as e:
+                        logging.error(f"An error occurred while configuring secondary ControlNet options from /image command: {e}")
+                    cnet_dict.update({'enabled': True, 'save_detected_map': True})
+                    message += f" | **ControlNet:** (Module: {cnet_dict['module']}, Model: {cnet_dict['model']})"
                     return cnet_dict, message
                 try:
                     cnet_dict, message = await process_image_controlnet(cnet, cnet_dict, message)
                 except Exception as e:
                     logging.error(f"An error occurred while configuring ControlNet for /image command: {e}")
-
             params = {'neg_prompt': neg_style_prompt, 'size': size_dict, 'img2img': img2img_dict, 'face_swap': faceswapimg, 'controlnet': cnet_dict, 'endpoint': endpoint, 'message': message}
             await ireply(ctx, 'image') # send a response msg to the user
             # offload to ai_gen queue
@@ -3865,7 +4063,7 @@ async def update_imgmodel(channel, selected_imgmodel, selected_imgmodel_tags):
         current_avg = average_width_height(current_w, current_h)    # get current average width/height
         new_avg = average_width_height(new_w, new_h)                # get new average width/height
         if current_avg != new_avg:                                  # Update size options in menus if they are different
-            await bg_task_queue.put(update_size_options(new_avg))
+            await bg_task_queue.put(update_image_cmd_menus(new_avg))
     except Exception as e:
         logging.error(f"Error updating settings with the selected imgmodel data: {e}")
 
