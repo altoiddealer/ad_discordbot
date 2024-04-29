@@ -22,6 +22,16 @@ Note: **text-generation-webui** and **Stable Diffusion** features can be indepen
 
 <details>
   <summary>click to expand</summary>
+  
+   **04/29/2024:** Huge Improvement to ControlNet in /image Command
+  
+    - Options are now dynamically filtered and populated using the '/controlnet/control_type' API endpoint
+    - Sets almost identical default options as in SD WebUI interface
+    - This took a lot of time and effort, please try it out!
+
+  <img width="690" alt="Screenshot 2024-04-29 145440" src="https://github.com/altoiddealer/ad_discordbot/assets/1613484/bd399667-8d1e-4dd8-9b36-074b9c4a3e54">
+
+  ---
 
    **04/21/2024:** Revamped Main Config. Made textgenwebui and SD WebUI Optional!
   
