@@ -31,6 +31,7 @@ from threading import Lock, Thread
 from pydub import AudioSegment
 import copy
 import sys
+import traceback
 
 #################################################################
 #################### DISCORD / BOT STARTUP ######################
@@ -86,7 +87,7 @@ class Config:
                 sys.exit(2)
         except yaml.YAMLError as e:
             logging.error(f"Error loading 'config.yaml': {e}")
-            sys.exit(2)            
+            sys.exit(2)
 
     def get_config_dict(self):
         return self.config
@@ -149,7 +150,7 @@ if sd_enabled:
     if SD_URL is None:
         SD_URL = config['sd'].get('A1111', 'http://127.0.0.1:7860')
 
-    async def sd_api(endpoint, method='get', json=None):
+    async def sd_api(endpoint, method='get', json=None, retry=True):
         try:
             async with aiohttp.ClientSession() as session:
                 request_method = getattr(session, method.lower())  
@@ -159,13 +160,18 @@ if sd_enabled:
                         return r
                     else:
                         logging.error(f'{SD_URL}{endpoint} response: "{response.status}"')
+                        if retry and response.status in [408, 500]:
+                            logging.info("Retrying the request in 3 seconds...")
+                            await asyncio.sleep(3)
+                            return await sd_api(endpoint, method, json, retry=False)
         except Exception as e:
             logging.error(f'Error getting data from "{SD_URL}{endpoint}": {e}')
-            return {}
+            traceback.print_exc()
+            return e
 
     async def get_sd_sysinfo():
         try:
-            r = await sd_api(endpoint='/sdapi/v1/cmd-flags', method='get', json=None)
+            r = await sd_api(endpoint='/sdapi/v1/cmd-flags', method='get', json=None, retry=False)
             ui_settings_file = r.get("ui_settings_file", "")
             if "webui-forge" in ui_settings_file:
                 return 'SD WebUI Forge'
@@ -339,22 +345,25 @@ def get_llm_model_loader(model):
     return loader
 
 def load_llm_model(loader=None):
-    # If any model has been selected, load it
-    if shared.model_name != 'None':
-        p = Path(shared.model_name)
-        if p.exists():
-            model_name = p.parts[-1]
-            shared.model_name = model_name
-        else:
-            model_name = shared.model_name
+    try:
+        # If any model has been selected, load it
+        if shared.model_name != 'None':
+            p = Path(shared.model_name)
+            if p.exists():
+                model_name = p.parts[-1]
+                shared.model_name = model_name
+            else:
+                model_name = shared.model_name
 
-        model_settings = get_model_metadata(model_name)
-        update_model_parameters(model_settings, initial=True)  # hijack the command-line arguments
+            model_settings = get_model_metadata(model_name)
+            update_model_parameters(model_settings, initial=True)  # hijack the command-line arguments
 
-        # Load the model
-        shared.model, shared.tokenizer = load_model(model_name, loader)
-        if shared.args.lora:
-            add_lora_to_model(shared.args.lora)
+            # Load the model
+            shared.model, shared.tokenizer = load_model(model_name, loader)
+            if shared.args.lora:
+                add_lora_to_model(shared.args.lora)
+    except Exception as e:
+        logging.error(f"An error occurred while loading LLM Model: {e}")
 
 if textgenwebui_enabled:
     init_textgenwebui_settings()
@@ -1916,12 +1925,11 @@ async def llm_gen(llm_payload):
             last_resp = ''
             tts_resp = ''
             for resp in chatbot_wrapper(text=llm_payload['text'], state=llm_payload['state'], regenerate=llm_payload['regenerate'], _continue=llm_payload['_continue'], loading_message=True, for_ui=False):
-                i_resp = resp['internal']
+                i_resp = resp.get('internal', [])
                 if len(i_resp) > 0:
-                    resp_clean = i_resp[len(i_resp) - 1][1]
-                    last_resp = resp_clean
+                    last_resp = i_resp[len(i_resp) - 1][1]
                 # look for tts response
-                vis_resp = resp['visible']
+                vis_resp = resp.get('visible', [])
                 if len(vis_resp) > 0:
                     last_vis_resp = vis_resp[-1][-1]
                     if 'audio src=' in last_vis_resp:
@@ -1938,9 +1946,10 @@ async def llm_gen(llm_payload):
 
         return last_resp, tts_resp
     except Exception as e:
-        if str(e).startswith('list index out of range'):
-            logging.error(f'Note: "regen" and "continue" commands only work if bot sent message during current session.')
         logging.error(f'An error occurred in llm_gen(): {e}')
+        if str(e).startswith('list index out of range'):
+            logging.warning(f'Note (this may not be the cause of error): "regen" and "continue" commands only work if bot sent message during current session.')
+        traceback.print_exc()
         return None, None
 
 async def cont_regen_gen(i, user, text, channel, source, message):
@@ -2050,7 +2059,7 @@ async def change_imgmodel_task(user, channel, params):
         # Soft Img model update if swapping
         if mode == 'swap' or mode == 'swap_back':
             model_data = imgmodel.get('override_settings') or imgmodel['payload'].get('override_settings')
-            _ = await sd_api(endpoint='/sdapi/v1/options', method='post', json=model_data)
+            _ = await sd_api(endpoint='/sdapi/v1/options', method='post', json=model_data, retry=True)
             if change_embed: await change_embed.delete()
             return True
         # Change Img model settings
@@ -2066,6 +2075,7 @@ async def change_imgmodel_task(user, channel, params):
             await bg_task_queue.put(post_active_settings())
     except Exception as e:
         logging.error(f"Error changing Img model: {e}")
+        traceback.print_exc()
         change_embed_info.title = "An error occurred while changing Img model"
         change_embed_info.description = e
         try: await change_embed.edit(embed=change_embed_info)
@@ -2087,11 +2097,16 @@ async def change_llmmodel_task(user, channel, params):
             change_embed = await channel.send(embed=change_embed_info)
             if shared.model_name != 'None':
                 unload_model()                  # If an LLM model is loaded, unload it
-            shared.model_name = llmmodel_name   # set to new LLM model
-            if shared.model_name != 'None':
-                bot_settings.database.update_was_warned('no_llmmodel', 0) # Reset warning message
-                loader = get_llm_model_loader(llmmodel_name)    # Try getting loader from user-config.yaml to prevent errors
-                load_llm_model(loader)                          # Load an LLM model if specified
+            try:
+                shared.model_name = llmmodel_name   # set to new LLM model
+                if shared.model_name != 'None':
+                    bot_settings.database.update_was_warned('no_llmmodel', 0) # Reset warning message
+                    loader = get_llm_model_loader(llmmodel_name)    # Try getting loader from user-config.yaml to prevent errors
+                    load_llm_model(loader)                          # Load an LLM model if specified
+            except:
+                change_embed_info.title = "An error occurred while changing LLM Model. No LLM Model is loaded."
+                change_embed_info.description = e
+                await change_embed.edit(embed=change_embed_info)
             if mode == 'swap':
                 return change_embed             # return the embed so it can be deleted by the caller
             if llmmodel_name == 'None':
@@ -2105,9 +2120,7 @@ async def change_llmmodel_task(user, channel, params):
             logging.info(f"LLM model changed to: {llmmodel_name}")
     except Exception as e:
         logging.error(f"An error occurred while changing LLM Model from '/llmmodel': {e}")
-        change_embed_info.title = "An error occurred while changing LLM Model from '/llmmodel'"
-        change_embed_info.description = e
-        await change_embed.edit(embed=change_embed_info)
+        traceback.print_exc()
 
 #################################################################
 #################### QUEUED CHARACTER CHANGE ####################
@@ -2342,6 +2355,7 @@ def progress_bar(value, length=20):
     return f'{bar}'
 
 async def check_sd_progress(img_gen_embed):
+    retry_count = 1
     async with aiohttp.ClientSession() as session:
         progress_data = {"progress":0}
         while progress_data['progress'] == 0:
@@ -2354,8 +2368,12 @@ async def check_sd_progress(img_gen_embed):
                     await img_gen_embed.edit(embed=img_embed_info)                    
                     await asyncio.sleep(1)
             except aiohttp.client_exceptions.ClientConnectionError:
-                logging.warning('Connection closed, retrying in 1 seconds')
+                logging.warning(f'Connection closed, retrying in 1 second (attempt {retry_count}/5)')
                 await asyncio.sleep(1)
+                retry_count += 1
+        if retry_count == 5:
+            logging.error('Reached maximum retry limit')
+            return
         while progress_data['state']['job_count'] > 0:
             try:
                 async with session.get(f'{SD_URL}/sdapi/v1/progress') as progress_response:
@@ -2423,14 +2441,18 @@ async def save_images_and_return(temp_dir, img_payload, endpoint):
     images = []
     pnginfo = None
     # save .json for debugging
-    with open("img_payload.json", "w") as file:
-        json.dump(img_payload, file)
+    # with open("img_payload.json", "w") as file:
+    #     json.dump(img_payload, file)
     try:
-        r = await sd_api(endpoint=endpoint, method='post', json=img_payload)
+        r = await sd_api(endpoint=endpoint, method='post', json=img_payload, retry=True)
+        if not isinstance(r, dict):
+            return [], r
         for i, img_data in enumerate(r.get('images')):
             image = Image.open(io.BytesIO(base64.b64decode(img_data.split(",", 1)[0])))
             png_payload = {"image": "data:image/png;base64," + img_data}
-            r2 = await sd_api(endpoint='/sdapi/v1/png-info', method='post', json=png_payload) 
+            r2 = await sd_api(endpoint='/sdapi/v1/png-info', method='post', json=png_payload, retry=True) 
+            if not isinstance(r2, dict):
+                return [], r2
             png_info_data = r2.get("info")
             if i == 0:  # Only capture pnginfo from the first png_img_data
                 pnginfo = PngImagePlugin.PngInfo()
@@ -2439,12 +2461,12 @@ async def save_images_and_return(temp_dir, img_payload, endpoint):
             images.append(image) # collect a list of PIL images
     except Exception as e:
         logging.error(f'Error processing images: {e}')
+        traceback.print_exc()
         return [], e
     return images, pnginfo
 
 async def sd_img_gen(temp_dir, img_payload, img_gen_embed, endpoint):
     try:
-       # reactor_mask = img_payload.get('alwayson_scripts', {}).get('reactor', {}).get('args', []).pop('mask', None)
         reactor_args = img_payload.get('alwayson_scripts', {}).get('reactor', {}).get('args', [])
         last_item = reactor_args[-1] if reactor_args else None
         reactor_mask = reactor_args.pop() if isinstance(last_item, dict) else None
@@ -2457,8 +2479,8 @@ async def sd_img_gen(temp_dir, img_payload, img_gen_embed, endpoint):
         images, pnginfo = await images_task
         if not images:
             img_embed_info.title = 'Error processing images'
-            img_embed_info.description = pnginfo # error
-            await img_gen_embed.edit()
+            img_embed_info.description = str(pnginfo) # error
+            await img_gen_embed.edit(embed=img_embed_info)
             return None
         # Apply ReActor mask
         reactor = img_payload.get('alwayson_scripts', {}).get('reactor', {})
@@ -2494,7 +2516,6 @@ async def process_image_gen(img_payload, img_gen_embed, channel, tags, endpoint,
         # Generate images, save locally
         images = await sd_img_gen(temp_dir, img_payload, img_gen_embed, endpoint)
         if not images:
-            await channel.send(f"No images were generated.")
             return
         # Send images to discord
         await img_gen_embed.delete()
@@ -2844,7 +2865,7 @@ async def process_img_payload_tags(img_payload, mods, params):
             if imgmodel_params:
                     ## IF API IMG MODEL UNLOADING GETS EVER DEBUGGED
                     ## if not change_imgmodel and swap_imgmodel and swap_imgmodel == 'None':
-                        # _ = await sd_api(endpoint='/sdapi/v1/unload-checkpoint', method='post', json=None)
+                        # _ = await sd_api(endpoint='/sdapi/v1/unload-checkpoint', method='post', json=None, retry=True)
                 # 'change_imgmodel' will trump 'swap_imgmodel'
                 current_imgmodel = bot_settings.settings['imgmodel'].get('override_settings', {}).get('sd_model_checkpoint') or bot_settings.settings['imgmodel']['payload'].get('override_settings', {}).get('sd_model_checkpoint') or ''
                 if imgmodel_params == current_imgmodel:
@@ -3292,7 +3313,7 @@ if sd_enabled:
         filtered_cnet_data = {}
         if config['sd']['extensions'].get(f'controlnet_enabled', False):
             try:
-                all_cnet_data = await sd_api(endpoint='/controlnet/control_types', method='get', json=None)
+                all_cnet_data = await sd_api(endpoint='/controlnet/control_types', method='get', json=None, retry=False)
                 for key, value in all_cnet_data["control_types"].items():
                     if key == "All":
                         continue
@@ -3312,7 +3333,7 @@ if sd_enabled:
     async def ext_online(ext, endpoint):
         if config['sd']['extensions'].get(f'{ext}_enabled', False):
             try:
-                online = await sd_api(endpoint=endpoint, method='get', json=None)
+                online = await sd_api(endpoint=endpoint, method='get', json=None, retry=False)
                 if online: return True
                 else: return False
             except:
@@ -3671,6 +3692,7 @@ if sd_enabled:
             await task_queue.put(queue_item)
         except Exception as e:
             logging.error(f"An error occurred in image(): {e}")
+            traceback.print_exc()
 
 #################################################################
 ######################### MISC COMMANDS #########################
@@ -4025,7 +4047,7 @@ async def filter_imgmodels(imgmodels):
 async def fetch_imgmodels():
     try:
         try:
-            imgmodels = await sd_api(endpoint='/sdapi/v1/sd-models', method='get', json=None)
+            imgmodels = await sd_api(endpoint='/sdapi/v1/sd-models', method='get', json=None, retry=False)
             # Update 'title' keys in fetched list for uniformity
             for imgmodel in imgmodels:
                 if 'title' in imgmodel:
@@ -4059,7 +4081,7 @@ async def update_imgmodel(channel, selected_imgmodel, selected_imgmodel_tags):
         #     return
         # Load the imgmodel and VAE via API
         model_data = active_settings['imgmodel'].get('override_settings') or active_settings['imgmodel']['payload'].get('override_settings')
-        _ = await sd_api(endpoint='/sdapi/v1/options', method='post', json=model_data)
+        _ = await sd_api(endpoint='/sdapi/v1/options', method='post', json=model_data, retry=True)
         # Update size options for /image command
         current_avg = average_width_height(current_w, current_h)    # get current average width/height
         new_avg = average_width_height(new_w, new_h)                # get new average width/height
