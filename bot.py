@@ -740,17 +740,18 @@ async def update_tags(tags):
         tags_data = load_file('ad_discordbot/dict_tags.yaml')
         global_tag_keys = tags_data.get('global_tag_keys', [])
         tag_presets = tags_data.get('tag_presets', [])
-        updated_tags = copy.deepcopy(tags)
+        updated_tags = []
         for tag in tags:
             if 'tag_preset_name' in tag:
-                tag_preset_name = tag['tag_preset_name']
                 # Find matching tag preset in tag_presets
                 for preset in tag_presets:
-                    if 'tag_preset_name' in preset and preset['tag_preset_name'] == tag_preset_name:
+                    if 'tag_preset_name' in preset and preset['tag_preset_name'] == tag['tag_preset_name']:
                         # Merge corresponding tag presets
-                        updated_tags.remove(tag)
                         updated_tags.extend(preset.get('tags', []))
+                        tag.pop('tag_preset_name', None)
                         break
+            if tag:
+                updated_tags.append(tag)
         # Add global tag keys to each tag item
         for tag in updated_tags:
             for key, value in global_tag_keys.items():
@@ -3030,6 +3031,7 @@ def collect_img_tag_values(tags):
         'img2img': {},
         'img2img_mask': {}
         }
+    payload_order_hack = {}
     controlnet_args = {}
     forge_couple_args = {}
     layerdiffuse_args = {}
@@ -3051,7 +3053,12 @@ def collect_img_tag_values(tags):
                     img_payload_mods['swap_imgmodel'] = str(value)
                 elif key == 'payload': # Allow multiple to accumulate
                     try:
-                        update_dict(img_payload_mods['payload'], dict(value))
+                        if img_payload_mods['payload']:
+                            payload_order_hack = dict(value)
+                            update_dict(payload_order_hack, img_payload_mods['payload'])
+                            img_payload_mods['payload'] = payload_order_hack                           
+                        else:
+                            img_payload_mods['payload'] = dict(value)
                     except:
                         logging.warning("Error processing a matched 'payload' tag; ensure it is a dictionary.")
                 elif key == 'img_param_variances': # Allow multiple to accumulate
@@ -4104,7 +4111,7 @@ async def guess_model_data(selected_imgmodel, presets):
             # no guessing needed for exact match
             exact_match = preset.pop('exact_match', '')
             if exact_match and selected_imgmodel.get('imgmodel_name') == exact_match:
-                logging.info(f'Applying exact match imgmodel preset for {selected_imgmodel}.')
+                logging.info(f'Applying exact match imgmodel preset for "{exact_match}".')
                 return preset
             # score presets by how close they match the selected imgmodel
             filter_list = preset.pop('filter', [])
