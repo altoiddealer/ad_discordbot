@@ -165,9 +165,12 @@ if sd_enabled:
                             await asyncio.sleep(3)
                             return await sd_api(endpoint, method, json, retry=False)
         except Exception as e:
-            logging.error(f'Error getting data from "{SD_URL}{endpoint}": {e}')
-            traceback.print_exc()
-            return e
+            if endpoint == '/sdapi/v1/server-restart' or endpoint == '/sdapi/v1/progress':
+                return None
+            else:
+                logging.error(f'Error getting data from "{SD_URL}{endpoint}": {e}')
+                traceback.print_exc()
+                return e
 
     async def get_sd_sysinfo():
         try:
@@ -184,6 +187,38 @@ if sd_enabled:
             return None
 
     SD_CLIENT = asyncio.run(get_sd_sysinfo()) # Stable Diffusion client name to use in messages, warnings, etc
+
+    # Function to attempt restarting the SD WebUI Client in the event it gets stuck
+    @client.hybrid_command(description=f"Immediately Restarts the {SD_CLIENT} server. Requires '--api-server-stop' SD WebUI launch flag.")
+    async def restart_sd_client(ctx: discord.ext.commands.Context):
+        try:
+            await ctx.send(f"**`/restart_sd_client` __will not work__ unless {SD_CLIENT} was launched with flag: `--api-server-stop`**", delete_after=10)
+            await sd_api(endpoint='/sdapi/v1/server-restart', method='post', json=None, retry=False)
+            title = f"{ctx.author} used '/restart_sd_client'. Restarting {SD_CLIENT} ..."
+            logging.info(title)
+            restart_embed_info = discord.Embed(title=title, description=f'Attempting to re-establish connection in 5 seconds (Attempt 1 of 10)', url='https://github.com/altoiddealer/ad_discordbot')
+            restart_embed = await ctx.send(embed=restart_embed_info)
+            response = None
+            retry = 1
+            while response is None and retry < 11:
+                restart_embed_info.description = f'Attempting to re-establish connection in 5 seconds (Attempt {retry} of 10)'
+                restart_embed = await restart_embed.edit(embed=restart_embed_info)
+                await asyncio.sleep(5)
+                response = await sd_api(endpoint='/sdapi/v1/progress', method='get', json=None, retry=False)             
+                retry += 1
+            if response:
+                title = f"{SD_CLIENT} restarted successfully."
+                restart_embed_info.title = title
+                restart_embed_info.description = f"Connection re-established after {retry} out of 10 attempts."
+                logging.info(title)
+            else:
+                title = f"{SD_CLIENT} server unresponsive after Restarting."
+                restart_embed_info.title = title
+                restart_embed_info.description = f"Connection was not re-established after 10 attempts."
+                logging.error(title)
+            restart_embed = await restart_embed.edit(embed=restart_embed_info)
+        except Exception as e:
+            logging.error(f"Error resetting the {SD_CLIENT} server: {e}")
 
     if SD_CLIENT:
         logging.info(f"Initializing with SD WebUI enabled: '{SD_CLIENT}'")
@@ -700,6 +735,8 @@ info_embed_json = {
 info_embed = discord.Embed().from_dict(info_embed_json)
 # Img gen embed
 img_embed_info = discord.Embed(title = "Processing image generation ...", description=" ", url='https://github.com/altoiddealer/ad_discordbot')
+# Img progress embed
+img_progress_embed_info = discord.Embed(title = "Receiving Image Progress ...", description=" ", url='https://github.com/altoiddealer/ad_discordbot')
 # Model change embed
 change_embed_info = discord.Embed(title = "Changing model ...", description=" ", url='https://github.com/altoiddealer/ad_discordbot')
 # Character embed
@@ -1758,7 +1795,7 @@ async def on_message(i):
 #################################################################
 #################### QUEUED FROM ON MESSAGE #####################
 #################################################################
-async def on_message_gen(user, channel, source, text, i):
+async def on_message_task(user, channel, source, text, i):
     try:
         params = {}
         # collects all tags, sorted into sub-lists by phase (user / llm / userllm)
@@ -1790,7 +1827,7 @@ async def on_message_gen(user, channel, source, text, i):
                 gen_warning = await channel.send(f'Bot was triggered by Tags to not respond with text.\n**Processing image generation using your input as the prompt ...**') # msg for if LLM model is unloaded
                 asyncio.create_task(delete_message_after(gen_warning, 5))
             llm_prompt = copy.copy(text)
-            await img_gen(user.name, channel, source, llm_prompt, params, i, tags)
+            await img_gen_task(user.name, channel, source, llm_prompt, params, i, tags)
     except Exception as e:
         logging.error(f"An error occurred processing on_message request: {e}")
 
@@ -1807,7 +1844,7 @@ async def hybrid_llm_img_gen(user, channel, source, text, tags, llm_payload, par
         if llmmodel_params:
             orig_llmmodel = copy.deepcopy(shared.model_name)                    # copy current LLM model name
             change_embed = await change_llmmodel_task(user, channel, params)    # Change LLM model
-            if mode == 'swap': await change_embed.delete()                      # Delete embed before the second call
+            if mode == 'swap' and change_embed: await change_embed.delete()                      # Delete embed before the second call
         # make a 'Prompting...' embed when generating text for an image response
         should_gen_image = should_bot_do('should_gen_image', default=False, tags=tags)
         if should_gen_image and textgenwebui_enabled:
@@ -1847,7 +1884,7 @@ async def hybrid_llm_img_gen(user, channel, source, text, tags, llm_payload, par
                 should_gen_image = should_bot_do('should_gen_image', default=False, tags=tags) # Check again post-LLM
             if should_gen_image:
                 if img_gen_embed: await img_gen_embed.delete()
-                await img_gen(user, channel, source, last_resp, params, i, tags)
+                await img_gen_task(user, channel, source, last_resp, params, i, tags)
         if tts_resp: await process_tts_resp(channel, tts_resp)
         mention_resp = update_mention(user.mention, last_resp) # @mention non-consecutive users
         should_send_text = should_bot_do('should_send_text', default=True, tags=tags)
@@ -1859,10 +1896,11 @@ async def hybrid_llm_img_gen(user, channel, source, text, tags, llm_payload, par
         return
     except Exception as e:
         logging.error(f'An error occurred while processing "{source}" request: {e}')
-        change_embed_info.title = f'An error occurred while processing "{source}" request'
-        change_embed_info.description = e
-        if change_embed: await change_embed.edit(embed=change_embed_info)
-        else: await channel.send(embed=change_embed_info)
+        img_gen_embed_info.title = f'An error occurred while processing "{source}" request'
+        img_gen_embed_info.description = e
+        if img_gen_embed: await img_gen_embed.edit(embed=img_gen_embed_info)
+        else: await channel.send(embed=img_gen_embed_info)
+        if change_embed: await change_embed.delete()
 
 #################################################################
 ##################### QUEUED LLM GENERATION #####################
@@ -1953,7 +1991,7 @@ async def llm_gen(llm_payload):
         traceback.print_exc()
         return None, None
 
-async def cont_regen_gen(i, user, text, channel, source, message):
+async def cont_regen_task(i, user, text, channel, source, message):
     try:
         cmd = ''
         llm_payload = await initialize_llm_payload(user, text)
@@ -1993,7 +2031,7 @@ async def cont_regen_gen(i, user, text, channel, source, message):
             await i.followup.send(e_msg, silent=True)
         await embed.delete()
 
-async def speak_gen(user, channel, text, params):
+async def speak_task(user, channel, text, params):
     try:
         if shared.model_name == 'None':
             warn_msg = await channel.send('Cannot process "/speak" request: No LLM model is currently loaded. Use "/llmmodel" to load a model.)')
@@ -2245,17 +2283,17 @@ async def process_tasks():
                 # Tasks which should simulate typing
                 async with channel.typing():
                     if source == 'speak': # from '/speak' command
-                        await speak_gen(user, channel, text, params)
+                        await speak_task(user, channel, text, params)
                     elif source == 'image': # from '/image' command
-                        await img_gen(user, channel, source, text, params, i, tags={})
+                        await img_gen_task(user, channel, source, text, params, i, tags={})
                     elif source == 'cont' or source == 'regen':
-                        await cont_regen_gen(i, user, text, channel, source, message)
+                        await cont_regen_task(i, user, text, channel, source, message)
                     elif source == 'on_message':
-                        await on_message_gen(user, channel, source, text, i)
+                        await on_message_task(user, channel, source, text, i)
                     else:
                         logging.warning(f'Unexpectedly received an invalid task. Source: {source}')
                     if flow_queue.qsize() > 0:          # flows are activated in process_llm_payload_tags(), and is where the flow queue is populated
-                        await process_flow(user, channel, source, text)
+                        await flow_task(user, channel, source, text)
             task_event.clear() # Flag function is no longer processing a task
             task_queue.task_done() # Accept next task
     except Exception as e:
@@ -2279,7 +2317,7 @@ async def format_next_flow(next_flow, user, text):
         # get name for message embed
         if key == 'flow_step':
             flow_name = f": {value}"
-        # format prompt before feeding it back into on_message_gen()
+        # format prompt before feeding it back into on_message_task()
         elif key == 'format_prompt':
             formatting = {'format_prompt': value}
             text = process_tag_formatting(user, text, formatting)
@@ -2306,7 +2344,7 @@ async def peek_flow_queue(queue, user, text):
         await queue.put(item_to_put_back)
     return flow_name, formatted_text
 
-async def process_flow(user, channel, source, text):
+async def flow_task(user, channel, source, text):
     try:
         total_flow_steps = flow_queue.qsize()
         flow_embed_info.title = f'Processing Flow for {user} with {total_flow_steps} steps'
@@ -2320,7 +2358,7 @@ async def process_flow(user, channel, source, text):
             flow_embed_info.description = flow_embed_info.description.replace("**Processing", ":white_check_mark: **")
             flow_embed_info.description += f'**Processing Step {total_flow_steps + 1 - remaining_flow_steps}/{total_flow_steps}**{flow_name}\n'
             await flow_embed.edit(embed=flow_embed_info)
-            await on_message_gen(user, channel, source, text, i=None)
+            await on_message_task(user, channel, source, text, i=None)
         flow_embed_info.title = f"Flow completed for {user}"
         flow_embed_info.description = flow_embed_info.description.replace("**Processing", ":white_check_mark: **")
         await flow_embed.edit(embed=flow_embed_info)
@@ -2349,54 +2387,75 @@ async def sd_online(channel):
             imgclient_embed_info = discord.Embed(title = f"{SD_CLIENT} api is not running at {SD_URL}", description=f"Launch {SD_CLIENT} with `--api --listen` commandline arguments\nRead more [here](https://github.com/AUTOMATIC1111/stable-diffusion-webui/wiki/API)", url='https://github.com/altoiddealer/ad_discordbot')
             await channel.send(embed=imgclient_embed_info)        
         return False
-        
-def progress_bar(value, length=20):
-    filled_length = int(length * value)
-    bar = ':white_large_square:' * filled_length + ':white_square_button:' * (length - filled_length)
-    return f'{bar}'
 
-async def check_sd_progress(img_gen_embed):
-    retry_count = 1
-    async with aiohttp.ClientSession() as session:
-        progress_data = {"progress":0}
-        while progress_data['progress'] == 0:
-            try:
-                async with session.get(f'{SD_URL}/sdapi/v1/progress') as progress_response:
-                    progress_data = await progress_response.json()
-                    progress = progress_data['progress']
-                    #print(f'Progress: {progress}%')
-                    img_embed_info.title = f'Waiting for response from {SD_CLIENT} ...'
-                    await img_gen_embed.edit(embed=img_embed_info)                    
-                    await asyncio.sleep(1)
-            except aiohttp.client_exceptions.ClientConnectionError:
-                logging.warning(f'Connection closed, retrying in 1 second (attempt {retry_count}/5)')
-                await asyncio.sleep(1)
-                retry_count += 1
-        if retry_count == 5:
-            logging.error('Reached maximum retry limit')
+async def sd_progress_warning(img_progress_embed):
+    logging.error('Reached maximum retry limit')
+    img_progress_embed_info.title = f'Error getting progress response from {SD_CLIENT}.'
+    img_progress_embed_info.description = 'Image generation will continue, but progress will not be tracked.'
+    await img_progress_embed.edit(embed=img_progress_embed_info)
+
+def progress_bar(value, length=15):
+    try:
+        filled_length = int(length * value)
+        bar = ':black_square_button:' * filled_length + ':black_large_square:' * (length - filled_length)
+        return f'{bar}'
+    except Exception as e:
+        return 0
+
+async def fetch_progress(session):
+    try:
+        async with session.get(f'{SD_URL}/sdapi/v1/progress') as progress_response:
+            return await progress_response.json()
+    except aiohttp.ClientError as e:
+        logging.warning(f'Failed to fetch progress: {e}')
+        return None
+
+async def check_sd_progress(channel, session):
+    try:
+        img_progress_embed_info.title = f'Waiting for {SD_CLIENT} ...'
+        img_progress_embed_info.description = ' '
+        img_progress_embed = await channel.send(embed=img_progress_embed_info)
+        await asyncio.sleep(1)
+        retry_count = 0
+        while retry_count < 5:
+            progress_data = await fetch_progress(session)
+            if progress_data and progress_data['progress'] != 0:
+                break
+            logging.warning(f'Waiting for progress response from {SD_CLIENT}, retrying in 1 second (attempt {retry_count + 1}/5)')
+            await asyncio.sleep(1)
+            retry_count += 1
+        else:
+            await sd_progress_warning(img_progress_embed)
             return
+        retry_count = 0   
         while progress_data['state']['job_count'] > 0:
-            try:
-                async with session.get(f'{SD_URL}/sdapi/v1/progress') as progress_response:
-                    progress_data = await progress_response.json()
-                    #pprint.pp(progress_data)
+            progress_data = await fetch_progress(session)
+            if progress_data:
+                if retry_count < 5:
                     progress = progress_data['progress'] * 100
-                    if progress == 0 :
-                        img_embed_info.title = f'Generating image: 100%'
-                        img_embed_info.description = progress_bar(1)
-                        await img_gen_embed.edit(embed=img_embed_info)
-                        break
-                    #print(f'Progress: {progress}%')
-                    img_embed_info.title = f'Generating image: {progress:.0f}%'
-                    img_embed_info.description = progress_bar(progress_data['progress'])
-                    await img_gen_embed.edit(embed=img_embed_info)
+                    eta = progress_data['eta_relative']
+                    if eta == 0:
+                        img_progress_embed_info.title = f'Generating image: 100%'
+                        img_progress_embed_info.description = f'{progress_bar(1)}'
+                    else:
+                        img_progress_embed_info.title = f'Generating image: {progress:.0f}%'
+                        img_progress_embed_info.description = f"{progress_bar(progress_data['progress'])}"
+                    await img_progress_embed.edit(embed=img_progress_embed_info)
                     await asyncio.sleep(1)
-            except aiohttp.client_exceptions.ClientConnectionError:
-                logging.warning('Connection closed, retrying in 1 seconds')
-                await asyncio.sleep(1)
+                else:
+                    logging.warning(f'Connection closed with {SD_CLIENT}, retrying in 1 second (attempt {retry_count + 1}/5)')
+                    await asyncio.sleep(1)
+                    retry_count += 1
+            else:
+                await sd_progress_warning(img_progress_embed)
+                return
+        await img_progress_embed.delete()
+    except Exception as e:
+        logging.error(f'Error tracking {SD_CLIENT} image generation progress: {e}')
 
-async def track_progress(img_gen_embed):
-    await check_sd_progress(img_gen_embed)
+async def track_progress(channel):
+    async with aiohttp.ClientSession() as session:
+        await check_sd_progress(channel, session)
 
 async def layerdiffuse_hack(temp_dir, img_payload, images, pnginfo):
     try:
@@ -2466,22 +2525,21 @@ async def save_images_and_return(temp_dir, img_payload, endpoint):
         return [], e
     return images, pnginfo
 
-async def sd_img_gen(temp_dir, img_payload, img_gen_embed, endpoint):
+async def sd_img_gen(channel, temp_dir, img_payload, endpoint):
     try:
         reactor_args = img_payload.get('alwayson_scripts', {}).get('reactor', {}).get('args', [])
         last_item = reactor_args[-1] if reactor_args else None
         reactor_mask = reactor_args.pop() if isinstance(last_item, dict) else None
         #Start progress task and generation task concurrently
         images_task = asyncio.create_task(save_images_and_return(temp_dir, img_payload, endpoint))
-        progress_task = asyncio.create_task(track_progress(img_gen_embed))
+        progress_task = asyncio.create_task(track_progress(channel))
         # Wait for both tasks to complete
         await asyncio.gather(images_task, progress_task)
         # Get the list of images and copy of pnginfo after both tasks are done
         images, pnginfo = await images_task
         if not images:
-            img_embed_info.title = 'Error processing images'
-            img_embed_info.description = str(pnginfo) # error
-            await img_gen_embed.edit(embed=img_embed_info)
+            img_gen_fail = discord.Embed(title= 'Error processing images.', description=f'Error: "{str(pnginfo)}"\nIf {SD_CLIENT} remains unresponsive, consider using "/restart_sd_client" command.', url='https://github.com/altoiddealer/ad_discordbot')
+            await channel.send(embed=img_gen_fail)
             return None
         # Apply ReActor mask
         reactor = img_payload.get('alwayson_scripts', {}).get('reactor', {})
@@ -2494,35 +2552,22 @@ async def sd_img_gen(temp_dir, img_payload, img_gen_embed, endpoint):
         return images
     except Exception as e:
         logging.error(f'Error processing images in {SD_CLIENT} API module: {e}')
-        img_embed_info.title = 'Error processing images'
-        img_embed_info.description = e
-        await img_gen_embed.edit(embed=img_embed_info)
         return []
 
-async def process_image_gen(img_payload, img_gen_embed, channel, tags, endpoint, sd_output_dir='ad_discordbot/sd_outputs/'):
+async def process_image_gen(img_payload, censor_mode, channel, tags, endpoint, sd_output_dir='ad_discordbot/sd_outputs/'):
     try:
-        censor_mode = None
-        do_censor = False
-        if img_payload.get('img_censoring', 0) > 0:
-            censor_mode = img_payload['img_censoring']
-            do_censor = True
-            if censor_mode == 2:
-                img_embed_info.title = "Image prompt was flagged as inappropriate."
-                await img_gen_embed.edit(embed=img_embed_info)
-                return
         # Ensure the necessary directories exist
         os.makedirs(sd_output_dir, exist_ok=True)
         temp_dir = 'ad_discordbot/temp/'
         os.makedirs(temp_dir, exist_ok=True)
         # Generate images, save locally
-        images = await sd_img_gen(temp_dir, img_payload, img_gen_embed, endpoint)
+        images = await sd_img_gen(channel, temp_dir, img_payload, endpoint)
         if not images:
             return
         # Send images to discord
-        await img_gen_embed.delete()
         # If the censor mode is 1 (blur), prefix the image file with "SPOILER_"
         file_prefix = 'temp_img_'
-        if do_censor and censor_mode == 1:
+        if censor_mode == 1:
             file_prefix = 'SPOILER_temp_img_'
         image_files = [discord.File(f'{temp_dir}/temp_img_{idx}.png', filename=f'{file_prefix}{idx}.png') for idx in range(len(images))]
         should_send_image = should_bot_do('should_send_image', default=True, tags=tags)
@@ -3160,7 +3205,7 @@ def match_img_tags(img_prompt, tags):
         logging.error(f"Error matching tags for img phase: {e}")
         return tags
 
-async def img_gen(user, channel, source, img_prompt, params, i=None, tags={}):
+async def img_gen_task(user, channel, source, img_prompt, params, i=None, tags={}):
     try:
         check_key = bot_settings.settings['imgmodel'].get('override_settings') or bot_settings.settings['imgmodel']['payload'].get('override_settings')
         if check_key.get('sd_model_checkpoint') == 'None': # Model currently unloaded
@@ -3177,6 +3222,15 @@ async def img_gen(user, channel, source, img_prompt, params, i=None, tags={}):
         send_user_image = img_payload_mods.get('send_user_image', None)
         # Apply tags relevant to Img gen
         img_payload, imgmodel_params, params = await process_img_payload_tags(img_payload, img_payload_mods, params)
+        # Check censoring
+        censor_mode = None
+        if img_payload.get('img_censoring', 0) > 0:
+            censor_mode = img_payload['img_censoring']
+            if censor_mode == 2:
+                img_embed_info.title = "Image prompt was flagged as inappropriate."
+                img_embed_info.description = ""
+                await channel.send(embed=img_embed_info)
+                return censor_mode
         # Process loractl
         if config['sd']['extensions'].get('lrctl', {}).get('enabled', False):
             tags = apply_loractl(tags)
@@ -3193,9 +3247,8 @@ async def img_gen(user, channel, source, img_prompt, params, i=None, tags={}):
             current_imgmodel = imgmodel_params['imgmodel'].get('current_imgmodel', '')
             should_swap = await change_imgmodel_task(user, channel, imgmodel_params)
         # Generate and send images
-        img_gen_embed = await channel.send(embed=img_embed_info)
         endpoint = params.get('endpoint', '/sdapi/v1/txt2img')
-        await process_image_gen(img_payload, img_gen_embed, channel, tags, endpoint, sd_output_dir)
+        await process_image_gen(img_payload, censor_mode, channel, tags, endpoint, sd_output_dir)
         should_send_text = should_bot_do('should_send_text', default=True, tags=tags)
         should_gen_text = should_bot_do('should_gen_text', default=True, tags=tags)
         if source == 'image' or (should_send_text and not should_gen_text):
@@ -3212,7 +3265,7 @@ async def img_gen(user, channel, source, img_prompt, params, i=None, tags={}):
             await change_imgmodel_task(user, channel, params={'imgmodel': {'imgmodel_name': current_imgmodel, 'mode': 'swap_back', 'verb': 'Swapping back to'}})
         return
     except Exception as e:
-        logging.error(f"An error occurred in img_gen(): {e}")
+        logging.error(f"An error occurred in img_gen_task(): {e}")
 
 #################################################################
 ######################## /IMAGE COMMAND #########################
@@ -3745,7 +3798,7 @@ async def sync(ctx: discord.ext.commands.Context):
 if textgenwebui_enabled:
     # /reset command - Resets current character
     @client.hybrid_command(description="Reset the conversation with current character")
-    async def reset(ctx: discord.ext.commands.Context):
+    async def reset_character(ctx: discord.ext.commands.Context):
         try:
             shared.stop_everything = True
             await ireply(ctx, 'character reset') # send a response msg to the user
