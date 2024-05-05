@@ -5,8 +5,6 @@
 # There are many settings here you probably don't need to tinker with.
 
 behavior:
-  ignore_history: False     # If True, never retain chat history
-  reply_with_image: 0.0     # 0.0 = never happens / 1.0 = always happens
   reply_to_itself: 0.0      # 0.0 = never happens / 1.0 = always happens
   chance_to_reply_to_other_bots: 0.0  # Chance for bot to reply when other bots speak in main channel
   reply_to_bots_when_adressed: 0.0    # Chance for bot to reply when other bots mention it by name

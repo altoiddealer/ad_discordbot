@@ -13,7 +13,6 @@ import discord
 from discord.ext import commands
 from discord import app_commands, File
 from discord.ext.commands.context import Context
-from discord.ext.commands import clean_content
 import typing
 import torch
 import io
@@ -196,7 +195,7 @@ if sd_enabled:
             await sd_api(endpoint='/sdapi/v1/server-restart', method='post', json=None, retry=False)
             title = f"{ctx.author} used '/restart_sd_client'. Restarting {SD_CLIENT} ..."
             logging.info(title)
-            restart_embed_info = discord.Embed(title=title, description=f'Attempting to re-establish connection in 5 seconds (Attempt 1 of 10)', url='https://github.com/altoiddealer/ad_discordbot')
+            restart_embed_info = discord.Embed(title=title, description=f'Attempting to re-establish connection in 5 seconds (Attempt 1 of 10)', url='https://github.com/altoiddealer/ad_discordbot/wiki/Troubleshooting#restart_sd_client-command-does-not-work')
             restart_embed = await ctx.send(embed=restart_embed_info)
             response = None
             retry = 1
@@ -294,15 +293,16 @@ try:
 except:
     tts_settings = config['discord'].get('tts_settings', {})
 
+supported_tts_clients = ['alltalk_tts', 'coqui_tts', 'silero_tts', 'elevenlabs_tts']
+
 def init_textgenwebui_extensions():
     # monkey patch load_extensions behavior from pre-commit b3fc2cd
     extensions_module.load_extensions = load_extensions
 
     shared.args.extensions = []
     extensions_module.available_extensions = utils.get_available_extensions()
-
+    
     # If any TTS extension defined in config.py, set tts bot vars and add extension to shared.args.extensions
-    supported_tts_clients = ['alltalk_tts', 'coqui_tts', 'silero_tts', 'elevenlabs_tts']
     tts_client = tts_settings.get('extension', '') # tts client
     tts_api_key = None
     tts_voice_key = None
@@ -742,7 +742,7 @@ change_embed_info = discord.Embed(title = "Changing model ...", description=" ",
 # Character embed
 char_embed_info = discord.Embed(title = 'Changing character ... ', description=" ", url='https://github.com/altoiddealer/ad_discordbot')
 # Flow embed
-flow_embed_info = discord.Embed(title = 'Processing flow ... ', description=" ", url='https://github.com/altoiddealer/ad_discordbot')
+flow_embed_info = discord.Embed(title = 'Processing flow ... ', description=" ", url='https://github.com/altoiddealer/ad_discordbot/wiki/tags')
 
 # If first time bot script is run
 async def first_run():
@@ -1585,6 +1585,8 @@ def get_tags_from_text(text):
                 key, value = parse_key_pair_from_text(pair)
                 tag_dict[key] = value
             tags_from_text.append(tag_dict)
+        if tags_from_text:
+            logging.info(f"[TAGS] Tags from text: '{tags_from_text}'")
         return detagged_text, tags_from_text
     except Exception as e:
         logging.error(f"Error getting tags from text: {e}")
@@ -1618,10 +1620,8 @@ async def initialize_llm_payload(user, text):
     llm_payload['state']['name2_instruct'] = name2
     llm_payload['state']['character_menu'] = name2
     llm_payload['state']['context'] = context
-    # check for ignore history setting / start with default history settings
     llm_payload['save_history'] = True
-    if not bot_settings.behavior.ignore_history:
-        llm_payload['state']['history'] = session_history
+    llm_payload['state']['history'] = session_history
     return llm_payload
 
 def get_wildcard_value(matched_text, dir_path='ad_discordbot/wildcards'):
@@ -1773,7 +1773,7 @@ async def dynamic_prompting(user, text, i=None):
             text_with_comments = (text_with_comments[:adjusted_start] + highlighted_changes + text_with_comments[adjusted_end:])
     # send a message showing the selected options
     if i and (braces_matches or wildcard_matches):
-        await i.reply(content=f">>> **{user}**: {text_with_comments}", mention_author=False, silent=True)
+        await i.reply(content=f"__Text with **[Dynamic Prompting](<https://github.com/altoiddealer/ad_discordbot/wiki/dynamic-prompting>)**__:\n>>> **{user}**: {text_with_comments}", mention_author=False, silent=True)
     return text
 
 @client.event
@@ -1923,7 +1923,7 @@ def manage_history(prompt, reply, save_history):
             oldest_message = recent_messages[key].pop()
     # Retain chat history
     global session_history
-    if not bot_settings.behavior.ignore_history and save_history:
+    if save_history:
         session_history['internal'].append([prompt, reply])
         session_history['visible'].append([prompt, reply])
 
@@ -2825,7 +2825,7 @@ def get_image_tag_args(extension, value, key=None, set_dir=None):
             image_file_path = os.path.join(home_path, value)
         # ReActor specific
         elif ".safetensors" in value and extension == 'ReActor Enabled':
-            args['image'] = None
+            args['image'] = ''
             args['source_type'] = 1
             args['face_model'] = value
             method = 'Face model'
@@ -2977,25 +2977,17 @@ def collect_img_extension_mods(mods):
     set_dir = None
     if img2img:
         try:
-            image = get_image_tag_args('Img2Img', img2img, key='img2img', set_dir=set_dir)
-            if not image:
-                mods['img2img'] = ''
-            else:
+            img2img_args = get_image_tag_args('Img2Img', img2img, key='img2img', set_dir=set_dir)
+            mods['img2img'] = img2img_args.get('image', '')
+            if img2img_args:
                 if set_dir is None:
-                    set_dir = image.pop('selected_folder', None)
-                else:
-                    image.pop('selected_folder')
-                mods['img2img'] = image['image']
+                    set_dir = img2img_args.get('selected_folder', None)
                 if img2img_mask:
-                    image = get_image_tag_args('Img2Img Mask', img2img_mask, key='img2img_mask', set_dir=set_dir)
-                    if not image:
-                        mods['img2img_mask'] = ''
-                    else:
+                    img2img_mask_args = get_image_tag_args('Img2Img Mask', img2img_mask, key='img2img_mask', set_dir=set_dir)
+                    mods['img2img_mask'] = img2img_mask_args.get('image', '')
+                    if img2img_mask_args:
                         if set_dir is None:
-                            set_dir = image.pop('selected_folder', None)
-                        else:
-                            image.pop('selected_folder')
-                        mods['img2img_mask'] = image['image']
+                            set_dir = img2img_mask_args.get('selected_folder', None)
         except Exception as e:
             logging.error(f"Error collecting img2img tag values: {e}")
     if controlnet:
@@ -3008,28 +3000,24 @@ def collect_img_extension_mods(mods):
                 mask_image = controlnet_item.get('mask', None) or controlnet_item.get('mask_image', None)
                 # Update controlnet item with image information
                 if image:
-                    cnet_image = get_image_tag_args('ControlNet Image', image, key=prefix, set_dir=set_dir)
-                    if not cnet_image:
+                    cnet_args = get_image_tag_args('ControlNet Image', image, key=prefix, set_dir=set_dir)
+                    if not cnet_args:
                         controlnet[idx] = {}
                     else:
                         if set_dir is None:
-                            set_dir = cnet_image.pop('selected_folder', None)
+                            set_dir = cnet_args.pop('selected_folder', None)
                         else:
-                            cnet_image.pop('selected_folder')
-                        controlnet[idx].update(cnet_image)
+                            cnet_args.pop('selected_folder')
+                        controlnet[idx].update(cnet_args)
                         controlnet[idx]['enabled'] = True
                         # Update controlnet item with mask_image information
                         if mask_image:
                             key = f'{prefix}_mask' if prefix else None
-                            cnet_mask_image = get_image_tag_args('ControlNet Mask', mask_image, key=key, set_dir=set_dir)
-                            if not cnet_mask_image:
-                                controlnet[idx]['mask_image'] = None
-                            else:
+                            cnet_mask_args = get_image_tag_args('ControlNet Mask', mask_image, key=key, set_dir=set_dir)
+                            controlnet[idx]['mask_image'] = cnet_mask_args.get('image', None)
+                            if cnet_mask_args:
                                 if set_dir is None:
-                                    set_dir = cnet_mask_image.pop('selected_folder', None)
-                                else:
-                                    cnet_mask_image.pop('selected_folder')
-                                controlnet[idx]['mask_image'] = cnet_mask_image['image']
+                                    set_dir = cnet_mask_args.get('selected_folder', None)
             mods['controlnet'] = controlnet
         except Exception as e:
             logging.error(f"Error collecting ControlNet tag values: {e}")
@@ -3038,23 +3026,16 @@ def collect_img_extension_mods(mods):
             image = reactor.get('image', None)
             mask_image = reactor.get('mask', None)
             if image:
-                reactor_image = get_image_tag_args('ReActor Enabled', image, key='reactor', set_dir=None)
-                if not reactor_image:
-                    mods['reactor']['image'] = ''
-                else:
-                    reactor_image.pop('selected_folder')
-                    mods['reactor'] = reactor_image
+                reactor_args = get_image_tag_args('ReActor Enabled', image, key='reactor', set_dir=None)
+                if reactor_args:
+                    reactor_args.pop('selected_folder', None)
+                    mods['reactor'].update(reactor_args)
                     mods['reactor']['enabled'] = True
                     if mask_image:
-                        reactor_mask = get_image_tag_args('ReActor Mask', mask_image, key='reactor_mask', set_dir=set_dir)
-                        if not reactor_mask:
-                            mods['reactor']['mask'] = ''
-                        else:
-                            if set_dir is None:
-                                set_dir = reactor_mask.pop('selected_folder', None)
-                            else:
-                                reactor_mask.pop('selected_folder')
-                            mods['reactor']['mask'] = reactor_mask['image'] 
+                        reactor_mask_args = get_image_tag_args('ReActor Mask', mask_image, key='reactor_mask', set_dir=set_dir)
+                        mods['reactor']['mask'] = reactor_mask_args.get('image', '')
+                        if reactor_mask_args and set_dir is None:
+                            set_dir = reactor_mask_args.get('selected_folder', None)
         except Exception as e:
             logging.error(f"Error collecting ReActor tag values: {e}")
     return mods
@@ -3859,14 +3840,12 @@ async def character_loader(source):
         # Gather context specific keys from the character data
         char_llmcontext = {}
         for key, value in char_data.items():
-            if key in ['bot_description', 'bot_emoji', 'extensions', 'use_voice_channel', 'tags']:
-                if key == 'extensions':
-                    await update_extensions(value)
-                elif key == 'use_voice_channel':
-                    await voice_channel(value)
-                elif key == 'tags':
-                    value = await update_tags(value) # Unpack any tag presets
-                char_llmcontext[key] = value
+            if key == 'extensions':
+                await update_extensions(value)
+            elif key == 'use_voice_channel':
+                await voice_channel(value)
+            elif key == 'tags':
+                value = await update_tags(value) # Unpack any tag presets
         # Merge any extra data with the llmcontext data
         char_llmcontext.update(textgen_data)
         # Collect behavior data
@@ -4679,15 +4658,13 @@ if textgenwebui_enabled and tts_client and tts_client in supported_tts_clients:
 # Sub-classes under a main class 'Settings'
 class Behavior:
     def __init__(self):
-        self.chance_to_reply_to_other_bots = 0.5
-        self.conversation_recency = 600
-        self.go_wild_in_channel = True
-        self.ignore_history = False
-        self.ignore_parentheses = True
-        self.only_speak_when_spoken_to = True
-        self.reply_to_bots_when_adressed = 0.3
         self.reply_to_itself = 0.0
-        self.reply_with_image = 0.0
+        self.chance_to_reply_to_other_bots = 0.5
+        self.reply_to_bots_when_adressed = 0.3
+        self.only_speak_when_spoken_to = True
+        self.ignore_parentheses = True
+        self.go_wild_in_channel = True
+        self.conversation_recency = 600
         self.user_conversations = {}
 
     def update_behavior_dict(self, new_data):
@@ -4721,7 +4698,8 @@ class Behavior:
         if self.ignore_parentheses and (i.content.startswith('(') and i.content.endswith(')')) or (i.content.startswith('<:') and i.content.endswith(':>')):
             return False
         # Whether to reply if only speak when spoken to
-        if (self.only_speak_when_spoken_to and (client.user.mentioned_in(i) or any(word in i.content.lower() for word in client.user.display_name.lower().split()))) or (self.in_active_conversation(i.author.id) and i.channel.id in bot_settings.database.main_channels):
+        if (self.only_speak_when_spoken_to and (client.user.mentioned_in(i) or any(word in i.content.lower() for word in client.user.display_name.lower().split()))) \
+            or (self.in_active_conversation(i.author.id) and i.channel.id in bot_settings.database.main_channels):
             return True
         reply = False
         # few more conditions
@@ -4761,13 +4739,12 @@ class ImgModel:
 
 class LLMContext:
     def __init__(self):
-        self.bot_description = ''
-        self.bot_emoji = ''
         self.context = 'The following is a conversation with an AI Large Language Model. The AI has been trained to answer questions, provide recommendations, and help with decision making. The AI follows user requests. The AI thinks outside the box.'
         self.extensions = {}
         self.greeting = '' # 'How can I help you today?'
         self.name = 'AI'
         self.use_voice_channel = False
+        self.bot_in_character_menu = True
 
 class LLMState:
     def __init__(self):
