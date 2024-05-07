@@ -379,6 +379,8 @@ def get_llm_model_loader(model):
         loader = infer_loader(model, user_model_settings)
     return loader
 
+instruction_template_str = None
+
 def load_llm_model(loader=None):
     try:
         # If any model has been selected, load it
@@ -391,6 +393,10 @@ def load_llm_model(loader=None):
                 model_name = shared.model_name
 
             model_settings = get_model_metadata(model_name)
+
+            global instruction_template_str
+            instruction_template_str = model_settings.get('instruction_template_str', '')
+
             update_model_parameters(model_settings, initial=True)  # hijack the command-line arguments
 
             # Load the model
@@ -674,8 +680,8 @@ async def start_auto_change_imgmodels():
     global imgmodel_update_task
     imgmodel_update_task = client.loop.create_task(auto_update_imgmodel_task())
 
-# Initialize in chat mode
-async def load_chat():
+# Try getting a valid character file source
+def get_character():
     try:
         # This will be either the char name found in activesettings.yaml, or the default char name
         source = bot_settings.settings['llmcontext']['name']
@@ -685,38 +691,23 @@ async def load_chat():
                 client.user.display_name, # Try current bot name
                 bot_settings.settings['llmcontext']['name'] # Try last known name
             ]
-            for source in sources:
-                logging.info(f'Trying to load character "{source}"...')
+            for try_source in sources:
+                logging.info(f'Trying to load character "{try_source}"...')
                 try:
-                    _, char_name, _, _, _ = load_character(source, '', '')
+                    _, char_name, _, _, _ = load_character(try_source, '', '')
                     if char_name:
-                        logging.info(f'Initializing with character "{source}". Use "/character" for changing characters.')                            
+                        logging.info(f'Initializing with character "{try_source}". Use "/character" for changing characters.')       
+                        source = try_source                     
                         break  # Character loaded successfully, exit the loop
                 except Exception as e:
                     logging.error(f"Error loading character for chat mode: {e}")
             if not char_name:
                 logging.error(f"Character not found in '/characters'. Tried files: {sources}")
         # Load character, but don't save it's settings to activesettings (Only user actions will result in modifications)
-        await character_loader(source)
+        return source
     except Exception as e:
-        logging.error(f"Error initializing in chat mode: {e}")
-
-# Initialize in instruct mode
-async def load_instruct():
-    try:
-        # Set the instruction template for the model
-        instruction_template_str = ''
-        llmmodel_metadata = get_model_metadata(shared.model_name)
-        if llmmodel_metadata:
-            instruction_template_str = llmmodel_metadata.get('instruction_template_str', '')
-            if instruction_template_str:
-                settings_dict = bot_settings.get_settings_dict()
-                settings_dict['llmstate']['state']['instruction_template_str'] = instruction_template_str
-                logging.info(f'The metadata for model "{shared.model_name}" includes an instruction template which will be used.')
-            else:
-                logging.warning(f'The metadata for model "{shared.model_name}" does not include an instruction template. Using default.')    
-    except Exception as e:
-        logging.error(f"Error initializing in instruct mode: {e}")
+        logging.error(f"Error trying to load character data: {e}")
+        return None
 
 # Welcome message embed
 info_embed_json = {
@@ -841,15 +832,14 @@ async def on_ready():
         if bot_settings.database.first_run:
             await first_run()
         if textgenwebui_enabled:
-            # Set the mode (chat / chat-instruct / instruct)
-            mode = bot_settings.settings['llmstate']['state']['mode']
-            logging.info(f'Initializing in {mode} mode')
-            # Get instruction template if not 'chat'
-            if mode != 'chat':
-                await load_instruct()
-            # Get character info if not 'instruct'
-            if mode != 'instruct':
-                await load_chat()
+            source = get_character() # Try loading character data regardless of mode (chat/instruct)
+            char_instruct = None
+            if source:
+                char_instruct, _, _, _ = await character_loader(source)
+            update_instruct = char_instruct or instruction_template_str or None # 'instruction_template_str' is global variable
+            if update_instruct:
+                settings_dict = bot_settings.get_settings_dict()
+                settings_dict['llmstate']['state']['instruction_template_str'] = update_instruct
         # Create main task processing queue
         client.loop.create_task(process_tasks())
         # Create background task processing queue
@@ -1105,7 +1095,7 @@ async def swap_llm_character(char_name, user_name, llm_payload):
         logging.error(f"An error occurred while loading the file for swap_character: {e}")
         return llm_payload
 
-def format_prompt_with_recent_msgs(user, prompt):
+def format_prompt_with_recent_output(user, prompt):
     try:
         formatted_prompt = copy.copy(prompt)
         # Find all matches of {user_x} and {llm_x} in the prompt
@@ -1116,17 +1106,18 @@ def format_prompt_with_recent_msgs(user, prompt):
             prefix, index = match
             index = int(index)
             if prefix in ['user', 'llm'] and 0 <= index <= 10:
-                message_list = recent_messages[prefix]
+                message_list = history_manager.recent_messages[prefix]
                 if not message_list or index >= len(message_list):
                     continue
                 matched_syntax = f"{prefix}_{index}"
                 formatted_prompt = formatted_prompt.replace(f"{{{matched_syntax}}}", message_list[index])
             elif prefix == 'history' and 0 <= index <= 10:
-                user_message = recent_messages['user'][index] if index < len(recent_messages['user']) else ''
-                llm_message = recent_messages['llm'][index] if index < len(recent_messages['llm']) else ''
+                user_message = history_manager.recent_messages['user'][index] if index < len(history_manager.recent_messages['user']) else ''
+                llm_message = history_manager.recent_messages['llm'][index] if index < len(history_manager.recent_messages['llm']) else ''
                 formatted_history = f'"{user}:" {user_message}\n"{client.user.display_name}:" {llm_message}\n'
                 matched_syntax = f"{prefix}_{index}"
                 formatted_prompt = formatted_prompt.replace(f"{{{matched_syntax}}}", formatted_history)
+#        formatted_prompt = formatted_prompt.replace('{last_image}', 'ad_discordbot/temp/temp_img_0.png')
         return formatted_prompt
     except Exception as e:
         logging.error(f'An error occurred while formatting prompt with recent messages: {e}')
@@ -1143,7 +1134,7 @@ def process_tag_formatting(user, prompt, formatting):
         if format_prompt is not None:
             updated_prompt = format_prompt.replace('{prompt}', updated_prompt)
         # format prompt with any defined recent messages
-        updated_prompt = format_prompt_with_recent_msgs(user, updated_prompt)
+        updated_prompt = format_prompt_with_recent_output(user, updated_prompt)
         # Format time if defined
         new_time, new_date = get_time(time_offset, time_format, date_format)
         updated_prompt = updated_prompt.replace('{time}', new_time)
@@ -1177,6 +1168,8 @@ async def build_flow_queue(input_flow):
             while counter > 0:
                 counter -= 1
                 await flow_queue.put(flow_step)
+        global flow_event
+        flow_event.set() # flag that a flow is being processed. Check with 'if flow_event.is_set():'
     except Exception as e:
         logging.error(f"Error building Flow: {e}")
 
@@ -1207,9 +1200,9 @@ async def process_llm_payload_tags(user_name, channel, llm_payload, llm_prompt, 
                     logging.info("[TAGS] History is being ignored")
                 elif load_history > 0:
                     # Calculate the number of items to retain (up to the length of session_history)
-                    num_to_retain = min(load_history, len(session_history["internal"]))
-                    llm_payload['state']['history']['internal'] = session_history['internal'][-num_to_retain:]
-                    llm_payload['state']['history']['visible'] = session_history['visible'][-num_to_retain:]
+                    num_to_retain = min(load_history, len(history_manager.session_history["internal"]))
+                    llm_payload['state']['history']['internal'] = history_manager.session_history['internal'][-num_to_retain:]
+                    llm_payload['state']['history']['visible'] = history_manager.session_history['visible'][-num_to_retain:]
                     logging.info(f'[TAGS] History is being limited to previous {load_history} exchanges')
             if param_variances:
                 processed_params = process_param_variances(param_variances)
@@ -1621,7 +1614,7 @@ async def initialize_llm_payload(user, text):
     llm_payload['state']['character_menu'] = name2
     llm_payload['state']['context'] = context
     llm_payload['save_history'] = True
-    llm_payload['state']['history'] = session_history
+    llm_payload['state']['history'] = history_manager.session_history
     return llm_payload
 
 def get_wildcard_value(matched_text, dir_path='ad_discordbot/wildcards'):
@@ -1782,6 +1775,7 @@ async def on_message(i):
         text = i.clean_content # primarly converts @mentions to actual user names
         if textgenwebui_enabled and not bot_settings.behavior.bot_should_reply(i, text): return # Check that bot should reply or not
         if not bot_settings.database.main_channels and client.user.mentioned_in(i): await main(i) # if None, set channel as main
+        update_last_time('last_user_msg') # Store the current datetime in bot.db
         # if @ mentioning bot, remove the @ mention from user prompt
         if text.startswith(f"@{client.user.display_name} "):
             text = text.replace(f"@{client.user.display_name} ", "", 1)
@@ -1905,28 +1899,6 @@ async def hybrid_llm_img_gen(user, channel, source, text, tags, llm_payload, par
 #################################################################
 ##################### QUEUED LLM GENERATION #####################
 #################################################################
-session_history = {'internal': [], 'visible': []}
-recent_messages = {'user': [], 'llm': []}
-
-# Reset session_history
-def reset_session_history():
-    global session_history
-    session_history = {'internal': [], 'visible': []}
-
-def manage_history(prompt, reply, save_history):
-    global recent_messages
-    recent_messages['user'].insert(0, prompt)
-    recent_messages['llm'].insert(0, reply)
-    # Ensure recent messages list does not exceed 10 elements or 10,000 characters
-    for key in recent_messages:
-        while len(recent_messages[key]) > 10 or sum(len(message) for message in recent_messages[key]) > 10000:
-            oldest_message = recent_messages[key].pop()
-    # Retain chat history
-    global session_history
-    if save_history:
-        session_history['internal'].append([prompt, reply])
-        session_history['visible'].append([prompt, reply])
-
 # Add dynamic stopping strings
 async def extra_stopping_strings(llm_payload):
     try:
@@ -1981,7 +1953,7 @@ async def llm_gen(llm_payload):
         last_resp, tts_resp = await loop.run_in_executor(None, process_responses)
 
         save_history = llm_payload.get('save_history', True)
-        manage_history(llm_payload['text'], last_resp, save_history)
+        history_manager.manage_history(prompt=llm_payload['text'], reply=last_resp, save_history=save_history)
 
         return last_resp, tts_resp
     except Exception as e:
@@ -2310,7 +2282,7 @@ async def format_next_flow(next_flow, user, text):
     for key, value in next_flow.items():
         # see if any tag values have dynamic formatting (user prompt, LLM reply, etc)
         if isinstance(value, str):
-            formatted_value = format_prompt_with_recent_msgs(user, value)       # output will be a string
+            formatted_value = format_prompt_with_recent_output(user, value)       # output will be a string
             if formatted_value != value:                                        # if the value changed,
                 formatted_value = parse_tag_from_text_value(formatted_value)    # convert new string to correct value type
             formatted_flow_tags[key] = formatted_value
@@ -2346,12 +2318,12 @@ async def peek_flow_queue(queue, user, text):
 
 async def flow_task(user, channel, source, text):
     try:
+        global flow_event
         total_flow_steps = flow_queue.qsize()
         flow_embed_info.title = f'Processing Flow for {user} with {total_flow_steps} steps'
         flow_embed_info.description = ''
         # flow_embed_info.description = f'Processing step 1/{total_flow_steps}'
         flow_embed = await channel.send(embed=flow_embed_info)
-        flow_event.set()                # flag that a flow is being processed. Check with 'if flow_event.is_set():'
         while flow_queue.qsize() > 0:   # flow_queue items are removed in get_tags()
             flow_name, text = await peek_flow_queue(flow_queue, user, text)
             remaining_flow_steps = flow_queue.qsize()
@@ -2577,8 +2549,8 @@ async def process_image_gen(img_payload, censor_mode, channel, tags, endpoint, s
         timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         os.rename(f'{temp_dir}/temp_img_0.png', f'{sd_output_dir}/{timestamp}.png')
         # Delete temporary image files
-        for tempfile in os.listdir(temp_dir):
-            os.remove(os.path.join(temp_dir, tempfile))
+        # for tempfile in os.listdir(temp_dir):
+        #     os.remove(os.path.join(temp_dir, tempfile))
     except Exception as e:
         logging.error(f"An error occurred when processing image generation: {e}")
 
@@ -3166,21 +3138,26 @@ def initialize_img_payload(img_prompt, neg_prompt):
 def match_img_tags(img_prompt, tags):
     try:
         # Unmatch any previously matched tags which try to insert text into the img_prompt
-        unmatched_userllm_tags = copy.deepcopy(tags['unmatched']['userllm'])
         for tag in tags['matches'][:]:  # Iterate over a copy of the list
-            if tag.get('imgtag_matched_early'): # collect all previously matched tags with a defined trigger + positive_prompt
-                unmatched_userllm_tags.append(tag)
-                tags['matches'].remove(tag)
-        tags['unmatched']['userllm'] = unmatched_userllm_tags # previously matched tags with a 'positive_prompt' are still accounted for but now unmatched
+            if tag.get('imgtag_matched_early'): # extract text insertion key pairs from previously matched tags
+                new_tag = {}
+                tag_copy = copy.copy(tag)
+                for key, value in tag_copy.items(): # Iterate over a copy of the tag
+                    if (key in ["trigger", "matched_trigger", "imgtag_matched_early", "case_sensitive", "on_prefix_only", "search_mode", "img_text_joining"]
+                        or key.startswith(('positive_prompt', 'negative_prompt'))):
+                        new_tag[key] = value
+                        del tag[key] # Remove the key from the original tag
+                tags['unmatched']['userllm'].append(new_tag) # append to unmatched list
+                # Remove tag items from original list that became an empty list
+                if not tag:
+                    tags['matches'].remove(tag)
         # match tags for 'img' phase.
         tags = match_tags(img_prompt, tags, phase='img')
         # Rematch any previously matched tags that failed to match text in img_prompt
-        matches = copy.deepcopy(tags['matches'])
         for tag in tags['unmatched']['userllm'][:]:  # Iterate over a copy of the list
             if tag.get('imgtag_matched_early') and tag.get('imgtag_uninserted'):
-                matches.append(tag)
+                tags['matches'].append(tag)
                 tags['unmatched']['userllm'].remove(tag)
-        tags['matches'] = matches
         return tags
     except Exception as e:
         logging.error(f"Error matching tags for img phase: {e}")
@@ -3833,6 +3810,7 @@ async def character_loader(source):
         textgen_data = {'name': name, 'greeting': greeting, 'context': context}
         # Check for extra bot data
         char_data = await load_character_data(source)
+        char_instruct = char_data.get('instruction_template_str', None)
         # Merge with basesettings
         char_data = merge_base(char_data, 'llmcontext')
         # Reset warning for character specific TTS
@@ -3846,7 +3824,7 @@ async def character_loader(source):
                 await voice_channel(value)
             elif key == 'tags':
                 value = await update_tags(value) # Unpack any tag presets
-        # Merge any extra data with the llmcontext data
+        # Merge llmcontext data and extra data
         char_llmcontext.update(textgen_data)
         # Collect behavior data
         char_behavior = char_data.get('behavior', {})
@@ -3859,19 +3837,20 @@ async def character_loader(source):
         settings_dict['llmcontext'] = dict(char_llmcontext) # Replace the entire dictionary key
         update_dict(settings_dict['behavior'], dict(char_behavior))
         update_dict(settings_dict['llmstate']['state'], dict(char_llmstate))
+        # Print mode in cmd
+        logging.info(f"Initializing in {bot_settings.settings['llmstate']['state']['mode']} mode")
         # Data for saving to activesettings.yaml (skipped in on_ready())
-        return char_llmcontext, char_behavior, char_llmstate
+        return char_instruct, char_llmcontext, char_behavior, char_llmstate
     except Exception as e:
         logging.error(f"Error loading character. Check spelling and file structure. Use bot cmd '/character' to try again. {e}")
 
-# Check how long since last character change
-def update_last_change():
+def update_last_time(location='last_change'):
     try:
         conn = sqlite3.connect('bot.db')
         c = conn.cursor()
         now = datetime.now()
         formatted_now = now.strftime('%Y-%m-%d %H:%M:%S')
-        c.execute('''UPDATE last_change SET timestamp = ?''', (formatted_now,))
+        c.execute(f'''UPDATE {location} SET timestamp = ?''', (formatted_now,))
         conn.commit()
         conn.close()
         bot_settings.database = Database()
@@ -3889,7 +3868,7 @@ async def delayed_profile_update(username, avatar, remaining_cooldown):
         if avatar:
             await client.user.edit(avatar=avatar)
         logging.info(f"Updated discord client profile (username/avatar). Profile can be updated again in 10 minutes.")
-        update_last_change()  # Store the current datetime in bot.db
+        update_last_time('last_change')  # Store the current datetime in bot.db
     except Exception as e:
         logging.error(f"Error while changing character username or avatar: {e}")
 
@@ -3929,7 +3908,11 @@ async def update_client_profile(channel, char_name):
 async def change_character(channel, char_name):
     try:
         # Load the character
-        char_llmcontext, char_behavior, char_llmstate = await character_loader(char_name)
+        char_instruct, char_llmcontext, char_behavior, char_llmstate = await character_loader(char_name)
+        update_instruct = char_instruct or instruction_template_str or None # 'instruction_template_str' is global variable
+        if update_instruct:
+            settings_dict = bot_settings.get_settings_dict()
+            settings_dict['llmstate']['state']['instruction_template_str'] = update_instruct
         # Update discord username / avatar
         await update_client_profile(channel, char_name)
         # Save the updated active_settings to activesettings.yaml
@@ -3941,7 +3924,7 @@ async def change_character(channel, char_name):
         # Ensure all settings are synchronized
         await update_bot_settings() # Sync updated user settings
         # Clear chat history
-        reset_session_history()
+        history_manager.reset_session_history()
     except Exception as e:
         await channel.send(f"An error occurred while changing character: {e}")
         logging.error(f"An error occurred while changing character: {e}")
@@ -4687,13 +4670,13 @@ class Behavior:
 
     def bot_should_reply(self, i, text):
         # Don't reply to @everyone or to itself
-        if i.mention_everyone or i.author == client.user:
+        if i.mention_everyone or (i.author == client.user and not self.probability_to_reply(self.reply_to_itself)):
             return False
         # Whether to reply to other bots
         if i.author.bot and client.user.display_name.lower() in text.lower() and i.channel.id in bot_settings.database.main_channels:
             if 'bye' in text.lower(): # don't reply if another bot is saying goodbye
                 return False
-            return probability_to_reply(self.reply_to_bots_when_adressed)
+            return self.probability_to_reply(self.reply_to_bots_when_adressed)
         # Whether to reply when text is nested in parentheses
         if self.ignore_parentheses and (i.content.startswith('(') and i.content.endswith(')')) or (i.content.startswith('<:') and i.content.endswith(':>')):
             return False
@@ -4704,16 +4687,16 @@ class Behavior:
         reply = False
         # few more conditions
         if i.author.bot and i.channel.id in bot_settings.database.main_channels:
-            reply = probability_to_reply(self.chance_to_reply_to_other_bots)
+            reply = self.probability_to_reply(self.chance_to_reply_to_other_bots)
         if self.go_wild_in_channel and i.channel.id in bot_settings.database.main_channels:
             reply = True
         if reply:
             self.update_user_dict(i.author.id)
         return reply
 
-def probability_to_reply(probability):
-    # Determine if the bot should reply based on a probability
-    return random.random() < probability
+    def probability_to_reply(self, probability):
+        # Determine if the bot should reply based on a probability
+        return random.random() < probability
 
 class ImgModel:
     def __init__(self):
@@ -4844,7 +4827,8 @@ class Database:
         self.learn_about_and_use_guild_emojis = None # not yet implemented
         self.read_chatlog = None # not yet implemented
         self.first_run = self.initialize_first_run()
-        self.last_change = self.initialize_last_change()
+        self.last_change = self.initialize_last_time('last_change')
+        self.last_user_msg = self.initialize_last_time('last_user_msg')
         self.main_channels = self.initialize_main_channels()
         self.warned_once = self.initialize_warned_once()
 
@@ -4864,27 +4848,27 @@ class Database:
         conn.close()
         return is_first_run_exists == 0
 
-    def initialize_last_change(self):
+    def initialize_last_time(self, location='last_change'):
         try:
             conn = sqlite3.connect('bot.db')
             c = conn.cursor()
-            c.execute('''CREATE TABLE IF NOT EXISTS last_change (timestamp TEXT)''')
-            c.execute('''SELECT timestamp FROM last_change''')
+            c.execute(f'''CREATE TABLE IF NOT EXISTS {location} (timestamp TEXT)''')
+            c.execute(f'''SELECT timestamp FROM {location}''')
             timestamp = c.fetchone()
             if timestamp is None or timestamp[0] is None:
                 now = datetime.now()
                 formatted_now = now.strftime('%Y-%m-%d %H:%M:%S')
                 if timestamp is None:
-                    c.execute('''INSERT INTO last_change (timestamp) VALUES (?)''', (formatted_now,))
+                    c.execute(f'''INSERT INTO {location} (timestamp) VALUES (?)''', (formatted_now,))
                 else:
-                    c.execute('''UPDATE last_change SET timestamp = ?''', (formatted_now,))
+                    c.execute(f'''UPDATE {location} SET timestamp = ?''', (formatted_now,))
                 conn.commit()
                 conn.close()
                 return formatted_now
             conn.close()
             return timestamp[0] if timestamp else None
         except Exception as e:
-            logging.error(f"Error initializing last_change: {e}")
+            logging.error(f"Error initializing {location}: {e}")
 
     def initialize_main_channels(self):
         conn = sqlite3.connect('bot.db')
@@ -4922,6 +4906,48 @@ class Database:
         c.execute('''UPDATE warned_once SET value = ? WHERE flag_name = ?''', (value, flag_name))
         conn.commit()
         conn.close()
+
+class ChatHistoryManager:
+    def __init__(self):
+        self.session_history = {'internal': [], 'visible': []}
+        self.recent_messages = {'user': [], 'llm': []}
+        self.collected_prompt = ''
+
+    # Retain most recent 10 elements or 10,000 characters from user prompts and bot replies
+    def manage_recent_messages(self, prompt, reply=None):
+        if prompt:
+            self.recent_messages['user'].insert(0, prompt)
+            while len(self.recent_messages['user']) > 10 or sum(len(message) for message in self.recent_messages['user']) > 10000:
+                oldest_message = self.recent_messages['user'].pop()
+        if reply:
+            self.recent_messages['llm'].insert(0, reply)
+            while len(self.recent_messages['llm']) > 10 or sum(len(message) for message in self.recent_messages['llm']) > 10000:
+                oldest_message = self.recent_messages['llm'].pop()
+    
+    # Manage the session history for textgen-webui
+    def manage_prompt_history(self, prompt, reply=None, save_history=True):
+        if reply is None:                       # Only prompt is received
+            if self.collected_prompt:           # If there are previously collected prompts
+                self.collected_prompt += '\n\n' + prompt
+            else:
+                self.collected_prompt = prompt
+        else:                                   # Both prompt and reply are received
+            if self.collected_prompt:           # If there are previously collected prompts
+                prompt = self.collected_prompt + '\n\n' + prompt
+                self.collected_prompt = ''      # Reset collected prompts
+
+            if save_history:
+                self.session_history['internal'].append([prompt, reply])
+                self.session_history['visible'].append([prompt, reply])
+
+    def manage_history(self, prompt, reply=None, save_history=True):
+        self.manage_recent_messages(prompt, reply)
+        self.manage_prompt_history(prompt, reply, save_history)
+
+    def reset_session_history(self):
+        self.session_history = {'internal': [], 'visible': []}
+
+history_manager = ChatHistoryManager()
 
 class BotSettings:
     def __init__(self):
