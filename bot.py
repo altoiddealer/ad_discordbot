@@ -635,23 +635,19 @@ async def auto_select_imgmodel(current_imgmodel_name, imgmodel_names, mode='rand
         logging.error(f"Error automatically selecting image model: {e}")
 
 # Task to auto-select an imgmodel at user defined interval
-async def auto_update_imgmodel_task():
+async def auto_update_imgmodel_task(mode, duration):
     while True:
-        imgmodels_data = load_file('ad_discordbot/dict_imgmodels.yaml')
-        auto_change_settings = imgmodels_data.get('settings', {}).get('auto_change_imgmodels', {})
-        mode = auto_change_settings.get('mode', 'random')
-        frequency = auto_change_settings.get('frequency', 1.0)
-        duration = frequency*3600 # 3600 = 1 hour
-        logging.info(f"Auto-change Imgmodels task was started (Mode: '{mode}', Frequency: {frequency} hours).")
         await asyncio.sleep(duration)
         try:
+            imgmodels_data = load_file('ad_discordbot/dict_imgmodels.yaml')
+            auto_change_settings = imgmodels_data.get('settings', {}).get('auto_change_imgmodels', {})
+            channel = auto_change_settings.get('channel_announce', None)
+            if channel == 11111111111111111111: channel = None
             active_settings = load_file('ad_discordbot/activesettings.yaml')
             current_imgmodel_name = active_settings.get('imgmodel', {}).get('imgmodel_name', '')
             imgmodel_names = [imgmodel.get('imgmodel_name', '') for imgmodel in all_imgmodels]           
             # Select an imgmodel automatically
             selected_imgmodel = await auto_select_imgmodel(current_imgmodel_name, imgmodel_names, mode)
-            channel = auto_change_settings.get('channel_announce', None)
-            if channel == 11111111111111111111: channel = None
             if channel: channel = client.get_channel(channel)
             # offload to ai_gen queue
             queue_item = {'user': 'Automatically', 'channel': channel, 'source': 'imgmodel', 'params': {'imgmodel': selected_imgmodel}}
@@ -664,7 +660,7 @@ imgmodel_update_task = None # Global variable allows process to be cancelled and
 
 if sd_enabled:
     # Register command for helper function to toggle auto-select imgmodel
-    @client.hybrid_command(description='Toggles the automatic Imgmodel changing task')
+    @client.hybrid_command(description='Toggles the automatic Img model changing task')
     async def toggle_auto_change_imgmodels(ctx):
         global imgmodel_update_task
         if imgmodel_update_task and not imgmodel_update_task.done():
@@ -673,12 +669,21 @@ if sd_enabled:
             logging.info("Auto-change Imgmodels task was cancelled via '/toggle_auto_change_imgmodels_task'")
         else:
             await bg_task_queue.put(start_auto_change_imgmodels())
-            if ctx: await ctx.send(f"Auto-change Imgmodels task was started.", ephemeral=True, delete_after=5)
+            if ctx: await ctx.send(f"Auto-change Img models task was started.", ephemeral=True, delete_after=5)
 
 # helper function to begin auto-select imgmodel task
 async def start_auto_change_imgmodels():
-    global imgmodel_update_task
-    imgmodel_update_task = client.loop.create_task(auto_update_imgmodel_task())
+    try:
+        global imgmodel_update_task
+        imgmodels_data = load_file('ad_discordbot/dict_imgmodels.yaml')
+        auto_change_settings = imgmodels_data.get('settings', {}).get('auto_change_imgmodels', {})
+        mode = auto_change_settings.get('mode', 'random')
+        frequency = auto_change_settings.get('frequency', 1.0)
+        duration = frequency*3600 # 3600 = 1 hour
+        imgmodel_update_task = client.loop.create_task(auto_update_imgmodel_task(mode, duration))
+        logging.info(f"Auto-change Imgmodels task was started (Mode: '{mode}', Frequency: {frequency} hours).")
+    except Exception as e:
+        logging.error(f"Error starting auto-change Img models task: {e}")
 
 # Try getting a valid character file source
 def get_character():
@@ -1321,7 +1326,7 @@ def process_tag_insertions(prompt, tags):
         tuple_matches.sort(key=lambda x: -x[1])  # Sort the tuple matches in reverse order by their second element (start index)
         for item in tuple_matches:
             tag, start, end = item # unpack tuple
-            phase = tag['phase']
+            phase = tag.get('phase', 'user')
             if phase == 'llm':
                 insert_text = tag.pop('insert_text', None)
                 insert_method = tag.pop('insert_text_method', 'after')  # Default to 'after'
@@ -1349,7 +1354,7 @@ def process_tag_insertions(prompt, tags):
                 tag, start, end = item
             else:
                 tag = item
-            phase = tag['phase']
+            phase = tag.get('phase', 'user')
             if phase == 'llm':
                 tag.pop('insert_text', None)
                 tag.pop('insert_text_method', None)
@@ -2158,7 +2163,7 @@ async def change_char_task(user, channel, source, params):
         char_embed_info.title = f"{user} changed character:"
         char_embed_info.description = f'**{char_name}**'
         await channel.send(embed=char_embed_info)
-        await channel.send(greeting)
+        await send_long_message(channel, greeting)
         logging.info(f"Character changed to: {char_name}")
     except Exception as e:
         logging.error(f"An error occurred while changing character for /character: {e}")
@@ -3143,10 +3148,11 @@ def match_img_tags(img_prompt, tags):
                 new_tag = {}
                 tag_copy = copy.copy(tag)
                 for key, value in tag_copy.items(): # Iterate over a copy of the tag
-                    if (key in ["trigger", "matched_trigger", "imgtag_matched_early", "case_sensitive", "on_prefix_only", "search_mode", "img_text_joining"]
+                    if (key in ["trigger", "matched_trigger", "imgtag_matched_early", "case_sensitive", "on_prefix_only", "search_mode", "img_text_joining", "phase"]
                         or key.startswith(('positive_prompt', 'negative_prompt'))):
                         new_tag[key] = value
-                        del tag[key] # Remove the key from the original tag
+                        if not key == 'phase':
+                            del tag[key] # Remove the key from the original tag
                 tags['unmatched']['userllm'].append(new_tag) # append to unmatched list
                 # Remove tag items from original list that became an empty list
                 if not tag:
@@ -3932,6 +3938,9 @@ async def change_character(channel, char_name):
 
 async def process_character(ctx, selected_character_value):
     try:
+        if not selected_character_value:
+            await ctx.reply('**No character was selected**.', ephemeral=True, delete_after=5)
+            return
         char_name = Path(selected_character_value).stem
         await ireply(ctx, 'character change') # send a response msg to the user
         # offload to ai_gen queue
@@ -4211,6 +4220,9 @@ async def get_selected_imgmodel_data(selected_imgmodel_value):
 
 async def process_imgmodel(ctx, selected_imgmodel_value):
     try:
+        if not selected_imgmodel_value:
+            await ctx.reply('**No Img model was selected**.', ephemeral=True, delete_after=5)
+            return
         await ireply(ctx, 'Img model change') # send a response msg to the user
         # offload to ai_gen queue
         queue_item = {'user': ctx.author, 'channel': ctx.channel, 'source': 'imgmodel', 'params': {'imgmodel': {'imgmodel_name': selected_imgmodel_value}}}
@@ -4335,6 +4347,9 @@ if sd_enabled:
 # Process selected LLM model
 async def process_llmmodel(ctx, selected_llmmodel):
     try:
+        if not selected_llmmodel:
+            await ctx.reply('**No LLM model was selected**.', ephemeral=True, delete_after=5)
+            return
         await ireply(ctx, 'LLM model change') # send a response msg to the user
         # offload to ai_gen queue
         queue_item = {'user': ctx.author, 'channel': ctx.channel, 'source': 'llmmodel', 'params': {'llmmodel': {'llmmodel_name': selected_llmmodel, 'verb': 'Changing', 'mode': 'change'}}}
@@ -4529,6 +4544,9 @@ async def process_user_voice(ctx, voice_input=None):
 
 async def process_speak(ctx, input_text, selected_voice=None, lang=None, voice_input=None):
     try:
+        if not (selected_voice or voice_input):
+            await ctx.reply('**No voice was selected**.', ephemeral=True, delete_after=5)
+            return
         user_voice = await process_user_voice(ctx, voice_input)
         tts_args = await process_speak_args(ctx, selected_voice, lang, user_voice)
         await ireply(ctx, 'tts') # send a response msg to the user
