@@ -142,7 +142,7 @@ client = commands.Bot(command_prefix=".", intents=intents)
 #################################################################
 ####################### DISCORD EMBEDS ##########################
 #################################################################
-embed_color = config['discord'].get('embed_settings', {}).get('color', 0x303134)
+embed_color = config['discord'].get('embed_settings', {}).get('color', 0x1e1f22)
 
 system_embed_info = None
 img_gen_embed_info = None
