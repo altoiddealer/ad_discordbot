@@ -396,7 +396,8 @@ def load_llm_model(loader=None):
             # Load the model
             shared.model, shared.tokenizer = load_model(model_name, loader)
             if shared.args.lora:
-                add_lora_to_model(shared.args.lora)
+                logging.error('Not implemented yet, unknown function: add_lora_to_model(shared.args.lora)') # TODO
+                # add_lora_to_model(shared.args.lora)
     except Exception as e:
         logging.error(f"An error occurred while loading LLM Model: {e}")
 
@@ -906,18 +907,20 @@ async def on_raw_reaction_add(endorsed_img):
 
 # Post settings to a dedicated channel
 async def post_active_settings():
-    if config['discord']['post_active_settings'].get('target_channel_id', ''):
-        target_channel = await client.fetch_channel(config['discord']['post_active_settings'].get('target_channel_id', None))
+    target_channel_id = config['discord']['post_active_settings'].get('target_channel_id', None)
+    
+    if target_channel_id:
+        target_channel = await client.fetch_channel(target_channel_id)
         if target_channel == 11111111111111111111: target_channel = None
         if target_channel:
             active_settings = load_file('ad_discordbot/activesettings.yaml')
             settings_content = yaml.dump(active_settings, default_flow_style=False)
             # Fetch and delete all existing messages in the channel
-            async for message in channel.history(limit=None):
+            async for message in target_channel.history(limit=None):
                 await message.delete()
                 await asyncio.sleep(0.5)  # minimum delay for discord limit
             # Send the entire settings content as a single message
-            await send_long_message(channel, f"Current settings:\n```yaml\n{settings_content}\n```")
+            await send_long_message(target_channel, f"Current settings:\n```yaml\n{settings_content}\n```")
         else:
             logging.error(f"Target channel with ID {target_channel_id} not found.")
     else:
@@ -1887,6 +1890,7 @@ async def hybrid_llm_img_gen(user, channel, source, text, tags, llm_payload, par
         return
     except Exception as e:
         logging.error(f'An error occurred while processing "{source}" request: {e}')
+        img_gen_embed_info = discord.Embed()
         img_gen_embed_info.title = f'An error occurred while processing "{source}" request'
         img_gen_embed_info.description = e
         if img_gen_embed: await img_gen_embed.edit(embed=img_gen_embed_info)
@@ -2833,7 +2837,7 @@ def get_image_tag_args(extension, value, key=None, set_dir=None):
                     break  # Break the loop if an image is found and selected
                 else:
                     if not os.listdir(os_path):
-                        logging.warning(f'Valid file not found in a "{homepath}" or any subdirectories: "{value}"')
+                        logging.warning(f'Valid file not found in a "{home_path}" or any subdirectories: "{value}"')
                         break  # Break the loop if no folders or images are found
         # If value does not specify an extension, but is also not a directory
         else:
@@ -2894,7 +2898,7 @@ async def process_img_payload_tags(img_payload, mods, params):
             # Img censoring handling
             if img_censoring and img_censoring > 0:
                 img_payload['img_censoring'] = img_censoring
-                logging.info(f"[TAGS] Censoring: {'Image Blurred' if value == 1 else 'Generation Blocked'}")
+                logging.info(f"[TAGS] Censoring: {'Image Blurred' if img_censoring == 1 else 'Generation Blocked'}")
             # Imgmodel handling
             imgmodel_params = change_imgmodel or swap_imgmodel or None
             if imgmodel_params:
@@ -3504,7 +3508,7 @@ if sd_enabled:
                     img2img_dict['mask'] = img2img_mask_img
                     message += f" | **Inpainting:** Image Provided"
                 else:
-                    await channel.send("Inpainting requires im2img. Not applying img2img_mask mask...", ephemeral=True)
+                    await ctx.send("Inpainting requires im2img. Not applying img2img_mask mask...", ephemeral=True)
             if face_swap:
                 attached_face_img = await face_swap.read()
                 faceswapimg = base64.b64encode(attached_face_img).decode('utf-8')
