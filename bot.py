@@ -3819,7 +3819,7 @@ async def load_character_data(char_name):
             break  # Break the loop if data is successfully loaded
             
     if char_data is None:
-        logging.error(f"An error occurred while loading character data for {char_name}")
+        logging.error(f"Failed to load data for: {char_name}, perhaps missing file?")
         
     return char_data
 
