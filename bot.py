@@ -29,6 +29,7 @@ from itertools import product
 from threading import Lock, Thread
 from pydub import AudioSegment
 import copy
+from shutil import copyfile
 import sys
 import traceback
 
@@ -1143,7 +1144,7 @@ def format_prompt_with_recent_output(user, prompt):
                 formatted_history = f'"{user}:" {user_message}\n"{client.user.display_name}:" {llm_message}\n'
                 matched_syntax = f"{prefix}_{index}"
                 formatted_prompt = formatted_prompt.replace(f"{{{matched_syntax}}}", formatted_history)
-#        formatted_prompt = formatted_prompt.replace('{last_image}', 'ad_discordbot/temp/temp_img_0.png')
+        formatted_prompt = formatted_prompt.replace('{last_image}', '__temp/temp_img_0.png')
         return formatted_prompt
     except Exception as e:
         logging.error(f'An error occurred while formatting prompt with recent messages: {e}')
@@ -2590,7 +2591,7 @@ async def process_image_gen(img_payload, censor_mode, channel, tags, endpoint, s
     try:
         # Ensure the necessary directories exist
         os.makedirs(sd_output_dir, exist_ok=True)
-        temp_dir = 'ad_discordbot/temp/'
+        temp_dir = 'ad_discordbot/user_images/__temp/'
         os.makedirs(temp_dir, exist_ok=True)
         # Generate images, save locally
         images = await sd_img_gen(channel, temp_dir, img_payload, endpoint)
@@ -2607,7 +2608,9 @@ async def process_image_gen(img_payload, censor_mode, channel, tags, endpoint, s
             await channel.send(files=image_files)
         # Save the image at index 0 with the date/time naming convention
         timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        os.rename(f'{temp_dir}/temp_img_0.png', f'{sd_output_dir}/{timestamp}.png')
+        last_image = f'{sd_output_dir}/{timestamp}.png'
+        os.rename(f'{temp_dir}/temp_img_0.png', last_image)
+        copyfile(last_image, f'{temp_dir}/temp_img_0.png')
         # Delete temporary image files
         # for tempfile in os.listdir(temp_dir):
         #     os.remove(os.path.join(temp_dir, tempfile))
