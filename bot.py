@@ -466,11 +466,6 @@ def merge_base(newsettings, basekey):
         logging.error(f"Error loading ad_discordbot/dict_base_settings.yaml ({basekey}): {e}")
         return newsettings
 
-# Function to delete a message after a certain time
-async def delete_message_after(message, delay):
-    await asyncio.sleep(delay)
-    await message.delete()
-
 # Send message response to user's interaction command
 async def ireply(i, process):
     try:
@@ -480,7 +475,6 @@ async def ireply(i, process):
         else:
             ireply = await i.reply(f'Processing your {process} request', ephemeral=True, delete_after=3)
         #     del_time = 1
-        # asyncio.create_task(delete_message_after(ireply, del_time))
     except Exception as e:
         logging.error(f"Error sending message response to user's interaction command: {e}")
 
@@ -1824,8 +1818,7 @@ async def on_message_task(user, channel, source, text, i):
         should_gen_image = should_bot_do('should_gen_image', default=False, tags=tags)
         if should_gen_image:
             if await sd_online(channel):
-                gen_warning = await channel.send(f'Bot was triggered by Tags to not respond with text.\n**Processing image generation using your input as the prompt ...**') # msg for if LLM model is unloaded
-                asyncio.create_task(delete_message_after(gen_warning, 5))
+                await channel.send(f'Bot was triggered by Tags to not respond with text.\n**Processing image generation using your input as the prompt ...**', delete_after=5) # msg for if LLM model is unloaded
             llm_prompt = copy.copy(text)
             await img_gen_task(user.name, channel, source, llm_prompt, params, i, tags)
     except Exception as e:
@@ -1850,8 +1843,7 @@ async def hybrid_llm_img_gen(user, channel, source, text, tags, llm_payload, par
         if should_gen_image and textgenwebui_enabled:
             if await sd_online(channel):
                 if shared.model_name == 'None':
-                    gen_warning = await channel.send('**Processing image generation using message as the image prompt ...**') # msg for if LLM model is unloaded
-                    asyncio.create_task(delete_message_after(gen_warning, 5))
+                    await channel.send('**Processing image generation using message as the image prompt ...**', delete_after=5) # msg for if LLM model is unloaded
                 else:
                     img_embed_info.title = "Prompting ..."
                     img_embed_info.description = " "
@@ -1861,8 +1853,7 @@ async def hybrid_llm_img_gen(user, channel, source, text, tags, llm_payload, par
             if shared.model_name == 'None':
                 if not bot_settings.database.was_warned('no_llmmodel'):
                     bot_settings.database.update_was_warned('no_llmmodel', 1)
-                    warn_msg = await channel.send(f'(Cannot process text request: No LLM model is currently loaded. Use "/llmmodel" to load a model.)')
-                    asyncio.create_task(delete_message_after(warn_msg, 10))
+                    await channel.send(f'(Cannot process text request: No LLM model is currently loaded. Use "/llmmodel" to load a model.)', delete_after=10)
                     logging.warning(f'Bot tried to generate text for {user}, but no LLM model was loaded')
             # generate text with textgen-webui
             last_resp, tts_resp = await llm_gen(llm_payload)
@@ -2003,8 +1994,7 @@ async def cont_regen_task(i, user, text, channel, source, message):
             cmd = 'Regenerating'
             llm_payload['regenerate'] = True
         if shared.model_name == 'None':
-            warn_msg = await channel.send('(Cannot process text request: No LLM model is currently loaded. Use "/llmmodel" to load a model.)')
-            asyncio.create_task(delete_message_after(warn_msg, 5))
+            await channel.send('(Cannot process text request: No LLM model is currently loaded. Use "/llmmodel" to load a model.)', delete_after=5)
             logging.warning(f'{user} used {cmd} but no LLM model was loaded')
             return
         info_embed.title = f'{cmd} ... '
@@ -2034,8 +2024,7 @@ async def cont_regen_task(i, user, text, channel, source, message):
 async def speak_task(user, channel, text, params):
     try:
         if shared.model_name == 'None':
-            warn_msg = await channel.send('Cannot process "/speak" request: No LLM model is currently loaded. Use "/llmmodel" to load a model.)')
-            asyncio.create_task(delete_message_after(warn_msg, 5))
+            await channel.send('Cannot process "/speak" request: No LLM model is currently loaded. Use "/llmmodel" to load a model.)', delete_after=5)
             logging.warning(f'Bot tried to generate tts for {user}, but no LLM model was loaded')
             return
         info_embed.title = f'{user} requested tts ... '
@@ -3918,8 +3907,7 @@ async def update_client_profile(channel, char_name):
         else:
             remaining_cooldown = last_cooldown - datetime.now()
             seconds = int(remaining_cooldown.total_seconds())
-            warning = await channel.send(f'**Due to Discord limitations, character name/avatar will update in {seconds} seconds.**')
-            asyncio.create_task(delete_message_after(warning, 10))
+            await channel.send(f'**Due to Discord limitations, character name/avatar will update in {seconds} seconds.**', delete_after=10)
             logging.info(f"Due to Discord limitations, character name/avatar will update in {remaining_cooldown} seconds.")
             delayed_profile_update_task = asyncio.create_task(delayed_profile_update(char_name, avatar, seconds))
     except Exception as e:
