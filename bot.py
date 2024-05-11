@@ -887,8 +887,12 @@ async def on_raw_reaction_add(endorsed_img):
         for reaction in message.reactions:
             total_reaction_count += reaction.count
     if total_reaction_count >= config['discord']['starboard'].get('min_reactions', 2):
-        target_channel = client.get_channel(config['discord']['starboard'].get('target_channel_id', ''))
-        if target_channel == 11111111111111111111: target_channel = None
+        
+        target_channel_id = config['discord']['starboard'].get('target_channel_id', None)
+        if target_channel_id == 11111111111111111111: 
+            target_channel_id = None
+        
+        target_channel = client.get_channel(target_channel_id)
         if target_channel and message.id not in starboard_posted_messages:
             # Create the message link
             message_link = f'[Original Message]({message.jump_url})'
@@ -908,10 +912,11 @@ async def on_raw_reaction_add(endorsed_img):
 # Post settings to a dedicated channel
 async def post_active_settings():
     target_channel_id = config['discord']['post_active_settings'].get('target_channel_id', None)
+    if target_channel_id == 11111111111111111111: 
+        target_channel_id = None
     
     if target_channel_id:
         target_channel = await client.fetch_channel(target_channel_id)
-        if target_channel == 11111111111111111111: target_channel = None
         if target_channel:
             active_settings = load_file('ad_discordbot/activesettings.yaml')
             settings_content = yaml.dump(active_settings, default_flow_style=False)
