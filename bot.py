@@ -746,6 +746,7 @@ def get_character():
                 client.user.display_name, # Try current bot name
                 bot_settings.settings['llmcontext']['name'] # Try last known name
             ]
+            char_name = None
             for try_source in sources:
                 logging.info(f'Trying to load character "{try_source}"...')
                 try:
