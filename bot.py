@@ -869,7 +869,7 @@ try: # Fetch images already starboard'd
     if data is None: starboard_posted_messages = ""
     else: starboard_posted_messages = set(data)
 except FileNotFoundError:
-    starboard_posted_messages = ""
+    starboard_posted_messages = set()
 
 @client.event
 async def on_raw_reaction_add(endorsed_img):
