@@ -6,6 +6,13 @@ discord:
   # **BOT TOKEN IS REQUIRED** (https://discordpy.readthedocs.io/en/stable/discord.html)
   TOKEN: ""
   
+  embed_settings:
+    color: 0x1e1f22 # Customize your embeds (0x_______) https://imagecolorpicker.com/
+    show_embeds:    # Set false for any embeds you wish disabled
+      system: true  # Information / System messages
+      images: true  # Embeds related to image generation
+      changes: true # Embeds related to character / model changes
+      flows: true   # Embeds for the Flows feature
   # Feature for bot to copy current settings in a dedicated channel when changing settings via commands (ei: /imgmodel),
   post_active_settings:
     enabled: false
