@@ -204,6 +204,10 @@ if sd_enabled:
                             logging.info("Retrying the request in 3 seconds...")
                             await asyncio.sleep(3)
                             return await sd_api(endpoint, method, json, retry=False)
+                        
+        except aiohttp.client.ClientConnectionError:
+            logging.warning(f'Failed to connect to: "{SD_URL}{endpoint}", offline?')
+        
         except Exception as e:
             if endpoint == '/sdapi/v1/server-restart' or endpoint == '/sdapi/v1/progress':
                 return None
@@ -215,6 +219,9 @@ if sd_enabled:
     async def get_sd_sysinfo():
         try:
             r = await sd_api(endpoint='/sdapi/v1/cmd-flags', method='get', json=None, retry=False)
+            if not r:
+                raise Exception('Failed to connect to SD api, make sure to start it or disable the api in your config.yaml')
+            
             ui_settings_file = r.get("ui_settings_file", "")
             if "webui-forge" in ui_settings_file:
                 return 'SD WebUI Forge'
