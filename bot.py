@@ -854,7 +854,7 @@ async def on_ready():
         # Start background task to to change image models automatically
         if sd_enabled:
             imgmodels_data = load_file('ad_discordbot/dict_imgmodels.yaml')
-            if imgmodels_data.get('settings', {}).get('auto_change_imgmodels', {}).get('enabled', False):
+            if imgmodels_data and imgmodels_data.get('settings', {}).get('auto_change_imgmodels', {}).get('enabled', False):
                 await bg_task_queue.put(start_auto_change_imgmodels())
         logging.info("Bot is ready")
     except Exception as e:
@@ -864,12 +864,11 @@ async def on_ready():
 ####################### DISCORD FEATURES ########################
 #################################################################
 # Starboard feature
-try: # Fetch images already starboard'd
-    data = load_file('ad_discordbot/starboard_messages.yaml')
-    if data is None: starboard_posted_messages = ""
-    else: starboard_posted_messages = set(data)
-except FileNotFoundError:
-    starboard_posted_messages = set()
+starboard_posted_messages = set()
+# Fetch images already starboard'd
+data = load_file('ad_discordbot/starboard_messages.yaml')
+if data:
+    starboard_posted_messages = set(data)
 
 @client.event
 async def on_raw_reaction_add(endorsed_img):
@@ -3812,12 +3811,16 @@ async def load_character_data(char_name):
     for ext in ['.yaml', '.yml', '.json']:
         character_file = os.path.join("characters", f"{char_name}{ext}")
         if os.path.exists(character_file):
-            try:
-                char_data = load_file(character_file)
-                char_data = dict(char_data)
-                break  # Break the loop if data is successfully loaded
-            except Exception as e:
-                logging.error(f"An error occurred while loading character data for {char_name}: {e}")
+            char_data = load_file(character_file)
+            if char_data is None:
+                continue
+            
+            char_data = dict(char_data)
+            break  # Break the loop if data is successfully loaded
+            
+    if char_data is None:
+        logging.error(f"An error occurred while loading character data for {char_name}")
+        
     return char_data
 
 # Collect character information
@@ -3963,13 +3966,15 @@ def get_all_characters():
                 character = {}
                 character['name'] = file.stem
                 all_characters.append(character)
-                try:
-                    char_data = load_file(file)
-                    char_data = dict(char_data)
-                    if char_data.get('bot_in_character_menu', True):
-                        filtered_characters.append(character)
-                except Exception as e:
-                    logging.error(f"An error occurred while filtering /character list: {e}")
+
+                char_data = load_file(file)
+                if char_data is None:
+                    continue
+                
+                char_data = dict(char_data)
+                if char_data.get('bot_in_character_menu', True):
+                    filtered_characters.append(character)
+
     except Exception as e:
         logging.error(f"An error occurred while getting all characters: {e}")
     return all_characters, filtered_characters
