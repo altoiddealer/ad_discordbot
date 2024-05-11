@@ -14,7 +14,7 @@ Variable:	Will be replaced with:
 {user_#}	A recent user prompt. {user_0} represents the most recent user prompt. {user_9} is from 10 prompts ago.
 {llm_#}		A recent LLM response. {llm_0} represents the most recent LLM response. {llm_4} is from 4 responses ago.
 {history_#}	A recent message exchange. Similar to {user/llm_#}, except the messages are prefixed with the user and char names, and separated by new lines (\n)
-
+{last_image}	Shortcut for '__temp/temp_img_0.png' which will be the most recently generated image. Useful in 'Flows' as a dynamic value for img2img or controlnet inputs.
 
 Note:
 For {user/llm_#} and {history_#}, this is limited to the first 10 messages (0-9) OR total character length of 10,000 characters for performance reasons.

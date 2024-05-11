@@ -1,3 +1,0 @@
-Images must be in .png, .jpg, or .txt file containing base64
-
-Images in folders must meet same criteria.
