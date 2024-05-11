@@ -759,6 +759,7 @@ def get_character():
                     logging.error(f"Error loading character for chat mode: {e}")
             if not char_name:
                 logging.error(f"Character not found in '/characters'. Tried files: {sources}")
+                return None # return nothing because no character files exist anyway
         # Load character, but don't save it's settings to activesettings (Only user actions will result in modifications)
         return source
     except Exception as e:
@@ -3919,6 +3920,7 @@ async def character_loader(source):
         return char_instruct, char_llmcontext, char_behavior, char_llmstate
     except Exception as e:
         logging.error(f"Error loading character. Check spelling and file structure. Use bot cmd '/character' to try again. {e}")
+        return # TODO
 
 def update_last_time(location='last_change'):
     try:
