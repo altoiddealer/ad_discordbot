@@ -701,7 +701,8 @@ async def auto_update_imgmodel_task(mode, duration):
             
             async with task_semaphore:
                 # offload to ai_gen queue
-                await change_imgmodel_task('Automatically', channel, dict(imgmodel=selected_imgmodel))
+                params = {'imgmodel': selected_imgmodel}
+                await change_imgmodel_task('Automatically', channel, params)
                 logging.info("Automatically updated imgmodel settings")
                 
         except Exception as e:
@@ -3785,7 +3786,8 @@ if textgenwebui_enabled:
             async with task_semaphore:
                 # offload to ai_gen queue
                 logging.info(f'{ctx.author} used "/reset": "{client.user.display_name}"')
-                await change_char_task(ctx.author, ctx.channel, 'reset', dict(character={'char_name': client.user.display_name, 'verb': 'Resetting', 'mode': 'reset'}))
+                params = {'character': {'char_name': client.user.display_name, 'verb': 'Resetting', 'mode': 'reset'}}
+                await change_char_task(ctx.author, ctx.channel, 'reset', params)
                 
         except Exception as e:
             logging.error(f"Error with /reset: {e}")
@@ -3977,7 +3979,8 @@ async def process_character(ctx, selected_character_value):
         async with task_semaphore:
             # offload to ai_gen queue
             logging.info(f'{ctx.author} used "/character": "{char_name}"')
-            await change_char_task(ctx.author, ctx.channel, 'character', dict(character={'char_name': char_name, 'verb': 'Changing', 'mode': 'change'}))
+            params = {'character': {'char_name': char_name, 'verb': 'Changing', 'mode': 'change'}}
+            await change_char_task(ctx.author, ctx.channel, 'character', params)
             
     except Exception as e:
         logging.error(f"Error processing selected character from /character command: {e}")
@@ -4263,7 +4266,8 @@ async def process_imgmodel(ctx, selected_imgmodel_value):
         async with task_semaphore:
             # offload to ai_gen queue
             logging.info(f'{ctx.author} used "/imgmodel": "{selected_imgmodel_value}"')
-            await change_imgmodel_task(ctx.author, ctx.channel, dict(imgmodel={'imgmodel_name': selected_imgmodel_value}))
+            params = {'imgmodel': {'imgmodel_name': selected_imgmodel_value}}
+            await change_imgmodel_task(ctx.author, ctx.channel, params)
             
     except Exception as e:
         logging.error(f"Error processing selected imgmodel from /imgmodel command: {e}")
@@ -4393,7 +4397,8 @@ async def process_llmmodel(ctx, selected_llmmodel):
         async with task_semaphore:
             # offload to ai_gen queue
             logging.info(f'{ctx.author} used "/llmmodel": "{selected_llmmodel}"')
-            await change_llmmodel_task(ctx.author, ctx.channel, {'llmmodel': {'llmmodel_name': selected_llmmodel, 'verb': 'Changing', 'mode': 'change'}})
+            params = {'llmmodel': {'llmmodel_name': selected_llmmodel, 'verb': 'Changing', 'mode': 'change'}}
+            await change_llmmodel_task(ctx.author, ctx.channel, params)
             
     except Exception as e:
         logging.error(f"Error processing /llmmodel command: {e}")
