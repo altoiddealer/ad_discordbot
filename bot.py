@@ -204,6 +204,10 @@ if sd_enabled:
                             logging.info("Retrying the request in 3 seconds...")
                             await asyncio.sleep(3)
                             return await sd_api(endpoint, method, json, retry=False)
+                        
+        except aiohttp.client.ClientConnectionError:
+            logging.warning(f'Failed to connect to: "{SD_URL}{endpoint}", offline?')
+        
         except Exception as e:
             if endpoint == '/sdapi/v1/server-restart' or endpoint == '/sdapi/v1/progress':
                 return None
@@ -215,6 +219,9 @@ if sd_enabled:
     async def get_sd_sysinfo():
         try:
             r = await sd_api(endpoint='/sdapi/v1/cmd-flags', method='get', json=None, retry=False)
+            if not r:
+                raise Exception('Failed to connect to SD api, make sure to start it or disable the api in your config.yaml')
+            
             ui_settings_file = r.get("ui_settings_file", "")
             if "webui-forge" in ui_settings_file:
                 return 'SD WebUI Forge'
@@ -520,11 +527,6 @@ def merge_base(newsettings, basekey):
         logging.error(f"Error loading ad_discordbot/dict_base_settings.yaml ({basekey}): {e}")
         return newsettings
 
-# Function to delete a message after a certain time
-async def delete_message_after(message, delay):
-    await asyncio.sleep(delay)
-    await message.delete()
-
 # Send message response to user's interaction command
 async def ireply(i, process):
     try:
@@ -534,7 +536,6 @@ async def ireply(i, process):
         else:
             ireply = await i.reply(f'Processing your {process} request', ephemeral=True, delete_after=3)
         #     del_time = 1
-        # asyncio.create_task(delete_message_after(ireply, del_time))
     except Exception as e:
         logging.error(f"Error sending message response to user's interaction command: {e}")
 
@@ -744,6 +745,7 @@ def get_character():
                 client.user.display_name, # Try current bot name
                 bot_settings.settings['llmcontext']['name'] # Try last known name
             ]
+            char_name = None
             for try_source in sources:
                 logging.info(f'Trying to load character "{try_source}"...')
                 try:
@@ -756,6 +758,7 @@ def get_character():
                     logging.error(f"Error loading character for chat mode: {e}")
             if not char_name:
                 logging.error(f"Character not found in '/characters'. Tried files: {sources}")
+                return None # return nothing because no character files exist anyway
         # Load character, but don't save it's settings to activesettings (Only user actions will result in modifications)
         return source
     except Exception as e:
@@ -876,7 +879,7 @@ async def on_ready():
         # Start background task to to change image models automatically
         if sd_enabled:
             imgmodels_data = load_file('ad_discordbot/dict_imgmodels.yaml')
-            if imgmodels_data.get('settings', {}).get('auto_change_imgmodels', {}).get('enabled', False):
+            if imgmodels_data and imgmodels_data.get('settings', {}).get('auto_change_imgmodels', {}).get('enabled', False):
                 await bg_task_queue.put(start_auto_change_imgmodels())
         logging.info("Bot is ready")
     except Exception as e:
@@ -886,12 +889,11 @@ async def on_ready():
 ####################### DISCORD FEATURES ########################
 #################################################################
 # Starboard feature
-try: # Fetch images already starboard'd
-    data = load_file('ad_discordbot/starboard_messages.yaml')
-    if data is None: starboard_posted_messages = ""
-    else: starboard_posted_messages = set(data)
-except FileNotFoundError:
-    starboard_posted_messages = ""
+starboard_posted_messages = set()
+# Fetch images already starboard'd
+data = load_file('ad_discordbot/starboard_messages.yaml')
+if data:
+    starboard_posted_messages = set(data)
 
 @client.event
 async def on_raw_reaction_add(endorsed_img):
@@ -909,8 +911,12 @@ async def on_raw_reaction_add(endorsed_img):
         for reaction in message.reactions:
             total_reaction_count += reaction.count
     if total_reaction_count >= config['discord']['starboard'].get('min_reactions', 2):
-        target_channel = client.get_channel(config['discord']['starboard'].get('target_channel_id', ''))
-        if target_channel == 11111111111111111111: target_channel = None
+        
+        target_channel_id = config['discord']['starboard'].get('target_channel_id', None)
+        if target_channel_id == 11111111111111111111: 
+            target_channel_id = None
+        
+        target_channel = client.get_channel(target_channel_id)
         if target_channel and message.id not in starboard_posted_messages:
             # Create the message link
             message_link = f'[Original Message]({message.jump_url})'
@@ -929,18 +935,21 @@ async def on_raw_reaction_add(endorsed_img):
 
 # Post settings to a dedicated channel
 async def post_active_settings():
-    if config['discord']['post_active_settings'].get('target_channel_id', ''):
-        target_channel = await client.fetch_channel(config['discord']['post_active_settings'].get('target_channel_id', None))
-        if target_channel == 11111111111111111111: target_channel = None
+    target_channel_id = config['discord']['post_active_settings'].get('target_channel_id', None)
+    if target_channel_id == 11111111111111111111: 
+        target_channel_id = None
+    
+    if target_channel_id:
+        target_channel = await client.fetch_channel(target_channel_id)
         if target_channel:
             active_settings = load_file('ad_discordbot/activesettings.yaml')
             settings_content = yaml.dump(active_settings, default_flow_style=False)
             # Fetch and delete all existing messages in the channel
-            async for message in channel.history(limit=None):
+            async for message in target_channel.history(limit=None):
                 await message.delete()
-                await asyncio.sleep(0.5)  # minimum delay for discord limit
+                await asyncio.sleep(0.5)
             # Send the entire settings content as a single message
-            await send_long_message(channel, f"Current settings:\n```yaml\n{settings_content}\n```")
+            await send_long_message(target_channel, f"Current settings:\n```yaml\n{settings_content}\n```")
         else:
             logging.error(f"Target channel with ID {target_channel_id} not found.")
     else:
@@ -1845,8 +1854,7 @@ async def on_message_task(user, channel, source, text, i):
         should_gen_image = should_bot_do('should_gen_image', default=False, tags=tags)
         if should_gen_image:
             if await sd_online(channel):
-                gen_warning = await channel.send(f'Bot was triggered by Tags to not respond with text.\n**Processing image generation using your input as the prompt ...**') # msg for if LLM model is unloaded
-                asyncio.create_task(delete_message_after(gen_warning, 5))
+                await channel.send(f'Bot was triggered by Tags to not respond with text.\n**Processing image generation using your input as the prompt ...**', delete_after=5) # msg for if LLM model is unloaded
             llm_prompt = copy.copy(text)
             await img_gen_task(user.name, channel, source, llm_prompt, params, i, tags)
     except Exception as e:
@@ -1871,8 +1879,7 @@ async def hybrid_llm_img_gen(user, channel, source, text, tags, llm_payload, par
         if should_gen_image and textgenwebui_enabled:
             if await sd_online(channel):
                 if shared.model_name == 'None':
-                    gen_warning = await channel.send('**Processing image generation using message as the image prompt ...**') # msg for if LLM model is unloaded
-                    asyncio.create_task(delete_message_after(gen_warning, 5))
+                    await channel.send('**Processing image generation using message as the image prompt ...**', delete_after=5) # msg for if LLM model is unloaded
                 else:
                     if img_gen_embed_info:
                         img_gen_embed_info.title = "Prompting ..."
@@ -1883,8 +1890,7 @@ async def hybrid_llm_img_gen(user, channel, source, text, tags, llm_payload, par
             if shared.model_name == 'None':
                 if not bot_settings.database.was_warned('no_llmmodel'):
                     bot_settings.database.update_was_warned('no_llmmodel', 1)
-                    warn_msg = await channel.send(f'(Cannot process text request: No LLM model is currently loaded. Use "/llmmodel" to load a model.)')
-                    asyncio.create_task(delete_message_after(warn_msg, 10))
+                    await channel.send(f'(Cannot process text request: No LLM model is currently loaded. Use "/llmmodel" to load a model.)', delete_after=10)
                     logging.warning(f'Bot tried to generate text for {user}, but no LLM model was loaded')
             # generate text with textgen-webui
             last_resp, tts_resp = await llm_gen(llm_payload)
@@ -2005,8 +2011,7 @@ async def cont_regen_task(i, user, text, channel, source, message):
             cmd = 'Regenerating'
             llm_payload['regenerate'] = True
         if shared.model_name == 'None':
-            warn_msg = await channel.send('(Cannot process text request: No LLM model is currently loaded. Use "/llmmodel" to load a model.)')
-            asyncio.create_task(delete_message_after(warn_msg, 5))
+            await channel.send('(Cannot process text request: No LLM model is currently loaded. Use "/llmmodel" to load a model.)', delete_after=5)
             logging.warning(f'{user} used {cmd} but no LLM model was loaded')
             return
         if system_embed_info:
@@ -2038,8 +2043,7 @@ async def speak_task(user, channel, text, params):
     try:
         system_embed = None
         if shared.model_name == 'None':
-            warn_msg = await channel.send('Cannot process "/speak" request: No LLM model is currently loaded. Use "/llmmodel" to load a model.)')
-            asyncio.create_task(delete_message_after(warn_msg, 5))
+            await channel.send('Cannot process "/speak" request: No LLM model is currently loaded. Use "/llmmodel" to load a model.)', delete_after=5)
             logging.warning(f'Bot tried to generate tts for {user}, but no LLM model was loaded')
             return
         if system_embed_info:
@@ -2879,7 +2883,7 @@ def get_image_tag_args(extension, value, key=None, set_dir=None):
                     break  # Break the loop if an image is found and selected
                 else:
                     if not os.listdir(os_path):
-                        logging.warning(f'Valid file not found in a "{homepath}" or any subdirectories: "{value}"')
+                        logging.warning(f'Valid file not found in a "{home_path}" or any subdirectories: "{value}"')
                         break  # Break the loop if no folders or images are found
         # If value does not specify an extension, but is also not a directory
         else:
@@ -2940,7 +2944,7 @@ async def process_img_payload_tags(img_payload, mods, params):
             # Img censoring handling
             if img_censoring and img_censoring > 0:
                 img_payload['img_censoring'] = img_censoring
-                logging.info(f"[TAGS] Censoring: {'Image Blurred' if value == 1 else 'Generation Blocked'}")
+                logging.info(f"[TAGS] Censoring: {'Image Blurred' if img_censoring == 1 else 'Generation Blocked'}")
             # Imgmodel handling
             imgmodel_params = change_imgmodel or swap_imgmodel or None
             if imgmodel_params:
@@ -3558,7 +3562,7 @@ if sd_enabled:
                     img2img_dict['mask'] = img2img_mask_img
                     message += f" | **Inpainting:** Image Provided"
                 else:
-                    await channel.send("Inpainting requires im2img. Not applying img2img_mask mask...", ephemeral=True)
+                    await ctx.send("Inpainting requires im2img. Not applying img2img_mask mask...", ephemeral=True)
             if face_swap:
                 attached_face_img = await face_swap.read()
                 faceswapimg = base64.b64encode(attached_face_img).decode('utf-8')
@@ -3857,12 +3861,16 @@ async def load_character_data(char_name):
     for ext in ['.yaml', '.yml', '.json']:
         character_file = os.path.join("characters", f"{char_name}{ext}")
         if os.path.exists(character_file):
-            try:
-                char_data = load_file(character_file)
-                char_data = dict(char_data)
-                break  # Break the loop if data is successfully loaded
-            except Exception as e:
-                logging.error(f"An error occurred while loading character data for {char_name}: {e}")
+            char_data = load_file(character_file)
+            if char_data is None:
+                continue
+            
+            char_data = dict(char_data)
+            break  # Break the loop if data is successfully loaded
+            
+    if char_data is None:
+        logging.error(f"Failed to load data for: {char_name}, perhaps missing file?")
+        
     return char_data
 
 # Collect character information
@@ -3909,6 +3917,7 @@ async def character_loader(source):
         return char_instruct, char_llmcontext, char_behavior, char_llmstate
     except Exception as e:
         logging.error(f"Error loading character. Check spelling and file structure. Use bot cmd '/character' to try again. {e}")
+        return # TODO
 
 def update_last_time(location='last_change'):
     try:
@@ -3963,8 +3972,7 @@ async def update_client_profile(channel, char_name):
         else:
             remaining_cooldown = last_cooldown - datetime.now()
             seconds = int(remaining_cooldown.total_seconds())
-            warning = await channel.send(f'**Due to Discord limitations, character name/avatar will update in {seconds} seconds.**')
-            asyncio.create_task(delete_message_after(warning, 10))
+            await channel.send(f'**Due to Discord limitations, character name/avatar will update in {seconds} seconds.**', delete_after=10)
             logging.info(f"Due to Discord limitations, character name/avatar will update in {remaining_cooldown} seconds.")
             delayed_profile_update_task = asyncio.create_task(delayed_profile_update(char_name, avatar, seconds))
     except Exception as e:
@@ -4018,13 +4026,15 @@ def get_all_characters():
                 character = {}
                 character['name'] = file.stem
                 all_characters.append(character)
-                try:
-                    char_data = load_file(file)
-                    char_data = dict(char_data)
-                    if char_data.get('bot_in_character_menu', True):
-                        filtered_characters.append(character)
-                except Exception as e:
-                    logging.error(f"An error occurred while filtering /character list: {e}")
+
+                char_data = load_file(file)
+                if char_data is None:
+                    continue
+                
+                char_data = dict(char_data)
+                if char_data.get('bot_in_character_menu', True):
+                    filtered_characters.append(character)
+
     except Exception as e:
         logging.error(f"An error occurred while getting all characters: {e}")
     return all_characters, filtered_characters
