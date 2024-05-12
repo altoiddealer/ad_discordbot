@@ -143,42 +143,47 @@ client = commands.Bot(command_prefix=".", intents=intents)
 #################################################################
 ####################### DISCORD EMBEDS ##########################
 #################################################################
-embed_color = config['discord'].get('embed_settings', {}).get('color', 0x1e1f22)
+def init_embeds(embed_color=0x1e1f22):
+    embed_color = config['discord'].get('embed_settings', {}).get('color', 0x1e1f22)
+    system_embed_info = None
+    img_gen_embed_info = None
+    img_send_embed_info = None
+    change_embed_info = None
+    flow_embed_info = None
 
-system_embed_info = None
-img_gen_embed_info = None
-img_send_embed_info = None
-change_embed_info = None
-flow_embed_info = None
+    enabled_embeds = config['discord'].get('embed_settings', {}).get('show_embeds', {})
 
-enabled_embeds = config['discord'].get('embed_settings', {}).get('show_embeds', {})
+    if enabled_embeds.get('system', True):
+        system_embed_info_json = {
+            "title": "Welcome to ad_discordbot!",
+            "description": """
+            **/helpmenu** - Display this message
+            **/character** - Change character
+            **/main** - Toggle if Bot always replies, per channel
+            **/image** - prompt an image to be generated (or try "draw <subject>")
+            **/speak** - if TTS settings are enabled, the bot can speak your text
+            **__Changing settings__** ('.../ad\_discordbot/dict\_.yaml' files)
+            **/imgmodel** - Change Img model and any model-specific settings
+            """,
+            "url": "https://github.com/altoiddealer/ad_discordbot",
+            "color": embed_color
+        }
+        system_embed_info = discord.Embed().from_dict(system_embed_info_json)
 
-if enabled_embeds.get('system', True):
-    system_embed_info_json = {
-        "title": "Welcome to ad_discordbot!",
-        "description": """
-        **/helpmenu** - Display this message
-        **/character** - Change character
-        **/main** - Toggle if Bot always replies, per channel
-        **/image** - prompt an image to be generated (or try "draw <subject>")
-        **/speak** - if TTS settings are enabled, the bot can speak your text
-        **__Changing settings__** ('.../ad\_discordbot/dict\_.yaml' files)
-        **/imgmodel** - Change Img model and any model-specific settings
-        """,
-        "url": "https://github.com/altoiddealer/ad_discordbot",
-        "color": embed_color
-    }
-    system_embed_info = discord.Embed().from_dict(system_embed_info_json)
+    if enabled_embeds.get('images', True):
+        img_gen_embed_info = discord.Embed(title = "Processing image generation ...", description=" ", url='https://github.com/altoiddealer/ad_discordbot', color=embed_color)
+        img_send_embed_info = discord.Embed(title= 'User requested an image ...', description=" ", url='https://github.com/altoiddealer/ad_discordbot', color=embed_color)
 
-if enabled_embeds.get('images', True):
-    img_gen_embed_info = discord.Embed(title = "Processing image generation ...", description=" ", url='https://github.com/altoiddealer/ad_discordbot', color=embed_color)
-    img_send_embed_info = discord.Embed(title= 'User requested an image ...', description=" ", url='https://github.com/altoiddealer/ad_discordbot', color=embed_color)
+    if enabled_embeds.get('changes', True):
+        change_embed_info = discord.Embed(title = "Changing model ...", description=" ", url='https://github.com/altoiddealer/ad_discordbot', color=embed_color)
 
-if enabled_embeds.get('changes', True):
-    change_embed_info = discord.Embed(title = "Changing model ...", description=" ", url='https://github.com/altoiddealer/ad_discordbot', color=embed_color)
+    if enabled_embeds.get('flows', True):
+        flow_embed_info = discord.Embed(title = 'Processing flow ... ', description=" ", url='https://github.com/altoiddealer/ad_discordbot/wiki/tags', color=embed_color)
 
-if enabled_embeds.get('flows', True):
-    flow_embed_info = discord.Embed(title = 'Processing flow ... ', description=" ", url='https://github.com/altoiddealer/ad_discordbot/wiki/tags', color=embed_color)
+    return system_embed_info, img_gen_embed_info, img_send_embed_info, change_embed_info, flow_embed_info
+
+system_embed_info, img_gen_embed_info, img_send_embed_info, change_embed_info, flow_embed_info = init_embeds()
+
 
 #################################################################
 ################### Stable Diffusion Startup ####################
@@ -436,7 +441,7 @@ def get_llm_model_loader(model):
 
 instruction_template_str = None
 
-def load_llm_model(loader=None):
+async def load_llm_model(loader=None):
     try:
         # If any model has been selected, load it
         if shared.model_name != 'None':
@@ -453,9 +458,10 @@ def load_llm_model(loader=None):
             instruction_template_str = model_settings.get('instruction_template_str', '')
 
             update_model_parameters(model_settings, initial=True)  # hijack the command-line arguments
-
             # Load the model
-            shared.model, shared.tokenizer = load_model(model_name, loader)
+            loop = asyncio.get_event_loop()
+            shared.model, shared.tokenizer = await loop.run_in_executor(None, load_model, model_name, loader)
+           # shared.model, shared.tokenizer = load_model(model_name, loader)
             if shared.args.lora:
                 add_lora_to_model(shared.args.lora)
     except Exception as e:
@@ -467,7 +473,7 @@ if textgenwebui_enabled:
     # Get list of available models
     all_llmmodels = utils.get_available_models()
     init_textgenwebui_llmmodels()
-    load_llm_model()
+    asyncio.run(load_llm_model())
     shared.generation_lock = Lock()
 
 #################################################################
@@ -944,10 +950,10 @@ async def post_active_settings():
         if target_channel:
             active_settings = load_file('ad_discordbot/activesettings.yaml')
             settings_content = yaml.dump(active_settings, default_flow_style=False)
-            # Fetch and delete all existing messages in the channel
+            
             async for message in target_channel.history(limit=None):
                 await message.delete()
-                await asyncio.sleep(0.5)
+                await asyncio.sleep(0.5)  # minimum delay for discord limit
             # Send the entire settings content as a single message
             await send_long_message(target_channel, f"Current settings:\n```yaml\n{settings_content}\n```")
         else:
@@ -2156,7 +2162,7 @@ async def change_llmmodel_task(user, channel, params):
                 if shared.model_name != 'None':
                     bot_settings.database.update_was_warned('no_llmmodel', 0) # Reset warning message
                     loader = get_llm_model_loader(llmmodel_name)    # Try getting loader from user-config.yaml to prevent errors
-                    load_llm_model(loader)                          # Load an LLM model if specified
+                    await load_llm_model(loader)                    # Load an LLM model if specified
             except:
                 if change_embed_info:
                     change_embed_info.title = "An error occurred while changing LLM Model. No LLM Model is loaded."
@@ -3894,10 +3900,13 @@ async def character_loader(source):
         for key, value in char_data.items():
             if key == 'extensions':
                 await update_extensions(value)
+                char_llmcontext['extensions'] = value
             elif key == 'use_voice_channel':
                 await voice_channel(value)
+                char_llmcontext['use_voice_channel'] = value
             elif key == 'tags':
                 value = await update_tags(value) # Unpack any tag presets
+                char_llmcontext['tags'] = value
         # Merge llmcontext data and extra data
         char_llmcontext.update(textgen_data)
         # Collect behavior data
@@ -4042,20 +4051,20 @@ def get_all_characters():
 if textgenwebui_enabled:
     all_characters, filtered_characters = get_all_characters()
     if filtered_characters:
-        character_options = [app_commands.Choice(name=character["name"], value=character["name"]) for character in filtered_characters[:25]]
+        character_options = [app_commands.Choice(name=character["name"][:100], value=character["name"]) for character in filtered_characters[:25]]
         character_options_label = f'{character_options[0].name[0]}-{character_options[-1].name[0]}'.lower()
         if len(filtered_characters) > 25:
-            character_options1 = [app_commands.Choice(name=character["name"], value=character["name"]) for character in filtered_characters[25:50]]
+            character_options1 = [app_commands.Choice(name=character["name"][:100], value=character["name"]) for character in filtered_characters[25:50]]
             character_options1_label = f'{character_options1[0].name[0]}-{character_options1[-1].name[0]}'.lower()
             if character_options1_label == character_options_label:
                 character_options1_label = f'{character_options1_label}_1'
             if len(filtered_characters) > 50:
-                character_options2 = [app_commands.Choice(name=character["name"], value=character["name"]) for character in filtered_characters[50:75]]
+                character_options2 = [app_commands.Choice(name=character["name"][:100], value=character["name"]) for character in filtered_characters[50:75]]
                 character_options2_label = f'{character_options2[0].name[0]}-{character_options2[-1].name[0]}'.lower()
                 if character_options2_label == character_options_label or character_options2_label == character_options1_label:
                     character_options2_label = f'{character_options2_label}_2'
                 if len(filtered_characters) > 75:
-                    character_options3 = [app_commands.Choice(name=character["name"], value=character["name"]) for character in filtered_characters[75:100]]
+                    character_options3 = [app_commands.Choice(name=character["name"][:100], value=character["name"]) for character in filtered_characters[75:100]]
                     character_options3_label = f'{character_options3[0].name[0]}-{character_options3[-1].name[0]}'.lower()
                     if character_options3_label == character_options_label or character_options3_label == character_options1_label or character_options3_label == character_options2_label:
                         character_options3_label = f'{character_options2_label}_3'
@@ -4313,20 +4322,20 @@ if sd_enabled:
         # unload_options = [app_commands.Choice(name="Unload Model", value="None"),
         # app_commands.Choice(name="Do Not Unload Model", value="Exit")]
 
-        imgmodel_options = [app_commands.Choice(name=imgmodel["imgmodel_name"], value=imgmodel["imgmodel_name"]) for imgmodel in all_imgmodels[:25]]
+        imgmodel_options = [app_commands.Choice(name=imgmodel["imgmodel_name"][:100], value=imgmodel["imgmodel_name"]) for imgmodel in all_imgmodels[:25]]
         imgmodel_options_label = f'{imgmodel_options[0].name[0]}-{imgmodel_options[-1].name[0]}'.lower()
         if len(all_imgmodels) > 25:
-            imgmodel_options1 = [app_commands.Choice(name=imgmodel["imgmodel_name"], value=imgmodel["imgmodel_name"]) for imgmodel in all_imgmodels[25:50]]
+            imgmodel_options1 = [app_commands.Choice(name=imgmodel["imgmodel_name"][:100], value=imgmodel["imgmodel_name"]) for imgmodel in all_imgmodels[25:50]]
             imgmodel_options1_label = f'{imgmodel_options1[0].name[0]}-{imgmodel_options1[-1].name[0]}'.lower()
             if imgmodel_options1_label == imgmodel_options_label:
                 imgmodel_options1_label = f'{imgmodel_options1_label}_1'
             if len(all_imgmodels) > 50:
-                imgmodel_options2 = [app_commands.Choice(name=imgmodel["imgmodel_name"], value=imgmodel["imgmodel_name"]) for imgmodel in all_imgmodels[50:75]]
+                imgmodel_options2 = [app_commands.Choice(name=imgmodel["imgmodel_name"][:100], value=imgmodel["imgmodel_name"]) for imgmodel in all_imgmodels[50:75]]
                 imgmodel_options2_label = f'{imgmodel_options2[0].name[0]}-{imgmodel_options2[-1].name[0]}'.lower()
                 if imgmodel_options2_label == imgmodel_options_label or imgmodel_options2_label == imgmodel_options1_label:
                     imgmodel_options2_label = f'{imgmodel_options2_label}_2'
                 if len(all_imgmodels) > 75:
-                    imgmodel_options3 = [app_commands.Choice(name=imgmodel["imgmodel_name"], value=imgmodel["imgmodel_name"]) for imgmodel in all_imgmodels[75:100]]
+                    imgmodel_options3 = [app_commands.Choice(name=imgmodel["imgmodel_name"][:100], value=imgmodel["imgmodel_name"]) for imgmodel in all_imgmodels[75:100]]
                     imgmodel_options3_label = f'{imgmodel_options3[0].name[0]}-{imgmodel_options3[-1].name[0]}'.lower()
                     if imgmodel_options3_label == imgmodel_options_label or imgmodel_options3_label == imgmodel_options1_label or imgmodel_options3_label == imgmodel_options2_label:
                         imgmodel_options3_label = f'{imgmodel_options2_label}_3'
@@ -4428,20 +4437,20 @@ async def process_llmmodel(ctx, selected_llmmodel):
         logging.error(f"Error processing /llmmodel command: {e}")
 
 if textgenwebui_enabled and all_llmmodels:
-    llmmodel_options = [app_commands.Choice(name=llmmodel, value=llmmodel) for llmmodel in all_llmmodels[:25]]
+    llmmodel_options = [app_commands.Choice(name=llmmodel[:100], value=llmmodel) for llmmodel in all_llmmodels[:25]]
     llmmodel_options_label = f'{llmmodel_options[1].name[0]}-{llmmodel_options[-1].name[0]}'.lower() # Using second "Name" since first name is "None"
     if len(all_llmmodels) > 25:
-        llmmodel_options1 = [app_commands.Choice(name=llmmodel, value=llmmodel) for llmmodel in all_llmmodels[25:50]]
+        llmmodel_options1 = [app_commands.Choice(name=llmmodel[:100], value=llmmodel) for llmmodel in all_llmmodels[25:50]]
         llmmodel_options1_label = f'{llmmodel_options1[0].name[0]}-{llmmodel_options1[-1].name[0]}'.lower()
         if llmmodel_options1_label == llmmodel_options_label:
             llmmodel_options1_label = f'{llmmodel_options1_label}_1'
         if len(all_llmmodels) > 50:
-            llmmodel_options2 = [app_commands.Choice(name=llmmodel, value=llmmodel) for llmmodel in all_llmmodels[50:75]]
+            llmmodel_options2 = [app_commands.Choice(name=llmmodel[:100], value=llmmodel) for llmmodel in all_llmmodels[50:75]]
             llmmodel_options2_label = f'{llmmodel_options2[0].name[0]}-{llmmodel_options2[-1].name[0]}'.lower()
             if llmmodel_options2_label == llmmodel_options_label or llmmodel_options2_label == llmmodel_options1_label:
                 llmmodel_options2_label = f'{llmmodel_options2_label}_2'
             if len(all_llmmodels) > 75:
-                llmmodel_options3 = [app_commands.Choice(name=llmmodel, value=llmmodel) for llmmodel in all_llmmodels[75:100]]
+                llmmodel_options3 = [app_commands.Choice(name=llmmodel[:100], value=llmmodel) for llmmodel in all_llmmodels[75:100]]
                 llmmodel_options3_label = f'{llmmodel_options3[0].name[0]}-{llmmodel_options3[-1].name[0]}'.lower()
                 if llmmodel_options3_label == llmmodel_options_label or llmmodel_options3_label == llmmodel_options1_label or llmmodel_options3_label == llmmodel_options2_label:
                     llmmodel_options3_label = f'{llmmodel_options3_label}_3'
