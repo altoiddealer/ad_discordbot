@@ -3948,7 +3948,9 @@ async def delayed_profile_update(username, avatar, remaining_cooldown):
     try:
         await asyncio.sleep(remaining_cooldown)
         if username:
-            await client.user.edit(username=username)
+            for guild in client.guilds:
+                client_member = guild.get_member(client.user.id)
+                await client_member.edit(nick=username)
         if avatar:
             await client.user.edit(avatar=avatar)
         logging.info(f"Updated discord client profile (username/avatar). Profile can be updated again in 10 minutes.")
@@ -3963,7 +3965,7 @@ async def update_client_profile(channel, char_name):
         if delayed_profile_update_task and not delayed_profile_update_task.done():
             delayed_profile_update_task.cancel()
         # Do not update profile if name is same and no update task is scheduled
-        elif (client.user.display_name == char_name):
+        elif all(guild.get_member(client.user.id).display_name == char_name for guild in client.guilds):
             return
         avatar = None
         folder = 'characters'
