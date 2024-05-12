@@ -530,7 +530,7 @@ def merge_base(newsettings, basekey):
 # Send message response to user's interaction command
 async def ireply(i, process):
     try:
-        if task_event.is_set():  # If a queued item is currently being processed
+        if task_semaphore.locked(): # If a queued item is currently being processed
             ireply = await i.reply(f'Your {process} request was added to the task queue', ephemeral=True, delete_after=5)
             # del_time = 5
         else:
@@ -698,9 +698,12 @@ async def auto_update_imgmodel_task(mode, duration):
             # Select an imgmodel automatically
             selected_imgmodel = await auto_select_imgmodel(current_imgmodel_name, imgmodel_names, mode)
             if channel: channel = client.get_channel(channel)
-            # offload to ai_gen queue
-            queue_item = {'user': 'Automatically', 'channel': channel, 'source': 'imgmodel', 'params': {'imgmodel': selected_imgmodel}}
-            await task_queue.put(queue_item)
+            
+            async with task_semaphore:
+                # offload to ai_gen queue
+                await change_imgmodel_task('Automatically', channel, dict(imgmodel=selected_imgmodel))
+                logging.info("Automatically updated imgmodel settings")
+                
         except Exception as e:
             logging.error(f"Error automatically updating image model: {e}")
         #await asyncio.sleep(duration)
@@ -870,8 +873,6 @@ async def on_ready():
             if update_instruct:
                 settings_dict = bot_settings.get_settings_dict()
                 settings_dict['llmstate']['state']['instruction_template_str'] = update_instruct
-        # Create main task processing queue
-        client.loop.create_task(process_tasks())
         # Create background task processing queue
         client.loop.create_task(process_tasks_in_background())
         # Start background task to sync the discord client tree
@@ -1817,8 +1818,13 @@ async def on_message(i):
             text = text.replace(f"@{client.user.display_name} ", "", 1)
         # apply wildcards
         text = await dynamic_prompting(i.author, text, i)
-        queue_item = {'i': i, 'user': i.author, 'channel': i.channel, 'source': 'on_message', 'text': text} 
-        await task_queue.put(queue_item)
+        
+        async with task_semaphore:
+            async with i.channel.typing():
+                logging.info(f'reply requested: {i.author} said: "{text}"')
+                await on_message_task(i.author, i.channel, 'on_message', text, i)
+                await run_flow_if_any(i.author, i.channel, 'on_message', text)
+
     except Exception as e:
         logging.error(f"An error occurred in on_message: {e}")
 
@@ -2256,76 +2262,10 @@ def update_mention(user_id, last_resp=''):
     previous_user_id = user_id
     return mention_resp
 
-def unpack_queue_item(queue_item):
-    i = queue_item.get('i', None)
-    user = queue_item.get('user', None)
-    channel = queue_item.get('channel', None)
-    source = queue_item.get('source', None)
-    text = queue_item.get('text', None)
-    message = queue_item.get('message', None)
-    params = queue_item.get('params', {})
-    info = params.get('llmmodel', {}).get('llmmodel_name', '') or params.get('imgmodel', {}).get('imgmodel_name', '') or params.get('character', {}).get('char_name', '')
-    if source == 'on_message':
-        logging.info(f'reply requested: {user} said: "{text}"')
-    if source == 'character' or source == 'reset':
-        logging.info(f'{user} used "/{source}": "{info}"')
-    if source == 'image':
-        logging.info(f'{user} used "/image": "{text}"')
-    if source == 'speak':
-        logging.info(f'{user} used "/speak": "{text}"')
-    if source == 'cont':
-        logging.info(f'{user} used "Continue"')
-    if source == 'regen':
-        logging.info(f'{user} used "Regenerate"')
-    if source == 'llmmodel':
-        logging.info(f'{user} used "/llmmodel": "{info}"')
-    if source == 'imgmodel':
-        if user == 'Automatically': logging.info("Automatically updated imgmodel settings")
-        else: logging.info(f'{user} used "/imgmodel": "{info}"')
-    return i, user, channel, source, text, message, params
-
 flow_event = asyncio.Event()
 flow_queue = asyncio.Queue()
 
-task_event = asyncio.Event()
-task_queue = asyncio.Queue()
-
-async def process_tasks():
-    try:
-        while True:
-            # Fetch item from the queue
-            queue_item = await task_queue.get()
-            task_event.set() # Flag function is processing a task. Check with 'if task_event.is_set():'
-            # Unpack the next queue item
-            i, user, channel, source, text, message, params = unpack_queue_item(queue_item)
-            # Process unpacked queue item accordingly
-            if source == 'character' or source == 'reset':
-                await change_char_task(user, channel, source, params)
-            elif source == 'imgmodel':
-                await change_imgmodel_task(user, channel, params)
-            elif source == 'llmmodel':
-                await change_llmmodel_task(user, channel, params)
-            else:
-                # Tasks which should simulate typing
-                async with channel.typing():
-                    if source == 'speak': # from '/speak' command
-                        await speak_task(user, channel, text, params)
-                    elif source == 'image': # from '/image' command
-                        await img_gen_task(user, channel, source, text, params, i, tags={})
-                    elif source == 'cont' or source == 'regen':
-                        await cont_regen_task(i, user, text, channel, source, message)
-                    elif source == 'on_message':
-                        await on_message_task(user, channel, source, text, i)
-                    else:
-                        logging.warning(f'Unexpectedly received an invalid task. Source: {source}')
-                    if flow_queue.qsize() > 0:          # flows are activated in process_llm_payload_tags(), and is where the flow queue is populated
-                        await flow_task(user, channel, source, text)
-            task_event.clear() # Flag function is no longer processing a task
-            task_queue.task_done() # Accept next task
-    except Exception as e:
-        logging.error(f"An error occurred while processing a main task: {e}")
-        task_event.clear()
-        task_queue.task_done()
+task_semaphore = asyncio.Semaphore(1)
 
 #################################################################
 ########################## QUEUED FLOW ##########################
@@ -2402,6 +2342,12 @@ async def flow_task(user, channel, source, text):
             else: await channel.send(embed=flow_embed_info)
         flow_event.clear()
         flow_queue.task_done()
+        
+        
+async def run_flow_if_any(user, channel, source, text):
+    if flow_queue.qsize() > 0:
+        # flows are activated in process_llm_payload_tags(), and is where the flow queue is populated
+        await flow_task(user, channel, source, text)
 
 #################################################################
 #################### QUEUED IMAGE GENERATION ####################
@@ -3775,9 +3721,14 @@ if sd_enabled:
                     logging.error(f"An error occurred while configuring ControlNet for /image command: {e}")
             params = {'neg_prompt': neg_style_prompt, 'size': size_dict, 'img2img': img2img_dict, 'face_swap': faceswapimg, 'controlnet': cnet_dict, 'endpoint': endpoint, 'message': message}
             await ireply(ctx, 'image') # send a response msg to the user
-            # offload to ai_gen queue
-            queue_item = {'user': ctx.author, 'channel': ctx.channel, 'source': 'image', 'text': prompt, 'params': params}
-            await task_queue.put(queue_item)
+            
+            async with task_semaphore:
+                async with ctx.channel.typing():
+                    # offload to ai_gen queue
+                    logging.info(f'{ctx.author} used "/image": "{prompt}"')
+                    await img_gen_task(ctx.author, ctx.channel, 'image', prompt, params, i=None, tags={})
+                    await run_flow_if_any(ctx.author, ctx.channel, 'image', prompt)
+
         except Exception as e:
             logging.error(f"An error occurred in image(): {e}")
             traceback.print_exc()
@@ -3830,9 +3781,12 @@ if textgenwebui_enabled:
         try:
             shared.stop_everything = True
             await ireply(ctx, 'character reset') # send a response msg to the user
-            # offload to ai_gen queue
-            queue_item = {'user': ctx.author, 'channel': ctx.channel, 'source': 'reset', 'params': {'character': {'char_name': client.user.display_name, 'verb': 'Resetting', 'mode': 'reset'}}}
-            await task_queue.put(queue_item)
+            
+            async with task_semaphore:
+                # offload to ai_gen queue
+                logging.info(f'{ctx.author} used "/reset": "{client.user.display_name}"')
+                await change_char_task(ctx.author, ctx.channel, 'reset', dict(character={'char_name': client.user.display_name, 'verb': 'Resetting', 'mode': 'reset'}))
+                
         except Exception as e:
             logging.error(f"Error with /reset: {e}")
 
@@ -3842,9 +3796,13 @@ if textgenwebui_enabled:
         text = message.content
         await i.response.defer(thinking=False)
         # await ireply(i, 'regenerate') # send a response msg to the user
-        # offload to ai_gen queue
-        queue_item = {'i': i, 'user': i.user.display_name, 'channel': i.channel, 'source': 'regen', 'text': text, 'message': message.id}
-        await task_queue.put(queue_item)
+        
+        async with task_semaphore:
+            async with i.channel.typing():
+                # offload to ai_gen queue
+                logging.info(f'{i.user.display_name} used "Regenerate"')
+                await cont_regen_task(i, i.user.display_name, text, i.channel, 'regen', message.id)
+                await run_flow_if_any(i.user.display_name, i.channel, 'regen', text)
 
     # Context menu command to Continue last reply
     @client.tree.context_menu(name="continue")
@@ -3852,9 +3810,13 @@ if textgenwebui_enabled:
         text = message.content
         await i.response.defer(thinking=False)
         # await ireply(i, 'continue') # send a response msg to the user
-        # offload to ai_gen queue
-        queue_item = {'i': i, 'user': i.user.display_name, 'channel': i.channel, 'source': 'cont', 'text': text, 'message': message.id}
-        await task_queue.put(queue_item)
+        
+        async with task_semaphore:
+            async with i.channel.typing():
+                # offload to ai_gen queue
+                logging.info(f'{i.user.display_name} used "Continue"')
+                await cont_regen_task(i, i.user.display_name, text, i.channel, 'cont', message.id)
+                await run_flow_if_any(i.user.display_name, i.channel, 'cont', text)
 
 async def load_character_data(char_name):
     char_data = None
@@ -4011,9 +3973,12 @@ async def process_character(ctx, selected_character_value):
             return
         char_name = Path(selected_character_value).stem
         await ireply(ctx, 'character change') # send a response msg to the user
-        # offload to ai_gen queue
-        queue_item = {'user': ctx.author, 'channel': ctx.channel, 'source': 'character', 'params': {'character': {'char_name': char_name, 'verb': 'Changing', 'mode': 'change'}}}
-        await task_queue.put(queue_item)
+
+        async with task_semaphore:
+            # offload to ai_gen queue
+            logging.info(f'{ctx.author} used "/character": "{char_name}"')
+            await change_char_task(ctx.author, ctx.channel, 'character', dict(character={'char_name': char_name, 'verb': 'Changing', 'mode': 'change'}))
+            
     except Exception as e:
         logging.error(f"Error processing selected character from /character command: {e}")
 
@@ -4294,9 +4259,12 @@ async def process_imgmodel(ctx, selected_imgmodel_value):
             await ctx.reply('**No Img model was selected**.', ephemeral=True, delete_after=5)
             return
         await ireply(ctx, 'Img model change') # send a response msg to the user
-        # offload to ai_gen queue
-        queue_item = {'user': ctx.author, 'channel': ctx.channel, 'source': 'imgmodel', 'params': {'imgmodel': {'imgmodel_name': selected_imgmodel_value}}}
-        await task_queue.put(queue_item)
+        
+        async with task_semaphore:
+            # offload to ai_gen queue
+            logging.info(f'{ctx.author} used "/imgmodel": "{selected_imgmodel_value}"')
+            await change_imgmodel_task(ctx.author, ctx.channel, dict(imgmodel={'imgmodel_name': selected_imgmodel_value}))
+            
     except Exception as e:
         logging.error(f"Error processing selected imgmodel from /imgmodel command: {e}")
 
@@ -4421,9 +4389,12 @@ async def process_llmmodel(ctx, selected_llmmodel):
             await ctx.reply('**No LLM model was selected**.', ephemeral=True, delete_after=5)
             return
         await ireply(ctx, 'LLM model change') # send a response msg to the user
-        # offload to ai_gen queue
-        queue_item = {'user': ctx.author, 'channel': ctx.channel, 'source': 'llmmodel', 'params': {'llmmodel': {'llmmodel_name': selected_llmmodel, 'verb': 'Changing', 'mode': 'change'}}}
-        await task_queue.put(queue_item)
+        
+        async with task_semaphore:
+            # offload to ai_gen queue
+            logging.info(f'{ctx.author} used "/llmmodel": "{selected_llmmodel}"')
+            await change_llmmodel_task(ctx.author, ctx.channel, {'llmmodel': {'llmmodel_name': selected_llmmodel, 'verb': 'Changing', 'mode': 'change'}})
+            
     except Exception as e:
         logging.error(f"Error processing /llmmodel command: {e}")
 
@@ -4620,9 +4591,15 @@ async def process_speak(ctx, input_text, selected_voice=None, lang=None, voice_i
         user_voice = await process_user_voice(ctx, voice_input)
         tts_args = await process_speak_args(ctx, selected_voice, lang, user_voice)
         await ireply(ctx, 'tts') # send a response msg to the user
-        # offload to ai_gen queue
-        queue_item = {'user': ctx.author, 'channel': ctx.channel, 'source': 'speak', 'text': input_text, 'params': {'tts_args': tts_args, 'user_voice': user_voice}}
-        await task_queue.put(queue_item)
+        
+        async with task_semaphore:
+            async with ctx.channel.typing():
+                # offload to ai_gen queue
+                logging.info(f'{ctx.author} used "/speak": "{input_text}"')
+                params = {'tts_args': tts_args, 'user_voice': user_voice}
+                await speak_task(ctx.author, ctx.channel, input_text, params)
+                await run_flow_if_any(ctx.author, ctx.channel, 'speak', input_text)
+            
     except Exception as e:
         logging.error(f"Error processing tts request: {e}")
         await ctx.send(f"Error processing tts request: {e}", ephemeral=True)
