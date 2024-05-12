@@ -944,12 +944,10 @@ async def post_active_settings():
         if target_channel:
             active_settings = load_file('ad_discordbot/activesettings.yaml')
             settings_content = yaml.dump(active_settings, default_flow_style=False)
-            
-            def check(m):
-                return True
-            deleted = await target_channel.purge(limit=None, check=check, bulk=True)
-            logging.debug(f'Deleted {len(deleted)} messages from {target_channel}')
-            
+            # Fetch and delete all existing messages in the channel
+            async for message in target_channel.history(limit=None):
+                await message.delete()
+                await asyncio.sleep(0.5)
             # Send the entire settings content as a single message
             await send_long_message(target_channel, f"Current settings:\n```yaml\n{settings_content}\n```")
         else:
