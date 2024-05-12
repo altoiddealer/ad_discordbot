@@ -457,8 +457,7 @@ def load_llm_model(loader=None):
             # Load the model
             shared.model, shared.tokenizer = load_model(model_name, loader)
             if shared.args.lora:
-                logging.error('Not implemented yet, unknown function: add_lora_to_model(shared.args.lora)') # TODO
-                # add_lora_to_model(shared.args.lora)
+                add_lora_to_model(shared.args.lora)
     except Exception as e:
         logging.error(f"An error occurred while loading LLM Model: {e}")
 
