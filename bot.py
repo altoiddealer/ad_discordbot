@@ -5091,9 +5091,9 @@ class ChatHistoryManager:
                 self.session_history['visible'].append([prompt, reply])
         if self.truncation:
             while sum(len(message) for exchange in self.session_history['internal'] for message in exchange) > self.truncation:
-                oldest_exchange = self.session_history['internal'].pop()
+                oldest_exchange = self.session_history['internal'].pop(0)
             while sum(len(message) for exchange in self.session_history['visible'] for message in exchange) > self.truncation:
-                oldest_exchange = self.session_history['visible'].pop()
+                oldest_exchange = self.session_history['visible'].pop(0)
         if self.autosave_history:
             self.save_history(auto_id=self.unique_id)
 
