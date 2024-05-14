@@ -36,6 +36,11 @@ dynamic_prompting_enabled: true
 textgenwebui:
   enabled: true                         # Controls whether TGWUI is part of the bot (does not register relavent commands for discord, etc)
   TGWUI_URL: "http://127.0.0.1:7861"    # Currently a placeholder value for if this bot switches to using the TGWUI API
+  # History handling settings
+  chat_history:
+    limit_history: true                 # Recommended to keep as true. This will limit the stored history to roughly the current 'truncation_length' (more than enough retained). You may have performance issues if set to false.
+    autosave_history: false             # Set this value to true to continuously save history. Use '/save_conversation' to manually save your conversation.
+    autoload_history: false             # Set to true if you want the character to load with the most recently saved chat history.
   # Supported TTS Clients: 'alltalk_tts', 'coqui_tts', 'silero_tts', and 'elevenlabs_tts' have been tested. Other tts extensions may work.
   # REQUIRES: 'pip install pynacl' in textgen-webui venv for bot to join a voice channel
   tts_settings:

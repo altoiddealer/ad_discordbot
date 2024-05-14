@@ -295,7 +295,7 @@ else:
 
 if textgenwebui_enabled:
     import modules.extensions as extensions_module
-    from modules.chat import chatbot_wrapper, load_character
+    from modules.chat import chatbot_wrapper, load_character, save_history, load_latest_history, find_all_histories
     from modules import shared
     from modules import chat, utils
     from modules.LoRA import add_lora_to_model
@@ -750,7 +750,7 @@ def get_character():
         # This will be either the char name found in activesettings.yaml, or the default char name
         source = bot_settings.settings['llmcontext']['name']
         # If name doesn't match the bot's discord username, try to figure out best char data to initialize with
-        if source != client.user.display_name:
+        if source != bot_settings.database.last_character:
             sources = [
                 client.user.display_name, # Try current bot name
                 bot_settings.settings['llmcontext']['name'] # Try last known name
@@ -782,7 +782,6 @@ async def first_run():
             text_channels = guild.text_channels
             if text_channels and system_embed_info:
                 default_channel = text_channels[0]  # Get the first text channel of the guild
-                system_embed_info = discord.Embed().from_dict(system_embed_info_json)
                 await default_channel.send(embed=system_embed_info)
                 break  # Exit the loop after sending the message to the first guild
         logging.info('Welcome to ad_discordbot! Use "/helpmenu" to see main commands. (https://github.com/altoiddealer/ad_discordbot) for more info.')
@@ -792,11 +791,10 @@ async def first_run():
         else:
             logging.error(f"An error occurred while welcoming user to the bot: {e}")
     finally:
-        conn = sqlite3.connect('bot.db')
-        c = conn.cursor()
-        c.execute('''UPDATE first_run SET is_first_run = ?''', (0,)) # log "0" for false
-        conn.commit()
-        conn.close()
+        with sqlite3.connect('bot.db') as conn:
+            c = conn.cursor()
+            c.execute('''UPDATE first_run SET is_first_run = ?''', (0,)) # log "0" for false
+            conn.commit()
         bot_settings.database = Database()
 
 # Unpack tag presets and add global tag keys
@@ -876,10 +874,15 @@ async def on_ready():
             char_instruct = None
             if source:
                 char_instruct, _, _, _ = await character_loader(source)
+                bot_settings.database.update_last_setting(source, 'last_character')
             update_instruct = char_instruct or instruction_template_str or None # 'instruction_template_str' is global variable
             if update_instruct:
                 settings_dict = bot_settings.get_settings_dict()
                 settings_dict['llmstate']['state']['instruction_template_str'] = update_instruct
+            # Initialize chat history
+            autoload_history = config.get('textgenwebui', {}).get('chat_history', {}).get('autoload_history', False)
+            if autoload_history:
+                history_manager.load_history(bot_settings.settings['llmstate']['state'])
         # Create background task processing queue
         client.loop.create_task(process_tasks_in_background())
         # Start background task to sync the discord client tree
@@ -1158,7 +1161,7 @@ def format_prompt_with_recent_output(user, prompt):
             elif prefix == 'history' and 0 <= index <= 10:
                 user_message = history_manager.recent_messages['user'][index] if index < len(history_manager.recent_messages['user']) else ''
                 llm_message = history_manager.recent_messages['llm'][index] if index < len(history_manager.recent_messages['llm']) else ''
-                formatted_history = f'"{user}:" {user_message}\n"{client.user.display_name}:" {llm_message}\n'
+                formatted_history = f'"{user}:" {user_message}\n"{bot_settings.database.last_character}:" {llm_message}\n'
                 matched_syntax = f"{prefix}_{index}"
                 formatted_prompt = formatted_prompt.replace(f"{{{matched_syntax}}}", formatted_history)
         formatted_prompt = formatted_prompt.replace('{last_image}', '__temp/temp_img_0.png')
@@ -1222,7 +1225,7 @@ async def process_llm_payload_tags(user_name, channel, llm_payload, llm_prompt, 
         char_params = {}
         params = {}
         flow = mods.get('flow', None)
-        save_history = mods.get('save_history', None)
+        save_to_history = mods.get('save_to_history', None)
         load_history = mods.get('load_histor', None)
         param_variances = mods.get('param_variances', {})
         state = mods.get('state', {})
@@ -1232,12 +1235,12 @@ async def process_llm_payload_tags(user_name, channel, llm_payload, llm_prompt, 
         swap_llmmodel = mods.get('swap_llmmodel', None)
         send_user_image = mods.get('send_user_image', None)
         # Process the tag matches
-        if flow or save_history or load_history or param_variances or state or change_character or swap_character or change_llmmodel or swap_llmmodel or send_user_image:
+        if flow or save_to_history or load_history or param_variances or state or change_character or swap_character or change_llmmodel or swap_llmmodel or send_user_image:
             # Flow handling
             if flow is not None and not flow_event.is_set():
                 await build_flow_queue(flow)
             # History handling
-            if save_history is not None: llm_payload['save_history'] = save_history # Save this interaction to history (True/False)
+            if save_to_history is not None: llm_payload['save_to_history'] = save_to_history # Save this interaction to history (True/False)
             if load_history is not None:
                 if load_history < 0:
                     llm_payload['state']['history'] = {'internal': [], 'visible': []} # No history
@@ -1297,7 +1300,7 @@ async def process_llm_payload_tags(user_name, channel, llm_payload, llm_prompt, 
 def collect_llm_tag_values(tags):
     llm_payload_mods = {
         'flow': None,
-        'save_history': None,
+        'save_to_history': None,
         'load_history': None,
         'change_character': None,
         'swap_character': None,
@@ -1317,8 +1320,8 @@ def collect_llm_tag_values(tags):
         # Values that will only apply from the first tag matches
         if 'flow' in tag and llm_payload_mods['flow'] is None:
             llm_payload_mods['flow'] = tag.pop('flow')
-        if 'save_history' in tag and llm_payload_mods['save_history'] is None:
-            llm_payload_mods['save_history'] = bool(tag.pop('save_history'))
+        if 'save_history' in tag and llm_payload_mods['save_to_history'] is None:
+            llm_payload_mods['save_to_history'] = bool(tag.pop('save_history'))
         if 'load_history' in tag and llm_payload_mods['load_history'] is None:
             llm_payload_mods['load_history'] = int(tag.pop('load_history'))
         if 'change_character' in tag and llm_payload_mods['change_character'] is None:
@@ -1657,7 +1660,7 @@ async def initialize_llm_payload(user, text):
     llm_payload['state']['name2_instruct'] = name2
     llm_payload['state']['character_menu'] = name2
     llm_payload['state']['context'] = context
-    llm_payload['save_history'] = True
+    llm_payload['save_to_history'] = True
     llm_payload['state']['history'] = history_manager.session_history
     return llm_payload
 
@@ -1818,11 +1821,10 @@ async def on_message(i):
     try:
         text = i.clean_content # primarly converts @mentions to actual user names
         if textgenwebui_enabled and not bot_settings.behavior.bot_should_reply(i, text): return # Check that bot should reply or not
-        if not bot_settings.database.main_channels and client.user.mentioned_in(i): await main(i) # if None, set channel as main
-        update_last_time('last_user_msg') # Store the current datetime in bot.db
+        bot_settings.database.update_last_time('last_user_msg') # Store the current datetime in bot.db
         # if @ mentioning bot, remove the @ mention from user prompt
-        if text.startswith(f"@{client.user.display_name} "):
-            text = text.replace(f"@{client.user.display_name} ", "", 1)
+        if text.startswith(f"@{bot_settings.database.last_character} "):
+            text = text.replace(f"@{bot_settings.database.last_character} ", "", 1)
         # apply wildcards
         text = await dynamic_prompting(i.author, text, i)
         
@@ -2000,8 +2002,8 @@ async def llm_gen(llm_payload):
         # Offload the synchronous task to a separate thread using run_in_executor
         last_resp, tts_resp = await loop.run_in_executor(None, process_responses)
 
-        save_history = llm_payload.get('save_history', True)
-        history_manager.manage_history(prompt=llm_payload['text'], reply=last_resp, save_history=save_history)
+        save_to_history = llm_payload.get('save_to_history', True)
+        history_manager.manage_history(prompt=llm_payload['text'], reply=last_resp, save_to_history=save_to_history)
 
         return last_resp, tts_resp
     except Exception as e:
@@ -2016,7 +2018,7 @@ async def cont_regen_task(i, user, text, channel, source, message):
         cmd = ''
         system_embed = None
         llm_payload = await initialize_llm_payload(user, text)
-        llm_payload['save_history'] = False
+        llm_payload['save_to_history'] = False
         if source == 'cont':
             cmd = 'Continuing'
             llm_payload['_continue'] = True
@@ -2039,7 +2041,8 @@ async def cont_regen_task(i, user, text, channel, source, message):
         fetched_message = await channel.fetch_message(message)
         await fetched_message.delete()
         if tts_resp: await process_tts_resp(channel, tts_resp)
-        await i.followup.send('__Regenerated text:__', silent=True)
+        if source == 'regen':
+            await i.followup.send('__Regenerated text:__', silent=True)
         await send_long_message(channel, last_resp)
     except Exception as e:
         e_msg = f'An error occurred while processing "{cmd}"'
@@ -2067,7 +2070,7 @@ async def speak_task(user, channel, text, params):
         llm_payload['_continue'] = True
         llm_payload['state']['max_new_tokens'] = 1
         llm_payload['state']['history'] = {'internal': [[text, text]], 'visible': [[text, text]]}
-        llm_payload['save_history'] = False
+        llm_payload['save_to_history'] = False
         tts_args = params.get('tts_args', {})
         await update_extensions(tts_args)
         _, tts_resp = await llm_gen(llm_payload)
@@ -3743,27 +3746,26 @@ if sd_enabled:
 #################################################################
 ######################### MISC COMMANDS #########################
 #################################################################
-@client.hybrid_command(description="Display help menu")
-async def helpmenu(ctx):
-    system_embed_info = discord.Embed().from_dict(system_embed_info_json)
-    await ctx.send(embed=system_embed_info)
+if system_embed_info:
+    @client.hybrid_command(description="Display help menu")
+    async def helpmenu(ctx):
+        await ctx.send(embed=system_embed_info)
 
 @client.hybrid_command(description="Toggle current channel as main channel for bot to auto-reply without needing to be called")
 async def main(i):
     try:
-        conn = sqlite3.connect('bot.db')
-        c = conn.cursor()
-        if i.channel.id in bot_settings.database.main_channels:
-            bot_settings.database.main_channels.remove(i.channel.id) # If the channel is already in the main channels, remove it
-            c.execute('''DELETE FROM main_channels WHERE channel_id = ?''', (i.channel.id,))
-            action_message = f'Removed {i.channel.mention} from main channels. Use "/main" again if you want to add it back.'
-        else:
-            # If the channel is not in the main channels, add it
-            bot_settings.database.main_channels.append(i.channel.id)
-            c.execute('''INSERT OR REPLACE INTO main_channels (channel_id) VALUES (?)''', (i.channel.id,))
-            action_message = f'Added {i.channel.mention} to main channels. Use "/main" again to remove it.'
-        conn.commit()
-        conn.close()
+        with sqlite3.connect('bot.db') as conn:
+            c = conn.cursor()
+            if i.channel.id in bot_settings.database.main_channels:
+                bot_settings.database.main_channels.remove(i.channel.id) # If the channel is already in the main channels, remove it
+                c.execute('''DELETE FROM main_channels WHERE channel_id = ?''', (i.channel.id,))
+                action_message = f'Removed {i.channel.mention} from main channels. Use "/main" again if you want to add it back.'
+            else:
+                # If the channel is not in the main channels, add it
+                bot_settings.database.main_channels.append(i.channel.id)
+                c.execute('''INSERT OR REPLACE INTO main_channels (channel_id) VALUES (?)''', (i.channel.id,))
+                action_message = f'Added {i.channel.mention} to main channels. Use "/main" again to remove it.'
+            conn.commit()
         bot_settings.database = Database()
         await i.reply(action_message)
     except Exception as e:
@@ -3791,10 +3793,19 @@ if textgenwebui_enabled:
             
             async with task_semaphore:
                 # offload to ai_gen queue
-                logging.info(f'{ctx.author} used "/reset": "{client.user.display_name}"')
-                params = {'character': {'char_name': client.user.display_name, 'verb': 'Resetting', 'mode': 'reset'}}
+                logging.info(f'{ctx.author} used "/reset": "{bot_settings.database.last_character}"')
+                params = {'character': {'char_name': bot_settings.database.last_character, 'verb': 'Resetting', 'mode': 'reset'}}
                 await change_char_task(ctx.author, ctx.channel, 'reset', params)
                 
+        except Exception as e:
+            logging.error(f"Error with /reset: {e}")
+
+    # /reset command - Resets current character
+    @client.hybrid_command(description="Saves the current conversation to a new file in text-generation-webui/logs/")
+    async def save_conversation(ctx: discord.ext.commands.Context):
+        try:
+            await ctx.reply('Saved current conversation history', ephemeral=True)
+            history_manager.save_history()
         except Exception as e:
             logging.error(f"Error with /reset: {e}")
 
@@ -3803,7 +3814,6 @@ if textgenwebui_enabled:
     async def regen_llm_gen(i: discord.Interaction, message: discord.Message):
         text = message.content
         await i.response.defer(thinking=False)
-        # await ireply(i, 'regenerate') # send a response msg to the user
         
         async with task_semaphore:
             async with i.channel.typing():
@@ -3817,7 +3827,6 @@ if textgenwebui_enabled:
     async def continue_llm_gen(i: discord.Interaction, message: discord.Message):
         text = message.content
         await i.response.defer(thinking=False)
-        # await ireply(i, 'continue') # send a response msg to the user
         
         async with task_semaphore:
             async with i.channel.typing():
@@ -3879,11 +3888,14 @@ async def character_loader(source):
         # Collect llmstate data
         char_llmstate = char_data.get('state', {})
         char_llmstate = merge_base(char_llmstate, 'llmstate,state')
+        char_llmstate['character_menu'] = source
         # Commit the character data to bot_settings.settings
         settings_dict = bot_settings.get_settings_dict()
         settings_dict['llmcontext'] = dict(char_llmcontext) # Replace the entire dictionary key
         update_dict(settings_dict['behavior'], dict(char_behavior))
         update_dict(settings_dict['llmstate']['state'], dict(char_llmstate))
+        # Update stored database value for character
+        bot_settings.database.update_last_setting(source, 'last_character')
         # Print mode in cmd
         logging.info(f"Initializing in {bot_settings.settings['llmstate']['state']['mode']} mode")
         # Data for saving to activesettings.yaml (skipped in on_ready())
@@ -3891,19 +3903,6 @@ async def character_loader(source):
     except Exception as e:
         logging.error(f"Error loading character. Check spelling and file structure. Use bot cmd '/character' to try again. {e}")
         return # TODO
-
-def update_last_time(location='last_change'):
-    try:
-        conn = sqlite3.connect('bot.db')
-        c = conn.cursor()
-        now = datetime.now()
-        formatted_now = now.strftime('%Y-%m-%d %H:%M:%S')
-        c.execute(f'''UPDATE {location} SET timestamp = ?''', (formatted_now,))
-        conn.commit()
-        conn.close()
-        bot_settings.database = Database()
-    except Exception as e:
-        logging.error(f"An error occurred while logging time of profile update to bot.db: {e}")
 
 # Task to manage discord profile updates
 delayed_profile_update_task = None
@@ -3917,8 +3916,8 @@ async def delayed_profile_update(username, avatar, remaining_cooldown):
                 await client_member.edit(nick=username)
         if avatar:
             await client.user.edit(avatar=avatar)
-        logging.info(f"Updated discord client profile (username/avatar). Profile can be updated again in 10 minutes.")
-        update_last_time('last_change')  # Store the current datetime in bot.db
+        logging.info(f"Updated discord client profile (Username: {username}; Avatar: {'Updated' if avatar else 'Unchanged'}).\n Profile can be updated again in 10 minutes.")
+        bot_settings.database.update_last_time('last_change')  # Store the current datetime in bot.db
     except Exception as e:
         logging.error(f"Error while changing character username or avatar: {e}")
 
@@ -3962,6 +3961,8 @@ async def change_character(channel, char_name):
         if update_instruct:
             settings_dict = bot_settings.get_settings_dict()
             settings_dict['llmstate']['state']['instruction_template_str'] = update_instruct
+        # Update stored database value for character
+        bot_settings.database.update_last_setting(char_name, 'last_character')
         # Update discord username / avatar
         await update_client_profile(channel, char_name)
         # Save the updated active_settings to activesettings.yaml
@@ -3972,8 +3973,12 @@ async def change_character(channel, char_name):
         save_yaml_file('ad_discordbot/activesettings.yaml', active_settings)
         # Ensure all settings are synchronized
         await update_bot_settings() # Sync updated user settings
-        # Clear chat history
-        history_manager.reset_session_history()
+        # Set history
+        autoload_history = config.get('textgenwebui', {}).get('chat_history', {}).get('autoload_history', False)
+        if autoload_history:
+            history_manager.load_history(bot_settings.settings['llmstate']['state'])
+        else:
+            history_manager.reset_session_history()
     except Exception as e:
         await channel.send(f"An error occurred while changing character: {e}")
         logging.error(f"An error occurred while changing character: {e}")
@@ -4754,7 +4759,7 @@ class Behavior:
         if i.mention_everyone or (i.author == client.user and not self.probability_to_reply(self.reply_to_itself)):
             return False
         # Whether to reply to other bots
-        if i.author.bot and client.user.display_name.lower() in text.lower() and i.channel.id in bot_settings.database.main_channels:
+        if i.author.bot and bot_settings.database.last_character.lower() in text.lower() and i.channel.id in bot_settings.database.main_channels:
             if 'bye' in text.lower(): # don't reply if another bot is saying goodbye
                 return False
             return self.probability_to_reply(self.reply_to_bots_when_adressed)
@@ -4762,7 +4767,7 @@ class Behavior:
         if self.ignore_parentheses and (i.content.startswith('(') and i.content.endswith(')')) or (i.content.startswith('<:') and i.content.endswith(':>')):
             return False
         # Whether to reply if only speak when spoken to
-        if (self.only_speak_when_spoken_to and (client.user.mentioned_in(i) or any(word in i.content.lower() for word in client.user.display_name.lower().split()))) \
+        if (self.only_speak_when_spoken_to and (client.user.mentioned_in(i) or any(word in i.content.lower() for word in bot_settings.database.last_character.lower().split()))) \
             or (self.in_active_conversation(i.author.id) and i.channel.id in bot_settings.database.main_channels):
             return True
         reply = False
@@ -4908,127 +4913,108 @@ class Database:
         self.learn_about_and_use_guild_emojis = None # not yet implemented
         self.read_chatlog = None # not yet implemented
         self.first_run = self.initialize_first_run()
+        self.last_character = self.initialize_last_setting('last_character')
         self.last_change = self.initialize_last_time('last_change')
         self.last_user_msg = self.initialize_last_time('last_user_msg')
         self.main_channels = self.initialize_main_channels()
         self.warned_once = self.initialize_warned_once()
 
     def initialize_first_run(self):
-        conn = sqlite3.connect('bot.db')
-        c = conn.cursor()
-        c.execute('''SELECT name FROM sqlite_master WHERE type='table' AND name='first_run' ''')
-        is_first_run_table_exists = c.fetchone()
-        if not is_first_run_table_exists:
-            c.execute('''CREATE TABLE IF NOT EXISTS first_run (is_first_run BOOLEAN)''')
-            c.execute('''INSERT INTO first_run (is_first_run) VALUES (1)''')
-            conn.commit()
-            conn.close()
-            return True
-        c.execute('''SELECT COUNT(*) FROM first_run''')
-        is_first_run_exists = c.fetchone()[0]
-        conn.close()
-        return is_first_run_exists == 0
+        with sqlite3.connect('bot.db') as conn:
+            c = conn.cursor()
+            c.execute('''SELECT name FROM sqlite_master WHERE type='table' AND name='first_run' ''')
+            is_first_run_table_exists = c.fetchone()
+            if not is_first_run_table_exists:
+                c.execute('''CREATE TABLE IF NOT EXISTS first_run (is_first_run BOOLEAN)''')
+                c.execute('''INSERT INTO first_run (is_first_run) VALUES (1)''')
+                conn.commit()
+                return True
+            c.execute('''SELECT COUNT(*) FROM first_run''')
+            is_first_run_exists = c.fetchone()[0]
+            return is_first_run_exists == 0
+
+    def initialize_last_setting(self, location):
+        try:
+            with sqlite3.connect('bot.db') as conn:
+                c = conn.cursor()
+                c.execute(f'''CREATE TABLE IF NOT EXISTS {location} (setting TEXT)''')
+        except Exception as e:
+            logging.error(f"Error initializing {location}: {e}")
+
+    def update_last_setting(self, value, location):
+        try:
+            with sqlite3.connect('bot.db') as conn:
+                c = conn.cursor()
+                c.execute(f'''UPDATE {location} SET setting = ?''', (value,))
+                conn.commit()
+            setattr(self, location, value)
+        except Exception as e:
+            logging.error(f"An error occurred while logging '{value}' to '{location}' in bot.db: {e}")
 
     def initialize_last_time(self, location='last_change'):
         try:
-            conn = sqlite3.connect('bot.db')
-            c = conn.cursor()
-            c.execute(f'''CREATE TABLE IF NOT EXISTS {location} (timestamp TEXT)''')
-            c.execute(f'''SELECT timestamp FROM {location}''')
-            timestamp = c.fetchone()
-            if timestamp is None or timestamp[0] is None:
-                now = datetime.now()
-                formatted_now = now.strftime('%Y-%m-%d %H:%M:%S')
-                if timestamp is None:
-                    c.execute(f'''INSERT INTO {location} (timestamp) VALUES (?)''', (formatted_now,))
-                else:
-                    c.execute(f'''UPDATE {location} SET timestamp = ?''', (formatted_now,))
-                conn.commit()
-                conn.close()
-                return formatted_now
-            conn.close()
+            with sqlite3.connect('bot.db') as conn:
+                c = conn.cursor()
+                c.execute(f'''CREATE TABLE IF NOT EXISTS {location} (timestamp TEXT)''')
+                c.execute(f'''SELECT timestamp FROM {location}''')
+                timestamp = c.fetchone()
+                if timestamp is None or timestamp[0] is None:
+                    now = datetime.now()
+                    formatted_now = now.strftime('%Y-%m-%d %H:%M:%S')
+                    if timestamp is None:
+                        c.execute(f'''INSERT INTO {location} (timestamp) VALUES (?)''', (formatted_now,))
+                    else:
+                        c.execute(f'''UPDATE {location} SET timestamp = ?''', (formatted_now,))
+                    conn.commit()
+                    return formatted_now
             return timestamp[0] if timestamp else None
         except Exception as e:
             logging.error(f"Error initializing {location}: {e}")
 
+    def update_last_time(self, location='last_change'):
+        try:
+            with sqlite3.connect('bot.db') as conn:
+                c = conn.cursor()
+                now = datetime.now()
+                formatted_now = now.strftime('%Y-%m-%d %H:%M:%S')
+                c.execute(f'''UPDATE {location} SET timestamp = ?''', (formatted_now,))
+                conn.commit()
+            setattr(self, location, formatted_now)
+        except Exception as e:
+            logging.error(f"An error occurred while logging time of profile update to bot.db: {e}")
+
     def initialize_main_channels(self):
-        conn = sqlite3.connect('bot.db')
-        c = conn.cursor()
-        c.execute('''CREATE TABLE IF NOT EXISTS main_channels (channel_id TEXT UNIQUE)''')
-        c.execute('''SELECT channel_id FROM main_channels''')
-        result = [int(row[0]) for row in c.fetchall()]
-        conn.close()
-        return result if result else []
+        with sqlite3.connect('bot.db') as conn:
+            c = conn.cursor()
+            c.execute('''CREATE TABLE IF NOT EXISTS main_channels (channel_id TEXT UNIQUE)''')
+            c.execute('''SELECT channel_id FROM main_channels''')
+            result = [int(row[0]) for row in c.fetchall()]
+            return result if result else []
 
     def initialize_warned_once(self):
-        conn = sqlite3.connect('bot.db')
-        c = conn.cursor()
-        c.execute('''CREATE TABLE IF NOT EXISTS warned_once (flag_name TEXT UNIQUE, value INTEGER)''')
-        flags_to_insert = [('loractl', 0), ('char_tts', 0), ('no_llmmodel', 0), ('forgecouple', 0), ('layerdiffuse', 0), ('dynaprompt', 0)]
-        for flag_name, value in flags_to_insert:
-            c.execute('''INSERT OR REPLACE INTO warned_once (flag_name, value) VALUES (?, ?)''', (flag_name, value))
-        conn.commit()
-        conn.close()
+        with sqlite3.connect('bot.db') as conn:
+            c = conn.cursor()
+            c.execute('''CREATE TABLE IF NOT EXISTS warned_once (flag_name TEXT UNIQUE, value INTEGER)''')
+            flags_to_insert = [('loractl', 0), ('char_tts', 0), ('no_llmmodel', 0), ('forgecouple', 0), ('layerdiffuse', 0), ('dynaprompt', 0)]
+            for flag_name, value in flags_to_insert:
+                c.execute('''INSERT OR REPLACE INTO warned_once (flag_name, value) VALUES (?, ?)''', (flag_name, value))
+            conn.commit()
 
     def was_warned(self, flag_name):
-        conn = sqlite3.connect('bot.db')
-        c = conn.cursor()
-        c.execute('''SELECT value FROM warned_once WHERE flag_name = ?''', (flag_name,))
-        result = c.fetchone()
-        conn.close()
-        if result:
-            return result[0]
-        else:
-            return None
+        with sqlite3.connect('bot.db') as conn:
+            c = conn.cursor()
+            c.execute('''SELECT value FROM warned_once WHERE flag_name = ?''', (flag_name,))
+            result = c.fetchone()
+            if result:
+                return result[0]
+            else:
+                return None
 
     def update_was_warned(self, flag_name, value):
-        conn = sqlite3.connect('bot.db')
-        c = conn.cursor()
-        c.execute('''UPDATE warned_once SET value = ? WHERE flag_name = ?''', (value, flag_name))
-        conn.commit()
-        conn.close()
-
-class ChatHistoryManager:
-    def __init__(self):
-        self.session_history = {'internal': [], 'visible': []}
-        self.recent_messages = {'user': [], 'llm': []}
-        self.collected_prompt = ''
-
-    # Retain most recent 10 elements or 10,000 characters from user prompts and bot replies
-    def manage_recent_messages(self, prompt, reply=None):
-        if prompt:
-            self.recent_messages['user'].insert(0, prompt)
-            while len(self.recent_messages['user']) > 10 or sum(len(message) for message in self.recent_messages['user']) > 10000:
-                oldest_message = self.recent_messages['user'].pop()
-        if reply:
-            self.recent_messages['llm'].insert(0, reply)
-            while len(self.recent_messages['llm']) > 10 or sum(len(message) for message in self.recent_messages['llm']) > 10000:
-                oldest_message = self.recent_messages['llm'].pop()
-    
-    # Manage the session history for textgen-webui
-    def manage_prompt_history(self, prompt, reply=None, save_history=True):
-        if reply is None:                       # Only prompt is received
-            if self.collected_prompt:           # If there are previously collected prompts
-                self.collected_prompt += '\n\n' + prompt
-            else:
-                self.collected_prompt = prompt
-        else:                                   # Both prompt and reply are received
-            if self.collected_prompt:           # If there are previously collected prompts
-                prompt = self.collected_prompt + '\n\n' + prompt
-                self.collected_prompt = ''      # Reset collected prompts
-
-            if save_history:
-                self.session_history['internal'].append([prompt, reply])
-                self.session_history['visible'].append([prompt, reply])
-
-    def manage_history(self, prompt, reply=None, save_history=True):
-        self.manage_recent_messages(prompt, reply)
-        self.manage_prompt_history(prompt, reply, save_history)
-
-    def reset_session_history(self):
-        self.session_history = {'internal': [], 'visible': []}
-
-history_manager = ChatHistoryManager()
+        with sqlite3.connect('bot.db') as conn:
+            c = conn.cursor()
+            c.execute('''UPDATE warned_once SET value = ? WHERE flag_name = ?''', (value, flag_name))
+            conn.commit()
 
 class BotSettings:
     def __init__(self):
@@ -5045,5 +5031,79 @@ class BotSettings:
         return self.settings
 
 bot_settings = BotSettings()
+
+class ChatHistoryManager:
+    def __init__(self):
+        self.limit_history = config.get('textgenwebui', {}).get('chat_history', {}).get('limit_history', True)
+        self.truncation = int(bot_settings.settings['llmstate']['state']['truncation_length'] * 4) if self.limit_history else None
+        self.autosave_history = config.get('textgenwebui', {}).get('chat_history', {}).get('autosave_history', False)
+        self.unique_id = None
+        self.session_history = {'internal': [], 'visible': []}
+        self.recent_messages = {'user': [], 'llm': []}
+        self.collected_prompt = ''
+
+    # Loads most recent history for current character
+    def load_history(self, state):
+        self.session_history = load_latest_history(state)
+        last_exchange = self.session_history['visible'][-1] if self.session_history['visible'] else None
+        if last_exchange:
+            last_user_message = last_exchange[0]
+            last_assistant_message = last_exchange[1]
+            logging.info(f'Loaded most recent chat history. Last message exchange:\n User: "{last_user_message}"\n {bot_settings.database.last_character}: "{last_assistant_message}"')
+        else:
+            logging.info("Starting new conversation.")
+        all_histories = find_all_histories(state)
+        if len(all_histories) > 0:
+            self.unique_id = all_histories[0]
+
+    # Save history to a new file
+    def save_history(self, auto_id=None):
+        state = bot_settings.settings['llmstate']['state']
+        if not auto_id:
+            self.unique_id = datetime.now().strftime('%Y%m%d-%H-%M-%S')
+            logging.info(f'''Chat history was saved to "/logs/{state['mode']}/{bot_settings.database.last_character}/{self.unique_id}.json"''')
+        save_history(self.session_history, self.unique_id, state['character_menu'], state['mode'])
+
+    # Retain most recent 10 elements or 10,000 characters from user prompts and bot replies
+    def manage_recent_messages(self, prompt, reply=None):
+        if prompt:
+            self.recent_messages['user'].insert(0, prompt)
+            while len(self.recent_messages['user']) > 10 or sum(len(message) for message in self.recent_messages['user']) > 5000:
+                oldest_message = self.recent_messages['user'].pop()
+        if reply:
+            self.recent_messages['llm'].insert(0, reply)
+            while len(self.recent_messages['llm']) > 10 or sum(len(message) for message in self.recent_messages['llm']) > 5000:
+                oldest_message = self.recent_messages['llm'].pop()
+    
+    # Manage the session history for textgen-webui
+    def manage_prompt_history(self, prompt, reply=None, save_to_history=True):
+        if reply is None:                       # Only prompt is received
+            if self.collected_prompt:           # If there are previously collected prompts
+                self.collected_prompt += '\n\n' + prompt
+            else:
+                self.collected_prompt = prompt
+        else:                                   # Both prompt and reply are received
+            if self.collected_prompt:           # If there are previously collected prompts
+                prompt = self.collected_prompt + '\n\n' + prompt
+                self.collected_prompt = ''      # Reset collected prompts
+            if save_to_history:
+                self.session_history['internal'].append([prompt, reply])
+                self.session_history['visible'].append([prompt, reply])
+        if self.truncation:
+            while sum(len(message) for exchange in self.session_history['internal'] for message in exchange) > self.truncation:
+                oldest_exchange = self.session_history['internal'].pop()
+            while sum(len(message) for exchange in self.session_history['visible'] for message in exchange) > self.truncation:
+                oldest_exchange = self.session_history['visible'].pop()
+        if self.autosave_history:
+            self.save_history(auto_id=self.unique_id)
+
+    def manage_history(self, prompt, reply=None, save_to_history=True):
+        self.manage_recent_messages(prompt, reply)
+        self.manage_prompt_history(prompt, reply, save_to_history)
+
+    def reset_session_history(self):
+        self.session_history = {'internal': [], 'visible': []}
+
+history_manager = ChatHistoryManager()
 
 client.run(bot_token, root_logger=True, log_handler=handler)
