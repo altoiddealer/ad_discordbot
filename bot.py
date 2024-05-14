@@ -2215,7 +2215,7 @@ async def change_char_task(user, channel, source, params):
             change_embed_info.description = f'{user} requested character {mode}: "{char_name}"'
             change_embed = await channel.send(embed=change_embed_info)
         # Change character
-        await change_character(channel, char_name)
+        await change_character(channel, source, char_name)
         greeting = bot_settings.settings['llmcontext']['greeting']
         if greeting:
             greeting = greeting.replace('{{user}}', 'user')
@@ -3953,7 +3953,7 @@ async def update_client_profile(channel, char_name):
         logging.error(f"An error occurred while updating Discord profile: {e}")
 
 # Apply character changes
-async def change_character(channel, char_name):
+async def change_character(channel, source, char_name):
     try:
         # Load the character
         char_instruct, char_llmcontext, char_behavior, char_llmstate = await character_loader(char_name)
@@ -3975,7 +3975,7 @@ async def change_character(channel, char_name):
         await update_bot_settings() # Sync updated user settings
         # Set history
         autoload_history = config.get('textgenwebui', {}).get('chat_history', {}).get('autoload_history', False)
-        if autoload_history:
+        if autoload_history and source != 'reset':
             history_manager.load_history(bot_settings.settings['llmstate']['state'])
         else:
             history_manager.reset_session_history()
@@ -5103,6 +5103,7 @@ class ChatHistoryManager:
 
     def reset_session_history(self):
         self.session_history = {'internal': [], 'visible': []}
+        logging.info("Starting new conversation.")
 
 history_manager = ChatHistoryManager()
 
