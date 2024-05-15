@@ -52,7 +52,7 @@ class Database:
     def load(self):
         data = load_file(self._fp) or {}
         self.first_run = data.pop('first_run', True)
-        self.last_character = data.pop('last_character')
+        self.last_character = data.pop('last_character', None)
         self.last_change = data.pop('last_change', time.time())
         self.last_user_msg = data.pop('last_user_msg', time.time())
         self.main_channels = data.pop('main_channels', [])
