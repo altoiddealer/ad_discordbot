@@ -4135,21 +4135,23 @@ if sd_enabled:
         ### IF API IMG MODEL UNLOADING GETS EVER DEBUGGED
         # unload_options = [app_commands.Choice(name="Unload Model", value="None"),
         # app_commands.Choice(name="Do Not Unload Model", value="Exit")]
+        
+        _img_model_hash_dict = {str(hash(imgmodel["imgmodel_name"])):imgmodel["imgmodel_name"] for imgmodel in all_imgmodels}
 
-        imgmodel_options = [app_commands.Choice(name=imgmodel["imgmodel_name"][:100], value=imgmodel["imgmodel_name"]) for imgmodel in all_imgmodels[:25]]
+        imgmodel_options = [app_commands.Choice(name=imgmodel["imgmodel_name"][:100], value=str(hash(imgmodel["imgmodel_name"]))) for imgmodel in all_imgmodels[:25]]
         imgmodel_options_label = f'{imgmodel_options[0].name[0]}-{imgmodel_options[-1].name[0]}'.lower()
         if len(all_imgmodels) > 25:
-            imgmodel_options1 = [app_commands.Choice(name=imgmodel["imgmodel_name"][:100], value=imgmodel["imgmodel_name"]) for imgmodel in all_imgmodels[25:50]]
+            imgmodel_options1 = [app_commands.Choice(name=imgmodel["imgmodel_name"][:100], value=str(hash(imgmodel["imgmodel_name"]))) for imgmodel in all_imgmodels[25:50]]
             imgmodel_options1_label = f'{imgmodel_options1[0].name[0]}-{imgmodel_options1[-1].name[0]}'.lower()
             if imgmodel_options1_label == imgmodel_options_label:
                 imgmodel_options1_label = f'{imgmodel_options1_label}_1'
             if len(all_imgmodels) > 50:
-                imgmodel_options2 = [app_commands.Choice(name=imgmodel["imgmodel_name"][:100], value=imgmodel["imgmodel_name"]) for imgmodel in all_imgmodels[50:75]]
+                imgmodel_options2 = [app_commands.Choice(name=imgmodel["imgmodel_name"][:100], value=str(hash(imgmodel["imgmodel_name"]))) for imgmodel in all_imgmodels[50:75]]
                 imgmodel_options2_label = f'{imgmodel_options2[0].name[0]}-{imgmodel_options2[-1].name[0]}'.lower()
                 if imgmodel_options2_label == imgmodel_options_label or imgmodel_options2_label == imgmodel_options1_label:
                     imgmodel_options2_label = f'{imgmodel_options2_label}_2'
                 if len(all_imgmodels) > 75:
-                    imgmodel_options3 = [app_commands.Choice(name=imgmodel["imgmodel_name"][:100], value=imgmodel["imgmodel_name"]) for imgmodel in all_imgmodels[75:100]]
+                    imgmodel_options3 = [app_commands.Choice(name=imgmodel["imgmodel_name"][:100], value=str(hash(imgmodel["imgmodel_name"]))) for imgmodel in all_imgmodels[75:100]]
                     imgmodel_options3_label = f'{imgmodel_options3[0].name[0]}-{imgmodel_options3[-1].name[0]}'.lower()
                     if imgmodel_options3_label == imgmodel_options_label or imgmodel_options3_label == imgmodel_options1_label or imgmodel_options3_label == imgmodel_options2_label:
                         imgmodel_options3_label = f'{imgmodel_options2_label}_3'
@@ -4169,6 +4171,8 @@ if sd_enabled:
         #         await ctx.send("More than one option was selected. Using the first selection.", ephemeral=True)
         #     selected_imgmodel = ((imgmodels or unload) and (imgmodels or unload).value) or ''
                 selected_imgmodel = imgmodels.value if imgmodels is not None else ''
+                if selected_imgmodel:
+                    selected_imgmodel = _img_model_hash_dict[selected_imgmodel]
                 await process_imgmodel(ctx, selected_imgmodel)
 
         elif 25 < len(all_imgmodels) <= 50:
@@ -4187,6 +4191,8 @@ if sd_enabled:
                     await ctx.send("More than one option was selected. Using the first selection.", ephemeral=True)
         #     selected_imgmodel = ((models_1 or models_2 or unload) and (models_1 or models_2 or unload).value) or ''
                 selected_imgmodel = ((models_1 or models_2) and (models_1 or models_2).value) or ''
+                if selected_imgmodel:
+                    selected_imgmodel = _img_model_hash_dict[selected_imgmodel]
                 await process_imgmodel(ctx, selected_imgmodel)
 
         elif 50 < len(all_imgmodels) <= 75:
@@ -4208,6 +4214,8 @@ if sd_enabled:
                     await ctx.send("More than one option was selected. Using the first selection.", ephemeral=True)
         #     selected_imgmodel = ((models_1 or models_2 or models_3 or unload) and (models_1 or models_2 or models_3 or unload).value) or ''
                 selected_imgmodel = ((models_1 or models_2 or models_3) and (models_1 or models_2 or models_3).value) or ''
+                if selected_imgmodel:
+                    selected_imgmodel = _img_model_hash_dict[selected_imgmodel]
                 await process_imgmodel(ctx, selected_imgmodel)
 
         elif 75 < len(all_imgmodels) <= 100:
@@ -4232,6 +4240,8 @@ if sd_enabled:
                     await ctx.send("More than one option was selected. Using the first selection.", ephemeral=True)
         #     selected_imgmodel = ((models_1 or models_2 or models_3 or models_4 or unload) and (models_1 or models_2 or models_3 or models_4 or unload).value) or ''
                 selected_imgmodel = ((models_1 or models_2 or models_3 or models_4) and (models_1 or models_2 or models_3 or models_4).value) or ''
+                if selected_imgmodel:
+                    selected_imgmodel = _img_model_hash_dict[selected_imgmodel]
                 await process_imgmodel(ctx, selected_imgmodel)
 
 #################################################################
@@ -4255,20 +4265,23 @@ async def process_llmmodel(ctx, selected_llmmodel):
         logging.error(f"Error processing /llmmodel command: {e}")
 
 if textgenwebui_enabled and all_llmmodels:
-    llmmodel_options = [app_commands.Choice(name=llmmodel[:100], value=llmmodel) for llmmodel in all_llmmodels[:25]]
+    
+    _llm_model_hash_dict = {str(hash(llmmodel)):llmmodel for llmmodel in all_llmmodels}
+    
+    llmmodel_options = [app_commands.Choice(name=llmmodel[:100], value=str(hash(llmmodel))) for llmmodel in all_llmmodels[:25]]
     llmmodel_options_label = f'{llmmodel_options[1].name[0]}-{llmmodel_options[-1].name[0]}'.lower() # Using second "Name" since first name is "None"
     if len(all_llmmodels) > 25:
-        llmmodel_options1 = [app_commands.Choice(name=llmmodel[:100], value=llmmodel) for llmmodel in all_llmmodels[25:50]]
+        llmmodel_options1 = [app_commands.Choice(name=llmmodel[:100], value=str(hash(llmmodel))) for llmmodel in all_llmmodels[25:50]]
         llmmodel_options1_label = f'{llmmodel_options1[0].name[0]}-{llmmodel_options1[-1].name[0]}'.lower()
         if llmmodel_options1_label == llmmodel_options_label:
             llmmodel_options1_label = f'{llmmodel_options1_label}_1'
         if len(all_llmmodels) > 50:
-            llmmodel_options2 = [app_commands.Choice(name=llmmodel[:100], value=llmmodel) for llmmodel in all_llmmodels[50:75]]
+            llmmodel_options2 = [app_commands.Choice(name=llmmodel[:100], value=str(hash(llmmodel))) for llmmodel in all_llmmodels[50:75]]
             llmmodel_options2_label = f'{llmmodel_options2[0].name[0]}-{llmmodel_options2[-1].name[0]}'.lower()
             if llmmodel_options2_label == llmmodel_options_label or llmmodel_options2_label == llmmodel_options1_label:
                 llmmodel_options2_label = f'{llmmodel_options2_label}_2'
             if len(all_llmmodels) > 75:
-                llmmodel_options3 = [app_commands.Choice(name=llmmodel[:100], value=llmmodel) for llmmodel in all_llmmodels[75:100]]
+                llmmodel_options3 = [app_commands.Choice(name=llmmodel[:100], value=str(hash(llmmodel))) for llmmodel in all_llmmodels[75:100]]
                 llmmodel_options3_label = f'{llmmodel_options3[0].name[0]}-{llmmodel_options3[-1].name[0]}'.lower()
                 if llmmodel_options3_label == llmmodel_options_label or llmmodel_options3_label == llmmodel_options1_label or llmmodel_options3_label == llmmodel_options2_label:
                     llmmodel_options3_label = f'{llmmodel_options3_label}_3'
@@ -4283,6 +4296,8 @@ if textgenwebui_enabled and all_llmmodels:
         @app_commands.choices(llmmodels=llmmodel_options)
         async def llmmodel(ctx: discord.ext.commands.Context, llmmodels: typing.Optional[app_commands.Choice[str]]):
             selected_llmmodel = llmmodels.value if llmmodels is not None else ''
+            if selected_llmmodel:
+                selected_llmmodel = _llm_model_hash_dict[selected_llmmodel]
             await process_llmmodel(ctx, selected_llmmodel)
 
     elif 25 < len(all_llmmodels) <= 50:
@@ -4297,6 +4312,8 @@ if textgenwebui_enabled and all_llmmodels:
             if models_1 and models_2:
                 await ctx.send("More than one LLM model was selected. Using the first selection.", ephemeral=True)
             selected_llmmodel = ((models_1 or models_2) and (models_1 or models_2).value) or ''
+            if selected_llmmodel:
+                selected_llmmodel = _llm_model_hash_dict[selected_llmmodel]
             await process_llmmodel(ctx, selected_llmmodel)
 
     elif 50 < len(all_llmmodels) <= 75:
@@ -4314,6 +4331,8 @@ if textgenwebui_enabled and all_llmmodels:
             if sum(1 for v in (models_1, models_2, models_3) if v) > 1:
                 await ctx.send("More than one LLM model was selected. Using the first selection.", ephemeral=True)
             selected_llmmodel = ((models_1 or models_2 or models_3) and (models_1 or models_2 or models_3).value) or ''
+            if selected_llmmodel:
+                selected_llmmodel = _llm_model_hash_dict[selected_llmmodel]
             await process_llmmodel(ctx, selected_llmmodel)
 
     elif 75 < len(all_llmmodels) <= 100:
@@ -4334,6 +4353,8 @@ if textgenwebui_enabled and all_llmmodels:
             if sum(1 for v in (models_1, models_2, models_3, models_4) if v) > 1:
                 await ctx.send("More than one LLM model was selected. Using the first selection.", ephemeral=True)
             selected_llmmodel = ((models_1 or models_2 or models_3 or models_4) and (models_1 or models_2 or models_3 or models_4).value) or ''
+            if selected_llmmodel:
+                selected_llmmodel = _llm_model_hash_dict[selected_llmmodel]
             await process_llmmodel(ctx, selected_llmmodel)
 
 #################################################################
@@ -4489,15 +4510,18 @@ async def fetch_speak_options():
 
 if textgenwebui_enabled and tts_client and tts_client in supported_tts_clients:
     lang_list, all_voices = asyncio.run(fetch_speak_options())
-    voice_options = [app_commands.Choice(name=voice_name.replace('_', ' ').title(), value=f'{voice_name}') for voice_name in all_voices[:25]]
+    
+    _voice_hash_dict = {str(hash(voice_name)):voice_name for voice_name in all_voices}
+    
+    voice_options = [app_commands.Choice(name=voice_name.replace('_', ' ').title(), value=str(hash(voice_name))) for voice_name in all_voices[:25]]
     voice_options_label = f'{voice_options[0].name[0]}-{voice_options[-1].name[0]}'.lower()
     if len(all_voices) > 25:
-        voice_options1 = [app_commands.Choice(name=voice_name.replace('_', ' ').title(), value=f'{voice_name}') for voice_name in all_voices[25:50]]
+        voice_options1 = [app_commands.Choice(name=voice_name.replace('_', ' ').title(), value=str(hash(voice_name))) for voice_name in all_voices[25:50]]
         voice_options1_label = f'{voice_options1[0].name[0]}-{voice_options1[-1].name[0]}'.lower()
         if voice_options1_label == voice_options_label:
             voice_options1_label = f'{voice_options1_label}_1'
         if len(all_voices) > 50:
-            voice_options2 = [app_commands.Choice(name=voice_name.replace('_', ' ').title(), value=f'{voice_name}') for voice_name in all_voices[50:75]]
+            voice_options2 = [app_commands.Choice(name=voice_name.replace('_', ' ').title(), value=str(hash(voice_name))) for voice_name in all_voices[50:75]]
             voice_options2_label = f'{voice_options2[0].name[0]}-{voice_options2[-1].name[0]}'.lower()
             if voice_options2_label == voice_options_label or voice_options2_label == voice_options1_label:
                 voice_options2_label = f'{voice_options2_label}_2'
@@ -4515,6 +4539,8 @@ if textgenwebui_enabled and tts_client and tts_client in supported_tts_clients:
         @app_commands.choices(lang=lang_options)
         async def speak(ctx: discord.ext.commands.Context, input_text: str, voice: typing.Optional[app_commands.Choice[str]], lang: typing.Optional[app_commands.Choice[str]], voice_input: typing.Optional[discord.Attachment]):
             selected_voice = voice.value if voice is not None else ''
+            if selected_voice:
+                selected_voice = _voice_hash_dict[selected_voice]
             voice_input = voice_input if voice_input is not None else ''
             lang = lang.value if lang is not None else ''
             await process_speak(ctx, input_text, selected_voice, lang, voice_input)
@@ -4532,6 +4558,8 @@ if textgenwebui_enabled and tts_client and tts_client in supported_tts_clients:
             if voice_1 and voice_2:
                 await ctx.send("A voice was picked from two separate menus. Using the first selection.", ephemeral=True)
             selected_voice = ((voice_1 or voice_2) and (voice_1 or voice_2).value) or ''
+            if selected_voice:
+                selected_voice = _voice_hash_dict[selected_voice]
             voice_input = voice_input if voice_input is not None else ''
             lang = lang.value if lang is not None else ''
             await process_speak(ctx, input_text, selected_voice, lang, voice_input)
@@ -4552,6 +4580,8 @@ if textgenwebui_enabled and tts_client and tts_client in supported_tts_clients:
             if sum(1 for v in (voice_1, voice_2, voice_3) if v) > 1:
                 await ctx.send("A voice was picked from two separate menus. Using the first selection.", ephemeral=True)
             selected_voice = ((voice_1 or voice_2 or voice_3) and (voice_1 or voice_2 or voice_3).value) or ''
+            if selected_voice:
+                selected_voice = _voice_hash_dict[selected_voice]
             voice_input = voice_input if voice_input is not None else ''
             lang = lang.value if lang is not None else ''
             await process_speak(ctx, input_text, selected_voice, lang, voice_input)
