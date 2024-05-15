@@ -69,8 +69,7 @@ class Database:
             self.save()
         
     def was_warned(self, flag_name):
-        value = self.warned_once.get(flag_name)
-        return value # Return None by default, as this is what the previous code did.
+        return self.warned_once.get(flag_name, False)
 
     def update_was_warned(self, flag_name, value=True, save_now=True):
         self.warned_once[flag_name] = value
