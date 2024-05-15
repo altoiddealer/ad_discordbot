@@ -20,7 +20,6 @@ import base64
 import yaml
 from PIL import Image, PngImagePlugin
 import requests
-import sqlite3
 import pprint
 import aiohttp
 import math
@@ -33,9 +32,8 @@ from shutil import copyfile
 import sys
 import traceback
 
-#################################################################
-#################### DISCORD / BOT STARTUP ######################
-#################################################################
+sys.path.append("ad_discordbot")
+
 # Start logger
 logging.basicConfig(format='%(levelname)s [%(asctime)s]: %(message)s (Line: %(lineno)d in %(funcName)s, %(filename)s )',
                     datefmt='%Y-%m-%d %H:%M:%S', 
@@ -48,6 +46,17 @@ handler = logging.handlers.RotatingFileHandler(
     maxBytes=32 * 1024 * 1024,  # 32 MiB
     backupCount=5,  # Rotate through 5 files
 )
+
+from database import Database
+from utils_shared import task_semaphore
+from utils_misc import fix_dict, update_dict, sum_update_dict, update_dict_matched_keys
+from utils_discord import ireply, send_long_message
+from utils_files import load_file, merge_base, save_yaml_file
+
+#################################################################
+#################### DISCORD / BOT STARTUP ######################
+#################################################################
+
 
 # Resolve legacy config method
 class Config:
@@ -487,179 +496,6 @@ async def process_tasks_in_background():
         await task
 
 #################################################################
-######################## MISC FUNCTIONS #########################
-#################################################################
-# Function to load .json, .yml or .yaml files
-def load_file(file_path):
-    try:
-        file_suffix = Path(file_path).suffix.lower()
-
-        if file_suffix in [".json", ".yml", ".yaml"]:
-            with open(file_path, 'r', encoding='utf-8') as file:
-                if file_suffix in [".json"]:
-                    data = json.load(file)
-                else:
-                    data = yaml.safe_load(file)
-            return data
-        else:
-            logging.error(f"Unsupported file format: {file_suffix}")
-            return None
-    except FileNotFoundError:
-        logging.error(f"File not found: {file_suffix}")
-        return None
-    except Exception as e:
-        logging.error(f"An error occurred while reading {file_path}: {str(e)}")
-        return None
-
-def merge_base(newsettings, basekey):
-    def deep_update(original, update):
-        for key, value in update.items():
-            if isinstance(value, dict) and key in original and isinstance(original[key], dict):
-                deep_update(original[key], value)
-            else:
-                original[key] = value
-    try:
-        base_settings = load_file('ad_discordbot/dict_base_settings.yaml')
-        keys = basekey.split(',')
-        current_dict = base_settings
-        for key in keys:
-            if key in current_dict:
-                current_dict = current_dict[key].copy()
-            else:
-                return None
-        deep_update(current_dict, newsettings) # Recursively update the dictionary
-        return current_dict
-    except Exception as e:
-        logging.error(f"Error loading ad_discordbot/dict_base_settings.yaml ({basekey}): {e}")
-        return newsettings
-
-# Send message response to user's interaction command
-async def ireply(i, process):
-    try:
-        if task_semaphore.locked(): # If a queued item is currently being processed
-            ireply = await i.reply(f'Your {process} request was added to the task queue', ephemeral=True, delete_after=5)
-            # del_time = 5
-        else:
-            ireply = await i.reply(f'Processing your {process} request', ephemeral=True, delete_after=3)
-        #     del_time = 1
-    except Exception as e:
-        logging.error(f"Error sending message response to user's interaction command: {e}")
-
-# Adds missing keys/values
-def fix_dict(set, req):
-    for k, req_v in req.items():
-        if k not in set:
-            set[k] = req_v
-        elif isinstance(req_v, dict):
-            fix_dict(set[k], req_v)
-    return set
-
-# Updates matched keys, AND adds missing keys
-def update_dict(d, u):
-    for k, v in u.items():
-        if isinstance(v, dict):
-            d[k] = update_dict(d.get(k, {}), v)
-        else:
-            d[k] = v
-    for k in d.keys() - u.keys():
-        u[k] = d[k]
-    return u
-
-# Updates matched keys, AND adds missing keys, BUT sums together number values
-def sum_update_dict(d, u):
-    def get_decimal_places(value):
-        # Function to get the number of decimal places in a float.
-        if isinstance(value, float):
-            return len(str(value).split('.')[1])
-        else:
-            return 0
-    for k, v in u.items():
-        if isinstance(v, dict):
-            d[k] = sum_update_dict(d.get(k, {}), v)
-        elif isinstance(v, (int, float)) and not isinstance(v, bool):
-            current_value = d.get(k, 0)
-            max_decimal_places = max(get_decimal_places(current_value), get_decimal_places(v))
-            d[k] = round(current_value + v, max_decimal_places)
-        else:
-            d[k] = v
-    for k in d.keys() - u.keys():
-        u[k] = d[k]
-    return u
-
-# Updates matched keys, but DOES NOT add missing keys
-def update_dict_matched_keys(d, u):
-    for k, v in u.items():
-        if isinstance(v, dict):
-            d[k] = update_dict(d.get(k, {}), v)
-        else:
-            d[k] = v
-    return d
-
-def save_yaml_file(file_path, data):
-    try:
-        with open(file_path, 'w') as file:
-            yaml.dump(data, file, encoding='utf-8', default_flow_style=False, width=float("inf"), sort_keys=False)
-    except Exception as e:
-        logging.error(f"An error occurred while saving {file_path}: {str(e)}")
-
-async def send_long_message(channel, message_text):
-    """ Splits a longer message into parts while preserving sentence boundaries and code blocks """
-    activelang = ''
-
-    # Helper function to ensure even pairs of code block markdown
-    def ensure_even_code_blocks(chunk_text, code_block_inserted):
-        nonlocal activelang  # Declare activelang as nonlocal to modify the global variable
-        code_block_languages = ["asciidoc", "autohotkey", "bash", "coffeescript", "cpp", "cs", "css", "diff", "fix", "glsl", "ini", "json", "md", "ml", "prolog", "ps", "py", "tex", "xl", "xml", "yaml", "html"]
-        code_block_count = chunk_text.count("```")
-        if code_block_inserted:
-            # If a code block was inserted in the previous chunk, add a leading set of "```"
-            chunk_text = f"```{activelang}\n" + chunk_text
-            code_block_inserted = False  # Reset the code_block_inserted flag
-        code_block_count = chunk_text.count("```")
-        if code_block_count % 2 == 1:
-            # Check last code block for syntax like "```yaml"
-            last_code_block_index = chunk_text.rfind("```")
-            last_code_block = chunk_text[last_code_block_index + len("```"):].strip()
-            for lang in code_block_languages:
-                if (last_code_block.lower()).startswith(lang):
-                    activelang = lang
-                    break  # Stop checking if a match is found
-            # If there is an odd number of code blocks, add a closing set of "```"
-            chunk_text += "```"
-            code_block_inserted = True
-        return chunk_text, code_block_inserted
-
-    if len(message_text) <= 1980:
-        sent_message = await channel.send(message_text)
-    else:
-        code_block_inserted = False  # Initialize code_block_inserted to False
-        while message_text:
-            # Find the last occurrence of either a line break or the end of a sentence
-            last_line_break = message_text.rfind("\n", 0, 1980)
-            last_sentence_end = message_text.rfind(". ", 0, 1980)
-            # Determine the index to split the string
-            if last_line_break >= 0 and last_sentence_end >= 0:
-                # If both a line break and a sentence end were found, choose the one that occurred last
-                chunk_length = max(last_line_break, last_sentence_end) + 1
-            elif last_line_break >= 0:
-                # If only a line break was found, use it as the split point
-                chunk_length = last_line_break + 1
-            elif last_sentence_end >= 0:
-                # If only a sentence end was found, use it as the split point
-                chunk_length = last_sentence_end + 2  # Include the period and space
-            else:
-                chunk_length = 1980 # If neither was found, split at the maximum limit of 2000 characters
-            chunk_text = message_text[:chunk_length]
-            chunk_text, code_block_inserted = ensure_even_code_blocks(chunk_text, code_block_inserted)
-            sent_message = await channel.send(chunk_text)
-            message_text = message_text[chunk_length:]
-            if len(message_text) <= 1980:
-                # Send the remaining text as a single chunk if it's shorter than or equal to 2000 characters
-                chunk_text, code_block_inserted = ensure_even_code_blocks(message_text, code_block_inserted)
-                sent_message = await channel.send(chunk_text)
-                break
-
-#################################################################
 ########################## BOT STARTUP ##########################
 #################################################################
 ## Function to automatically change image models
@@ -791,11 +627,7 @@ async def first_run():
         else:
             logging.error(f"An error occurred while welcoming user to the bot: {e}")
     finally:
-        with sqlite3.connect('bot.db') as conn:
-            c = conn.cursor()
-            c.execute('''UPDATE first_run SET is_first_run = ?''', (0,)) # log "0" for false
-            conn.commit()
-        bot_settings.database = Database()
+        bot_settings.database.set('first_run', False)
 
 # Unpack tag presets and add global tag keys
 async def update_tags(tags):
@@ -874,7 +706,7 @@ async def on_ready():
             char_instruct = None
             if source:
                 char_instruct, _, _, _ = await character_loader(source)
-                bot_settings.database.update_last_setting(source, 'last_character')
+                bot_settings.database.set('last_character', source)
             update_instruct = char_instruct or instruction_template_str or None # 'instruction_template_str' is global variable
             if update_instruct:
                 settings_dict = bot_settings.get_settings_dict()
@@ -984,7 +816,7 @@ async def voice_channel(vc_setting):
                     logging.warning(f'Bot launched with {tts_client}, but no voice channel is specified in config.py')
             else:
                 if not bot_settings.database.was_warned('char_tts'):
-                    bot_settings.database.update_was_warned('char_tts', 1)
+                    bot_settings.database.update_was_warned('char_tts')
                     logging.warning(f'Character "use_voice_channel" = True, and "voice channel" is specified in config.py, but no "tts_client" is specified in config.py')
         except Exception as e:
             logging.error(f"An error occurred while connecting to voice channel: {e}")
@@ -1770,7 +1602,7 @@ def get_braces_value(matched_text):
 async def dynamic_prompting(user, text, i=None):
     if not config.get('dynamic_prompting_enabled', True):
         if not bot_settings.database.was_warned('dynaprompt'):
-            bot_settings.database.update_was_warned('dynaprompt', 1)
+            bot_settings.database.update_was_warned('dynaprompt')
             logging.warning("'config.yaml' is missing a new parameter 'dynamic_prompting_enabled'. Defaulting to 'True' (enabled) ")
     if not dynamic_prompting:
         return text
@@ -1821,7 +1653,7 @@ async def on_message(i):
     try:
         text = i.clean_content # primarly converts @mentions to actual user names
         if textgenwebui_enabled and not bot_settings.behavior.bot_should_reply(i, text): return # Check that bot should reply or not
-        bot_settings.database.update_last_time('last_user_msg') # Store the current datetime in bot.db
+        bot_settings.database.set('last_user_msg', time.time(), save_now=False) # Store the current time in bot_database_v2.yaml
         # if @ mentioning bot, remove the @ mention from user prompt
         if text.startswith(f"@{bot_settings.database.last_character} "):
             text = text.replace(f"@{bot_settings.database.last_character} ", "", 1)
@@ -1904,7 +1736,7 @@ async def hybrid_llm_img_gen(user, channel, source, text, tags, llm_payload, par
         if textgenwebui_enabled:
             if shared.model_name == 'None':
                 if not bot_settings.database.was_warned('no_llmmodel'):
-                    bot_settings.database.update_was_warned('no_llmmodel', 1)
+                    bot_settings.database.update_was_warned('no_llmmodel')
                     await channel.send(f'(Cannot process text request: No LLM model is currently loaded. Use "/llmmodel" to load a model.)', delete_after=10)
                     logging.warning(f'Bot tried to generate text for {user}, but no LLM model was loaded')
             # generate text with textgen-webui
@@ -2170,7 +2002,7 @@ async def change_llmmodel_task(user, channel, params):
             try:
                 shared.model_name = llmmodel_name   # set to new LLM model
                 if shared.model_name != 'None':
-                    bot_settings.database.update_was_warned('no_llmmodel', 0) # Reset warning message
+                    bot_settings.database.update_was_warned('no_llmmodel', False) # Reset warning message
                     loader = get_llm_model_loader(llmmodel_name)    # Try getting loader from user-config.yaml to prevent errors
                     await load_llm_model(loader)                    # Load an LLM model if specified
             except:
@@ -2274,8 +2106,6 @@ def update_mention(user_id, last_resp=''):
 
 flow_event = asyncio.Event()
 flow_queue = asyncio.Queue()
-
-task_semaphore = asyncio.Semaphore(1)
 
 #################################################################
 ########################## QUEUED FLOW ##########################
@@ -2595,10 +2425,10 @@ def clean_img_payload(img_payload):
             if SD_CLIENT != 'SD WebUI Forge':
                 if img_payload['alwayson_scripts']['forge_couple']['args'].get('enabled', False):
                     logging.warning(f'forge_couple is not known to be compatible with "{SD_CLIENT}". Not applying forge_couple...')
-                    bot_settings.database.update_was_warned('forgecouple', 1)
+                    bot_settings.database.update_was_warned('forgecouple')
                 if img_payload['alwayson_scripts']['layerdiffuse']['args'].get('enabled', False):
                     logging.warning(f'layerdiffuse is not known to be compatible with "{SD_CLIENT}". Not applying layerdiffuse...')
-                    bot_settings.database.update_was_warned('layerdiffuse', 1)
+                    bot_settings.database.update_was_warned('layerdiffuse')
             # Clean ControlNet
             if not config['sd']['extensions'].get('controlnet_enabled', False):
                 del img_payload['alwayson_scripts']['controlnet'] # Delete all 'controlnet' keys if disabled by config
@@ -2637,7 +2467,7 @@ def apply_loractl(tags):
     try:
         if SD_CLIENT != 'A1111 SD WebUI':
             if not bot_settings.database.was_warned('loractl'):
-                bot_settings.database.update_was_warned('loractl', 1)
+                bot_settings.database.update_was_warned('loractl')
                 logging.warning(f'loractl is not known to be compatible with "{SD_CLIENT}". Not applying loractl...')
             return tags
         scaling_settings = [v for k, v in config['sd'].get('extensions', {}).get('lrctl', {}).items() if 'scaling' in k]
@@ -3754,19 +3584,15 @@ if system_embed_info:
 @client.hybrid_command(description="Toggle current channel as main channel for bot to auto-reply without needing to be called")
 async def main(i):
     try:
-        with sqlite3.connect('bot.db') as conn:
-            c = conn.cursor()
-            if i.channel.id in bot_settings.database.main_channels:
-                bot_settings.database.main_channels.remove(i.channel.id) # If the channel is already in the main channels, remove it
-                c.execute('''DELETE FROM main_channels WHERE channel_id = ?''', (i.channel.id,))
-                action_message = f'Removed {i.channel.mention} from main channels. Use "/main" again if you want to add it back.'
-            else:
-                # If the channel is not in the main channels, add it
-                bot_settings.database.main_channels.append(i.channel.id)
-                c.execute('''INSERT OR REPLACE INTO main_channels (channel_id) VALUES (?)''', (i.channel.id,))
-                action_message = f'Added {i.channel.mention} to main channels. Use "/main" again to remove it.'
-            conn.commit()
-        bot_settings.database = Database()
+        if i.channel.id in bot_settings.database.main_channels:
+            bot_settings.database.main_channels.remove(i.channel.id) # If the channel is already in the main channels, remove it
+            action_message = f'Removed {i.channel.mention} from main channels. Use "/main" again if you want to add it back.'
+        else:
+            # If the channel is not in the main channels, add it
+            bot_settings.database.main_channels.append(i.channel.id)
+            action_message = f'Added {i.channel.mention} to main channels. Use "/main" again to remove it.'
+            
+        bot_settings.database.save()
         await i.reply(action_message)
     except Exception as e:
         logging.error(f"Error toggling main channel setting: {e}")
@@ -3867,7 +3693,7 @@ async def character_loader(source):
         # Merge with basesettings
         char_data = merge_base(char_data, 'llmcontext')
         # Reset warning for character specific TTS
-        bot_settings.database.update_was_warned('char_tts', 0)
+        bot_settings.database.update_was_warned('char_tts', False)
         # Gather context specific keys from the character data
         char_llmcontext = {}
         for key, value in char_data.items():
@@ -3895,7 +3721,7 @@ async def character_loader(source):
         update_dict(settings_dict['behavior'], dict(char_behavior))
         update_dict(settings_dict['llmstate']['state'], dict(char_llmstate))
         # Update stored database value for character
-        bot_settings.database.update_last_setting(source, 'last_character')
+        bot_settings.database.set('last_character', source)
         # Print mode in cmd
         logging.info(f"Initializing in {bot_settings.settings['llmstate']['state']['mode']} mode")
         # Data for saving to activesettings.yaml (skipped in on_ready())
@@ -3917,7 +3743,7 @@ async def delayed_profile_update(username, avatar, remaining_cooldown):
         if avatar:
             await client.user.edit(avatar=avatar)
         logging.info(f"Updated discord client profile (Username: {username}; Avatar: {'Updated' if avatar else 'Unchanged'}).\n Profile can be updated again in 10 minutes.")
-        bot_settings.database.update_last_time('last_change')  # Store the current datetime in bot.db
+        bot_settings.database.set('last_change', time.time())  # Store the current time in bot_database_v2.yaml
     except Exception as e:
         logging.error(f"Error while changing character username or avatar: {e}")
 
@@ -3938,14 +3764,13 @@ async def update_client_profile(channel, char_name):
                 avatar = f.read()
         # Check for cooldown before allowing profile change
         last_change = bot_settings.database.last_change
-        last_change = datetime.strptime(last_change, '%Y-%m-%d %H:%M:%S')
-        last_cooldown = last_change + timedelta(minutes=10)
-        if datetime.now() >= last_cooldown:
+        last_cooldown = last_change + timedelta(minutes=10).seconds
+        if time.time() >= last_cooldown:
             # Apply changes immediately if outside 10 minute cooldown
             delayed_profile_update_task = asyncio.create_task(delayed_profile_update(char_name, avatar, 0))
         else:
-            remaining_cooldown = last_cooldown - datetime.now()
-            seconds = int(remaining_cooldown.total_seconds())
+            remaining_cooldown = last_cooldown - time.time()
+            seconds = int(remaining_cooldown)
             await channel.send(f'**Due to Discord limitations, character name/avatar will update in {seconds} seconds.**', delete_after=10)
             logging.info(f"Due to Discord limitations, character name/avatar will update in {remaining_cooldown} seconds.")
             delayed_profile_update_task = asyncio.create_task(delayed_profile_update(char_name, avatar, seconds))
@@ -3962,7 +3787,7 @@ async def change_character(channel, source, char_name):
             settings_dict = bot_settings.get_settings_dict()
             settings_dict['llmstate']['state']['instruction_template_str'] = update_instruct
         # Update stored database value for character
-        bot_settings.database.update_last_setting(char_name, 'last_character')
+        bot_settings.database.set('last_character', char_name)
         # Update discord username / avatar
         await update_client_profile(channel, char_name)
         # Save the updated active_settings to activesettings.yaml
@@ -4300,21 +4125,23 @@ if sd_enabled:
         ### IF API IMG MODEL UNLOADING GETS EVER DEBUGGED
         # unload_options = [app_commands.Choice(name="Unload Model", value="None"),
         # app_commands.Choice(name="Do Not Unload Model", value="Exit")]
+        
+        _img_model_hash_dict = {str(hash(imgmodel["imgmodel_name"])):imgmodel["imgmodel_name"] for imgmodel in all_imgmodels}
 
-        imgmodel_options = [app_commands.Choice(name=imgmodel["imgmodel_name"][:100], value=imgmodel["imgmodel_name"]) for imgmodel in all_imgmodels[:25]]
+        imgmodel_options = [app_commands.Choice(name=imgmodel["imgmodel_name"][:100], value=str(hash(imgmodel["imgmodel_name"]))) for imgmodel in all_imgmodels[:25]]
         imgmodel_options_label = f'{imgmodel_options[0].name[0]}-{imgmodel_options[-1].name[0]}'.lower()
         if len(all_imgmodels) > 25:
-            imgmodel_options1 = [app_commands.Choice(name=imgmodel["imgmodel_name"][:100], value=imgmodel["imgmodel_name"]) for imgmodel in all_imgmodels[25:50]]
+            imgmodel_options1 = [app_commands.Choice(name=imgmodel["imgmodel_name"][:100], value=str(hash(imgmodel["imgmodel_name"]))) for imgmodel in all_imgmodels[25:50]]
             imgmodel_options1_label = f'{imgmodel_options1[0].name[0]}-{imgmodel_options1[-1].name[0]}'.lower()
             if imgmodel_options1_label == imgmodel_options_label:
                 imgmodel_options1_label = f'{imgmodel_options1_label}_1'
             if len(all_imgmodels) > 50:
-                imgmodel_options2 = [app_commands.Choice(name=imgmodel["imgmodel_name"][:100], value=imgmodel["imgmodel_name"]) for imgmodel in all_imgmodels[50:75]]
+                imgmodel_options2 = [app_commands.Choice(name=imgmodel["imgmodel_name"][:100], value=str(hash(imgmodel["imgmodel_name"]))) for imgmodel in all_imgmodels[50:75]]
                 imgmodel_options2_label = f'{imgmodel_options2[0].name[0]}-{imgmodel_options2[-1].name[0]}'.lower()
                 if imgmodel_options2_label == imgmodel_options_label or imgmodel_options2_label == imgmodel_options1_label:
                     imgmodel_options2_label = f'{imgmodel_options2_label}_2'
                 if len(all_imgmodels) > 75:
-                    imgmodel_options3 = [app_commands.Choice(name=imgmodel["imgmodel_name"][:100], value=imgmodel["imgmodel_name"]) for imgmodel in all_imgmodels[75:100]]
+                    imgmodel_options3 = [app_commands.Choice(name=imgmodel["imgmodel_name"][:100], value=str(hash(imgmodel["imgmodel_name"]))) for imgmodel in all_imgmodels[75:100]]
                     imgmodel_options3_label = f'{imgmodel_options3[0].name[0]}-{imgmodel_options3[-1].name[0]}'.lower()
                     if imgmodel_options3_label == imgmodel_options_label or imgmodel_options3_label == imgmodel_options1_label or imgmodel_options3_label == imgmodel_options2_label:
                         imgmodel_options3_label = f'{imgmodel_options2_label}_3'
@@ -4334,6 +4161,8 @@ if sd_enabled:
         #         await ctx.send("More than one option was selected. Using the first selection.", ephemeral=True)
         #     selected_imgmodel = ((imgmodels or unload) and (imgmodels or unload).value) or ''
                 selected_imgmodel = imgmodels.value if imgmodels is not None else ''
+                if selected_imgmodel:
+                    selected_imgmodel = _img_model_hash_dict[selected_imgmodel]
                 await process_imgmodel(ctx, selected_imgmodel)
 
         elif 25 < len(all_imgmodels) <= 50:
@@ -4352,6 +4181,8 @@ if sd_enabled:
                     await ctx.send("More than one option was selected. Using the first selection.", ephemeral=True)
         #     selected_imgmodel = ((models_1 or models_2 or unload) and (models_1 or models_2 or unload).value) or ''
                 selected_imgmodel = ((models_1 or models_2) and (models_1 or models_2).value) or ''
+                if selected_imgmodel:
+                    selected_imgmodel = _img_model_hash_dict[selected_imgmodel]
                 await process_imgmodel(ctx, selected_imgmodel)
 
         elif 50 < len(all_imgmodels) <= 75:
@@ -4373,6 +4204,8 @@ if sd_enabled:
                     await ctx.send("More than one option was selected. Using the first selection.", ephemeral=True)
         #     selected_imgmodel = ((models_1 or models_2 or models_3 or unload) and (models_1 or models_2 or models_3 or unload).value) or ''
                 selected_imgmodel = ((models_1 or models_2 or models_3) and (models_1 or models_2 or models_3).value) or ''
+                if selected_imgmodel:
+                    selected_imgmodel = _img_model_hash_dict[selected_imgmodel]
                 await process_imgmodel(ctx, selected_imgmodel)
 
         elif 75 < len(all_imgmodels) <= 100:
@@ -4397,6 +4230,8 @@ if sd_enabled:
                     await ctx.send("More than one option was selected. Using the first selection.", ephemeral=True)
         #     selected_imgmodel = ((models_1 or models_2 or models_3 or models_4 or unload) and (models_1 or models_2 or models_3 or models_4 or unload).value) or ''
                 selected_imgmodel = ((models_1 or models_2 or models_3 or models_4) and (models_1 or models_2 or models_3 or models_4).value) or ''
+                if selected_imgmodel:
+                    selected_imgmodel = _img_model_hash_dict[selected_imgmodel]
                 await process_imgmodel(ctx, selected_imgmodel)
 
 #################################################################
@@ -4420,20 +4255,23 @@ async def process_llmmodel(ctx, selected_llmmodel):
         logging.error(f"Error processing /llmmodel command: {e}")
 
 if textgenwebui_enabled and all_llmmodels:
-    llmmodel_options = [app_commands.Choice(name=llmmodel[:100], value=llmmodel) for llmmodel in all_llmmodels[:25]]
+    
+    _llm_model_hash_dict = {str(hash(llmmodel)):llmmodel for llmmodel in all_llmmodels}
+    
+    llmmodel_options = [app_commands.Choice(name=llmmodel[:100], value=str(hash(llmmodel))) for llmmodel in all_llmmodels[:25]]
     llmmodel_options_label = f'{llmmodel_options[1].name[0]}-{llmmodel_options[-1].name[0]}'.lower() # Using second "Name" since first name is "None"
     if len(all_llmmodels) > 25:
-        llmmodel_options1 = [app_commands.Choice(name=llmmodel[:100], value=llmmodel) for llmmodel in all_llmmodels[25:50]]
+        llmmodel_options1 = [app_commands.Choice(name=llmmodel[:100], value=str(hash(llmmodel))) for llmmodel in all_llmmodels[25:50]]
         llmmodel_options1_label = f'{llmmodel_options1[0].name[0]}-{llmmodel_options1[-1].name[0]}'.lower()
         if llmmodel_options1_label == llmmodel_options_label:
             llmmodel_options1_label = f'{llmmodel_options1_label}_1'
         if len(all_llmmodels) > 50:
-            llmmodel_options2 = [app_commands.Choice(name=llmmodel[:100], value=llmmodel) for llmmodel in all_llmmodels[50:75]]
+            llmmodel_options2 = [app_commands.Choice(name=llmmodel[:100], value=str(hash(llmmodel))) for llmmodel in all_llmmodels[50:75]]
             llmmodel_options2_label = f'{llmmodel_options2[0].name[0]}-{llmmodel_options2[-1].name[0]}'.lower()
             if llmmodel_options2_label == llmmodel_options_label or llmmodel_options2_label == llmmodel_options1_label:
                 llmmodel_options2_label = f'{llmmodel_options2_label}_2'
             if len(all_llmmodels) > 75:
-                llmmodel_options3 = [app_commands.Choice(name=llmmodel[:100], value=llmmodel) for llmmodel in all_llmmodels[75:100]]
+                llmmodel_options3 = [app_commands.Choice(name=llmmodel[:100], value=str(hash(llmmodel))) for llmmodel in all_llmmodels[75:100]]
                 llmmodel_options3_label = f'{llmmodel_options3[0].name[0]}-{llmmodel_options3[-1].name[0]}'.lower()
                 if llmmodel_options3_label == llmmodel_options_label or llmmodel_options3_label == llmmodel_options1_label or llmmodel_options3_label == llmmodel_options2_label:
                     llmmodel_options3_label = f'{llmmodel_options3_label}_3'
@@ -4448,6 +4286,8 @@ if textgenwebui_enabled and all_llmmodels:
         @app_commands.choices(llmmodels=llmmodel_options)
         async def llmmodel(ctx: discord.ext.commands.Context, llmmodels: typing.Optional[app_commands.Choice[str]]):
             selected_llmmodel = llmmodels.value if llmmodels is not None else ''
+            if selected_llmmodel:
+                selected_llmmodel = _llm_model_hash_dict[selected_llmmodel]
             await process_llmmodel(ctx, selected_llmmodel)
 
     elif 25 < len(all_llmmodels) <= 50:
@@ -4462,6 +4302,8 @@ if textgenwebui_enabled and all_llmmodels:
             if models_1 and models_2:
                 await ctx.send("More than one LLM model was selected. Using the first selection.", ephemeral=True)
             selected_llmmodel = ((models_1 or models_2) and (models_1 or models_2).value) or ''
+            if selected_llmmodel:
+                selected_llmmodel = _llm_model_hash_dict[selected_llmmodel]
             await process_llmmodel(ctx, selected_llmmodel)
 
     elif 50 < len(all_llmmodels) <= 75:
@@ -4479,6 +4321,8 @@ if textgenwebui_enabled and all_llmmodels:
             if sum(1 for v in (models_1, models_2, models_3) if v) > 1:
                 await ctx.send("More than one LLM model was selected. Using the first selection.", ephemeral=True)
             selected_llmmodel = ((models_1 or models_2 or models_3) and (models_1 or models_2 or models_3).value) or ''
+            if selected_llmmodel:
+                selected_llmmodel = _llm_model_hash_dict[selected_llmmodel]
             await process_llmmodel(ctx, selected_llmmodel)
 
     elif 75 < len(all_llmmodels) <= 100:
@@ -4499,6 +4343,8 @@ if textgenwebui_enabled and all_llmmodels:
             if sum(1 for v in (models_1, models_2, models_3, models_4) if v) > 1:
                 await ctx.send("More than one LLM model was selected. Using the first selection.", ephemeral=True)
             selected_llmmodel = ((models_1 or models_2 or models_3 or models_4) and (models_1 or models_2 or models_3 or models_4).value) or ''
+            if selected_llmmodel:
+                selected_llmmodel = _llm_model_hash_dict[selected_llmmodel]
             await process_llmmodel(ctx, selected_llmmodel)
 
 #################################################################
@@ -4654,15 +4500,18 @@ async def fetch_speak_options():
 
 if textgenwebui_enabled and tts_client and tts_client in supported_tts_clients:
     lang_list, all_voices = asyncio.run(fetch_speak_options())
-    voice_options = [app_commands.Choice(name=voice_name.replace('_', ' ').title(), value=f'{voice_name}') for voice_name in all_voices[:25]]
+    
+    _voice_hash_dict = {str(hash(voice_name)):voice_name for voice_name in all_voices}
+    
+    voice_options = [app_commands.Choice(name=voice_name.replace('_', ' ').title(), value=str(hash(voice_name))) for voice_name in all_voices[:25]]
     voice_options_label = f'{voice_options[0].name[0]}-{voice_options[-1].name[0]}'.lower()
     if len(all_voices) > 25:
-        voice_options1 = [app_commands.Choice(name=voice_name.replace('_', ' ').title(), value=f'{voice_name}') for voice_name in all_voices[25:50]]
+        voice_options1 = [app_commands.Choice(name=voice_name.replace('_', ' ').title(), value=str(hash(voice_name))) for voice_name in all_voices[25:50]]
         voice_options1_label = f'{voice_options1[0].name[0]}-{voice_options1[-1].name[0]}'.lower()
         if voice_options1_label == voice_options_label:
             voice_options1_label = f'{voice_options1_label}_1'
         if len(all_voices) > 50:
-            voice_options2 = [app_commands.Choice(name=voice_name.replace('_', ' ').title(), value=f'{voice_name}') for voice_name in all_voices[50:75]]
+            voice_options2 = [app_commands.Choice(name=voice_name.replace('_', ' ').title(), value=str(hash(voice_name))) for voice_name in all_voices[50:75]]
             voice_options2_label = f'{voice_options2[0].name[0]}-{voice_options2[-1].name[0]}'.lower()
             if voice_options2_label == voice_options_label or voice_options2_label == voice_options1_label:
                 voice_options2_label = f'{voice_options2_label}_2'
@@ -4680,6 +4529,8 @@ if textgenwebui_enabled and tts_client and tts_client in supported_tts_clients:
         @app_commands.choices(lang=lang_options)
         async def speak(ctx: discord.ext.commands.Context, input_text: str, voice: typing.Optional[app_commands.Choice[str]], lang: typing.Optional[app_commands.Choice[str]], voice_input: typing.Optional[discord.Attachment]):
             selected_voice = voice.value if voice is not None else ''
+            if selected_voice:
+                selected_voice = _voice_hash_dict[selected_voice]
             voice_input = voice_input if voice_input is not None else ''
             lang = lang.value if lang is not None else ''
             await process_speak(ctx, input_text, selected_voice, lang, voice_input)
@@ -4697,6 +4548,8 @@ if textgenwebui_enabled and tts_client and tts_client in supported_tts_clients:
             if voice_1 and voice_2:
                 await ctx.send("A voice was picked from two separate menus. Using the first selection.", ephemeral=True)
             selected_voice = ((voice_1 or voice_2) and (voice_1 or voice_2).value) or ''
+            if selected_voice:
+                selected_voice = _voice_hash_dict[selected_voice]
             voice_input = voice_input if voice_input is not None else ''
             lang = lang.value if lang is not None else ''
             await process_speak(ctx, input_text, selected_voice, lang, voice_input)
@@ -4717,6 +4570,8 @@ if textgenwebui_enabled and tts_client and tts_client in supported_tts_clients:
             if sum(1 for v in (voice_1, voice_2, voice_3) if v) > 1:
                 await ctx.send("A voice was picked from two separate menus. Using the first selection.", ephemeral=True)
             selected_voice = ((voice_1 or voice_2 or voice_3) and (voice_1 or voice_2 or voice_3).value) or ''
+            if selected_voice:
+                selected_voice = _voice_hash_dict[selected_voice]
             voice_input = voice_input if voice_input is not None else ''
             lang = lang.value if lang is not None else ''
             await process_speak(ctx, input_text, selected_voice, lang, voice_input)
@@ -4907,114 +4762,7 @@ class Settings:
         attributes = ", ".join(f"{attr}={getattr(self, attr)}" for attr in dir(self) if not callable(getattr(self, attr)) and not attr.startswith("__"))
         return f"{self.__class__.__name__}({attributes})"
 
-class Database:
-    def __init__(self):
-        self.take_notes_about_users = None # not yet implemented
-        self.learn_about_and_use_guild_emojis = None # not yet implemented
-        self.read_chatlog = None # not yet implemented
-        self.first_run = self.initialize_first_run()
-        self.last_character = self.initialize_last_setting('last_character')
-        self.last_change = self.initialize_last_time('last_change')
-        self.last_user_msg = self.initialize_last_time('last_user_msg')
-        self.main_channels = self.initialize_main_channels()
-        self.warned_once = self.initialize_warned_once()
 
-    def initialize_first_run(self):
-        with sqlite3.connect('bot.db') as conn:
-            c = conn.cursor()
-            c.execute('''SELECT name FROM sqlite_master WHERE type='table' AND name='first_run' ''')
-            is_first_run_table_exists = c.fetchone()
-            if not is_first_run_table_exists:
-                c.execute('''CREATE TABLE IF NOT EXISTS first_run (is_first_run BOOLEAN)''')
-                c.execute('''INSERT INTO first_run (is_first_run) VALUES (1)''')
-                conn.commit()
-                return True
-            c.execute('''SELECT COUNT(*) FROM first_run''')
-            is_first_run_exists = c.fetchone()[0]
-            return is_first_run_exists == 0
-
-    def initialize_last_setting(self, location):
-        try:
-            with sqlite3.connect('bot.db') as conn:
-                c = conn.cursor()
-                c.execute(f'''CREATE TABLE IF NOT EXISTS {location} (setting TEXT)''')
-        except Exception as e:
-            logging.error(f"Error initializing {location}: {e}")
-
-    def update_last_setting(self, value, location):
-        try:
-            with sqlite3.connect('bot.db') as conn:
-                c = conn.cursor()
-                c.execute(f'''UPDATE {location} SET setting = ?''', (value,))
-                conn.commit()
-            setattr(self, location, value)
-        except Exception as e:
-            logging.error(f"An error occurred while logging '{value}' to '{location}' in bot.db: {e}")
-
-    def initialize_last_time(self, location='last_change'):
-        try:
-            with sqlite3.connect('bot.db') as conn:
-                c = conn.cursor()
-                c.execute(f'''CREATE TABLE IF NOT EXISTS {location} (timestamp TEXT)''')
-                c.execute(f'''SELECT timestamp FROM {location}''')
-                timestamp = c.fetchone()
-                if timestamp is None or timestamp[0] is None:
-                    now = datetime.now()
-                    formatted_now = now.strftime('%Y-%m-%d %H:%M:%S')
-                    if timestamp is None:
-                        c.execute(f'''INSERT INTO {location} (timestamp) VALUES (?)''', (formatted_now,))
-                    else:
-                        c.execute(f'''UPDATE {location} SET timestamp = ?''', (formatted_now,))
-                    conn.commit()
-                    return formatted_now
-            return timestamp[0] if timestamp else None
-        except Exception as e:
-            logging.error(f"Error initializing {location}: {e}")
-
-    def update_last_time(self, location='last_change'):
-        try:
-            with sqlite3.connect('bot.db') as conn:
-                c = conn.cursor()
-                now = datetime.now()
-                formatted_now = now.strftime('%Y-%m-%d %H:%M:%S')
-                c.execute(f'''UPDATE {location} SET timestamp = ?''', (formatted_now,))
-                conn.commit()
-            setattr(self, location, formatted_now)
-        except Exception as e:
-            logging.error(f"An error occurred while logging time of profile update to bot.db: {e}")
-
-    def initialize_main_channels(self):
-        with sqlite3.connect('bot.db') as conn:
-            c = conn.cursor()
-            c.execute('''CREATE TABLE IF NOT EXISTS main_channels (channel_id TEXT UNIQUE)''')
-            c.execute('''SELECT channel_id FROM main_channels''')
-            result = [int(row[0]) for row in c.fetchall()]
-            return result if result else []
-
-    def initialize_warned_once(self):
-        with sqlite3.connect('bot.db') as conn:
-            c = conn.cursor()
-            c.execute('''CREATE TABLE IF NOT EXISTS warned_once (flag_name TEXT UNIQUE, value INTEGER)''')
-            flags_to_insert = [('loractl', 0), ('char_tts', 0), ('no_llmmodel', 0), ('forgecouple', 0), ('layerdiffuse', 0), ('dynaprompt', 0)]
-            for flag_name, value in flags_to_insert:
-                c.execute('''INSERT OR REPLACE INTO warned_once (flag_name, value) VALUES (?, ?)''', (flag_name, value))
-            conn.commit()
-
-    def was_warned(self, flag_name):
-        with sqlite3.connect('bot.db') as conn:
-            c = conn.cursor()
-            c.execute('''SELECT value FROM warned_once WHERE flag_name = ?''', (flag_name,))
-            result = c.fetchone()
-            if result:
-                return result[0]
-            else:
-                return None
-
-    def update_was_warned(self, flag_name, value):
-        with sqlite3.connect('bot.db') as conn:
-            c = conn.cursor()
-            c.execute('''UPDATE warned_once SET value = ? WHERE flag_name = ?''', (value, flag_name))
-            conn.commit()
 
 class BotSettings:
     def __init__(self):
