@@ -18,7 +18,7 @@ class Database:
         self.last_change:float
         self.last_user_msg:float
         self.main_channels:list[int]
-        self.warned_once:dict[str, int]
+        self.warned_once:dict[str, bool]
         
         
         self._fp = 'bot_database_v2.yaml'
@@ -72,7 +72,7 @@ class Database:
         value = self.warned_once.get(flag_name)
         return value # Return None by default, as this is what the previous code did.
 
-    def update_was_warned(self, flag_name, value, save_now=True):
+    def update_was_warned(self, flag_name, value=True, save_now=True):
         self.warned_once[flag_name] = value
         if save_now:
             self.save()

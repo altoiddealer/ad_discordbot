@@ -816,7 +816,7 @@ async def voice_channel(vc_setting):
                     logging.warning(f'Bot launched with {tts_client}, but no voice channel is specified in config.py')
             else:
                 if not bot_settings.database.was_warned('char_tts'):
-                    bot_settings.database.update_was_warned('char_tts', 1)
+                    bot_settings.database.update_was_warned('char_tts')
                     logging.warning(f'Character "use_voice_channel" = True, and "voice channel" is specified in config.py, but no "tts_client" is specified in config.py')
         except Exception as e:
             logging.error(f"An error occurred while connecting to voice channel: {e}")
@@ -1602,7 +1602,7 @@ def get_braces_value(matched_text):
 async def dynamic_prompting(user, text, i=None):
     if not config.get('dynamic_prompting_enabled', True):
         if not bot_settings.database.was_warned('dynaprompt'):
-            bot_settings.database.update_was_warned('dynaprompt', 1)
+            bot_settings.database.update_was_warned('dynaprompt')
             logging.warning("'config.yaml' is missing a new parameter 'dynamic_prompting_enabled'. Defaulting to 'True' (enabled) ")
     if not dynamic_prompting:
         return text
@@ -1736,7 +1736,7 @@ async def hybrid_llm_img_gen(user, channel, source, text, tags, llm_payload, par
         if textgenwebui_enabled:
             if shared.model_name == 'None':
                 if not bot_settings.database.was_warned('no_llmmodel'):
-                    bot_settings.database.update_was_warned('no_llmmodel', 1)
+                    bot_settings.database.update_was_warned('no_llmmodel')
                     await channel.send(f'(Cannot process text request: No LLM model is currently loaded. Use "/llmmodel" to load a model.)', delete_after=10)
                     logging.warning(f'Bot tried to generate text for {user}, but no LLM model was loaded')
             # generate text with textgen-webui
@@ -2002,7 +2002,7 @@ async def change_llmmodel_task(user, channel, params):
             try:
                 shared.model_name = llmmodel_name   # set to new LLM model
                 if shared.model_name != 'None':
-                    bot_settings.database.update_was_warned('no_llmmodel', 0) # Reset warning message
+                    bot_settings.database.update_was_warned('no_llmmodel', False) # Reset warning message
                     loader = get_llm_model_loader(llmmodel_name)    # Try getting loader from user-config.yaml to prevent errors
                     await load_llm_model(loader)                    # Load an LLM model if specified
             except:
@@ -2425,10 +2425,10 @@ def clean_img_payload(img_payload):
             if SD_CLIENT != 'SD WebUI Forge':
                 if img_payload['alwayson_scripts']['forge_couple']['args'].get('enabled', False):
                     logging.warning(f'forge_couple is not known to be compatible with "{SD_CLIENT}". Not applying forge_couple...')
-                    bot_settings.database.update_was_warned('forgecouple', 1)
+                    bot_settings.database.update_was_warned('forgecouple')
                 if img_payload['alwayson_scripts']['layerdiffuse']['args'].get('enabled', False):
                     logging.warning(f'layerdiffuse is not known to be compatible with "{SD_CLIENT}". Not applying layerdiffuse...')
-                    bot_settings.database.update_was_warned('layerdiffuse', 1)
+                    bot_settings.database.update_was_warned('layerdiffuse')
             # Clean ControlNet
             if not config['sd']['extensions'].get('controlnet_enabled', False):
                 del img_payload['alwayson_scripts']['controlnet'] # Delete all 'controlnet' keys if disabled by config
@@ -2467,7 +2467,7 @@ def apply_loractl(tags):
     try:
         if SD_CLIENT != 'A1111 SD WebUI':
             if not bot_settings.database.was_warned('loractl'):
-                bot_settings.database.update_was_warned('loractl', 1)
+                bot_settings.database.update_was_warned('loractl')
                 logging.warning(f'loractl is not known to be compatible with "{SD_CLIENT}". Not applying loractl...')
             return tags
         scaling_settings = [v for k, v in config['sd'].get('extensions', {}).get('lrctl', {}).items() if 'scaling' in k]
@@ -3693,7 +3693,7 @@ async def character_loader(source):
         # Merge with basesettings
         char_data = merge_base(char_data, 'llmcontext')
         # Reset warning for character specific TTS
-        bot_settings.database.update_was_warned('char_tts', 0)
+        bot_settings.database.update_was_warned('char_tts', False)
         # Gather context specific keys from the character data
         char_llmcontext = {}
         for key, value in char_data.items():

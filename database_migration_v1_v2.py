@@ -91,7 +91,7 @@ class OldDatabase:
         for k,_ in [('loractl', 0), ('char_tts', 0), ('no_llmmodel', 0), ('forgecouple', 0), ('layerdiffuse', 0), ('dynaprompt', 0)]:
             v = self.was_warned(k)
             if v:
-                data[k] = v
+                data[k] = True
         return data
 
     def was_warned(self, flag_name):
