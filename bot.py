@@ -20,7 +20,6 @@ import base64
 import yaml
 from PIL import Image, PngImagePlugin
 import requests
-import sqlite3
 import pprint
 import aiohttp
 import math
@@ -628,11 +627,7 @@ async def first_run():
         else:
             logging.error(f"An error occurred while welcoming user to the bot: {e}")
     finally:
-        with sqlite3.connect('bot.db') as conn:
-            c = conn.cursor()
-            c.execute('''UPDATE first_run SET is_first_run = ?''', (0,)) # log "0" for false
-            conn.commit()
-        bot_settings.database = Database()
+        bot_settings.database.set('first_run', False)
 
 # Unpack tag presets and add global tag keys
 async def update_tags(tags):
@@ -711,7 +706,7 @@ async def on_ready():
             char_instruct = None
             if source:
                 char_instruct, _, _, _ = await character_loader(source)
-                bot_settings.database.update_last_setting(source, 'last_character')
+                bot_settings.database.set('last_character', source)
             update_instruct = char_instruct or instruction_template_str or None # 'instruction_template_str' is global variable
             if update_instruct:
                 settings_dict = bot_settings.get_settings_dict()
@@ -1658,7 +1653,7 @@ async def on_message(i):
     try:
         text = i.clean_content # primarly converts @mentions to actual user names
         if textgenwebui_enabled and not bot_settings.behavior.bot_should_reply(i, text): return # Check that bot should reply or not
-        bot_settings.database.update_last_time('last_user_msg') # Store the current datetime in bot.db
+        bot_settings.database.set('last_user_msg', time.time(), save_now=False) # Store the current time in bot_database_v2.yaml
         # if @ mentioning bot, remove the @ mention from user prompt
         if text.startswith(f"@{bot_settings.database.last_character} "):
             text = text.replace(f"@{bot_settings.database.last_character} ", "", 1)
@@ -3589,19 +3584,15 @@ if system_embed_info:
 @client.hybrid_command(description="Toggle current channel as main channel for bot to auto-reply without needing to be called")
 async def main(i):
     try:
-        with sqlite3.connect('bot.db') as conn:
-            c = conn.cursor()
-            if i.channel.id in bot_settings.database.main_channels:
-                bot_settings.database.main_channels.remove(i.channel.id) # If the channel is already in the main channels, remove it
-                c.execute('''DELETE FROM main_channels WHERE channel_id = ?''', (i.channel.id,))
-                action_message = f'Removed {i.channel.mention} from main channels. Use "/main" again if you want to add it back.'
-            else:
-                # If the channel is not in the main channels, add it
-                bot_settings.database.main_channels.append(i.channel.id)
-                c.execute('''INSERT OR REPLACE INTO main_channels (channel_id) VALUES (?)''', (i.channel.id,))
-                action_message = f'Added {i.channel.mention} to main channels. Use "/main" again to remove it.'
-            conn.commit()
-        bot_settings.database = Database()
+        if i.channel.id in bot_settings.database.main_channels:
+            bot_settings.database.main_channels.remove(i.channel.id) # If the channel is already in the main channels, remove it
+            action_message = f'Removed {i.channel.mention} from main channels. Use "/main" again if you want to add it back.'
+        else:
+            # If the channel is not in the main channels, add it
+            bot_settings.database.main_channels.append(i.channel.id)
+            action_message = f'Added {i.channel.mention} to main channels. Use "/main" again to remove it.'
+            
+        bot_settings.database.save()
         await i.reply(action_message)
     except Exception as e:
         logging.error(f"Error toggling main channel setting: {e}")
@@ -3730,7 +3721,7 @@ async def character_loader(source):
         update_dict(settings_dict['behavior'], dict(char_behavior))
         update_dict(settings_dict['llmstate']['state'], dict(char_llmstate))
         # Update stored database value for character
-        bot_settings.database.update_last_setting(source, 'last_character')
+        bot_settings.database.set('last_character', source)
         # Print mode in cmd
         logging.info(f"Initializing in {bot_settings.settings['llmstate']['state']['mode']} mode")
         # Data for saving to activesettings.yaml (skipped in on_ready())
@@ -3752,7 +3743,7 @@ async def delayed_profile_update(username, avatar, remaining_cooldown):
         if avatar:
             await client.user.edit(avatar=avatar)
         logging.info(f"Updated discord client profile (Username: {username}; Avatar: {'Updated' if avatar else 'Unchanged'}).\n Profile can be updated again in 10 minutes.")
-        bot_settings.database.update_last_time('last_change')  # Store the current datetime in bot.db
+        bot_settings.database.set('last_change', time.time())  # Store the current time in bot_database_v2.yaml
     except Exception as e:
         logging.error(f"Error while changing character username or avatar: {e}")
 
@@ -3773,14 +3764,13 @@ async def update_client_profile(channel, char_name):
                 avatar = f.read()
         # Check for cooldown before allowing profile change
         last_change = bot_settings.database.last_change
-        last_change = datetime.strptime(last_change, '%Y-%m-%d %H:%M:%S')
-        last_cooldown = last_change + timedelta(minutes=10)
-        if datetime.now() >= last_cooldown:
+        last_cooldown = last_change + timedelta(minutes=10).seconds
+        if time.time() >= last_cooldown:
             # Apply changes immediately if outside 10 minute cooldown
             delayed_profile_update_task = asyncio.create_task(delayed_profile_update(char_name, avatar, 0))
         else:
-            remaining_cooldown = last_cooldown - datetime.now()
-            seconds = int(remaining_cooldown.total_seconds())
+            remaining_cooldown = last_cooldown - time.time()
+            seconds = int(remaining_cooldown)
             await channel.send(f'**Due to Discord limitations, character name/avatar will update in {seconds} seconds.**', delete_after=10)
             logging.info(f"Due to Discord limitations, character name/avatar will update in {remaining_cooldown} seconds.")
             delayed_profile_update_task = asyncio.create_task(delayed_profile_update(char_name, avatar, seconds))
@@ -3797,7 +3787,7 @@ async def change_character(channel, source, char_name):
             settings_dict = bot_settings.get_settings_dict()
             settings_dict['llmstate']['state']['instruction_template_str'] = update_instruct
         # Update stored database value for character
-        bot_settings.database.update_last_setting(char_name, 'last_character')
+        bot_settings.database.set('last_character', char_name)
         # Update discord username / avatar
         await update_client_profile(channel, char_name)
         # Save the updated active_settings to activesettings.yaml

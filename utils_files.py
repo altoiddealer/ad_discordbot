@@ -16,10 +16,10 @@ def load_file(file_path):
                     data = yaml.safe_load(file)
             return data
         else:
-            logging.error(f"Unsupported file format: {file_suffix}")
+            logging.error(f"Unsupported file format: {file_suffix}: {file_path}")
             return None
     except FileNotFoundError:
-        logging.error(f"File not found: {file_suffix}")
+        logging.error(f"File not found: {file_path}")
         return None
     except Exception as e:
         logging.error(f"An error occurred while reading {file_path}: {str(e)}")
