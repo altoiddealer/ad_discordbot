@@ -33,6 +33,8 @@ from shutil import copyfile
 import sys
 import traceback
 
+sys.path.append("ad_discordbot")
+
 #################################################################
 #################### DISCORD / BOT STARTUP ######################
 #################################################################
