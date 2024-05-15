@@ -41,6 +41,7 @@ class Database:
             with sqlite3.connect('bot.db') as conn:
                 c = conn.cursor()
                 c.execute(f'''UPDATE {location} SET setting = ?''', (value,))
+                c.execute(f'''INSERT INTO {location} (setting) SELECT (?) WHERE NOT EXISTS (SELECT 1 FROM {location})''', (value,))
                 conn.commit()
             setattr(self, location, value)
         except Exception as e:
