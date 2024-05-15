@@ -586,7 +586,7 @@ def get_character():
         # This will be either the char name found in activesettings.yaml, or the default char name
         source = bot_settings.settings['llmcontext']['name']
         # If name doesn't match the bot's discord username, try to figure out best char data to initialize with
-        if source != bot_settings.database.last_character:
+        if source != bot_database.last_character:
             sources = [
                 client.user.display_name, # Try current bot name
                 bot_settings.settings['llmcontext']['name'] # Try last known name
@@ -627,7 +627,7 @@ async def first_run():
         else:
             logging.error(f"An error occurred while welcoming user to the bot: {e}")
     finally:
-        bot_settings.database.set('first_run', False)
+        bot_database.set('first_run', False)
 
 # Unpack tag presets and add global tag keys
 async def update_tags(tags):
@@ -661,60 +661,29 @@ async def update_tags(tags):
         logging.error(f"Error loading tag presets: {e}")
         return tags
 
-async def update_bot_base_tags():
-    try:
-        tags_data = load_file('ad_discordbot/dict_tags.yaml')
-        base_tags_data = tags_data.get('base_tags', [])
-        base_tags = copy.deepcopy(base_tags_data)
-        settings_dict = bot_settings.get_settings_dict()
-        settings_dict['tags'] = await update_tags(base_tags)
-    except Exception as e:
-        logging.error(f"Error updating client base tags: {e}")
-
-# Function to overwrite default settings with activesettings
-async def update_bot_settings():
-    try:
-        defaults = Settings() # Instance of the default settings
-        defaults = defaults.settings_to_dict() # Convert instance to dict
-        # Current user custom settings
-        active_settings = load_file('ad_discordbot/activesettings.yaml')
-        active_settings = dict(active_settings)
-        # Add any missing required settings
-        fixed_settings = fix_dict(active_settings, defaults)
-        # Commit fixed settings to bot_settings (always accessible)
-        bot_settings.settings = fixed_settings
-        # Update client behavior
-        bot_settings.behavior = Behavior() # Instance of the default behavior
-        behavior = active_settings['behavior']
-        bot_settings.behavior.update_behavior_dict(behavior)
-        await update_bot_base_tags() # base tags from dict_tags.yaml
-    except Exception as e:
-        logging.error(f"Error updating client settings: {e}")
-
 #################################################################
 ########################### ON READY ############################
 #################################################################
 @client.event
 async def on_ready():
     try:
-        await update_bot_base_tags()
+        await bot_settings.update_base_tags()
         # If first time running bot
-        if bot_settings.database.first_run:
+        if bot_database.first_run:
             await first_run()
         if textgenwebui_enabled:
-            source = get_character() # Try loading character data regardless of mode (chat/instruct)
+            char_name = get_character() # Try loading character data regardless of mode (chat/instruct)
             char_instruct = None
-            if source:
-                char_instruct, _, _, _ = await character_loader(source)
-                bot_settings.database.set('last_character', source)
+            if char_name:
+                char_instruct, _, _, _ = await character_loader(char_name)
+                bot_database.set('last_character', char_name)
             update_instruct = char_instruct or instruction_template_str or None # 'instruction_template_str' is global variable
             if update_instruct:
                 settings_dict = bot_settings.get_settings_dict()
                 settings_dict['llmstate']['state']['instruction_template_str'] = update_instruct
             # Initialize chat history
-            autoload_history = config.get('textgenwebui', {}).get('chat_history', {}).get('autoload_history', False)
-            if autoload_history:
-                history_manager.load_history(bot_settings.settings['llmstate']['state'])
+            if bot_history.autoload_history:
+                bot_history.load_history(bot_settings.settings['llmstate']['state'])
         # Create background task processing queue
         client.loop.create_task(process_tasks_in_background())
         # Start background task to sync the discord client tree
@@ -815,8 +784,8 @@ async def voice_channel(vc_setting):
                 else:
                     logging.warning(f'Bot launched with {tts_client}, but no voice channel is specified in config.py')
             else:
-                if not bot_settings.database.was_warned('char_tts'):
-                    bot_settings.database.update_was_warned('char_tts')
+                if not bot_database.was_warned('char_tts'):
+                    bot_database.update_was_warned('char_tts')
                     logging.warning(f'Character "use_voice_channel" = True, and "voice channel" is specified in config.py, but no "tts_client" is specified in config.py')
         except Exception as e:
             logging.error(f"An error occurred while connecting to voice channel: {e}")
@@ -985,15 +954,15 @@ def format_prompt_with_recent_output(user, prompt):
             prefix, index = match
             index = int(index)
             if prefix in ['user', 'llm'] and 0 <= index <= 10:
-                message_list = history_manager.recent_messages[prefix]
+                message_list = bot_history.recent_messages[prefix]
                 if not message_list or index >= len(message_list):
                     continue
                 matched_syntax = f"{prefix}_{index}"
                 formatted_prompt = formatted_prompt.replace(f"{{{matched_syntax}}}", message_list[index])
             elif prefix == 'history' and 0 <= index <= 10:
-                user_message = history_manager.recent_messages['user'][index] if index < len(history_manager.recent_messages['user']) else ''
-                llm_message = history_manager.recent_messages['llm'][index] if index < len(history_manager.recent_messages['llm']) else ''
-                formatted_history = f'"{user}:" {user_message}\n"{bot_settings.database.last_character}:" {llm_message}\n'
+                user_message = bot_history.recent_messages['user'][index] if index < len(bot_history.recent_messages['user']) else ''
+                llm_message = bot_history.recent_messages['llm'][index] if index < len(bot_history.recent_messages['llm']) else ''
+                formatted_history = f'"{user}:" {user_message}\n"{bot_database.last_character}:" {llm_message}\n'
                 matched_syntax = f"{prefix}_{index}"
                 formatted_prompt = formatted_prompt.replace(f"{{{matched_syntax}}}", formatted_history)
         formatted_prompt = formatted_prompt.replace('{last_image}', '__temp/temp_img_0.png')
@@ -1079,9 +1048,9 @@ async def process_llm_payload_tags(user_name, channel, llm_payload, llm_prompt, 
                     logging.info("[TAGS] History is being ignored")
                 elif load_history > 0:
                     # Calculate the number of items to retain (up to the length of session_history)
-                    num_to_retain = min(load_history, len(history_manager.session_history["internal"]))
-                    llm_payload['state']['history']['internal'] = history_manager.session_history['internal'][-num_to_retain:]
-                    llm_payload['state']['history']['visible'] = history_manager.session_history['visible'][-num_to_retain:]
+                    num_to_retain = min(load_history, len(bot_history.session_history["internal"]))
+                    llm_payload['state']['history']['internal'] = bot_history.session_history['internal'][-num_to_retain:]
+                    llm_payload['state']['history']['visible'] = bot_history.session_history['visible'][-num_to_retain:]
                     logging.info(f'[TAGS] History is being limited to previous {load_history} exchanges')
             if param_variances:
                 processed_params = process_param_variances(param_variances)
@@ -1469,7 +1438,7 @@ async def get_tags(text):
         flow_step_tags = []
         if flow_queue.qsize() > 0:
             flow_step_tags = [await flow_queue.get()]
-        base_tags = bot_settings.settings.get('tags', []) # base tags
+        base_tags = bot_settings.base_tags # base tags
         imgmodel_tags = bot_settings.settings['imgmodel'].get('tags', []) # imgmodel specific tags
         char_tags = bot_settings.settings['llmcontext'].get('tags', []) # character specific tags
         detagged_text, tags_from_text = get_tags_from_text(text)
@@ -1480,7 +1449,7 @@ async def get_tags(text):
         logging.error(f"Error getting tags: {e}")
         return text, []      
 
-async def initialize_llm_payload(user, text):
+async def init_llm_payload(user, text):
     llm_payload = copy.deepcopy(bot_settings.settings['llmstate'])
     llm_payload['text'] = text
     name1 = user
@@ -1493,7 +1462,7 @@ async def initialize_llm_payload(user, text):
     llm_payload['state']['character_menu'] = name2
     llm_payload['state']['context'] = context
     llm_payload['save_to_history'] = True
-    llm_payload['state']['history'] = history_manager.session_history
+    llm_payload['state']['history'] = bot_history.session_history
     return llm_payload
 
 def get_wildcard_value(matched_text, dir_path='ad_discordbot/wildcards'):
@@ -1601,8 +1570,8 @@ def get_braces_value(matched_text):
 
 async def dynamic_prompting(user, text, i=None):
     if not config.get('dynamic_prompting_enabled', True):
-        if not bot_settings.database.was_warned('dynaprompt'):
-            bot_settings.database.update_was_warned('dynaprompt')
+        if not bot_database.was_warned('dynaprompt'):
+            bot_database.update_was_warned('dynaprompt')
             logging.warning("'config.yaml' is missing a new parameter 'dynamic_prompting_enabled'. Defaulting to 'True' (enabled) ")
     if not dynamic_prompting:
         return text
@@ -1652,11 +1621,11 @@ async def dynamic_prompting(user, text, i=None):
 async def on_message(i):
     try:
         text = i.clean_content # primarly converts @mentions to actual user names
-        if textgenwebui_enabled and not bot_settings.behavior.bot_should_reply(i, text): return # Check that bot should reply or not
-        bot_settings.database.set('last_user_msg', time.time(), save_now=False) # Store the current time in bot_database_v2.yaml
+        if textgenwebui_enabled and not bot_behavior.bot_should_reply(i, text): return # Check that bot should reply or not
+        bot_database.set('last_user_msg', time.time()) # Store the current time in bot_database_v2.yaml
         # if @ mentioning bot, remove the @ mention from user prompt
-        if text.startswith(f"@{bot_settings.database.last_character} "):
-            text = text.replace(f"@{bot_settings.database.last_character} ", "", 1)
+        if text.startswith(f"@{bot_database.last_character} "):
+            text = text.replace(f"@{bot_database.last_character} ", "", 1)
         # apply wildcards
         text = await dynamic_prompting(i.author, text, i)
         
@@ -1683,7 +1652,7 @@ async def on_message_task(user, channel, source, text, i):
         should_gen_text = should_bot_do('should_gen_text', default=True, tags=tags)
         if should_gen_text:
             # build llm_payload with defaults
-            llm_payload = await initialize_llm_payload(user.name, text)
+            llm_payload = await init_llm_payload(user.name, text)
             # make working copy of user's request (without @ mention)
             llm_prompt = copy.copy(text)
             # apply tags to prompt
@@ -1735,8 +1704,8 @@ async def hybrid_llm_img_gen(user, channel, source, text, tags, llm_payload, par
         # if no LLM model is loaded, notify that no text will be generated     
         if textgenwebui_enabled:
             if shared.model_name == 'None':
-                if not bot_settings.database.was_warned('no_llmmodel'):
-                    bot_settings.database.update_was_warned('no_llmmodel')
+                if not bot_database.was_warned('no_llmmodel'):
+                    bot_database.update_was_warned('no_llmmodel')
                     await channel.send(f'(Cannot process text request: No LLM model is currently loaded. Use "/llmmodel" to load a model.)', delete_after=10)
                     logging.warning(f'Bot tried to generate text for {user}, but no LLM model was loaded')
             # generate text with textgen-webui
@@ -1835,7 +1804,7 @@ async def llm_gen(llm_payload):
         last_resp, tts_resp = await loop.run_in_executor(None, process_responses)
 
         save_to_history = llm_payload.get('save_to_history', True)
-        history_manager.manage_history(prompt=llm_payload['text'], reply=last_resp, save_to_history=save_to_history)
+        bot_history.manage_history(prompt=llm_payload['text'], reply=last_resp, save_to_history=save_to_history)
 
         return last_resp, tts_resp
     except Exception as e:
@@ -1849,7 +1818,7 @@ async def cont_regen_task(i, user, text, channel, source, message):
     try:
         cmd = ''
         system_embed = None
-        llm_payload = await initialize_llm_payload(user, text)
+        llm_payload = await init_llm_payload(user, text)
         llm_payload['save_to_history'] = False
         if source == 'cont':
             cmd = 'Continuing'
@@ -1898,7 +1867,7 @@ async def speak_task(user, channel, text, params):
             system_embed_info.title = f'{user} requested tts ... '
             system_embed_info.description = ''
             system_embed = await channel.send(embed=system_embed_info)
-        llm_payload = await initialize_llm_payload(user.name, text)
+        llm_payload = await init_llm_payload(user.name, text)
         llm_payload['_continue'] = True
         llm_payload['state']['max_new_tokens'] = 1
         llm_payload['state']['history'] = {'internal': [[text, text]], 'visible': [[text, text]]}
@@ -2002,7 +1971,7 @@ async def change_llmmodel_task(user, channel, params):
             try:
                 shared.model_name = llmmodel_name   # set to new LLM model
                 if shared.model_name != 'None':
-                    bot_settings.database.update_was_warned('no_llmmodel', False) # Reset warning message
+                    bot_database.update_was_warned('no_llmmodel', False) # Reset warning message
                     loader = get_llm_model_loader(llmmodel_name)    # Try getting loader from user-config.yaml to prevent errors
                     await load_llm_model(loader)                    # Load an LLM model if specified
             except:
@@ -2425,10 +2394,10 @@ def clean_img_payload(img_payload):
             if SD_CLIENT != 'SD WebUI Forge':
                 if img_payload['alwayson_scripts']['forge_couple']['args'].get('enabled', False):
                     logging.warning(f'forge_couple is not known to be compatible with "{SD_CLIENT}". Not applying forge_couple...')
-                    bot_settings.database.update_was_warned('forgecouple')
+                    bot_database.update_was_warned('forgecouple')
                 if img_payload['alwayson_scripts']['layerdiffuse']['args'].get('enabled', False):
                     logging.warning(f'layerdiffuse is not known to be compatible with "{SD_CLIENT}". Not applying layerdiffuse...')
-                    bot_settings.database.update_was_warned('layerdiffuse')
+                    bot_database.update_was_warned('layerdiffuse')
             # Clean ControlNet
             if not config['sd']['extensions'].get('controlnet_enabled', False):
                 del img_payload['alwayson_scripts']['controlnet'] # Delete all 'controlnet' keys if disabled by config
@@ -2466,8 +2435,8 @@ def clean_img_payload(img_payload):
 def apply_loractl(tags):
     try:
         if SD_CLIENT != 'A1111 SD WebUI':
-            if not bot_settings.database.was_warned('loractl'):
-                bot_settings.database.update_was_warned('loractl')
+            if not bot_database.was_warned('loractl'):
+                bot_database.update_was_warned('loractl')
                 logging.warning(f'loractl is not known to be compatible with "{SD_CLIENT}". Not applying loractl...')
             return tags
         scaling_settings = [v for k, v in config['sd'].get('extensions', {}).get('lrctl', {}).items() if 'scaling' in k]
@@ -2976,7 +2945,7 @@ def collect_img_tag_values(tags):
         logging.error(f"Error collecting Img tag values: {e}")
         return sd_output_dir, tags
 
-def initialize_img_payload(img_prompt, neg_prompt):
+def init_img_payload(img_prompt, neg_prompt):
     try:
         # Initialize img_payload settings
         img_payload = {"prompt": img_prompt, "negative_prompt": neg_prompt, "width": 512, "height": 512, "steps": 20, "resize_mode": 1}
@@ -3028,7 +2997,7 @@ async def img_gen_task(user, channel, source, img_prompt, params, i=None, tags={
             tags = match_img_tags(img_prompt, tags)
         # Initialize img_payload
         neg_prompt = params.get('neg_prompt', '')
-        img_payload = initialize_img_payload(img_prompt, neg_prompt)
+        img_payload = init_img_payload(img_prompt, neg_prompt)
         # collect matched tag values
         sd_output_dir, img_payload_mods = collect_img_tag_values(tags)
         send_user_image = img_payload_mods.get('send_user_image', None)
@@ -3584,15 +3553,15 @@ if system_embed_info:
 @client.hybrid_command(description="Toggle current channel as main channel for bot to auto-reply without needing to be called")
 async def main(i):
     try:
-        if i.channel.id in bot_settings.database.main_channels:
-            bot_settings.database.main_channels.remove(i.channel.id) # If the channel is already in the main channels, remove it
+        if i.channel.id in bot_database.main_channels:
+            bot_database.main_channels.remove(i.channel.id) # If the channel is already in the main channels, remove it
             action_message = f'Removed {i.channel.mention} from main channels. Use "/main" again if you want to add it back.'
         else:
             # If the channel is not in the main channels, add it
-            bot_settings.database.main_channels.append(i.channel.id)
+            bot_database.main_channels.append(i.channel.id)
             action_message = f'Added {i.channel.mention} to main channels. Use "/main" again to remove it.'
             
-        bot_settings.database.save()
+        bot_database.save()
         await i.reply(action_message)
     except Exception as e:
         logging.error(f"Error toggling main channel setting: {e}")
@@ -3619,8 +3588,8 @@ if textgenwebui_enabled:
             
             async with task_semaphore:
                 # offload to ai_gen queue
-                logging.info(f'{ctx.author} used "/reset": "{bot_settings.database.last_character}"')
-                params = {'character': {'char_name': bot_settings.database.last_character, 'verb': 'Resetting', 'mode': 'reset'}}
+                logging.info(f'{ctx.author} used "/reset": "{bot_database.last_character}"')
+                params = {'character': {'char_name': bot_database.last_character, 'verb': 'Resetting', 'mode': 'reset'}}
                 await change_char_task(ctx.author, ctx.channel, 'reset', params)
                 
         except Exception as e:
@@ -3631,7 +3600,7 @@ if textgenwebui_enabled:
     async def save_conversation(ctx: discord.ext.commands.Context):
         try:
             await ctx.reply('Saved current conversation history', ephemeral=True)
-            history_manager.save_history()
+            bot_history.save_history()
         except Exception as e:
             logging.error(f"Error with /reset: {e}")
 
@@ -3693,7 +3662,7 @@ async def character_loader(source):
         # Merge with basesettings
         char_data = merge_base(char_data, 'llmcontext')
         # Reset warning for character specific TTS
-        bot_settings.database.update_was_warned('char_tts', False)
+        bot_database.update_was_warned('char_tts', False)
         # Gather context specific keys from the character data
         char_llmcontext = {}
         for key, value in char_data.items():
@@ -3718,10 +3687,8 @@ async def character_loader(source):
         # Commit the character data to bot_settings.settings
         settings_dict = bot_settings.get_settings_dict()
         settings_dict['llmcontext'] = dict(char_llmcontext) # Replace the entire dictionary key
-        update_dict(settings_dict['behavior'], dict(char_behavior))
         update_dict(settings_dict['llmstate']['state'], dict(char_llmstate))
-        # Update stored database value for character
-        bot_settings.database.set('last_character', source)
+        bot_behavior.update_behavior(dict(char_behavior))
         # Print mode in cmd
         logging.info(f"Initializing in {bot_settings.settings['llmstate']['state']['mode']} mode")
         # Data for saving to activesettings.yaml (skipped in on_ready())
@@ -3743,7 +3710,7 @@ async def delayed_profile_update(username, avatar, remaining_cooldown):
         if avatar:
             await client.user.edit(avatar=avatar)
         logging.info(f"Updated discord client profile (Username: {username}; Avatar: {'Updated' if avatar else 'Unchanged'}).\n Profile can be updated again in 10 minutes.")
-        bot_settings.database.set('last_change', time.time())  # Store the current time in bot_database_v2.yaml
+        bot_database.set('last_change', time.time())  # Store the current time in bot_database_v2.yaml
     except Exception as e:
         logging.error(f"Error while changing character username or avatar: {e}")
 
@@ -3763,7 +3730,7 @@ async def update_client_profile(channel, char_name):
             with open(picture_path, 'rb') as f:
                 avatar = f.read()
         # Check for cooldown before allowing profile change
-        last_change = bot_settings.database.last_change
+        last_change = bot_database.last_change
         last_cooldown = last_change + timedelta(minutes=10).seconds
         if time.time() >= last_cooldown:
             # Apply changes immediately if outside 10 minute cooldown
@@ -3787,7 +3754,7 @@ async def change_character(channel, source, char_name):
             settings_dict = bot_settings.get_settings_dict()
             settings_dict['llmstate']['state']['instruction_template_str'] = update_instruct
         # Update stored database value for character
-        bot_settings.database.set('last_character', char_name)
+        bot_database.set('last_character', char_name)
         # Update discord username / avatar
         await update_client_profile(channel, char_name)
         # Save the updated active_settings to activesettings.yaml
@@ -3796,14 +3763,14 @@ async def change_character(channel, source, char_name):
         active_settings['behavior'] = char_behavior
         active_settings['llmstate']['state'] = char_llmstate
         save_yaml_file('ad_discordbot/activesettings.yaml', active_settings)
-        # Ensure all settings are synchronized
-        await update_bot_settings() # Sync updated user settings
+        # Update all settings
+        bot_settings.update_settings()
+        await bot_settings.update_base_tags()
         # Set history
-        autoload_history = config.get('textgenwebui', {}).get('chat_history', {}).get('autoload_history', False)
-        if autoload_history and source != 'reset':
-            history_manager.load_history(bot_settings.settings['llmstate']['state'])
+        if bot_history.autoload_history and source != 'reset':
+            bot_history.load_history(bot_settings.settings['llmstate']['state'])
         else:
-            history_manager.reset_session_history()
+            bot_history.reset_session_history()
     except Exception as e:
         await channel.send(f"An error occurred while changing character: {e}")
         logging.error(f"An error occurred while changing character: {e}")
@@ -3981,7 +3948,10 @@ async def update_imgmodel(channel, selected_imgmodel, selected_imgmodel_tags):
         active_settings['imgmodel'] = selected_imgmodel
         active_settings['imgmodel']['tags'] = selected_imgmodel_tags
         save_yaml_file('ad_discordbot/activesettings.yaml', active_settings)
-        await update_bot_settings() # Sync updated user settings
+        # Update all settings
+        bot_settings.update_settings()
+        await bot_settings.update_base_tags()
+
         ### IF API IMG MODEL UNLOADING GETS EVER DEBUGGED
         # if selected_imgmodel['imgmodel_name'] == 'None':
         # _ = await sd_api(endpoint='/sdapi/v1/unload-checkpoint', method='post', json=None)
@@ -4452,9 +4422,6 @@ async def process_user_voice(ctx, voice_input=None):
 
 async def process_speak(ctx, input_text, selected_voice=None, lang=None, voice_input=None):
     try:
-        if not (selected_voice or voice_input):
-            await ctx.reply('**No voice was selected**.', ephemeral=True, delete_after=5)
-            return
         user_voice = await process_user_voice(ctx, voice_input)
         tts_args = await process_speak_args(ctx, selected_voice, lang, user_voice)
         await ireply(ctx, 'tts') # send a response msg to the user
@@ -4579,7 +4546,6 @@ if textgenwebui_enabled and tts_client and tts_client in supported_tts_clients:
 #################################################################
 ####################### DEFAULT SETTINGS ########################
 #################################################################
-# Sub-classes under a main class 'Settings'
 class Behavior:
     def __init__(self):
         self.reply_to_itself = 0.0
@@ -4591,9 +4557,8 @@ class Behavior:
         self.conversation_recency = 600
         self.user_conversations = {}
 
-    def update_behavior_dict(self, new_data):
-        # Update specific attributes of the behavior instance
-        for key, value in new_data.items():
+    def update_behavior(self, behavior):
+        for key, value in behavior.items():
             if hasattr(self, key):
                 setattr(self, key, value)
 
@@ -4614,7 +4579,7 @@ class Behavior:
         if i.mention_everyone or (i.author == client.user and not self.probability_to_reply(self.reply_to_itself)):
             return False
         # Whether to reply to other bots
-        if i.author.bot and bot_settings.database.last_character.lower() in text.lower() and i.channel.id in bot_settings.database.main_channels:
+        if i.author.bot and bot_database.last_character.lower() in text.lower() and i.channel.id in bot_database.main_channels:
             if 'bye' in text.lower(): # don't reply if another bot is saying goodbye
                 return False
             return self.probability_to_reply(self.reply_to_bots_when_adressed)
@@ -4622,14 +4587,14 @@ class Behavior:
         if self.ignore_parentheses and (i.content.startswith('(') and i.content.endswith(')')) or (i.content.startswith('<:') and i.content.endswith(':>')):
             return False
         # Whether to reply if only speak when spoken to
-        if (self.only_speak_when_spoken_to and (client.user.mentioned_in(i) or any(word in i.content.lower() for word in bot_settings.database.last_character.lower().split()))) \
-            or (self.in_active_conversation(i.author.id) and i.channel.id in bot_settings.database.main_channels):
+        if (self.only_speak_when_spoken_to and (client.user.mentioned_in(i) or any(word in i.content.lower() for word in bot_database.last_character.lower().split()))) \
+            or (self.in_active_conversation(i.author.id) and i.channel.id in bot_database.main_channels):
             return True
         reply = False
         # few more conditions
-        if i.author.bot and i.channel.id in bot_settings.database.main_channels:
+        if i.author.bot and i.channel.id in bot_database.main_channels:
             reply = self.probability_to_reply(self.chance_to_reply_to_other_bots)
-        if self.go_wild_in_channel and i.channel.id in bot_settings.database.main_channels:
+        if self.go_wild_in_channel and i.channel.id in bot_database.main_channels:
             reply = True
         if reply:
             self.update_user_dict(i.author.id)
@@ -4639,6 +4604,9 @@ class Behavior:
         # Determine if the bot should reply based on a probability
         return random.random() < probability
 
+bot_behavior = Behavior()
+
+# Sub-classes under a main class 'Settings'
 class ImgModel:
     def __init__(self):
         self.imgmodel_name = '' # label used for /imgmodel command
@@ -4669,6 +4637,7 @@ class LLMContext:
         self.name = 'AI'
         self.use_voice_channel = False
         self.bot_in_character_menu = True
+        self.tags = []
 
 class LLMState:
     def __init__(self):
@@ -4740,50 +4709,55 @@ class LLMState:
         self.regenerate = False
         self._continue = False
 
-# Holds the default value of all sub-classes.
 class Settings:
     def __init__(self):
-        self.behavior = Behavior()
         self.imgmodel = ImgModel()
         self.llmcontext = LLMContext()
         self.llmstate = LLMState()
+        self.settings = {}
+        self.update_settings()
+        self.base_tags = []
+
+    async def update_base_tags(self):
+        try:
+            tags_data = load_file('ad_discordbot/dict_tags.yaml')
+            base_tags_data = tags_data.get('base_tags', [])
+            base_tags = copy.deepcopy(base_tags_data)
+            base_tags = await update_tags(base_tags)
+            self.base_tags = base_tags
+        except Exception as e:
+            logging.error(f"Error updating client base tags: {e}")
 
     # Returns the value of Settings as a dictionary
     def settings_to_dict(self):
         return {
-            'behavior': vars(self.behavior),
             'imgmodel': vars(self.imgmodel),
             'llmcontext': vars(self.llmcontext),
             'llmstate': vars(self.llmstate)
         }
-    
+
+    def update_settings(self):
+        defaults = self.settings_to_dict()
+        # Current user custom settings
+        active_settings = load_file('ad_discordbot/activesettings.yaml')
+        active_settings = copy.deepcopy(active_settings)
+        behavior = active_settings.pop('behavior', {})
+        # Add any missing required settings
+        self.settings = fix_dict(active_settings, defaults)
+        bot_behavior.update_behavior(behavior)
+
+    def get_settings_dict(self):
+        return self.settings
+
     # Allows printing default values of Settings
     def __str__(self):
         attributes = ", ".join(f"{attr}={getattr(self, attr)}" for attr in dir(self) if not callable(getattr(self, attr)) and not attr.startswith("__"))
         return f"{self.__class__.__name__}({attributes})"
 
-
-
-class BotSettings:
-    def __init__(self):
-        self.defaults = Settings() # Instance of the default settings
-        self.defaults = self.defaults.settings_to_dict() # Convert instance to dict
-        self.active_settings = load_file('ad_discordbot/activesettings.yaml')
-        self.active_settings = dict(self.active_settings)
-        self.settings = fix_dict(self.active_settings, self.defaults)
-        self.behavior = Behavior()
-        self.behavior.update_behavior_dict(self.active_settings['behavior'])
-        self.database = Database()
-
-    def get_settings_dict(self):
-        return self.settings
-
-bot_settings = BotSettings()
-
-class ChatHistoryManager:
+class History:
     def __init__(self):
         self.limit_history = config.get('textgenwebui', {}).get('chat_history', {}).get('limit_history', True)
-        self.truncation = int(bot_settings.settings['llmstate']['state']['truncation_length'] * 4) if self.limit_history else None
+        self.autoload_history = config.get('textgenwebui', {}).get('chat_history', {}).get('autoload_history', False)
         self.autosave_history = config.get('textgenwebui', {}).get('chat_history', {}).get('autosave_history', False)
         self.unique_id = None
         self.session_history = {'internal': [], 'visible': []}
@@ -4797,7 +4771,7 @@ class ChatHistoryManager:
         if last_exchange:
             last_user_message = last_exchange[0]
             last_assistant_message = last_exchange[1]
-            logging.info(f'Loaded most recent chat history. Last message exchange:\n User: "{last_user_message}"\n {bot_settings.database.last_character}: "{last_assistant_message}"')
+            logging.info(f'Loaded most recent chat history. Last message exchange:\n User: "{last_user_message}"\n {bot_database.last_character}: "{last_assistant_message}"')
         else:
             logging.info("Starting new conversation.")
         all_histories = find_all_histories(state)
@@ -4809,7 +4783,7 @@ class ChatHistoryManager:
         state = bot_settings.settings['llmstate']['state']
         if not auto_id:
             self.unique_id = datetime.now().strftime('%Y%m%d-%H-%M-%S')
-            logging.info(f'''Chat history was saved to "/logs/{state['mode']}/{bot_settings.database.last_character}/{self.unique_id}.json"''')
+            logging.info(f'''Chat history was saved to "/logs/{state['mode']}/{bot_database.last_character}/{self.unique_id}.json"''')
         save_history(self.session_history, self.unique_id, state['character_menu'], state['mode'])
 
     # Retain most recent 10 elements or 10,000 characters from user prompts and bot replies
@@ -4837,10 +4811,11 @@ class ChatHistoryManager:
             if save_to_history:
                 self.session_history['internal'].append([prompt, reply])
                 self.session_history['visible'].append([prompt, reply])
-        if self.truncation:
-            while sum(len(message) for exchange in self.session_history['internal'] for message in exchange) > self.truncation:
+        if self.limit_history:
+            truncation = int(bot_settings.settings['llmstate']['state']['truncation_length'] * 4)
+            while sum(len(message) for exchange in self.session_history['internal'] for message in exchange) > truncation:
                 oldest_exchange = self.session_history['internal'].pop(0)
-            while sum(len(message) for exchange in self.session_history['visible'] for message in exchange) > self.truncation:
+            while sum(len(message) for exchange in self.session_history['visible'] for message in exchange) > truncation:
                 oldest_exchange = self.session_history['visible'].pop(0)
         if self.autosave_history:
             self.save_history(auto_id=self.unique_id)
@@ -4853,6 +4828,9 @@ class ChatHistoryManager:
         self.session_history = {'internal': [], 'visible': []}
         logging.info("Starting new conversation.")
 
-history_manager = ChatHistoryManager()
+bot_database = Database()
+bot_settings = Settings()
+bot_behavior = Behavior()
+bot_history = History()
 
 client.run(bot_token, root_logger=True, log_handler=handler)
