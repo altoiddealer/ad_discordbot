@@ -28,6 +28,9 @@ class Database:
         
         if self._did_migration:
             self.save()
+            
+    def get_vars(self):
+        return {k:v for k,v in vars(self).items() if not k.startswith('_')}
         
     def migrate_v1_v2(self):
         old = OldDatabase()
@@ -43,24 +46,20 @@ class Database:
         self._did_migration = True
         
     def save(self):
-        data = {}
-        data['first_run'] = self.first_run
-        data['last_character'] = self.last_character
-        data['last_change'] = self.last_change
-        data['last_user_msg'] = self.last_user_msg
-        data['main_channels'] = self.main_channels
-        data['warned_once'] = self.warned_once
+        data = self.get_vars()
         save_yaml_file(self._fp, data)
         
     def load(self):
-        data = load_file(self._fp)
-        data = data or {}
-        self.first_run = data.get('first_run', True)
-        self.last_character = data.get('last_character')
-        self.last_change = data.get('last_change', time.time())
-        self.last_user_msg = data.get('last_user_msg', time.time())
-        self.main_channels = data.get('main_channels', [])
-        self.warned_once = data.get('warned_once', {})
+        data = load_file(self._fp) or {}
+        self.first_run = data.pop('first_run', True)
+        self.last_character = data.pop('last_character')
+        self.last_change = data.pop('last_change', time.time())
+        self.last_user_msg = data.pop('last_user_msg', time.time())
+        self.main_channels = data.pop('main_channels', [])
+        self.warned_once = data.pop('warned_once', {})
+        
+        for k,v in data.items():
+            setattr(self, k, v)
         
         
     def set(self, key, value, save_now=True):
