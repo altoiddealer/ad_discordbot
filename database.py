@@ -1,37 +1,6 @@
-from datetime import datetime, timedelta
-from pathlib import Path
-import asyncio
-import random
+from datetime import datetime
 import logging
-import logging.handlers
-import json
-import re
-import glob
-import os
-import warnings
-import discord
-from discord.ext import commands
-from discord import app_commands, File
-from discord.ext.commands.context import Context
-import typing
-import torch
-import io
-import base64
-import yaml
-from PIL import Image, PngImagePlugin
-import requests
 import sqlite3
-import pprint
-import aiohttp
-import math
-import time
-from itertools import product
-from threading import Lock, Thread
-from pydub import AudioSegment
-import copy
-from shutil import copyfile
-import sys
-import traceback
 
 class Database:
     def __init__(self):
