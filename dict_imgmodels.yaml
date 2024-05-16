@@ -12,7 +12,7 @@ settings:
     mode: random          # 'random' = picks model at random / 'cycle' = sequential order
     frequency: 2.0        # How often to change models (hours). 0.5 = 30 minutes
     channel_announce: 1111111111111111111  # channel ID to send a discord Embed announcing model change. Use number value.
-  # Controls whether to check the presets below when updating models. Otherwise, most params can only be updated manually via 'internal/activesettings.yaml'
+  # Controls whether to check the presets below when updating models. Otherwise, only settings will apply from dict_base_settings.yaml (not specific to models / resolutions)
   guess_model_params: true
 
 
@@ -41,8 +41,8 @@ presets:
       width: 1024
       height: 1024
     tags:
-      - tag_preset_name: SDXL Turbo Payload
       - tag_preset_name: SDXL Tags
+      - tag_preset_name: SDXL Turbo Payload
 
   - max_filesize: 100.0
     filter: ['xl']
@@ -52,13 +52,13 @@ presets:
       width: 1024
       height: 1024
     tags:
-      - tag_preset_name: SDXL Payload
       - tag_preset_name: SDXL Tags
+      - tag_preset_name: SDXL Payload
 
   - exact_match: 'sdxl_realvisxlV40_v40Bakedvae'
     payload:
       width: 1024
       height: 1024
     tags:
-      - tag_preset_name: SDXL Payload
       - tag_preset_name: SDXL Tags
+      - tag_preset_name: SDXL Payload
