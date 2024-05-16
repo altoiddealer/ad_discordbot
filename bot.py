@@ -4604,8 +4604,6 @@ class Behavior:
         # Determine if the bot should reply based on a probability
         return random.random() < probability
 
-bot_behavior = Behavior()
-
 # Sub-classes under a main class 'Settings'
 class ImgModel:
     def __init__(self):
