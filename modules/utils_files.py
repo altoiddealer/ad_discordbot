@@ -2,7 +2,7 @@ from pathlib import Path
 import logging
 import json
 import yaml
-from ad_modules.utils_shared import shared_path
+from ad_discordbot.modules.utils_shared import shared_path
 
 # Function to load .json, .yml or .yaml files
 def load_file(file_path):
