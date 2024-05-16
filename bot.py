@@ -896,8 +896,7 @@ async def process_tts_resp(channel, tts_resp):
 #################################################################
 async def fix_llm_payload(llm_payload):
     # Fix llm_payload by adding any missing required settings
-    defaults = Settings() # Create an instance of the default settings
-    defaults = defaults.settings_to_dict() # Convert instance to dict
+    defaults = bot_settings.settings_to_dict() # Get default settings as dict
     default_state = defaults['llmstate']['state']
     current_state = llm_payload['state']
     llm_payload['state'] = fix_dict(current_state, default_state)
