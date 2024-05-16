@@ -4707,7 +4707,8 @@ class LLMState:
         self._continue = False
 
 class Settings:
-    def __init__(self):
+    def __init__(self, bot_behavior):
+        self.bot_behavior = bot_behavior
         self.imgmodel = ImgModel()
         self.llmcontext = LLMContext()
         self.llmstate = LLMState()
@@ -4741,7 +4742,7 @@ class Settings:
         behavior = active_settings.pop('behavior', {})
         # Add any missing required settings
         self.settings = fix_dict(active_settings, defaults)
-        bot_behavior.update_behavior(behavior)
+        self.bot_behavior.update_behavior(behavior)
 
     def get_settings_dict(self):
         return self.settings
@@ -4825,9 +4826,9 @@ class History:
         self.session_history = {'internal': [], 'visible': []}
         logging.info("Starting new conversation.")
 
+bot_behavior = Behavior() # needs to be loaded before settings
 bot_database = Database()
-bot_settings = Settings()
-bot_behavior = Behavior()
+bot_settings = Settings(bot_behavior=bot_behavior)
 bot_history = History()
 
 client.run(bot_token, root_logger=True, log_handler=handler)
