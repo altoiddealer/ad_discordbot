@@ -32,7 +32,8 @@ Note: **text-generation-webui** and **Stable Diffusion** features can be indepen
 
   **New file structure**
   
-  <img width="549" alt="Screenshot 2024-05-16 093612" src="https://github.com/altoiddealer/ad_discordbot/assets/1613484/2d1da765-9928-41fc-8579-b17bbffa57f3">
+  <img width="549" alt="331227041-2d1da765-9928-41fc-8579-b17bbffa57f3" src="https://github.com/altoiddealer/ad_discordbot/assets/1613484/41735b36-9ccd-462e-a125-8c7e08dd7130">
+
 
   ---
   
