@@ -1,8 +1,8 @@
 import logging
-from ad_modules.utils_files import load_file, save_yaml_file
+from ad_discordbot.modules.utils_files import load_file, save_yaml_file
 import time
 
-from ad_modules.database_migration_v1_v2 import OldDatabase
+from ad_discordbot.modules.database_migration_v1_v2 import OldDatabase
 
 
 class Database:

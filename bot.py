@@ -47,11 +47,11 @@ handler = logging.handlers.RotatingFileHandler(
     backupCount=5,  # Rotate through 5 files
 )
 
-from ad_modules.database import Database
-from ad_modules.utils_shared import task_semaphore, shared_path
-from ad_modules.utils_misc import fix_dict, update_dict, sum_update_dict, update_dict_matched_keys
-from ad_modules.utils_discord import ireply, send_long_message
-from ad_modules.utils_files import load_file, merge_base, save_yaml_file
+from ad_discordbot.modules.database import Database
+from ad_discordbot.modules.utils_shared import task_semaphore, shared_path
+from ad_discordbot.modules.utils_misc import fix_dict, update_dict, sum_update_dict, update_dict_matched_keys
+from ad_discordbot.modules.utils_discord import ireply, send_long_message
+from ad_discordbot.modules.utils_files import load_file, merge_base, save_yaml_file
 
 #################################################################
 #################### DISCORD / BOT STARTUP ######################
