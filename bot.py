@@ -47,11 +47,13 @@ handler = logging.handlers.RotatingFileHandler(
     backupCount=5,  # Rotate through 5 files
 )
 
-from ad_discordbot.modules.database import Database
+from ad_discordbot.modules.database import Database, ActiveSettings
 from ad_discordbot.modules.utils_shared import task_semaphore, shared_path
 from ad_discordbot.modules.utils_misc import fix_dict, update_dict, sum_update_dict, update_dict_matched_keys
 from ad_discordbot.modules.utils_discord import ireply, send_long_message
 from ad_discordbot.modules.utils_files import load_file, merge_base, save_yaml_file
+
+bot_active_settings = ActiveSettings()
 
 #################################################################
 #################### DISCORD / BOT STARTUP ######################
@@ -533,8 +535,8 @@ async def auto_update_imgmodel_task(mode, duration):
             auto_change_settings = imgmodels_data.get('settings', {}).get('auto_change_imgmodels', {})
             channel = auto_change_settings.get('channel_announce', None)
             if channel == 11111111111111111111: channel = None
-            active_settings = load_file(shared_path.active_settings)
-            current_imgmodel_name = active_settings.get('imgmodel', {}).get('imgmodel_name', '')
+            
+            current_imgmodel_name = bot_active_settings.get('imgmodel', {}).get('imgmodel_name', '')
             imgmodel_names = [imgmodel.get('imgmodel_name', '') for imgmodel in all_imgmodels]           
             # Select an imgmodel automatically
             selected_imgmodel = await auto_select_imgmodel(current_imgmodel_name, imgmodel_names, mode)
@@ -753,8 +755,7 @@ async def post_active_settings():
     if target_channel_id:
         target_channel = await client.fetch_channel(target_channel_id)
         if target_channel:
-            active_settings = load_file(shared_path.active_settings)
-            settings_content = yaml.dump(active_settings, default_flow_style=False)
+            settings_content = yaml.dump(bot_active_settings.get_vars(), default_flow_style=False)
             
             async for message in target_channel.history(limit=None):
                 await message.delete()
@@ -1621,7 +1622,9 @@ async def on_message(i):
     try:
         text = i.clean_content # primarly converts @mentions to actual user names
         if textgenwebui_enabled and not bot_behavior.bot_should_reply(i, text): return # Check that bot should reply or not
-        bot_database.set('last_user_msg', time.time()) # Store the current time in bot_database_v2.yaml
+        # To prevent unnecessary overhead, don't save time every message
+        # The value will still save, just when a different action is performed, such as /character
+        bot_database.set('last_user_msg', time.time(), save_now=False) # Store the current time in bot_database_v2.yaml
         # if @ mentioning bot, remove the @ mention from user prompt
         if text.startswith(f"@{bot_database.last_character} "):
             text = text.replace(f"@{bot_database.last_character} ", "", 1)
@@ -3131,14 +3134,12 @@ if sd_enabled:
         try:
             options = load_file(shared_path.cmd_options)
             options = dict(options)
-            active_settings = load_file(shared_path.active_settings)
-            active_settings = dict(active_settings)
             # Get sizes and aspect ratios from 'dict_cmdoptions.yaml'
             sizes = options.get('sizes', {})
             aspect_ratios = [size.get("ratio") for size in sizes.get('ratios', [])]
             # Calculate the average and aspect ratio sizes
-            width = active_settings.get('imgmodel', {}).get('payload', {}).get('width', 512)
-            height = active_settings.get('imgmodel', {}).get('payload', {}).get('height', 512)
+            width = bot_active_settings.get('imgmodel', {}).get('payload', {}).get('width', 512)
+            height = bot_active_settings.get('imgmodel', {}).get('payload', {}).get('height', 512)
             average = average_width_height(width, height)
             ratio_options = calculate_aspect_ratio_sizes(average, aspect_ratios)
             # Collect any defined static sizes
@@ -3756,12 +3757,11 @@ async def change_character(channel, source, char_name):
         bot_database.set('last_character', char_name)
         # Update discord username / avatar
         await update_client_profile(channel, char_name)
-        # Save the updated active_settings
-        active_settings = load_file(shared_path.active_settings)
-        active_settings['llmcontext'] = char_llmcontext
-        active_settings['behavior'] = char_behavior
-        active_settings['llmstate']['state'] = char_llmstate
-        save_yaml_file(shared_path.active_settings, active_settings)
+        # Save the updated bot_active_settings
+        bot_active_settings['llmcontext'] = char_llmcontext
+        bot_active_settings['behavior'] = char_behavior
+        bot_active_settings['llmstate']['state'] = char_llmstate
+        bot_active_settings.save()
         # Update all settings
         bot_settings.update_settings()
         await bot_settings.update_base_tags()
@@ -3941,12 +3941,11 @@ async def fetch_imgmodels():
 
 async def update_imgmodel(channel, selected_imgmodel, selected_imgmodel_tags):
     try:
-        active_settings = load_file(shared_path.active_settings)
-        current_w, current_h = active_settings['imgmodel'].get('payload', {}).get('width', 512), active_settings['imgmodel'].get('payload', {}).get('height', 512)
+        current_w, current_h = bot_active_settings['imgmodel'].get('payload', {}).get('width', 512), bot_active_settings['imgmodel'].get('payload', {}).get('height', 512)
         new_w, new_h = selected_imgmodel.get('payload', {}).get('width', 512), selected_imgmodel.get('payload', {}).get('height', 512)
-        active_settings['imgmodel'] = selected_imgmodel
-        active_settings['imgmodel']['tags'] = selected_imgmodel_tags
-        save_yaml_file(shared_path.active_settings, active_settings)
+        bot_active_settings['imgmodel'] = selected_imgmodel
+        bot_active_settings['imgmodel']['tags'] = selected_imgmodel_tags
+        bot_active_settings.save()
         # Update all settings
         bot_settings.update_settings()
         await bot_settings.update_base_tags()
@@ -3959,7 +3958,7 @@ async def update_imgmodel(channel, selected_imgmodel, selected_imgmodel_tags):
         #     await channel.send(embed=change_embed)
         #     return
         # Load the imgmodel and VAE via API
-        model_data = active_settings['imgmodel'].get('override_settings') or active_settings['imgmodel']['payload'].get('override_settings')
+        model_data = bot_active_settings['imgmodel'].get('override_settings') or bot_active_settings['imgmodel']['payload'].get('override_settings')
         _ = await sd_api(endpoint='/sdapi/v1/options', method='post', json=model_data, retry=True)
         # Update size options for /image command
         current_avg = average_width_height(current_w, current_h)    # get current average width/height
@@ -4737,8 +4736,7 @@ class Settings:
     def update_settings(self):
         defaults = self.settings_to_dict()
         # Current user custom settings
-        active_settings = load_file(shared_path.active_settings)
-        active_settings = copy.deepcopy(active_settings)
+        active_settings = copy.deepcopy(bot_active_settings.get_vars())
         behavior = active_settings.pop('behavior', {})
         # Add any missing required settings
         self.settings = fix_dict(active_settings, defaults)
