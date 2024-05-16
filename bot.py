@@ -47,11 +47,11 @@ handler = logging.handlers.RotatingFileHandler(
     backupCount=5,  # Rotate through 5 files
 )
 
-from database import Database
-from utils_shared import task_semaphore, shared_path
-from utils_misc import fix_dict, update_dict, sum_update_dict, update_dict_matched_keys
-from utils_discord import ireply, send_long_message
-from utils_files import load_file, merge_base, save_yaml_file
+from ad_modules.database import Database
+from ad_modules.utils_shared import task_semaphore, shared_path
+from ad_modules.utils_misc import fix_dict, update_dict, sum_update_dict, update_dict_matched_keys
+from ad_modules.utils_discord import ireply, send_long_message
+from ad_modules.utils_files import load_file, merge_base, save_yaml_file
 
 #################################################################
 #################### DISCORD / BOT STARTUP ######################
@@ -86,7 +86,7 @@ class Config:
             with open(shared_path.config, 'r', encoding='utf-8') as file:
                 self.config = yaml.safe_load(file)
         except FileNotFoundError:
-            logging.error(f"Main bot config file {shared_path.config!r} not found.")
+            logging.error(f"Main bot config file '{shared_path.config}' not found.")
             try:
                 self.legacy_required_values()
                 logging.info("Found legacy 'config.py'. Please migrate your settings from 'config.py' as it will soon be unsupported.")
@@ -94,7 +94,7 @@ class Config:
                 logging.error("Legacy config file 'config.py' not found.")
                 sys.exit(2)
         except yaml.YAMLError as e:
-            logging.error(f"Error loading {shared_path.config!r}: {e}")
+            logging.error(f"Error loading '{shared_path.config}': {e}")
             sys.exit(2)
 
     def get_config_dict(self):
@@ -233,7 +233,7 @@ if sd_enabled:
         try:
             r = await sd_api(endpoint='/sdapi/v1/cmd-flags', method='get', json=None, retry=False)
             if not r:
-                raise Exception(f'Failed to connect to SD api, make sure to start it or disable the api in your {shared_path.config!r}')
+                raise Exception(f'Failed to connect to SD api, make sure to start it or disable the api in your "{shared_path.config}"')
             
             ui_settings_file = r.get("ui_settings_file", "")
             if "webui-forge" in ui_settings_file:
@@ -1571,7 +1571,7 @@ async def dynamic_prompting(user, text, i=None):
     if not config.get('dynamic_prompting_enabled', True):
         if not bot_database.was_warned('dynaprompt'):
             bot_database.update_was_warned('dynaprompt')
-            logging.warning(f"{shared_path.config!r} is missing a new parameter 'dynamic_prompting_enabled'. Defaulting to 'True' (enabled) ")
+            logging.warning(f"'{shared_path.config}' is missing a new parameter 'dynamic_prompting_enabled'. Defaulting to 'True' (enabled) ")
     if not dynamic_prompting:
         return text
     # copy text for adding comments
