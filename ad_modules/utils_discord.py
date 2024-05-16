@@ -1,6 +1,6 @@
 import logging
 
-from utils_shared import task_semaphore
+from ad_modules.utils_shared import task_semaphore
 
 # Send message response to user's interaction command
 async def ireply(i, process):

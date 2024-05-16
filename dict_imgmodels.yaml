@@ -12,7 +12,7 @@ settings:
     mode: random          # 'random' = picks model at random / 'cycle' = sequential order
     frequency: 2.0        # How often to change models (hours). 0.5 = 30 minutes
     channel_announce: 1111111111111111111  # channel ID to send a discord Embed announcing model change. Use number value.
-  # Controls whether to check the presets below when updating models. Otherwise, most params can only be updated manually via 'activesettings.yaml'
+  # Controls whether to check the presets below when updating models. Otherwise, most params can only be updated manually via 'internal/activesettings.yaml'
   guess_model_params: true
 
 
