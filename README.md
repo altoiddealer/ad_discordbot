@@ -25,10 +25,10 @@ Note: **text-generation-webui** and **Stable Diffusion** features can be indepen
 
    **05/16/2024:** Significant Changes to File Structure
   
-    - activesettings.yaml is now in an '/internal/' subdirectory. Please move your existing settings there.
     - The main bot script has grown massive, so it is now split to modules (new '/modules/' subdirectory)
-    - 'bot.db' has been superceded by a 'database.yaml' file. Your existing database will migrate automatically.
-    - Changes in the 'dict_base_settings.yaml' and 'activesettings.yaml' files are just comment updates
+    - activesettings.yaml is now in an '/internal/' subdirectory. Your settings will migrate automatically.
+    - 'bot.db' has been superceded by a 'database.yaml' file. Your settings will migrate automatically.
+    - Note: Changes to 'dict_base_settings.yaml' and 'activesettings.yaml' are just comment updates
 
   **New file structure**
   
