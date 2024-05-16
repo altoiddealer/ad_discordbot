@@ -25,14 +25,15 @@ Note: **text-generation-webui** and **Stable Diffusion** features can be indepen
 
    **05/16/2024:** Significant Changes to File Structure
   
-    - activesettings.yaml is now in an '/internal/' subdirectory. Please move your existing settings there.
     - The main bot script has grown massive, so it is now split to modules (new '/modules/' subdirectory)
-    - 'bot.db' has been superceded by a 'database.yaml' file. Your existing database will migrate automatically.
-    - Changes in the 'dict_base_settings.yaml' and 'activesettings.yaml' files are just comment updates
+    - activesettings.yaml is now in an '/internal/' subdirectory. Your settings will migrate automatically.
+    - 'bot.db' has been superceded by a 'database.yaml' file. Your settings will migrate automatically.
+    - Note: Changes to 'dict_base_settings.yaml' and 'activesettings.yaml' are just comment updates
 
   **New file structure**
   
-  <img width="549" alt="Screenshot 2024-05-16 093612" src="https://github.com/altoiddealer/ad_discordbot/assets/1613484/2d1da765-9928-41fc-8579-b17bbffa57f3">
+  <img width="549" alt="331227041-2d1da765-9928-41fc-8579-b17bbffa57f3" src="https://github.com/altoiddealer/ad_discordbot/assets/1613484/41735b36-9ccd-462e-a125-8c7e08dd7130">
+
 
   ---
   
