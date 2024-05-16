@@ -2,6 +2,7 @@ from pathlib import Path
 import logging
 import json
 import yaml
+from utils_shared import shared_path
 
 # Function to load .json, .yml or .yaml files
 def load_file(file_path):
@@ -33,7 +34,7 @@ def merge_base(newsettings, basekey):
             else:
                 original[key] = value
     try:
-        base_settings = load_file('ad_discordbot/dict_base_settings.yaml')
+        base_settings = load_file(shared_path.base_settings)
         keys = basekey.split(',')
         current_dict = base_settings
         for key in keys:
@@ -44,7 +45,7 @@ def merge_base(newsettings, basekey):
         deep_update(current_dict, newsettings) # Recursively update the dictionary
         return current_dict
     except Exception as e:
-        logging.error(f"Error loading ad_discordbot/dict_base_settings.yaml ({basekey}): {e}")
+        logging.error(f"Error loading {shared_path.base_settings!r} ({basekey}): {e}")
         return newsettings
     
 def save_yaml_file(file_path, data):

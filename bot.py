@@ -48,7 +48,7 @@ handler = logging.handlers.RotatingFileHandler(
 )
 
 from database import Database
-from utils_shared import task_semaphore
+from utils_shared import task_semaphore, shared_path
 from utils_misc import fix_dict, update_dict, sum_update_dict, update_dict_matched_keys
 from utils_discord import ireply, send_long_message
 from utils_files import load_file, merge_base, save_yaml_file
@@ -83,11 +83,10 @@ class Config:
 
     def init_config(self):
         try:
-            config_path = os.path.join('ad_discordbot', 'config.yaml')
-            with open(config_path, 'r', encoding='utf-8') as file:
+            with open(shared_path.config, 'r', encoding='utf-8') as file:
                 self.config = yaml.safe_load(file)
         except FileNotFoundError:
-            logging.error("Main bot config file 'config.yaml' not found.")
+            logging.error(f"Main bot config file {shared_path.config!r} not found.")
             try:
                 self.legacy_required_values()
                 logging.info("Found legacy 'config.py'. Please migrate your settings from 'config.py' as it will soon be unsupported.")
@@ -95,7 +94,7 @@ class Config:
                 logging.error("Legacy config file 'config.py' not found.")
                 sys.exit(2)
         except yaml.YAMLError as e:
-            logging.error(f"Error loading 'config.yaml': {e}")
+            logging.error(f"Error loading {shared_path.config!r}: {e}")
             sys.exit(2)
 
     def get_config_dict(self):
@@ -234,7 +233,7 @@ if sd_enabled:
         try:
             r = await sd_api(endpoint='/sdapi/v1/cmd-flags', method='get', json=None, retry=False)
             if not r:
-                raise Exception('Failed to connect to SD api, make sure to start it or disable the api in your config.yaml')
+                raise Exception(f'Failed to connect to SD api, make sure to start it or disable the api in your {shared_path.config!r}')
             
             ui_settings_file = r.get("ui_settings_file", "")
             if "webui-forge" in ui_settings_file:
@@ -530,11 +529,11 @@ async def auto_update_imgmodel_task(mode, duration):
     while True:
         await asyncio.sleep(duration)
         try:
-            imgmodels_data = load_file('ad_discordbot/dict_imgmodels.yaml')
+            imgmodels_data = load_file(shared_path.img_models)
             auto_change_settings = imgmodels_data.get('settings', {}).get('auto_change_imgmodels', {})
             channel = auto_change_settings.get('channel_announce', None)
             if channel == 11111111111111111111: channel = None
-            active_settings = load_file('ad_discordbot/activesettings.yaml')
+            active_settings = load_file(shared_path.active_settings)
             current_imgmodel_name = active_settings.get('imgmodel', {}).get('imgmodel_name', '')
             imgmodel_names = [imgmodel.get('imgmodel_name', '') for imgmodel in all_imgmodels]           
             # Select an imgmodel automatically
@@ -570,7 +569,7 @@ if sd_enabled:
 async def start_auto_change_imgmodels():
     try:
         global imgmodel_update_task
-        imgmodels_data = load_file('ad_discordbot/dict_imgmodels.yaml')
+        imgmodels_data = load_file(shared_path.img_models)
         auto_change_settings = imgmodels_data.get('settings', {}).get('auto_change_imgmodels', {})
         mode = auto_change_settings.get('mode', 'random')
         frequency = auto_change_settings.get('frequency', 1.0)
@@ -583,7 +582,7 @@ async def start_auto_change_imgmodels():
 # Try getting a valid character file source
 def get_character():
     try:
-        # This will be either the char name found in activesettings.yaml, or the default char name
+        # This will be either the char name found in activesettings, or the default char name
         source = bot_settings.settings['llmcontext']['name']
         # If name doesn't match the bot's discord username, try to figure out best char data to initialize with
         if source != bot_database.last_character:
@@ -635,7 +634,7 @@ async def update_tags(tags):
         logging.warning(f'''One or more "tags" are improperly formatted. Please ensure each tag is formatted as a list item designated with a hyphen (-)''')
         return tags
     try:
-        tags_data = load_file('ad_discordbot/dict_tags.yaml')
+        tags_data = load_file(shared_path.tags)
         global_tag_keys = tags_data.get('global_tag_keys', [])
         tag_presets = tags_data.get('tag_presets', [])
         updated_tags = []
@@ -690,7 +689,7 @@ async def on_ready():
         await bg_task_queue.put(client.tree.sync())
         # Start background task to to change image models automatically
         if sd_enabled:
-            imgmodels_data = load_file('ad_discordbot/dict_imgmodels.yaml')
+            imgmodels_data = load_file(shared_path.img_models)
             if imgmodels_data and imgmodels_data.get('settings', {}).get('auto_change_imgmodels', {}).get('enabled', False):
                 await bg_task_queue.put(start_auto_change_imgmodels())
         logging.info("Bot is ready")
@@ -703,7 +702,7 @@ async def on_ready():
 # Starboard feature
 starboard_posted_messages = set()
 # Fetch images already starboard'd
-data = load_file('ad_discordbot/starboard_messages.yaml')
+data = load_file(shared_path.starboard)
 if data:
     starboard_posted_messages = set(data)
 
@@ -743,7 +742,7 @@ async def on_raw_reaction_add(endorsed_img):
                 await target_channel.send(image_url)
             # Add the message ID to the set and update the file
             starboard_posted_messages.add(message.id)
-            save_yaml_file('ad_discordbot/starboard_messages.yaml', list(starboard_posted_messages))
+            save_yaml_file(shared_path.starboard, list(starboard_posted_messages))
 
 # Post settings to a dedicated channel
 async def post_active_settings():
@@ -754,7 +753,7 @@ async def post_active_settings():
     if target_channel_id:
         target_channel = await client.fetch_channel(target_channel_id)
         if target_channel:
-            active_settings = load_file('ad_discordbot/activesettings.yaml')
+            active_settings = load_file(shared_path.active_settings)
             settings_content = yaml.dump(active_settings, default_flow_style=False)
             
             async for message in target_channel.history(limit=None):
@@ -1572,7 +1571,7 @@ async def dynamic_prompting(user, text, i=None):
     if not config.get('dynamic_prompting_enabled', True):
         if not bot_database.was_warned('dynaprompt'):
             bot_database.update_was_warned('dynaprompt')
-            logging.warning("'config.yaml' is missing a new parameter 'dynamic_prompting_enabled'. Defaulting to 'True' (enabled) ")
+            logging.warning(f"{shared_path.config!r} is missing a new parameter 'dynamic_prompting_enabled'. Defaulting to 'True' (enabled) ")
     if not dynamic_prompting:
         return text
     # copy text for adding comments
@@ -3058,7 +3057,7 @@ if sd_enabled:
     # Updates size options for /image command
     def update_size_options(average):
         global size_choices
-        options = load_file('ad_discordbot/dict_cmdoptions.yaml')
+        options = load_file(shared_path.cmd_options)
         sizes = options.get('sizes', [])
         aspect_ratios = [size.get("ratio") for size in sizes.get('ratios', [])]
         size_choices.clear()  # Clear the existing list
@@ -3130,9 +3129,9 @@ if sd_enabled:
 
     async def get_imgcmd_options():
         try:
-            options = load_file('ad_discordbot/dict_cmdoptions.yaml')
+            options = load_file(shared_path.cmd_options)
             options = dict(options)
-            active_settings = load_file('ad_discordbot/activesettings.yaml')
+            active_settings = load_file(shared_path.active_settings)
             active_settings = dict(active_settings)
             # Get sizes and aspect ratios from 'dict_cmdoptions.yaml'
             sizes = options.get('sizes', {})
@@ -3691,7 +3690,7 @@ async def character_loader(source):
         bot_behavior.update_behavior(dict(char_behavior))
         # Print mode in cmd
         logging.info(f"Initializing in {bot_settings.settings['llmstate']['state']['mode']} mode")
-        # Data for saving to activesettings.yaml (skipped in on_ready())
+        # Data for saving to activesettings (skipped in on_ready())
         return char_instruct, char_llmcontext, char_behavior, char_llmstate
     except Exception as e:
         logging.error(f"Error loading character. Check spelling and file structure. Use bot cmd '/character' to try again. {e}")
@@ -3757,12 +3756,12 @@ async def change_character(channel, source, char_name):
         bot_database.set('last_character', char_name)
         # Update discord username / avatar
         await update_client_profile(channel, char_name)
-        # Save the updated active_settings to activesettings.yaml
-        active_settings = load_file('ad_discordbot/activesettings.yaml')
+        # Save the updated active_settings
+        active_settings = load_file(shared_path.active_settings)
         active_settings['llmcontext'] = char_llmcontext
         active_settings['behavior'] = char_behavior
         active_settings['llmstate']['state'] = char_llmstate
-        save_yaml_file('ad_discordbot/activesettings.yaml', active_settings)
+        save_yaml_file(shared_path.active_settings, active_settings)
         # Update all settings
         bot_settings.update_settings()
         await bot_settings.update_base_tags()
@@ -3905,7 +3904,7 @@ if textgenwebui_enabled:
 # Apply user defined filters to imgmodel list
 async def filter_imgmodels(imgmodels):
     try:
-        imgmodels_data = load_file('ad_discordbot/dict_imgmodels.yaml')
+        imgmodels_data = load_file(shared_path.img_models)
         filter_list = imgmodels_data.get('settings', {}).get('filter', None)
         exclude_list = imgmodels_data.get('settings', {}).get('exclude', None)
         if filter_list or exclude_list:
@@ -3942,12 +3941,12 @@ async def fetch_imgmodels():
 
 async def update_imgmodel(channel, selected_imgmodel, selected_imgmodel_tags):
     try:
-        active_settings = load_file('ad_discordbot/activesettings.yaml')
+        active_settings = load_file(shared_path.active_settings)
         current_w, current_h = active_settings['imgmodel'].get('payload', {}).get('width', 512), active_settings['imgmodel'].get('payload', {}).get('height', 512)
         new_w, new_h = selected_imgmodel.get('payload', {}).get('width', 512), selected_imgmodel.get('payload', {}).get('height', 512)
         active_settings['imgmodel'] = selected_imgmodel
         active_settings['imgmodel']['tags'] = selected_imgmodel_tags
-        save_yaml_file('ad_discordbot/activesettings.yaml', active_settings)
+        save_yaml_file(shared_path.active_settings, active_settings)
         # Update all settings
         bot_settings.update_settings()
         await bot_settings.update_base_tags()
@@ -4020,7 +4019,7 @@ async def merge_imgmodel_data(selected_imgmodel):
         # Get tags if defined
         selected_imgmodel_tags = None
         imgmodel_settings = {'payload': {}, 'override_settings': {}}
-        imgmodels_data = load_file('ad_discordbot/dict_imgmodels.yaml')
+        imgmodels_data = load_file(shared_path.img_models)
         if imgmodels_data.get('settings', {}).get('auto_change_imgmodels', {}).get('guess_model_params', True):
             imgmodel_presets = copy.deepcopy(imgmodels_data.get('presets', []))
             matched_preset = await guess_model_data(selected_imgmodel, imgmodel_presets)
@@ -4718,7 +4717,7 @@ class Settings:
 
     async def update_base_tags(self):
         try:
-            tags_data = load_file('ad_discordbot/dict_tags.yaml')
+            tags_data = load_file(shared_path.tags)
             base_tags_data = tags_data.get('base_tags', [])
             base_tags = copy.deepcopy(base_tags_data)
             base_tags = await update_tags(base_tags)
@@ -4737,7 +4736,7 @@ class Settings:
     def update_settings(self):
         defaults = self.settings_to_dict()
         # Current user custom settings
-        active_settings = load_file('ad_discordbot/activesettings.yaml')
+        active_settings = load_file(shared_path.active_settings)
         active_settings = copy.deepcopy(active_settings)
         behavior = active_settings.pop('behavior', {})
         # Add any missing required settings

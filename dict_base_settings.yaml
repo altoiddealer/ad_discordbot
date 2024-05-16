@@ -1,6 +1,6 @@
 # These are the baseline settings you may adjust to your liking.
 # When you use bot commands like /character, /imgmodel, etc - those settings will always override these.
-# To see the currently active settings, look in activesettings.yaml (which is not intended to be edited).
+# To see the currently active settings, look in internal/activesettings.yaml (which is not intended to be edited).
 
 # There are many settings here you probably don't need to tinker with.
 
