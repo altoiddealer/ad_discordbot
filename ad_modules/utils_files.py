@@ -45,7 +45,7 @@ def merge_base(newsettings, basekey):
         deep_update(current_dict, newsettings) # Recursively update the dictionary
         return current_dict
     except Exception as e:
-        logging.error(f"Error loading {shared_path.base_settings!r} ({basekey}): {e}")
+        logging.error(f"Error loading '{shared_path.base_settings} '({basekey}): {e}")
         return newsettings
     
 def save_yaml_file(file_path, data):

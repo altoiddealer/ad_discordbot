@@ -26,6 +26,6 @@ shared_path = SharedPath()
 
 _old_active = os.path.join(shared_path.dir_root, 'activesettings.yaml')
 if os.path.isfile(_old_active):
-    logging.info(f'Migrating file to {shared_path.active_settings!r}')
+    logging.info(f'Migrating file to "{shared_path.active_settings}"')
     os.rename(_old_active, shared_path.active_settings)
     
