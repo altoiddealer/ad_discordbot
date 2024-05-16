@@ -668,7 +668,6 @@ async def update_tags(tags):
 @client.event
 async def on_ready():
     try:
-        await bot_settings.update_base_tags()
         # If first time running bot
         if bot_database.first_run:
             await first_run()
@@ -676,15 +675,7 @@ async def on_ready():
             char_name = get_character() # Try loading character data regardless of mode (chat/instruct)
             char_instruct = None
             if char_name:
-                char_instruct, _, _, _ = await character_loader(char_name)
-                bot_database.set('last_character', char_name)
-            update_instruct = char_instruct or instruction_template_str or None # 'instruction_template_str' is global variable
-            if update_instruct:
-                settings_dict = bot_settings.get_settings_dict()
-                settings_dict['llmstate']['state']['instruction_template_str'] = update_instruct
-            # Initialize chat history
-            if bot_history.autoload_history:
-                bot_history.load_history(bot_settings.settings['llmstate']['state'])
+                await character_loader(char_name)
         # Create background task processing queue
         client.loop.create_task(process_tasks_in_background())
         # Start background task to sync the discord client tree
@@ -2017,7 +2008,7 @@ async def change_char_task(user, channel, source, params):
             change_embed_info.description = f'{user} requested character {mode}: "{char_name}"'
             change_embed = await channel.send(embed=change_embed_info)
         # Change character
-        await change_character(channel, source, char_name)
+        await change_character(char_name, channel, source)
         greeting = bot_settings.settings['llmcontext']['greeting']
         if greeting:
             greeting = greeting.replace('{{user}}', 'user')
@@ -3647,16 +3638,16 @@ async def load_character_data(char_name):
     return char_data
 
 # Collect character information
-async def character_loader(source):
+async def character_loader(char_name, channel=None, source=None):
     try:
         # Get data using textgen-webui native character loading function
-        _, name, _, greeting, context = load_character(source, '', '')
+        _, name, _, greeting, context = load_character(char_name, '', '')
         missing_keys = [key for key, value in {'name': name, 'greeting': greeting, 'context': context}.items() if not value]
         if any (missing_keys):
-            logging.warning(f'Note that character "{source}" is missing the following info:"{missing_keys}".')
+            logging.warning(f'Note that character "{char_name}" is missing the following info:"{missing_keys}".')
         textgen_data = {'name': name, 'greeting': greeting, 'context': context}
         # Check for extra bot data
-        char_data = await load_character_data(source)
+        char_data = await load_character_data(char_name)
         char_instruct = char_data.get('instruction_template_str', None)
         # Merge with basesettings
         char_data = merge_base(char_data, 'llmcontext')
@@ -3682,7 +3673,7 @@ async def character_loader(source):
         # Collect llmstate data
         char_llmstate = char_data.get('state', {})
         char_llmstate = merge_base(char_llmstate, 'llmstate,state')
-        char_llmstate['character_menu'] = source
+        char_llmstate['character_menu'] = char_name
         # Commit the character data to bot_settings.settings
         settings_dict = bot_settings.get_settings_dict()
         settings_dict['llmcontext'] = dict(char_llmcontext) # Replace the entire dictionary key
@@ -3690,11 +3681,26 @@ async def character_loader(source):
         bot_behavior.update_behavior(dict(char_behavior))
         # Print mode in cmd
         logging.info(f"Initializing in {bot_settings.settings['llmstate']['state']['mode']} mode")
-        # Data for saving to activesettings (skipped in on_ready())
-        return char_instruct, char_llmcontext, char_behavior, char_llmstate
+        # Check for any char defined or model defined instruct_template
+        update_instruct = char_instruct or instruction_template_str or None # 'instruction_template_str' is global variable
+        if update_instruct:
+            settings_dict['llmstate']['state']['instruction_template_str'] = update_instruct
+        # Update stored database value for character
+        bot_database.set('last_character', char_name)
+        # Update discord username / avatar
+        await update_client_profile(char_name, channel)
+        # Save the updated bot_active_settings
+        bot_active_settings['llmcontext'] = char_llmcontext
+        bot_active_settings['behavior'] = char_behavior
+        bot_active_settings['llmstate']['state'] = char_llmstate
+        bot_active_settings.save()
+        # Set history
+        if bot_history.autoload_history and source != 'reset':
+            bot_history.load_history(bot_settings.settings['llmstate']['state'])
+        else:
+            bot_history.reset_session_history()
     except Exception as e:
         logging.error(f"Error loading character. Check spelling and file structure. Use bot cmd '/character' to try again. {e}")
-        return # TODO
 
 # Task to manage discord profile updates
 delayed_profile_update_task = None
@@ -3713,7 +3719,7 @@ async def delayed_profile_update(username, avatar, remaining_cooldown):
     except Exception as e:
         logging.error(f"Error while changing character username or avatar: {e}")
 
-async def update_client_profile(channel, char_name):
+async def update_client_profile(char_name, channel=None):
     try:
         global delayed_profile_update_task
         # Cancel delayed profile update task if one is already pending
@@ -3737,38 +3743,21 @@ async def update_client_profile(channel, char_name):
         else:
             remaining_cooldown = last_cooldown - time.time()
             seconds = int(remaining_cooldown)
-            await channel.send(f'**Due to Discord limitations, character name/avatar will update in {seconds} seconds.**', delete_after=10)
+            if channel:
+                await channel.send(f'**Due to Discord limitations, character name/avatar will update in {seconds} seconds.**', delete_after=10)
             logging.info(f"Due to Discord limitations, character name/avatar will update in {remaining_cooldown} seconds.")
             delayed_profile_update_task = asyncio.create_task(delayed_profile_update(char_name, avatar, seconds))
     except Exception as e:
         logging.error(f"An error occurred while updating Discord profile: {e}")
 
 # Apply character changes
-async def change_character(channel, source, char_name):
+async def change_character(char_name, channel, source):
     try:
         # Load the character
-        char_instruct, char_llmcontext, char_behavior, char_llmstate = await character_loader(char_name)
-        update_instruct = char_instruct or instruction_template_str or None # 'instruction_template_str' is global variable
-        if update_instruct:
-            settings_dict = bot_settings.get_settings_dict()
-            settings_dict['llmstate']['state']['instruction_template_str'] = update_instruct
-        # Update stored database value for character
-        bot_database.set('last_character', char_name)
-        # Update discord username / avatar
-        await update_client_profile(channel, char_name)
-        # Save the updated bot_active_settings
-        bot_active_settings['llmcontext'] = char_llmcontext
-        bot_active_settings['behavior'] = char_behavior
-        bot_active_settings['llmstate']['state'] = char_llmstate
-        bot_active_settings.save()
+        await character_loader(char_name, channel, source)
         # Update all settings
         bot_settings.update_settings()
         await bot_settings.update_base_tags()
-        # Set history
-        if bot_history.autoload_history and source != 'reset':
-            bot_history.load_history(bot_settings.settings['llmstate']['state'])
-        else:
-            bot_history.reset_session_history()
     except Exception as e:
         await channel.send(f"An error occurred while changing character: {e}")
         logging.error(f"An error occurred while changing character: {e}")
@@ -4713,6 +4702,7 @@ class Settings:
         self.settings = {}
         self.update_settings()
         self.base_tags = []
+        asyncio.run(self.update_base_tags())
 
     async def update_base_tags(self):
         try:
