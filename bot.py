@@ -4536,7 +4536,7 @@ class Behavior:
     def __init__(self):
         self.reply_to_itself = 0.0
         self.chance_to_reply_to_other_bots = 0.5
-        self.reply_to_bots_when_adressed = 0.3
+        self.reply_to_bots_when_addressed = 0.3
         self.only_speak_when_spoken_to = True
         self.ignore_parentheses = True
         self.go_wild_in_channel = True
@@ -4568,7 +4568,7 @@ class Behavior:
         if i.author.bot and bot_database.last_character.lower() in text.lower() and i.channel.id in bot_database.main_channels:
             if 'bye' in text.lower(): # don't reply if another bot is saying goodbye
                 return False
-            return self.probability_to_reply(self.reply_to_bots_when_adressed)
+            return self.probability_to_reply(self.reply_to_bots_when_addressed)
         # Whether to reply when text is nested in parentheses
         if self.ignore_parentheses and (i.content.startswith('(') and i.content.endswith(')')) or (i.content.startswith('<:') and i.content.endswith(':>')):
             return False
