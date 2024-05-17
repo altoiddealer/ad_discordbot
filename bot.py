@@ -1000,7 +1000,7 @@ async def process_llm_payload_tags(user_name, channel, llm_payload, llm_prompt, 
         params = {}
         flow = mods.get('flow', None)
         save_to_history = mods.get('save_to_history', None)
-        load_history = mods.get('load_histor', None)
+        load_history = mods.get('load_history', None)
         param_variances = mods.get('param_variances', {})
         state = mods.get('state', {})
         change_character = mods.get('change_character', None)
@@ -1008,64 +1008,63 @@ async def process_llm_payload_tags(user_name, channel, llm_payload, llm_prompt, 
         change_llmmodel = mods.get('change_llmmodel', None)
         swap_llmmodel = mods.get('swap_llmmodel', None)
         send_user_image = mods.get('send_user_image', [])
-        # Process the tag matches
-        if flow or save_to_history or load_history or param_variances or state or change_character or swap_character or change_llmmodel or swap_llmmodel or send_user_image:
-            # Flow handling
-            if flow is not None and not flow_event.is_set():
-                await build_flow_queue(flow)
-            # History handling
-            if save_to_history is not None: llm_payload['save_to_history'] = save_to_history # Save this interaction to history (True/False)
-            if load_history is not None:
-                if load_history < 0:
-                    llm_payload['state']['history'] = {'internal': [], 'visible': []} # No history
-                    logging.info("[TAGS] History is being ignored")
-                elif load_history > 0:
-                    # Calculate the number of items to retain (up to the length of session_history)
-                    num_to_retain = min(load_history, len(bot_history.session_history["internal"]))
-                    llm_payload['state']['history']['internal'] = bot_history.session_history['internal'][-num_to_retain:]
-                    llm_payload['state']['history']['visible'] = bot_history.session_history['visible'][-num_to_retain:]
-                    logging.info(f'[TAGS] History is being limited to previous {load_history} exchanges')
-            if param_variances:
-                processed_params = process_param_variances(param_variances)
-                logging.info(f'[TAGS] LLM Param Variances: {processed_params}')
-                sum_update_dict(llm_payload['state'], processed_params) # Updates dictionary while adding floats + ints
-            if state:
-                update_dict(llm_payload['state'], state)
-                logging.info(f'[TAGS] LLM State was modified')
-            # Character handling
-            char_params = change_character or swap_character or {} # 'character_change' will trump 'character_swap'
-            if char_params:
+        # Flow handling
+        if flow is not None and not flow_event.is_set():
+            await build_flow_queue(flow)
+        # History handling
+        if save_to_history is not None:
+            llm_payload['save_to_history'] = save_to_history # Save this interaction to history (True/False)
+        if load_history is not None:
+            if load_history < 0:
+                llm_payload['state']['history'] = {'internal': [], 'visible': []} # No history
+                logging.info("[TAGS] History is being ignored")
+            elif load_history > 0:
+                # Calculate the number of items to retain (up to the length of session_history)
+                num_to_retain = min(load_history, len(bot_history.session_history["internal"]))
+                llm_payload['state']['history']['internal'] = bot_history.session_history['internal'][-num_to_retain:]
+                llm_payload['state']['history']['visible'] = bot_history.session_history['visible'][-num_to_retain:]
+                logging.info(f'[TAGS] History is being limited to previous {load_history} exchanges')
+        if param_variances:
+            processed_params = process_param_variances(param_variances)
+            logging.info(f'[TAGS] LLM Param Variances: {processed_params}')
+            sum_update_dict(llm_payload['state'], processed_params) # Updates dictionary while adding floats + ints
+        if state:
+            update_dict(llm_payload['state'], state)
+            logging.info(f'[TAGS] LLM State was modified')
+        # Character handling
+        char_params = change_character or swap_character or {} # 'character_change' will trump 'character_swap'
+        if char_params:
+            # Error handling
+            if not any(char_params == char['name'] for char in all_characters):
+                logging.error(f'Character not found: {char_params}')
+            else:
+                if char_params == change_character:
+                    verb = 'Changing'
+                    char_params = {'character': {'char_name': char_params, 'mode': 'change', 'verb': verb}}
+                    await change_char_task(user_name, channel, 'Tags', char_params)
+                else:
+                    verb = 'Swapping'
+                    llm_payload = await swap_llm_character(swap_character, user_name, llm_payload)
+                logging.info(f'[TAGS] {verb} Character: {char_params}')
+        # LLM model handling
+        params = change_llmmodel or swap_llmmodel or {} # 'llmmodel_change' will trump 'llmmodel_swap'
+        if params:
+            if params == shared.model_name:
+                logging.info(f'[TAGS] LLM model was triggered to change, but it is the same as current ("{shared.model_name}").')
+                params = {} # return empty dict
+            else:
+                mode = 'change' if params == change_llmmodel else 'swap'
+                verb = 'Changing' if mode == 'change' else 'Swapping'
                 # Error handling
-                if not any(char_params == char['name'] for char in all_characters):
-                    logging.error(f'Character not found: {char_params}')
+                if not any(params == model for model in all_llmmodels):
+                    logging.error(f'LLM model not found: {params}')
                 else:
-                    if char_params == change_character:
-                        verb = 'Changing'
-                        char_params = {'character': {'char_name': char_params, 'mode': 'change', 'verb': verb}}
-                        await change_char_task(user_name, channel, 'Tags', char_params)
-                    else:
-                        verb = 'Swapping'
-                        llm_payload = await swap_llm_character(swap_character, user_name, llm_payload)
-                    logging.info(f'[TAGS] {verb} Character: {char_params}')
-            # LLM model handling
-            params = change_llmmodel or swap_llmmodel or {} # 'llmmodel_change' will trump 'llmmodel_swap'
-            if params:
-                if params == shared.model_name:
-                    logging.info(f'[TAGS] LLM model was triggered to change, but it is the same as current ("{shared.model_name}").')
-                    params = {} # return empty dict
-                else:
-                    mode = 'change' if params == change_llmmodel else 'swap'
-                    verb = 'Changing' if mode == 'change' else 'Swapping'
-                    # Error handling
-                    if not any(params == model for model in all_llmmodels):
-                        logging.error(f'LLM model not found: {params}')
-                    else:
-                        logging.info(f'[TAGS] {verb} LLM Model: {params}')
-                        params = {'llmmodel': {'llmmodel_name': params, 'mode': mode, 'verb': verb}}
-            # Send User Image handling
-            if send_user_image:
-                params['send_user_image'] = send_user_image
-                logging.info(f"[TAGS] Sending user image{'s' if len(send_user_image) > 1 else ''}")
+                    logging.info(f'[TAGS] {verb} LLM Model: {params}')
+                    params = {'llmmodel': {'llmmodel_name': params, 'mode': mode, 'verb': verb}}
+        # Send User Image handling
+        if send_user_image:
+            params['send_user_image'] = send_user_image
+            logging.info(f"[TAGS] Sending user image{'s' if len(send_user_image) > 1 else ''}")
         return llm_payload, llm_prompt, params
     except Exception as e:
         logging.error(f"Error processing LLM tags: {e}")
@@ -3555,7 +3554,7 @@ async def sync(ctx: discord.ext.commands.Context):
 if textgenwebui_enabled:
     # /reset command - Resets current character
     @client.hybrid_command(description="Reset the conversation with current character")
-    async def reset_character(ctx: discord.ext.commands.Context):
+    async def reset_conversation(ctx: discord.ext.commands.Context):
         try:
             shared.stop_everything = True
             await ireply(ctx, 'character reset') # send a response msg to the user
@@ -4684,8 +4683,9 @@ class Settings:
         self.llmcontext = LLMContext()
         self.llmstate = LLMState()
         self.settings = {}
-        self.update_settings()
         self.base_tags = []
+        # Initialize main settings and base tags
+        self.update_settings()
         asyncio.run(self.update_base_tags())
 
     async def update_base_tags(self):
