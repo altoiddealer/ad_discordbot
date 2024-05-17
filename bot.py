@@ -1612,9 +1612,8 @@ async def on_message(i):
     try:
         text = i.clean_content # primarly converts @mentions to actual user names
         if textgenwebui_enabled and not bot_behavior.bot_should_reply(i, text): return # Check that bot should reply or not
-        # To prevent unnecessary overhead, don't save time every message
-        # The value will still save, just when a different action is performed, such as /character
-        bot_database.set('last_user_msg', time.time(), save_now=False) # Store the current time in bot_database_v2.yaml
+        # Store the current time. The value will save locally to bot_database_v2.yaml at another time
+        bot_database.set('last_user_msg', time.time(), save_now=False)
         # if @ mentioning bot, remove the @ mention from user prompt
         if text.startswith(f"@{bot_database.last_character} "):
             text = text.replace(f"@{bot_database.last_character} ", "", 1)
@@ -3695,7 +3694,7 @@ async def character_loader(char_name, channel=None, source=None):
         bot_active_settings['llmstate']['state'] = char_llmstate
         bot_active_settings.save()
         # Set history
-        if bot_history.autoload_history and source != 'reset':
+        if bot_history.autoload_history and (bot_history.change_char_history_method == 'keep' and source != 'reset'):
             bot_history.load_history(bot_settings.settings['llmstate']['state'])
         else:
             bot_history.reset_session_history()
@@ -4741,9 +4740,11 @@ class Settings:
 
 class History:
     def __init__(self):
-        self.limit_history = config.get('textgenwebui', {}).get('chat_history', {}).get('limit_history', True)
-        self.autoload_history = config.get('textgenwebui', {}).get('chat_history', {}).get('autoload_history', False)
-        self.autosave_history = config.get('textgenwebui', {}).get('chat_history', {}).get('autosave_history', False)
+        chat_history = config.get('textgenwebui', {}).get('chat_history', {})
+        self.limit_history = chat_history.get('limit_history', True)
+        self.autosave_history = chat_history.get('autosave_history', False)
+        self.autoload_history = chat_history.get('autoload_history', False)
+        self.change_char_history_method = chat_history.get('change_char_history_method', 'new')
         self.unique_id = None
         self.session_history = {'internal': [], 'visible': []}
         self.recent_messages = {'user': [], 'llm': []}
