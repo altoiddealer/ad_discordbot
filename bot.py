@@ -964,13 +964,14 @@ def format_prompt_with_recent_output(user, prompt):
 def process_tag_formatting(user, prompt, formatting):
     try:
         updated_prompt = copy.copy(prompt)
-        format_prompt = formatting.get('format_prompt', None)
+        format_prompt = formatting.get('format_prompt', [])
         time_offset = formatting.get('time_offset', None)
         time_format = formatting.get('time_format', None)
         date_format = formatting.get('date_format', None)
         # Tag handling for prompt formatting
-        if format_prompt is not None:
-            updated_prompt = format_prompt.replace('{prompt}', updated_prompt)
+        if format_prompt:
+            for fmt_prompt in format_prompt:
+                updated_prompt = fmt_prompt.replace('{prompt}', updated_prompt)
         # format prompt with any defined recent messages
         updated_prompt = format_prompt_with_recent_output(user, updated_prompt)
         # Format time if defined
@@ -1102,7 +1103,7 @@ def collect_llm_tag_values(tags):
         'state': {}
         }
     formatting = {
-        'format_prompt': None,
+        'format_prompt': [],
         'time_offset': None,
         'time_format': None,
         'date_format': None
@@ -1128,9 +1129,9 @@ def collect_llm_tag_values(tags):
             user_image_args = get_image_tag_args('User image', str(user_image_file), key=None, set_dir=None)
             user_image_args.pop('selected_folder')
             llm_payload_mods['send_user_image'] = user_image_args
-        if 'format_prompt' in tag and formatting['format_prompt'] is None:
-            formatting['format_prompt'] = str(tag.pop('format_prompt'))
         # Values that may apply repeatedly
+        if 'format_prompt' in tag:
+            formatting['format_prompt'].append(str(tag.pop('format_prompt')))
         if 'time_offset' in tag:
             formatting['time_offset'] = float(tag.pop('time_offset'))
         if 'time_format' in tag:
@@ -2085,7 +2086,7 @@ async def format_next_flow(next_flow, user, text):
             flow_name = f": {value}"
         # format prompt before feeding it back into on_message_task()
         elif key == 'format_prompt':
-            formatting = {'format_prompt': value}
+            formatting = [value]
             text = process_tag_formatting(user, text, formatting)
         # apply wildcards
         text = await dynamic_prompting(user, text, i=None)
