@@ -205,14 +205,6 @@ class StarBoard(BaseFileMemory):
         self.messages:list
         super().__init__(shared_path.starboard, version=2)
         
-    # def load_defaults(self, data: dict):
-    #     self.messages = set(data.pop('messages', []))
-    
-    # def save_pre_process(self, data):
-    #     if 'messages' in data:
-    #         data['messages'] = list(data['messages'])
-    #     return data
-    
     def run_migration(self):
         _old_active = os.path.join(shared_path.dir_root, 'starboard_messages.yaml')
         state = self._migrate_from_file(_old_active, load=False) # v1
@@ -220,8 +212,3 @@ class StarBoard(BaseFileMemory):
             data = load_file(self._fp) # convert list to dict
             self.load(data=dict(messages=data))
         
-    # # Just skip these
-    # def _upgrade_to_v1(self, data):
-    #     return data
-    # def _upgrade_to_v2(self, data):
-    #     return data
