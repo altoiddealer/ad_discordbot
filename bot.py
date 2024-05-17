@@ -1993,18 +1993,27 @@ async def change_char_task(user, channel, source, params):
             change_embed = await channel.send(embed=change_embed_info)
         # Change character
         await change_character(char_name, channel, source)
-        greeting = bot_settings.settings['llmcontext']['greeting']
-        if greeting:
-            greeting = greeting.replace('{{user}}', 'user')
-            greeting = greeting.replace('{{char}}', char_name)
-        else:
-            greeting = f'**{char_name}** has entered the chat"'
         if change_embed: await change_embed.delete()
         if change_embed_info:
             change_embed_info.title = f"{user} changed character:"
             change_embed_info.description = f'**{char_name}**'
             await channel.send(embed=change_embed_info)
-        await send_long_message(channel, greeting)
+        # Send message to channel
+        message = ''
+        if bot_history.greeting_or_history == 'history':
+            last_exchange = bot_history.session_history['visible'][-1] if bot_history.session_history['visible'] else None
+            if last_exchange:
+                last_user_message = last_exchange[0]
+                last_assistant_message = last_exchange[1]
+                message = f'__**Last message exchange**__:\n>>> **User**: "{last_user_message}"\n **{bot_database.last_character}**: "{last_assistant_message}"'
+        if not message:
+            greeting = bot_settings.settings['llmcontext']['greeting']
+            if greeting:
+                message = greeting.replace('{{user}}', 'user')
+                message = message.replace('{{char}}', char_name)
+            else:
+                message = f'**{char_name}** has entered the chat"'
+        await send_long_message(channel, message)
         logging.info(f"Character changed to: {char_name}")
     except Exception as e:
         logging.error(f"An error occurred while changing character for /character: {e}")
@@ -4730,6 +4739,7 @@ class History:
         self.autosave_history = chat_history.get('autosave_history', False)
         self.autoload_history = chat_history.get('autoload_history', False)
         self.change_char_history_method = chat_history.get('change_char_history_method', 'new')
+        self.greeting_or_history = chat_history.get('greeting_or_history', 'history')
         self.unique_id = None
         self.session_history = {'internal': [], 'visible': []}
         self.recent_messages = {'user': [], 'llm': []}

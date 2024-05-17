@@ -42,6 +42,7 @@ textgenwebui:
     autosave_history: false             # Set this value to true to continuously save history. Use '/save_conversation' to manually save your conversation.
     autoload_history: false             # Set to true if you want the character to load with the most recently saved chat history.
     change_char_history_method: new     # 'new' - start new history; 'keep' - retain history for next character (only applicable if 'autoload_history: true')
+    greeting_or_history: history        # 'history' - Sends copy of most recent message exchange whenever history is loaded; 'greeting' - Only send character's greeting
   # Supported TTS Clients: 'alltalk_tts', 'coqui_tts', 'silero_tts', and 'elevenlabs_tts' have been tested. Other tts extensions may work.
   # REQUIRES: 'pip install pynacl' in textgen-webui venv for bot to join a voice channel
   tts_settings:
