@@ -2,10 +2,16 @@ import logging
 from datetime import datetime, timedelta
 import sqlite3
 import os
+from ad_discordbot.modules.utils_shared import shared_path
 
 class OldDatabase:
     def __init__(self):
         self.migrate = False
+        
+        if os.path.isfile('OUTDATED_bot_v1.db'):
+            os.rename('OUTDATED_bot_v1.db', os.path.join(shared_path.dir_internal, 'OUTDATED_bot_v1.db'))
+            logging.info('Moved old DB file to internal')
+        
         if not os.path.isfile('bot.db'):
             return
         

@@ -3,6 +3,7 @@ import logging
 import json
 import yaml
 from ad_discordbot.modules.utils_shared import shared_path
+import os
 
 # Function to load .json, .yml or .yaml files
 def load_file(file_path):
@@ -54,3 +55,19 @@ def save_yaml_file(file_path, data):
             yaml.dump(data, file, encoding='utf-8', default_flow_style=False, width=float("inf"), sort_keys=False)
     except Exception as e:
         logging.error(f"An error occurred while saving {file_path}: {str(e)}")
+        
+        
+def make_fp_unique(fp):
+    c = 0 # already adds 1
+    name, ext = fp.rsplit('.',1)
+    
+    if name.endswith(')'): # check if already a (1)
+        name_, num = name.rsplit(' ',1)
+        if num[1:-1].isdigit() and num[0] == '(':
+            name = name_
+    
+    format_path = f'{name} ({{0}}).{ext}'
+    while os.path.isfile(fp): # TODO could optimize with get dupe num
+        c += 1
+        fp = format_path.format(c)
+    return fp
