@@ -8,10 +8,12 @@ from ad_discordbot.modules.utils_files import make_fp_unique
 import os
 
 class BaseFileMemory:
-    def __init__(self, fp) -> None:
+    def __init__(self, fp, version=0) -> None:
+        self._latest_version = version
         self._fp = fp
         self._did_migration = False
         
+        # Attempts to load, but if file not found, continue to migration
         self.load()
         
         self.run_migration()
@@ -60,6 +62,8 @@ class BaseFileMemory:
     
     def save(self):
         data = self.get_vars()
+        data['db_version'] = self._latest_version
+        data = self.save_pre_process(data)
         save_yaml_file(self._fp, data)
         
     def set(self, key, value, save_now=True):
@@ -67,13 +71,22 @@ class BaseFileMemory:
         if save_now:
             self.save()
             
+    def save_pre_process(self, data):
+        return data
+            
     #########
     # Loading
     def load_defaults(self, data: dict):
         pass
     
-    def load(self):
-        data = load_file(self._fp) or {}
+    def load(self, data:dict=None):
+        if not data:
+            data = load_file(self._fp) or {}
+            if not isinstance(data, dict):
+                raise Exception(f'Failed to import: "{self._fp}" wrong data type, expected dict, got {type(data)}')
+            
+            # data = self.version_upgrade(data) # TODO implement later
+            
         self.load_defaults(data)
         
         for k,v in data.items():
@@ -90,7 +103,7 @@ class BaseFileMemory:
     
     ###########
     # Migration
-    def _migrate_from_file(self, from_fp):
+    def _migrate_from_file(self, from_fp, load:bool):
         'Migrate an old file where the new file may already exist in correct location from git.'
         if not os.path.isfile(from_fp):
             return
@@ -102,9 +115,32 @@ class BaseFileMemory:
         logging.info(f'Migrating file to "{self._fp}"')
         os.rename(from_fp, self._fp)
         self._did_migration = True
+        
+        if load:
+            self.load()
+        return True
+    
+    def version_upgrade(self, data):
+        version = data.get('db_version', 0)
+        if version == self._latest_version:
+            return data
+        
+        logging.debug(f'Upgrading "{self._fp}"')
+        
+        for upgrade in range(version, self._latest_version):
+            upgrade += 1
+            logging.debug(f'Upgrading "{self._fp}" to v{upgrade}')
+            
+            func = f'_upgrade_to_v{upgrade}'
+            if not hasattr(self, func):
+                raise Exception(f'Could not upgrade database structure to v{upgrade}, missing function.')
+            
+            data = getattr(self, func)(data)
+            
+        return data
 
 class Database(BaseFileMemory):
-    def __init__(self, fp='bot_database_v2.yaml') -> None:
+    def __init__(self) -> None:
         self.take_notes_about_users = None # not yet implemented
         self.learn_about_and_use_guild_emojis = None # not yet implemented
         self.read_chatlog = None # not yet implemented
@@ -116,10 +152,13 @@ class Database(BaseFileMemory):
         self.main_channels:list[int]
         self.warned_once:dict[str, bool]
         
-        super().__init__(fp)
+        super().__init__(shared_path.database, version=2)
         
     def run_migration(self):
         self._migrate_v1_v2()
+        
+        _old_active = os.path.join('bot_database_v2.yaml')
+        self._migrate_from_file(_old_active, load=True)
         
     def _migrate_v1_v2(self):
         old = OldDatabase()
@@ -154,13 +193,35 @@ class Database(BaseFileMemory):
             
 class ActiveSettings(BaseFileMemory):
     def __init__(self) -> None:
-        # Set default type hints here
-        super().__init__(shared_path.active_settings)
+        super().__init__(shared_path.active_settings, version=2)
         
-    def load_defaults(self, data: dict):
-        # Set defaults here
-        pass
-    
     def run_migration(self):
         _old_active = os.path.join(shared_path.dir_root, 'activesettings.yaml')
-        self._migrate_from_file(_old_active)
+        self._migrate_from_file(_old_active, load=True)
+        
+        
+class StarBoard(BaseFileMemory):
+    def __init__(self) -> None:
+        self.messages:list
+        super().__init__(shared_path.starboard, version=2)
+        
+    # def load_defaults(self, data: dict):
+    #     self.messages = set(data.pop('messages', []))
+    
+    # def save_pre_process(self, data):
+    #     if 'messages' in data:
+    #         data['messages'] = list(data['messages'])
+    #     return data
+    
+    def run_migration(self):
+        _old_active = os.path.join(shared_path.dir_root, 'starboard_messages.yaml')
+        state = self._migrate_from_file(_old_active, load=False) # v1
+        if state:
+            data = load_file(self._fp) # convert list to dict
+            self.load(data=dict(messages=data))
+        
+    # # Just skip these
+    # def _upgrade_to_v1(self, data):
+    #     return data
+    # def _upgrade_to_v2(self, data):
+    #     return data

@@ -12,6 +12,7 @@ class SharedPath:
     # Internal
     active_settings = os.path.join(dir_internal, 'activesettings.yaml')
     starboard = os.path.join(dir_internal, 'starboard_messages.yaml')
+    database = os.path.join(dir_internal, 'database.yaml')
 
     # Configs
     config = os.path.join(dir_root, 'config.yaml')

@@ -47,13 +47,14 @@ handler = logging.handlers.RotatingFileHandler(
     backupCount=5,  # Rotate through 5 files
 )
 
-from ad_discordbot.modules.database import Database, ActiveSettings
+from ad_discordbot.modules.database import Database, ActiveSettings, StarBoard
 from ad_discordbot.modules.utils_shared import task_semaphore, shared_path
 from ad_discordbot.modules.utils_misc import fix_dict, update_dict, sum_update_dict, update_dict_matched_keys
 from ad_discordbot.modules.utils_discord import ireply, send_long_message
 from ad_discordbot.modules.utils_files import load_file, merge_base, save_yaml_file
 
 bot_active_settings = ActiveSettings()
+starboard = StarBoard()
 
 #################################################################
 #################### DISCORD / BOT STARTUP ######################
@@ -693,12 +694,6 @@ async def on_ready():
 ####################### DISCORD FEATURES ########################
 #################################################################
 # Starboard feature
-starboard_posted_messages = set()
-# Fetch images already starboard'd
-data = load_file(shared_path.starboard)
-if data:
-    starboard_posted_messages = set(data)
-
 @client.event
 async def on_raw_reaction_add(endorsed_img):
     if not config['discord'].get('starboard', {}).get('enabled', False):
@@ -721,7 +716,7 @@ async def on_raw_reaction_add(endorsed_img):
             target_channel_id = None
         
         target_channel = client.get_channel(target_channel_id)
-        if target_channel and message.id not in starboard_posted_messages:
+        if target_channel and message.id not in starboard.messages:
             # Create the message link
             message_link = f'[Original Message]({message.jump_url})'
             # Duplicate image and post message link to target channel
@@ -734,8 +729,8 @@ async def on_raw_reaction_add(endorsed_img):
                 await target_channel.send(message_link)
                 await target_channel.send(image_url)
             # Add the message ID to the set and update the file
-            starboard_posted_messages.add(message.id)
-            save_yaml_file(shared_path.starboard, list(starboard_posted_messages))
+            starboard.messages.append(message.id)
+            starboard.save()
 
 # Post settings to a dedicated channel
 async def post_active_settings():
