@@ -4,6 +4,8 @@ import time
 
 from ad_discordbot.modules.database_migration_v1_v2 import OldDatabase
 from ad_discordbot.modules.utils_shared import shared_path
+from ad_discordbot.modules.utils_files import make_fp_unique
+import os
 
 class BaseFileMemory:
     def __init__(self, fp) -> None:
@@ -85,6 +87,21 @@ class BaseFileMemory:
             return getattr(self, key)
         
         return default
+    
+    ###########
+    # Migration
+    def _migrate_from_file(self, from_fp):
+        'Migrate an old file where the new file may already exist in correct location from git.'
+        if not os.path.isfile(from_fp):
+            return
+        
+        if os.path.isfile(self._fp):
+            logging.warning(f'File at "{self._fp}" already exists, renaming.')
+            os.rename(self._fp, make_fp_unique(self._fp))
+            
+        logging.info(f'Migrating file to "{self._fp}"')
+        os.rename(from_fp, self._fp)
+        self._did_migration = True
 
 class Database(BaseFileMemory):
     def __init__(self, fp='bot_database_v2.yaml') -> None:
@@ -143,3 +160,7 @@ class ActiveSettings(BaseFileMemory):
     def load_defaults(self, data: dict):
         # Set defaults here
         pass
+    
+    def run_migration(self):
+        _old_active = os.path.join(shared_path.dir_root, 'activesettings.yaml')
+        self._migrate_from_file(_old_active)
