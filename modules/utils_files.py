@@ -1,9 +1,10 @@
+from ad_discordbot.modules.logs import import_track, log, get_logger; import_track(__file__, fp=True)
 from pathlib import Path
-import logging
 import json
 import yaml
 from ad_discordbot.modules.utils_shared import shared_path
 import os
+logging = get_logger(__name__)
 
 # Function to load .json, .yml or .yaml files
 def load_file(file_path):

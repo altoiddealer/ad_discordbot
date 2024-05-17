@@ -1,5 +1,5 @@
-import logging
-
+from ad_discordbot.modules.logs import import_track, log, get_logger; import_track(__file__, fp=True)
+logging = get_logger(__name__)
 from ad_discordbot.modules.utils_shared import task_semaphore
 
 # Send message response to user's interaction command

@@ -1,0 +1,81 @@
+import colorama
+colorama.init()
+from colorama import Fore, Back, Style
+import sys
+import logging
+import os
+log = logging.getLogger('bot')
+
+COLORS = {
+    'WARNING': f'{Fore.LIGHTRED_EX} WARN [{{name}}]: ',
+    'INFO': f'{Fore.GREEN} INFO [{{name}}]: {Fore.LIGHTGREEN_EX}',
+    'DEBUG': f'{Fore.LIGHTCYAN_EX}DEBUG [{{name}}]: ',
+    'CRITICAL': f'{Back.RED}{Fore.WHITE} CRIT [{{name}}]: ',
+    'ERROR': f'{Fore.RED}ERROR [{{name}}]: ',
+    'TEST': f'{Fore.YELLOW} TEST [{{name}}]: {Fore.LIGHTYELLOW_EX}'
+}
+
+TEST_LEVEL = 51
+
+logging.addLevelName(TEST_LEVEL, "TEST")
+
+class ColoredFormatter(logging.Formatter):
+    def __init__(self, msg, use_color = True, **kw):
+        logging.Formatter.__init__(self, msg, **kw)
+        self.use_color = use_color
+
+    def format(self, record):
+        levelname = record.levelname
+        name = record.name
+        if self.use_color and levelname in COLORS:
+            record.levelname = COLORS[levelname].format(levelname=levelname, name=name)
+            
+        f = logging.Formatter.format(self, record)
+        record.levelname = levelname
+        return f
+    
+def test(message, *args, **kws):
+    log._log(TEST_LEVEL, message, args, **kws)
+    
+def get_logger(name):
+    return log.getChild(name)
+
+log.test = test
+log_level = logging.DEBUG
+
+log_formatter = ColoredFormatter(f'{Fore.BLACK}{Back.WHITE}{{asctime}}.{{msecs:0<3.0f}} {Back.LIGHTBLACK_EX}#{{lineno:<5}}{Style.RESET_ALL}{Fore.LIGHTWHITE_EX}{{levelname}}{{message}}{Style.RESET_ALL}', datefmt='%H:%M:%S', style='{')
+log.setLevel(log_level)
+
+
+def add_file_handler(level=logging.DEBUG, fp="latest.log", **kw):
+    log_formatter_file = ColoredFormatter(f'[{{asctime:15}}] {{levelname:8}} #{{lineno:<5}} ({{name}}) {{module}}.{{funcName}} -> {{message}}', use_color=False, style='{')
+    file_handler = logging.FileHandler(fp, encoding='utf-8', **kw)
+    file_handler.setFormatter(log_formatter_file)
+    file_handler.setLevel(level)
+    log.addHandler(file_handler)
+    return file_handler, log_formatter_file
+
+console_handler = logging.StreamHandler(sys.stdout)
+console_handler.setLevel(log_level)
+console_handler.setFormatter(log_formatter)
+log.addHandler(console_handler)
+
+
+logging.getLogger('asyncio').setLevel(logging.WARNING)
+log_file_handler, log_file_formatter = add_file_handler(fp=os.path.join('ad_discordbot','discord.log'), mode='w')
+
+
+################
+# import tracker
+import os
+root_path_ = os.path.dirname(os.path.abspath(__file__)).rsplit(os.sep,2)[0].lower()
+_import_log = get_logger(__name__)
+def import_track(string, fp=False):
+    if fp:# and root_path_ in string:
+        string = string.lower().split(root_path_,1)[1]
+        string = string.lstrip(os.sep)
+        string = string.rsplit('.',1)[0]
+        string = string.replace(os.sep,'.')
+        
+    _import_log.debug(f'IMPORT {string}')
+    

@@ -1,6 +1,7 @@
+from ad_discordbot.modules.logs import import_track, log, get_logger; import_track(__file__, fp=True)
 import asyncio
 import os
-import logging
+logging = get_logger(__name__)
 
 task_semaphore = asyncio.Semaphore(1)
 

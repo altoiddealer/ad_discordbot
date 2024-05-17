@@ -267,7 +267,7 @@ Note: **text-generation-webui** and **Stable Diffusion** features can be indepen
    
 6. **Run the .cmd file** in text-generation-webui directory (**ex: cmd_windows.bat**), and performing the following commands:
    ```
-   pip install discord
+   pip install -r ad_discordbot\requirements.txt
    ```
 ---
 

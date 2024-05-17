@@ -1,4 +1,5 @@
-import logging
+from ad_discordbot.modules.logs import import_track, log, get_logger; import_track(__file__, fp=True)
+logging = get_logger(__name__)
 from datetime import datetime, timedelta
 import sqlite3
 import os
