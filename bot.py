@@ -1,9 +1,9 @@
+from ad_discordbot.modules.logs import import_track, log, get_logger, log_file_handler, log_file_formatter; import_track(__file__, fp=True)
+logging = get_logger(__name__)
 from datetime import datetime, timedelta
 from pathlib import Path
 import asyncio
 import random
-import logging
-import logging.handlers
 import json
 import re
 import glob
@@ -33,19 +33,6 @@ import sys
 import traceback
 
 sys.path.append("ad_discordbot")
-
-# Start logger
-logging.basicConfig(format='%(levelname)s [%(asctime)s]: %(message)s (Line: %(lineno)d in %(funcName)s, %(filename)s )',
-                    datefmt='%Y-%m-%d %H:%M:%S', 
-                    level=logging.INFO) # logging.DEBUG)
-
-handler = logging.FileHandler(filename='discord.log', encoding='utf-8', mode='w')
-handler = logging.handlers.RotatingFileHandler(
-    filename='discord.log',
-    encoding='utf-8',
-    maxBytes=32 * 1024 * 1024,  # 32 MiB
-    backupCount=5,  # Rotate through 5 files
-)
 
 from ad_discordbot.modules.database import Database, ActiveSettings, StarBoard
 from ad_discordbot.modules.utils_shared import task_semaphore, shared_path
@@ -4815,4 +4802,4 @@ bot_database = Database()
 bot_settings = Settings(bot_behavior=bot_behavior)
 bot_history = History()
 
-client.run(bot_token, root_logger=True, log_handler=handler)
+client.run(bot_token, log_handler=log_file_handler, log_formatter=log_file_formatter)
