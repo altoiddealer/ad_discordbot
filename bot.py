@@ -1025,7 +1025,7 @@ async def process_llm_payload_tags(user_name, channel, llm_payload, llm_prompt, 
         swap_character = mods.get('swap_character', None)
         change_llmmodel = mods.get('change_llmmodel', None)
         swap_llmmodel = mods.get('swap_llmmodel', None)
-        send_user_image = mods.get('send_user_image', None)
+        send_user_image = mods.get('send_user_image', [])
         # Process the tag matches
         if flow or save_to_history or load_history or param_variances or state or change_character or swap_character or change_llmmodel or swap_llmmodel or send_user_image:
             # Flow handling
@@ -1083,7 +1083,7 @@ async def process_llm_payload_tags(user_name, channel, llm_payload, llm_prompt, 
             # Send User Image handling
             if send_user_image:
                 params['send_user_image'] = send_user_image
-                logging.info(f"[TAGS] Sending user image: {send_user_image}")
+                logging.info(f"[TAGS] Sending user image{'s' if len(send_user_image) > 1 else ''}")
         return llm_payload, llm_prompt, params
     except Exception as e:
         logging.error(f"Error processing LLM tags: {e}")
@@ -1098,7 +1098,7 @@ def collect_llm_tag_values(tags):
         'swap_character': None,
         'change_llmmodel': None,
         'swap_llmmodel': None,
-        'send_user_image': None,
+        'send_user_image': [],
         'param_variances': {},
         'state': {}
         }
@@ -1108,49 +1108,53 @@ def collect_llm_tag_values(tags):
         'time_format': None,
         'date_format': None
         }
-    for tag in tags['matches']:
-        # Values that will only apply from the first tag matches
-        if 'flow' in tag and llm_payload_mods['flow'] is None:
-            llm_payload_mods['flow'] = tag.pop('flow')
-        if 'save_history' in tag and llm_payload_mods['save_to_history'] is None:
-            llm_payload_mods['save_to_history'] = bool(tag.pop('save_history'))
-        if 'load_history' in tag and llm_payload_mods['load_history'] is None:
-            llm_payload_mods['load_history'] = int(tag.pop('load_history'))
-        if 'change_character' in tag and llm_payload_mods['change_character'] is None:
-            llm_payload_mods['change_character'] = str(tag.pop('change_character'))
-        if 'swap_character' in tag and llm_payload_mods['swap_character'] is None:
-            llm_payload_mods['swap_character'] = str(tag.pop('swap_character'))
-        if 'change_llmmodel' in tag and llm_payload_mods['change_llmmodel'] is None:
-            llm_payload_mods['change_llmmodel'] = str(tag.pop('change_llmmodel'))
-        if 'swap_llmmodel' in tag and llm_payload_mods['swap_llmmodel'] is None:
-            llm_payload_mods['swap_llmmodel'] = str(tag.pop('swap_llmmodel'))
-        if 'send_user_image' in tag and llm_payload_mods['send_user_image'] is None:
-            user_image_file = tag.pop('send_user_image')
-            user_image_args = get_image_tag_args('User image', str(user_image_file), key=None, set_dir=None)
-            user_image_args.pop('selected_folder')
-            llm_payload_mods['send_user_image'] = user_image_args
-        # Values that may apply repeatedly
-        if 'format_prompt' in tag:
-            formatting['format_prompt'].append(str(tag.pop('format_prompt')))
-        if 'time_offset' in tag:
-            formatting['time_offset'] = float(tag.pop('time_offset'))
-        if 'time_format' in tag:
-            formatting['time_format'] = str(tag.pop('time_format'))
-        if 'date_format' in tag:
-            formatting['date_format'] = str(tag.pop('date_format'))
-        if 'llm_param_variances' in tag:
-            llm_param_variances = dict(tag.pop('llm_param_variances'))
-            try:
-                llm_payload_mods['param_variances'].update(llm_param_variances) # Allow multiple to accumulate.
-            except:
-                logging.warning("Error processing a matched 'llm_param_variances' tag; ensure it is a dictionary.")
-        if 'state' in tag:
-            state = dict(tag.pop('state'))
-            try:
-                llm_payload_mods['state'].update(state) # Allow multiple to accumulate.
-            except:
-                logging.warning("Error processing a matched 'state' tag; ensure it is a dictionary.")
-    return llm_payload_mods, formatting
+    try:
+        for tag in tags['matches']:
+            # Values that will only apply from the first tag matches
+            if 'flow' in tag and llm_payload_mods['flow'] is None:
+                llm_payload_mods['flow'] = tag.pop('flow')
+            if 'save_history' in tag and llm_payload_mods['save_to_history'] is None:
+                llm_payload_mods['save_to_history'] = bool(tag.pop('save_history'))
+            if 'load_history' in tag and llm_payload_mods['load_history'] is None:
+                llm_payload_mods['load_history'] = int(tag.pop('load_history'))
+            if 'change_character' in tag and llm_payload_mods['change_character'] is None:
+                llm_payload_mods['change_character'] = str(tag.pop('change_character'))
+            if 'swap_character' in tag and llm_payload_mods['swap_character'] is None:
+                llm_payload_mods['swap_character'] = str(tag.pop('swap_character'))
+            if 'change_llmmodel' in tag and llm_payload_mods['change_llmmodel'] is None:
+                llm_payload_mods['change_llmmodel'] = str(tag.pop('change_llmmodel'))
+            if 'swap_llmmodel' in tag and llm_payload_mods['swap_llmmodel'] is None:
+                llm_payload_mods['swap_llmmodel'] = str(tag.pop('swap_llmmodel'))
+            # Values that may apply repeatedly
+            if 'send_user_image' in tag:
+                user_image_file = tag.pop('send_user_image')
+                user_image_args = get_image_tag_args('User image', str(user_image_file), key=None, set_dir=None)
+                user_image = discord.File(user_image_args)
+                llm_payload_mods['send_user_image'].append(user_image)
+            if 'format_prompt' in tag:
+                formatting['format_prompt'].append(str(tag.pop('format_prompt')))
+            if 'time_offset' in tag:
+                formatting['time_offset'] = float(tag.pop('time_offset'))
+            if 'time_format' in tag:
+                formatting['time_format'] = str(tag.pop('time_format'))
+            if 'date_format' in tag:
+                formatting['date_format'] = str(tag.pop('date_format'))
+            if 'llm_param_variances' in tag:
+                llm_param_variances = dict(tag.pop('llm_param_variances'))
+                try:
+                    llm_payload_mods['param_variances'].update(llm_param_variances) # Allow multiple to accumulate.
+                except:
+                    logging.warning("Error processing a matched 'llm_param_variances' tag; ensure it is a dictionary.")
+            if 'state' in tag:
+                state = dict(tag.pop('state'))
+                try:
+                    llm_payload_mods['state'].update(state) # Allow multiple to accumulate.
+                except:
+                    logging.warning("Error processing a matched 'state' tag; ensure it is a dictionary.")
+        return llm_payload_mods, formatting
+    except Exception as e:
+        logging.error(f"Error collecting LLM tag values: {e}")
+        return llm_payload_mods, formatting
 
 def process_tag_insertions(prompt, tags):
     try:
@@ -1676,7 +1680,7 @@ async def hybrid_llm_img_gen(user, channel, source, text, tags, llm_payload, par
         img_note = ''
         # Check params to see if an LLM model change/swap was triggered by Tags
         llmmodel_params = params.get('llmmodel', {})
-        send_user_image = params.get('send_user_image', None)
+        send_user_image = params.get('send_user_image', [])
         mode = llmmodel_params.get('mode', 'change') # default to 'change' unless a tag was triggered with 'swap'
         if llmmodel_params:
             orig_llmmodel = copy.deepcopy(shared.model_name)                    # copy current LLM model name
@@ -1726,9 +1730,8 @@ async def hybrid_llm_img_gen(user, channel, source, text, tags, llm_payload, par
         should_send_text = should_bot_do('should_send_text', default=True, tags=tags)
         if should_send_text:
             await send_long_message(channel, mention_resp)
-        if send_user_image:
-            send_user_image = discord.File(send_user_image)
-            await channel.send(file=send_user_image)
+        if send_user_image:                
+            await channel.send(file=send_user_image) if len(send_user_image) == 1 else await channel.send(files=send_user_image)
         return
     except Exception as e:
         logging.error(f'An error occurred while processing "{source}" request: {e}')
@@ -2681,7 +2684,7 @@ async def process_img_payload_tags(img_payload, mods, params):
         reactor = mods.get('reactor', {})
         img2img = mods.get('img2img', {})
         img2img_mask = mods.get('img2img_mask', {})
-        send_user_image = mods.get('send_user_image', None)
+        send_user_image = mods.get('send_user_image', [])
         endpoint = '/sdapi/v1/txt2img'
         # Process the tag matches
         if flow or img_censoring or change_imgmodel or swap_imgmodel or payload or param_variances or controlnet or forge_couple or layerdiffuse or reactor or img2img or img2img_mask or send_user_image:
@@ -2747,7 +2750,7 @@ async def process_img_payload_tags(img_payload, mods, params):
                 img_payload['mask'] = img2img_mask
             # Send User Image handling
             if send_user_image:
-                logging.info(f"[TAGS] Sending user image: {send_user_image}")
+                logging.info(f"[TAGS] Sending user image{'s' if len(send_user_image) > 1 else ''}")
         return img_payload, imgmodel_params, params
     except Exception as e:
         logging.error(f"Error processing Img tags: {e}")
@@ -2839,7 +2842,7 @@ def collect_img_tag_values(tags):
         'forge_couple': {},
         'layerdiffuse': {},
         'reactor': {},
-        'send_user_image': None,
+        'send_user_image': [],
         'img2img': {},
         'img2img_mask': {}
         }
@@ -2884,11 +2887,11 @@ def collect_img_tag_values(tags):
                 elif key.startswith('laydiff_'):
                     laydiff_key = key[len('laydiff_'):]
                     layerdiffuse_args[laydiff_key] = value
-                # get any user image
+                # get any user image(s)
                 elif key == 'send_user_image':
                     user_image_args = get_image_tag_args('User image', str(value), key=None, set_dir=None)
-                    user_image_args.pop('selected_folder')
-                    img_payload_mods['send_user_image'] = user_image_args
+                    user_image = discord.File(user_image_args)
+                    img_payload_mods['send_user_image'].append(user_image_args)
                 # get reactor tag params
                 elif key == 'reactor':
                     img_payload_mods['reactor']['image'] = value
@@ -2992,7 +2995,7 @@ async def img_gen_task(user, channel, source, img_prompt, params, i=None, tags={
         img_payload = init_img_payload(img_prompt, neg_prompt)
         # collect matched tag values
         sd_output_dir, img_payload_mods = collect_img_tag_values(tags)
-        send_user_image = img_payload_mods.get('send_user_image', None)
+        send_user_image = img_payload_mods.get('send_user_image', [])
         # Apply tags relevant to Img gen
         img_payload, imgmodel_params, params = await process_img_payload_tags(img_payload, img_payload_mods, params)
         # Check censoring
@@ -3032,9 +3035,8 @@ async def img_gen_task(user, channel, source, img_prompt, params, i=None, tags={
                 if hasattr(i, 'followup'): await i.followup.reply(embed=img_send_embed_info)
                 else: await i.reply(embed=img_send_embed_info)
             else: await channel.send(embed=img_send_embed_info)
-        if send_user_image:
-            send_user_image = discord.File(send_user_image)
-            await channel.send(file=send_user_image)
+        if send_user_image:                
+            await channel.send(file=send_user_image) if len(send_user_image) == 1 else await channel.send(files=send_user_image)
         # If switching back to original Img model
         if should_swap:
             await change_imgmodel_task(user, channel, params={'imgmodel': {'imgmodel_name': current_imgmodel, 'mode': 'swap_back', 'verb': 'Swapping back to'}})
