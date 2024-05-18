@@ -397,6 +397,8 @@ def init_textgenwebui_extensions():
     return tts_client, tts_api_key, tts_voice_key, tts_lang_key
 
 def init_textgenwebui_llmmodels():
+    all_llmmodels = utils.get_available_models()
+
     # Model defined through --model
     if shared.args.model is not None:
         shared.model_name = shared.args.model
@@ -469,7 +471,6 @@ if textgenwebui_enabled:
     init_textgenwebui_settings()
     tts_client, tts_api_key, tts_voice_key, tts_lang_key = init_textgenwebui_extensions()
     # Get list of available models
-    all_llmmodels = utils.get_available_models()
     init_textgenwebui_llmmodels()
     asyncio.run(load_llm_model())
     shared.generation_lock = Lock()
@@ -489,13 +490,15 @@ async def process_tasks_in_background():
 #################################################################
 ## Function to automatically change image models
 # Select imgmodel based on mode, while avoid repeating current imgmodel
-async def auto_select_imgmodel(current_imgmodel_name, imgmodel_names, mode='random'):   
+async def auto_select_imgmodel(current_imgmodel_name, mode='random'):   
     try:
+        all_imgmodels = await fetch_imgmodels()
         imgmodels = copy.deepcopy(all_imgmodels)
+        all_imgmodel_names = [imgmodel.get('imgmodel_name', '') for imgmodel in all_imgmodels] 
         if mode == 'random':
             if current_imgmodel_name:
                 matched_imgmodel = None
-                for imgmodel, imgmodel_name in zip(imgmodels, imgmodel_names):
+                for imgmodel, imgmodel_name in zip(imgmodels, all_imgmodel_names):
                     if imgmodel_name == current_imgmodel_name:
                         matched_imgmodel = imgmodel
                         break
@@ -503,9 +506,9 @@ async def auto_select_imgmodel(current_imgmodel_name, imgmodel_names, mode='rand
                     imgmodels.remove(matched_imgmodel)
             selected_imgmodel = random.choice(imgmodels)
         elif mode == 'cycle':
-            if current_imgmodel_name in imgmodel_names:
-                current_index = imgmodel_names.index(current_imgmodel_name)
-                next_index = (current_index + 1) % len(imgmodel_names)  # Cycle to the beginning if at the end
+            if current_imgmodel_name in all_imgmodel_names:
+                current_index = all_imgmodel_names.index(current_imgmodel_name)
+                next_index = (current_index + 1) % len(all_imgmodel_names)  # Cycle to the beginning if at the end
                 selected_imgmodel = imgmodels[next_index]
             else:
                 selected_imgmodel = random.choice(imgmodels) # If no image model set yet, select randomly
@@ -523,11 +526,9 @@ async def auto_update_imgmodel_task(mode, duration):
             auto_change_settings = imgmodels_data.get('settings', {}).get('auto_change_imgmodels', {})
             channel = auto_change_settings.get('channel_announce', None)
             if channel == 11111111111111111111: channel = None
-            
             current_imgmodel_name = bot_settings.settings['imgmodel'].get('imgmodel_name', '')
-            imgmodel_names = [imgmodel.get('imgmodel_name', '') for imgmodel in all_imgmodels]           
             # Select an imgmodel automatically
-            selected_imgmodel = await auto_select_imgmodel(current_imgmodel_name, imgmodel_names, mode)
+            selected_imgmodel = await auto_select_imgmodel(current_imgmodel_name, mode)
             if channel: channel = client.get_channel(channel)
             
             async with task_semaphore:
@@ -1035,6 +1036,7 @@ async def process_llm_payload_tags(user_name, channel, llm_payload, llm_prompt, 
         char_params = change_character or swap_character or {} # 'character_change' will trump 'character_swap'
         if char_params:
             # Error handling
+            all_characters, _ = get_all_characters()
             if not any(char_params == char['name'] for char in all_characters):
                 logging.error(f'Character not found: {char_params}')
             else:
@@ -1056,6 +1058,7 @@ async def process_llm_payload_tags(user_name, channel, llm_payload, llm_prompt, 
                 mode = 'change' if params == change_llmmodel else 'swap'
                 verb = 'Changing' if mode == 'change' else 'Swapping'
                 # Error handling
+                all_llmmodels = utils.get_available_models()
                 if not any(params == model for model in all_llmmodels):
                     logging.error(f'LLM model not found: {params}')
                 else:
@@ -3795,17 +3798,14 @@ def get_all_characters():
     return all_characters, filtered_characters
 
 if textgenwebui_enabled:
-    all_characters, filtered_characters = get_all_characters()
-    if filtered_characters:
-
-        items_for_character = [i['name'] for i in filtered_characters]
-
-        @client.hybrid_command(description="Choose a character")
-        async def character(ctx: discord.ext.commands.Context):
-            # View containing Selects for Characters
-            try:
+    # Command to change characters
+    @client.hybrid_command(description="Choose a character")
+    async def character(ctx: discord.ext.commands.Context):
+        try:
+            _, filtered_characters = get_all_characters()
+            if filtered_characters:
+                items_for_character = [i['name'] for i in filtered_characters]
                 warned_too_many_character = False # TODO use the warned_once feature?
-                # SelectOptionsView in '/modules/utils_discord.py'
                 characters_view = SelectOptionsView(items_for_character, 
                                                 custom_id_prefix='characters', 
                                                 placeholder_prefix='Characters: ', 
@@ -3813,13 +3813,14 @@ if textgenwebui_enabled:
                                                 warned=warned_too_many_character)
                 view_message = await ctx.send('### Select an LLM Model.', view=characters_view, ephemeral=True)
                 await characters_view.wait()
-                
+
                 selected_item = characters_view.get_selected()
                 await view_message.delete()
                 await process_character(ctx, selected_item)
-                
-            except Exception as e:
-                logging.error(f"An error occurred while selecting a Character from '/characters' command: {e}")
+            else:
+                await ctx.send('There are no characters available', ephemeral=True)
+        except Exception as e:
+            logging.error(f"An error occurred while selecting a Character from '/characters' command: {e}")
 
 #################################################################
 ####################### /IMGMODEL COMMAND #######################
@@ -3845,22 +3846,18 @@ async def filter_imgmodels(imgmodels):
 # Build list of imgmodels depending on user preference (user .yaml / API)
 async def fetch_imgmodels():
     try:
-        try:
-            imgmodels = await sd_api(endpoint='/sdapi/v1/sd-models', method='get', json=None, retry=False)
-            # Update 'title' keys in fetched list for uniformity
-            for imgmodel in imgmodels:
-                if 'title' in imgmodel:
-                    imgmodel['sd_model_checkpoint'] = imgmodel.pop('title')
-        except Exception as e:
-            logging.error(f"Error fetching image models from {SD_CLIENT} API: {e}")
-            if str(e).startswith('Cannot connect to host'):
-                logging.warning('"/imgmodels" command will initialize as an empty list. Stable Diffusion must be running before launching ad_discordbot.')
-            return ''
-        if imgmodels:
-            imgmodels = await filter_imgmodels(imgmodels)
-            return imgmodels
+        imgmodels = await sd_api(endpoint='/sdapi/v1/sd-models', method='get', json=None, retry=False)
+        # Update 'title' keys in fetched list for uniformity
+        for imgmodel in imgmodels:
+            if 'title' in imgmodel:
+                imgmodel['sd_model_checkpoint'] = imgmodel.pop('title')
+            if 'model_name' in imgmodel:
+                imgmodel['imgmodel_name'] = imgmodel.pop('model_name')
+        imgmodels = await filter_imgmodels(imgmodels)
+        return imgmodels
     except Exception as e:
         logging.error(f"Error fetching image models: {e}")
+        return {}
 
 async def update_imgmodel(channel, selected_imgmodel, selected_imgmodel_tags):
     try:
@@ -3971,6 +3968,7 @@ async def get_selected_imgmodel_data(selected_imgmodel_value):
         # if selected_imgmodel_value == 'Exit':
         #      selected_imgmodel = {'imgmodel_name': 'None were selected'}
         #     return selected_imgmodel
+        all_imgmodels = await fetch_imgmodels()
         all_imgmodel_data = copy.deepcopy(all_imgmodels)
         for imgmodel in all_imgmodel_data:
             # check that the value matches a valid checkpoint
@@ -4006,41 +4004,30 @@ async def process_imgmodel(ctx, selected_imgmodel_value):
 
 if sd_enabled:
 
-    all_imgmodels = []
-    all_imgmodels = asyncio.run(fetch_imgmodels())
-
-    if all_imgmodels:
-        for imgmodel in all_imgmodels:
-            if 'model_name' in imgmodel:
-                imgmodel['imgmodel_name'] = imgmodel.pop('model_name')
-        
-        ### IF API IMG MODEL UNLOADING GETS EVER DEBUGGED
-        # unload_options = [app_commands.Choice(name="Unload Model", value="None"),
-        # app_commands.Choice(name="Do Not Unload Model", value="Exit")]
-    
-    items_for_img_model = [i["imgmodel_name"] for i in all_imgmodels]
-
     @client.hybrid_command(description="Choose an imgmodel")
     async def imgmodel(ctx: discord.ext.commands.Context):
-        # View containing Selects for Image models
         try:
-            warned_too_many_img_model = False # TODO use the warned_once feature?
-            # SelectOptionsView in '/modules/utils_discord.py'
-            imgmodels_view = SelectOptionsView(items_for_img_model, 
-                                               custom_id_prefix='imgmodels', 
-                                               placeholder_prefix='ImgModels: ', 
-                                               unload_item=None,
-                                               warned=warned_too_many_img_model)
-            view_message = await ctx.send('### Select an Image Model.', view=imgmodels_view, ephemeral=True)
-            await imgmodels_view.wait()
-            
-            selected_item = imgmodels_view.get_selected()
-            await view_message.delete()
-            await process_imgmodel(ctx, selected_item)
-            
+            all_imgmodels = await fetch_imgmodels()
+            if all_imgmodels:
+                ### IF API IMG MODEL UNLOADING GETS EVER DEBUGGED
+                # unload_options = [app_commands.Choice(name="Unload Model", value="None"),
+                # app_commands.Choice(name="Do Not Unload Model", value="Exit")]
+                items_for_img_model = [i["imgmodel_name"] for i in all_imgmodels]
+                warned_too_many_img_model = False # TODO use the warned_once feature?
+                imgmodels_view = SelectOptionsView(items_for_img_model, 
+                                                custom_id_prefix='imgmodels', 
+                                                placeholder_prefix='ImgModels: ', 
+                                                unload_item=None,
+                                                warned=warned_too_many_img_model)
+                view_message = await ctx.send('### Select an Image Model.', view=imgmodels_view, ephemeral=True)
+                await imgmodels_view.wait()
+                selected_item = imgmodels_view.get_selected()
+                await view_message.delete()
+                await process_imgmodel(ctx, selected_item)
+            else:
+                await ctx.send('There are no Img models available', ephemeral=True)
         except Exception as e:
             logging.error(f"An error occurred while selecting an Img model from '/imgmodel' command: {e}")
-
 
 #################################################################
 ####################### /LLMMODEL COMMAND #######################
@@ -4062,30 +4049,28 @@ async def process_llmmodel(ctx, selected_llmmodel):
     except Exception as e:
         logging.error(f"Error processing /llmmodel command: {e}")
 
-if textgenwebui_enabled and all_llmmodels:
-
-    items_for_llm_model = [i for i in all_llmmodels]
-
-    unload_llmmodel = items_for_llm_model.pop(0)
+if textgenwebui_enabled:
 
     @client.hybrid_command(description="Choose an LLM Model")
     async def llmmodel(ctx: discord.ext.commands.Context):
-        # View containing Selects for LLM models
         try:
-            warned_too_many_llm_model = False # TODO use the warned_once feature?
-            # SelectOptionsView in '/modules/utils_discord.py'
-            llmmodels_view = SelectOptionsView(items_for_llm_model, 
-                                               custom_id_prefix='llmmodels', 
-                                               placeholder_prefix='LLMModels: ', 
-                                               unload_item=unload_llmmodel,
-                                               warned=warned_too_many_llm_model)
-            view_message = await ctx.send('### Select an LLM Model.', view=llmmodels_view, ephemeral=True)
-            await llmmodels_view.wait()
-            
-            selected_item = llmmodels_view.get_selected()
-            await view_message.delete()
-            await process_llmmodel(ctx, selected_item)
-            
+            all_llmmodels = utils.get_available_models()
+            if all_llmmodels:
+                items_for_llm_model = [i for i in all_llmmodels]
+                unload_llmmodel = items_for_llm_model.pop(0)
+                warned_too_many_llm_model = False # TODO use the warned_once feature?
+                llmmodels_view = SelectOptionsView(items_for_llm_model, 
+                                                custom_id_prefix='llmmodels', 
+                                                placeholder_prefix='LLMModels: ', 
+                                                unload_item=unload_llmmodel,
+                                                warned=warned_too_many_llm_model)
+                view_message = await ctx.send('### Select an LLM Model.', view=llmmodels_view, ephemeral=True)
+                await llmmodels_view.wait()
+                selected_item = llmmodels_view.get_selected()
+                await view_message.delete()
+                await process_llmmodel(ctx, selected_item)
+            else:
+                await ctx.send('There are no LLM models available', ephemeral=True)
         except Exception as e:
             logging.error(f"An error occurred while selecting an LLM model from '/llmmodel' command: {e}")
 
