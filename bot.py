@@ -4077,16 +4077,18 @@ if sd_enabled:
     
     items_for_img_model = [i["imgmodel_name"] for i in all_imgmodels]
 
+#    unload_imgmodel = items_for_img_model.pop(0)
+
     @client.hybrid_command(description="Choose an imgmodel")
     async def imgmodel(ctx: discord.ext.commands.Context):
         # View containing Selects for Image models
         try:
             warned_too_many_img_model = False # TODO use the warned_once feature?
             # SelectOptionsView in '/modules/utils_discord.py'
-            imgmodels_view = SelectOptionsView('imgmodel',
-                                               items_for_img_model, 
+            imgmodels_view = SelectOptionsView(items_for_img_model, 
                                                custom_id_prefix='imgmodels', 
                                                placeholder_prefix='ImgModels: ', 
+                                               unload_item=None,
                                                warned=warned_too_many_img_model)
             view_message = await ctx.send('### Select an Image Model.', view=imgmodels_view, ephemeral=True)
             await imgmodels_view.wait()

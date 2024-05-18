@@ -91,14 +91,16 @@ class SelectOptionsView(discord.ui.View):
     Pass warned=True to bypass warning.
     '''
 
-    def __init__(self, cmd_name, all_items, max_menus=4, max_items_per_menu=25, custom_id_prefix='items', placeholder_prefix='Items ', warned=False):
+    def __init__(self, all_items, max_menus=4, max_items_per_menu=25, custom_id_prefix='items', placeholder_prefix='Items ', unload_item=None, warned=False):
         super().__init__()
-        self.can_unload = cmd_name in ['llmmodel']
-        self.unload_value = all_items.pop(0) if self.can_unload else None
-
-        # Unsure correct syntax for this...
-        # if not self.can_unload:
-        #     self.remove_item(unload_model_button)
+        # Value for "Unload" button
+        self.unload_item = unload
+        # Remove "Unload" button if N/A for command
+        if not self.unload_item:
+            for child in self.children:
+                if child.custom_id == 'models_unload':
+                    self.remove_item(child)
+                    break
 
         self.selected_item = None
         self.warned = warned
@@ -126,18 +128,12 @@ class SelectOptionsView(discord.ui.View):
             logging.warning(f'Too many models, the menu will be truncated to the first {max_items_per_menu*max_menus}.')
             self.warned = True
             
-            
     def label_formatter(self, local_options, menu_ii):
         return f'{local_options[0].label[0]}-{local_options[-1].label[0]}'.upper()
-        # if self.cmd_name == 'llmmodel' and menu_ii == 0:
-        #     # Using second "Name" since first name is "None"
-        #     return f'{local_options[1].label[0]}-{local_options[-1].label[0]}'.upper()
-        # else:
-        #     return f'{local_options[0].label[0]}-{local_options[-1].label[0]}'.upper()
     
     def get_selected(self, items:list=None):
-        if self.selected_item == self.unload_value:
-            return self.unload_value
+        if self.selected_item == self.unload_item:
+            return self.unload_item
         items = items or self.all_items
         return items[self.selected_item]
 
@@ -146,12 +142,11 @@ class SelectOptionsView(discord.ui.View):
         if self.selected_item is None:
             await interaction.response.send_message('No Image model selected.', ephemeral=True, delete_after=5)
         else:
-            print("self.selected_item", self.selected_item)
             await interaction.response.defer()
             self.stop()
 
     @discord.ui.button(label='Unload Model', style=discord.ButtonStyle.secondary, custom_id="models_unload", row=4)
     async def unload_model_button(self, interaction: discord.Interaction, button:discord.ui.Button):
-        self.selected_item = self.unload_value
+        self.selected_item = self.unload_item
         await interaction.response.defer()
         self.stop()
