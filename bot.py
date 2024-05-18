@@ -524,7 +524,7 @@ async def auto_update_imgmodel_task(mode, duration):
             channel = auto_change_settings.get('channel_announce', None)
             if channel == 11111111111111111111: channel = None
             
-            current_imgmodel_name = bot_active_settings.get('imgmodel', {}).get('imgmodel_name', '')
+            current_imgmodel_name = bot_settings.settings['imgmodel'].get('imgmodel_name', '')
             imgmodel_names = [imgmodel.get('imgmodel_name', '') for imgmodel in all_imgmodels]           
             # Select an imgmodel automatically
             selected_imgmodel = await auto_select_imgmodel(current_imgmodel_name, imgmodel_names, mode)
@@ -3120,8 +3120,8 @@ if sd_enabled:
             sizes = options.get('sizes', {})
             aspect_ratios = [size.get("ratio") for size in sizes.get('ratios', [])]
             # Calculate the average and aspect ratio sizes
-            width = bot_active_settings.get('imgmodel', {}).get('payload', {}).get('width', 512)
-            height = bot_active_settings.get('imgmodel', {}).get('payload', {}).get('height', 512)
+            width = bot_settings.settings['imgmodel'].get('payload', {}).get('width', 512)
+            height = bot_settings.settings['imgmodel'].get('payload', {}).get('height', 512)
             average = average_width_height(width, height)
             ratio_options = calculate_aspect_ratio_sizes(average, aspect_ratios)
             # Collect any defined static sizes
@@ -3921,7 +3921,7 @@ async def fetch_imgmodels():
 
 async def update_imgmodel(channel, selected_imgmodel, selected_imgmodel_tags):
     try:
-        current_w, current_h = bot_active_settings['imgmodel'].get('payload', {}).get('width', 512), bot_active_settings['imgmodel'].get('payload', {}).get('height', 512)
+        current_w, current_h = bot_settings.settings['imgmodel'].get('payload', {}).get('width', 512), bot_settings.settings['imgmodel'].get('payload', {}).get('height', 512)
         new_w, new_h = selected_imgmodel.get('payload', {}).get('width', 512), selected_imgmodel.get('payload', {}).get('height', 512)
         bot_active_settings['imgmodel'] = selected_imgmodel
         bot_active_settings['imgmodel']['tags'] = selected_imgmodel_tags
@@ -3938,7 +3938,7 @@ async def update_imgmodel(channel, selected_imgmodel, selected_imgmodel_tags):
         #     await channel.send(embed=change_embed)
         #     return
         # Load the imgmodel and VAE via API
-        model_data = bot_active_settings['imgmodel'].get('override_settings') or bot_active_settings['imgmodel']['payload'].get('override_settings')
+        model_data = bot_settings.settings['imgmodel'].get('override_settings') or bot_settings.settings['imgmodel']['payload'].get('override_settings')
         _ = await sd_api(endpoint='/sdapi/v1/options', method='post', json=model_data, retry=True)
         # Update size options for /image command
         current_avg = average_width_height(current_w, current_h)    # get current average width/height
