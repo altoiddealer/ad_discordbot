@@ -37,7 +37,7 @@ sys.path.append("ad_discordbot")
 from ad_discordbot.modules.database import Database, ActiveSettings, StarBoard
 from ad_discordbot.modules.utils_shared import task_semaphore, shared_path
 from ad_discordbot.modules.utils_misc import fix_dict, update_dict, sum_update_dict, update_dict_matched_keys
-from ad_discordbot.modules.utils_discord import ireply, send_long_message
+from ad_discordbot.modules.utils_discord import ireply, send_long_message, SelectedListItem, SelectOptionsView
 from ad_discordbot.modules.utils_files import load_file, merge_base, save_yaml_file
 
 bot_active_settings = ActiveSettings()
@@ -4074,92 +4074,29 @@ if sd_enabled:
         ### IF API IMG MODEL UNLOADING GETS EVER DEBUGGED
         # unload_options = [app_commands.Choice(name="Unload Model", value="None"),
         # app_commands.Choice(name="Do Not Unload Model", value="Exit")]
-        
-    _img_model_hash_dict = {str(hash(imgmodel["imgmodel_name"])):imgmodel["imgmodel_name"] for imgmodel in all_imgmodels}
-
-    async def select_imgmodel(ctx):
-
-        # View containing Selects for Image models
-        class ImgmodelsView(discord.ui.View):
-            def __init__(self):
-                super().__init__()
-                self.selected_imgmodel = None
-
-            imgmodel_options0 = [discord.SelectOption(label=imgmodel["imgmodel_name"][:100], value=str(hash(imgmodel["imgmodel_name"]))) for imgmodel in all_imgmodels[:25]]
-            imgmodel_options0_label = f'{imgmodel_options0[0].label[0]}-{imgmodel_options0[-1].label[0]}'.lower()
-
-            # Dropdown Menu for < 25 Imgmodels
-            @discord.ui.select(options=imgmodel_options0, placeholder=f'Imgmodels {imgmodel_options0_label.upper()}', custom_id="imgmodels_0_select")
-            async def imgmodels_0(self, select, interaction):
-                self.selected_imgmodel = select.data['values'][0]
-                await select.response.defer()
-
-            if len(all_imgmodels) > 25:
-                imgmodel_options1 = [discord.SelectOption(label=imgmodel["imgmodel_name"][:100], value=str(hash(imgmodel["imgmodel_name"]))) for imgmodel in all_imgmodels[25:50]]
-                imgmodel_options1_label = f'{imgmodel_options1[0].label[0]}-{imgmodel_options1[-1].label[0]}'.lower()
-                if imgmodel_options1_label == imgmodel_options_label:
-                    imgmodel_options1_label = f'{imgmodel_options1_label}_1'
-
-                # Dropdown Menu for 25-50 Imgmodels
-                @discord.ui.select(options=imgmodel_options1, placeholder=f'Imgmodels {imgmodel_options1_label.upper()}', custom_id="imgmodels_1_select")
-                async def imgmodels_1(self, select, interaction):
-                    self.selected_imgmodel = select.data['values'][0]
-                    await select.response.defer()
-
-                if len(all_imgmodels) > 50:
-                    imgmodel_options2 = [discord.SelectOption(label=imgmodel["imgmodel_name"][:100], value=str(hash(imgmodel["imgmodel_name"]))) for imgmodel in all_imgmodels[50:75]]
-                    imgmodel_options2_label = f'{imgmodel_options2[0].label[0]}-{imgmodel_options2[-1].label[0]}'.lower()
-                    if imgmodel_options2_label == imgmodel_options_label or imgmodel_options2_label == imgmodel_options1_label:
-                        imgmodel_options2_label = f'{imgmodel_options2_label}_2'
-
-                    # Dropdown Menu for 50-75 Imgmodels
-                    @discord.ui.select(options=imgmodel_options2, placeholder=f'Imgmodels {imgmodel_options2_label.upper()}', custom_id="imgmodels_2_select")
-                    async def imgmodels_2(self, select, interaction):
-                        self.selected_imgmodel = select.data['values'][0]
-                        await select.response.defer()
-
-                    if len(all_imgmodels) > 75:
-                        imgmodel_options3 = [discord.SelectOption(label=imgmodel["imgmodel_name"][:100], value=str(hash(imgmodel["imgmodel_name"]))) for imgmodel in all_imgmodels[75:100]]
-                        imgmodel_options3_label = f'{imgmodel_options3[0].label[0]}-{imgmodel_options3[-1].label[0]}'.lower()
-                        if imgmodel_options3_label == imgmodel_options_label or imgmodel_options3_label == imgmodel_options1_label or imgmodel_options3_label == imgmodel_options2_label:
-                            imgmodel_options3_label = f'{imgmodel_options2_label}_3'
-
-                        # Dropdown Menu for 75-100 Imgmodels
-                        @discord.ui.select(options=imgmodel_options3, placeholder=f'Imgmodels {imgmodel_options3_label.upper()}', custom_id="imgmodels_3_select")
-                        async def imgmodels_3(self, select, interaction):
-                            self.selected_imgmodel = select.data['values'][0]
-                            await select.response.defer()
-
-                        if len(all_imgmodels) > 100:
-                            all_imgmodels = all_imgmodels[:100]
-                            logging.warning("'/imgmodel' command only allows up to 100 image models. Some models were omitted.")
-
-            # Submit button
-            @discord.ui.button(label='Submit', style=discord.ButtonStyle.primary, custom_id="models_submit")
-            async def submit_button(self, button, interaction):
-                if self.selected_imgmodel is None:
-                    await ctx.send('No Image model selected.', ephemeral=True, delete_after=5)
-                else:
-                    await button.response.defer()
-                    self.stop()
-        try:
-            imgmodels_view = ImgmodelsView()
-            view_message = await ctx.send('### Select an Image Model.', view=imgmodels_view, ephemeral=True)
-            await imgmodels_view.wait()
-            selected_imgmodel = imgmodels_view.selected_imgmodel
-            
-            if selected_imgmodel:
-                # convert from hash back to the selected option (the name)
-                selected_imgmodel = _img_model_hash_dict[selected_imgmodel]
-                
-            await view_message.delete()
-            await process_imgmodel(ctx, selected_imgmodel)
-        except Exception as e:
-            logging.error(f"An error occurred while selecting an Img model from '/imgmodel' command: {e}")
+    
+    items_for_img_model = [i["imgmodel_name"] for i in all_imgmodels]
 
     @client.hybrid_command(description="Choose an imgmodel")
     async def imgmodel(ctx: discord.ext.commands.Context):
-        await select_imgmodel(ctx)
+        # View containing Selects for Image models
+        try:
+            warned_too_many_img_model = False # TODO use the warned_once feature?
+            
+            imgmodels_view = SelectOptionsView(items_for_img_model, 
+                                               custom_id_prefix='imgmodels', 
+                                               placeholder_prefix='ImgModels: ', 
+                                               warned=warned_too_many_img_model)
+            view_message = await ctx.send('### Select an Image Model.', view=imgmodels_view, ephemeral=True)
+            await imgmodels_view.wait()
+            
+            selected_item = imgmodels_view.get_selected()
+            await view_message.delete()
+            await process_imgmodel(ctx, selected_item)
+            
+        except Exception as e:
+            logging.error(f"An error occurred while selecting an Img model from '/imgmodel' command: {e}")
+
 
 #################################################################
 ####################### /LLMMODEL COMMAND #######################
