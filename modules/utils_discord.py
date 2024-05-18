@@ -91,8 +91,15 @@ class SelectOptionsView(discord.ui.View):
     Pass warned=True to bypass warning.
     '''
 
-    def __init__(self, all_items, max_menus=4, max_items_per_menu=25, custom_id_prefix='items', placeholder_prefix='Items ', warned=False):
+    def __init__(self, cmd_name, all_items, max_menus=4, max_items_per_menu=25, custom_id_prefix='items', placeholder_prefix='Items ', warned=False):
         super().__init__()
+        self.can_unload = cmd_name in ['llmmodel']
+        self.unload_value = all_items.pop(0) if self.can_unload else None
+
+        # Unsure correct syntax for this...
+        # if not self.can_unload:
+        #     self.remove_item(unload_model_button)
+
         self.selected_item = None
         self.warned = warned
         
@@ -100,15 +107,16 @@ class SelectOptionsView(discord.ui.View):
         assert max_menus <= 4
         
         self.all_items = all_items
+
         all_choices = [discord.SelectOption(label=name[:100], value=ii) for ii, name in enumerate(self.all_items)]
-        
+
         for menu_ii in range(max_menus): # 4 max dropdowns
             local_options = all_choices[max_items_per_menu*menu_ii: max_items_per_menu*(menu_ii+1)]
             if not local_options: # end of items
                 break
             
             self.add_item(SelectedListItem(options=local_options,
-                                            placeholder=f'{placeholder_prefix}{self.label_formatter(local_options)}', 
+                                            placeholder=f'{placeholder_prefix}{self.label_formatter(local_options, menu_ii)}', 
                                             custom_id=f"{custom_id_prefix}_{menu_ii}_select",
                                             ))
             
@@ -119,10 +127,17 @@ class SelectOptionsView(discord.ui.View):
             self.warned = True
             
             
-    def label_formatter(self, local_options):
+    def label_formatter(self, local_options, menu_ii):
         return f'{local_options[0].label[0]}-{local_options[-1].label[0]}'.upper()
+        # if self.cmd_name == 'llmmodel' and menu_ii == 0:
+        #     # Using second "Name" since first name is "None"
+        #     return f'{local_options[1].label[0]}-{local_options[-1].label[0]}'.upper()
+        # else:
+        #     return f'{local_options[0].label[0]}-{local_options[-1].label[0]}'.upper()
     
     def get_selected(self, items:list=None):
+        if self.selected_item == self.unload_value:
+            return self.unload_value
         items = items or self.all_items
         return items[self.selected_item]
 
@@ -131,5 +146,12 @@ class SelectOptionsView(discord.ui.View):
         if self.selected_item is None:
             await interaction.response.send_message('No Image model selected.', ephemeral=True, delete_after=5)
         else:
+            print("self.selected_item", self.selected_item)
             await interaction.response.defer()
             self.stop()
+
+    @discord.ui.button(label='Unload Model', style=discord.ButtonStyle.secondary, custom_id="models_unload", row=4)
+    async def unload_model_button(self, interaction: discord.Interaction, button:discord.ui.Button):
+        self.selected_item = self.unload_value
+        await interaction.response.defer()
+        self.stop()

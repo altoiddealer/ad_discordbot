@@ -4082,8 +4082,9 @@ if sd_enabled:
         # View containing Selects for Image models
         try:
             warned_too_many_img_model = False # TODO use the warned_once feature?
-            
-            imgmodels_view = SelectOptionsView(items_for_img_model, 
+            # SelectOptionsView in '/modules/utils_discord.py'
+            imgmodels_view = SelectOptionsView('imgmodel',
+                                               items_for_img_model, 
                                                custom_id_prefix='imgmodels', 
                                                placeholder_prefix='ImgModels: ', 
                                                warned=warned_too_many_img_model)
