@@ -3120,8 +3120,8 @@ if sd_enabled:
             sizes = options.get('sizes', {})
             aspect_ratios = [size.get("ratio") for size in sizes.get('ratios', [])]
             # Calculate the average and aspect ratio sizes
-            width = bot_settings.settings['imgmodel'].get('payload', {}).get('width', 512)
-            height = bot_settings.settings['imgmodel'].get('payload', {}).get('height', 512)
+            width = bot_active_settings.get('imgmodel', {}).get('payload', {}).get('width', 512)
+            height = bot_active_settings.get('imgmodel', {}).get('payload', {}).get('height', 512)
             average = average_width_height(width, height)
             ratio_options = calculate_aspect_ratio_sizes(average, aspect_ratios)
             # Collect any defined static sizes
