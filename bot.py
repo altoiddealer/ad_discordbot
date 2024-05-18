@@ -314,7 +314,7 @@ def init_textgenwebui_settings():
     elif Path("settings.yaml").exists():
         settings_file = Path("settings.yaml")
     if settings_file is not None:
-        logging.info(f"Loading settings from {settings_file}...")
+        logging.info(f"Loading text-generation-webui settings from {settings_file}...")
         file_contents = open(settings_file, 'r', encoding='utf-8').read()
         new_settings = json.loads(file_contents) if settings_file.suffix == "json" else yaml.safe_load(file_contents)
         shared.settings.update(new_settings)
