@@ -75,7 +75,6 @@ async def send_long_message(channel, message_text):
                 sent_message = await channel.send(chunk_text)
                 break
             
-            
 class SelectedListItem(discord.ui.Select):
     def __init__(self, options, placeholder, custom_id):
         super().__init__(placeholder=placeholder, min_values=0, max_values=1, options=options, custom_id=custom_id)
@@ -84,6 +83,9 @@ class SelectedListItem(discord.ui.Select):
         if self.values:
             self.view.selected_item = int(self.values[0])
         await interaction.response.defer()
+        # Stop the view if there is only one menu item (skip "Submit" button)
+        if self.view.num_menus == 1:
+            self.view.stop()
         
 class SelectOptionsView(discord.ui.View):
     '''
@@ -93,14 +95,20 @@ class SelectOptionsView(discord.ui.View):
 
     def __init__(self, all_items, max_menus=4, max_items_per_menu=25, custom_id_prefix='items', placeholder_prefix='Items ', unload_item=None, warned=False):
         super().__init__()
-        # Value for "Unload" button
-        self.unload_item = unload
+        # Get item value for Submit and Unload buttons
+        models_submit_btn = None
+        models_unload_btn = None
+        for child in self.children:
+            if child.custom_id == 'models_submit':
+                models_submit_btn = child
+            elif child.custom_id == 'models_unload':
+                models_unload_btn = child
+
+        # Value for Unload model, if any
+        self.unload_item = unload_item
         # Remove "Unload" button if N/A for command
         if not self.unload_item:
-            for child in self.children:
-                if child.custom_id == 'models_unload':
-                    self.remove_item(child)
-                    break
+            self.remove_item(models_unload_btn)
 
         self.selected_item = None
         self.warned = warned
@@ -109,6 +117,7 @@ class SelectOptionsView(discord.ui.View):
         assert max_menus <= 4
         
         self.all_items = all_items
+        self.num_menus = 0
 
         all_choices = [discord.SelectOption(label=name[:100], value=ii) for ii, name in enumerate(self.all_items)]
 
@@ -123,10 +132,15 @@ class SelectOptionsView(discord.ui.View):
                                             ))
             
         menu_ii += 1
+        self.num_menus += 1 # Count dropdowns. If only one, "Submit" button will be removed
         local_options = all_choices[max_items_per_menu*menu_ii: max_items_per_menu*(menu_ii+1)]
         if local_options and not self.warned:
             logging.warning(f'Too many models, the menu will be truncated to the first {max_items_per_menu*max_menus}.')
             self.warned = True
+
+        # Remove Submit button if only one dropdown
+        if self.num_menus == 1:
+            self.remove_item(models_submit_btn)
             
     def label_formatter(self, local_options, menu_ii):
         return f'{local_options[0].label[0]}-{local_options[-1].label[0]}'.upper()
@@ -145,7 +159,7 @@ class SelectOptionsView(discord.ui.View):
             await interaction.response.defer()
             self.stop()
 
-    @discord.ui.button(label='Unload Model', style=discord.ButtonStyle.secondary, custom_id="models_unload", row=4)
+    @discord.ui.button(label='Unload Model', style=discord.ButtonStyle.danger, custom_id="models_unload", row=4)
     async def unload_model_button(self, interaction: discord.Interaction, button:discord.ui.Button):
         self.selected_item = self.unload_item
         await interaction.response.defer()
