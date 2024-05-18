@@ -4088,7 +4088,7 @@ if sd_enabled:
             imgmodels_view = SelectOptionsView(items_for_img_model, 
                                                custom_id_prefix='imgmodels', 
                                                placeholder_prefix='ImgModels: ', 
-                                               unload_item=unload_imgmodel,
+                                               unload_item=None,
                                                warned=warned_too_many_img_model)
             view_message = await ctx.send('### Select an Image Model.', view=imgmodels_view, ephemeral=True)
             await imgmodels_view.wait()
