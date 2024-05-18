@@ -1,6 +1,8 @@
 from ad_discordbot.modules.logs import import_track, log, get_logger; import_track(__file__, fp=True)
 logging = get_logger(__name__)
 from ad_discordbot.modules.utils_shared import task_semaphore
+import discord
+
 
 # Send message response to user's interaction command
 async def ireply(i, process):
@@ -72,3 +74,62 @@ async def send_long_message(channel, message_text):
                 chunk_text, code_block_inserted = ensure_even_code_blocks(message_text, code_block_inserted)
                 sent_message = await channel.send(chunk_text)
                 break
+            
+            
+class SelectedListItem(discord.ui.Select):
+    def __init__(self, options, placeholder, custom_id):
+        super().__init__(placeholder=placeholder, min_values=0, max_values=1, options=options, custom_id=custom_id)
+
+    async def callback(self, interaction: discord.Interaction):
+        if self.values:
+            self.view.selected_item = int(self.values[0])
+        await interaction.response.defer()
+        
+class SelectOptionsView(discord.ui.View):
+    '''
+    Use view.warned to check if too many items message has been logged.
+    Pass warned=True to bypass warning.
+    '''
+
+    def __init__(self, all_items, max_menus=4, max_items_per_menu=25, custom_id_prefix='items', placeholder_prefix='Items ', warned=False):
+        super().__init__()
+        self.selected_item = None
+        self.warned = warned
+        
+        assert max_items_per_menu <= 25
+        assert max_menus <= 4
+        
+        self.all_items = all_items
+        all_choices = [discord.SelectOption(label=name[:100], value=ii) for ii, name in enumerate(self.all_items)]
+        
+        for menu_ii in range(max_menus): # 4 max dropdowns
+            local_options = all_choices[max_items_per_menu*menu_ii: max_items_per_menu*(menu_ii+1)]
+            if not local_options: # end of items
+                break
+            
+            self.add_item(SelectedListItem(options=local_options,
+                                            placeholder=f'{placeholder_prefix}{self.label_formatter(local_options)}', 
+                                            custom_id=f"{custom_id_prefix}_{menu_ii}_select",
+                                            ))
+            
+        menu_ii += 1
+        local_options = all_choices[max_items_per_menu*menu_ii: max_items_per_menu*(menu_ii+1)]
+        if local_options and not self.warned:
+            logging.warning(f'Too many models, the menu will be truncated to the first {max_items_per_menu*max_menus}.')
+            self.warned = True
+            
+            
+    def label_formatter(self, local_options):
+        return f'{local_options[0].label[0]}-{local_options[-1].label[0]}'.upper()
+    
+    def get_selected(self, items:list=None):
+        items = items or self.all_items
+        return items[self.selected_item]
+
+    @discord.ui.button(label='Submit', style=discord.ButtonStyle.primary, custom_id="models_submit", row=4)
+    async def submit_button(self, interaction: discord.Interaction, button:discord.ui.Button):
+        if self.selected_item is None:
+            await interaction.response.send_message('No Image model selected.', ephemeral=True, delete_after=5)
+        else:
+            await interaction.response.defer()
+            self.stop()
