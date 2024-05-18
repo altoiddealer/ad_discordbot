@@ -4075,7 +4075,7 @@ if sd_enabled:
         # unload_options = [app_commands.Choice(name="Unload Model", value="None"),
         # app_commands.Choice(name="Do Not Unload Model", value="Exit")]
         
-        _img_model_hash_dict = {str(hash(imgmodel["imgmodel_name"])):imgmodel["imgmodel_name"] for imgmodel in all_imgmodels}
+    _img_model_hash_dict = {str(hash(imgmodel["imgmodel_name"])):imgmodel["imgmodel_name"] for imgmodel in all_imgmodels}
 
     async def select_imgmodel(ctx):
 
@@ -4147,6 +4147,11 @@ if sd_enabled:
             view_message = await ctx.send('### Select an Image Model.', view=imgmodels_view, ephemeral=True)
             await imgmodels_view.wait()
             selected_imgmodel = imgmodels_view.selected_imgmodel
+            
+            if selected_imgmodel:
+                # convert from hash back to the selected option (the name)
+                selected_imgmodel = _img_model_hash_dict[selected_imgmodel]
+                
             await view_message.delete()
             await process_imgmodel(ctx, selected_imgmodel)
         except Exception as e:
