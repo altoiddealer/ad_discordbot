@@ -3797,86 +3797,29 @@ def get_all_characters():
 if textgenwebui_enabled:
     all_characters, filtered_characters = get_all_characters()
     if filtered_characters:
-        character_options = [app_commands.Choice(name=character["name"][:100], value=character["name"]) for character in filtered_characters[:25]]
-        character_options_label = f'{character_options[0].name[0]}-{character_options[-1].name[0]}'.lower()
-        if len(filtered_characters) > 25:
-            character_options1 = [app_commands.Choice(name=character["name"][:100], value=character["name"]) for character in filtered_characters[25:50]]
-            character_options1_label = f'{character_options1[0].name[0]}-{character_options1[-1].name[0]}'.lower()
-            if character_options1_label == character_options_label:
-                character_options1_label = f'{character_options1_label}_1'
-            if len(filtered_characters) > 50:
-                character_options2 = [app_commands.Choice(name=character["name"][:100], value=character["name"]) for character in filtered_characters[50:75]]
-                character_options2_label = f'{character_options2[0].name[0]}-{character_options2[-1].name[0]}'.lower()
-                if character_options2_label == character_options_label or character_options2_label == character_options1_label:
-                    character_options2_label = f'{character_options2_label}_2'
-                if len(filtered_characters) > 75:
-                    character_options3 = [app_commands.Choice(name=character["name"][:100], value=character["name"]) for character in filtered_characters[75:100]]
-                    character_options3_label = f'{character_options3[0].name[0]}-{character_options3[-1].name[0]}'.lower()
-                    if character_options3_label == character_options_label or character_options3_label == character_options1_label or character_options3_label == character_options2_label:
-                        character_options3_label = f'{character_options2_label}_3'
-                    if len(filtered_characters) > 100:
-                        filtered_characters = filtered_characters[:100]
-                        logging.warning("'/character' command only allows up to 100 characters. Some characters were omitted.")
 
-        if len(filtered_characters) <= 25:
-            @client.hybrid_command(name="character", description='Choose an character')
-            @app_commands.rename(characters=f'characters_{character_options_label}')
-            @app_commands.describe(characters=f'characters {character_options_label.upper()}')
-            @app_commands.choices(characters=character_options)
-            async def character(ctx: discord.ext.commands.Context, characters: typing.Optional[app_commands.Choice[str]]):
-                selected_character = characters.value if characters is not None else ''
-                await process_character(ctx, selected_character)
+        items_for_character = [i['name'] for i in filtered_characters]
 
-        elif 25 < len(filtered_characters) <= 50:
-            @client.hybrid_command(name="character", description='Choose an character (pick only one)')
-            @app_commands.rename(characters_1=f'characters_{character_options_label}')
-            @app_commands.describe(characters_1=f'characters {character_options_label.upper()}')
-            @app_commands.choices(characters_1=character_options)
-            @app_commands.rename(characters_2=f'characters_{character_options1_label}')
-            @app_commands.describe(characters_2=f'characters {character_options1_label.upper()}')
-            @app_commands.choices(characters_2=character_options1)
-            async def character(ctx: discord.ext.commands.Context, characters_1: typing.Optional[app_commands.Choice[str]], characters_2: typing.Optional[app_commands.Choice[str]]):
-                if characters_1 and characters_2:
-                    await ctx.send("More than one character was selected. Using the first selection.", ephemeral=True)
-                selected_character = ((characters_1 or characters_2) and (characters_1 or characters_2).value) or ''
-                await process_character(ctx, selected_character)
-
-        elif 50 < len(filtered_characters) <= 75:
-            @client.hybrid_command(name="character", description='Choose an character (pick only one)')
-            @app_commands.rename(characters_1=f'characters_{character_options_label}')
-            @app_commands.describe(characters_1=f'characters {character_options_label.upper()}')
-            @app_commands.choices(characters_1=character_options)
-            @app_commands.rename(characters_2=f'characters_{character_options1_label}')
-            @app_commands.describe(characters_2=f'characters {character_options1_label.upper()}')
-            @app_commands.choices(characters_2=character_options1)
-            @app_commands.rename(characters_3=f'characters_{character_options2_label}')
-            @app_commands.describe(characters_3=f'characters {character_options2_label.upper()}')
-            @app_commands.choices(characters_3=character_options2)
-            async def character(ctx: discord.ext.commands.Context, characters_1: typing.Optional[app_commands.Choice[str]], characters_2: typing.Optional[app_commands.Choice[str]], characters_3: typing.Optional[app_commands.Choice[str]]):
-                if sum(1 for v in (characters_1, characters_2, characters_3) if v) > 1:
-                    await ctx.send("More than one character was selected. Using the first selection.", ephemeral=True)
-                selected_character = ((characters_1 or characters_2 or characters_3) and (characters_1 or characters_2 or characters_3).value) or ''
-                await process_character(ctx, selected_character)
-
-        elif 75 < len(filtered_characters) <= 100:
-            @client.hybrid_command(name="character", description='Choose an character (pick only one)')
-            @app_commands.rename(characters_1=f'characters_{character_options_label}')
-            @app_commands.describe(characters_1=f'characters {character_options_label.upper()}')
-            @app_commands.choices(characters_1=character_options)
-            @app_commands.rename(characters_2=f'characters_{character_options1_label}')
-            @app_commands.describe(characters_2=f'characters {character_options1_label.upper()}')
-            @app_commands.choices(characters_2=character_options1)
-            @app_commands.rename(characters_3=f'characters_{character_options2_label}')
-            @app_commands.describe(characters_3=f'characters {character_options2_label.upper()}')
-            @app_commands.choices(characters_3=character_options2)
-            @app_commands.rename(characters_4=f'characters_{character_options3_label}')
-            @app_commands.describe(characters_4=f'characters {character_options3_label.upper()}')
-            @app_commands.choices(characters_4=character_options3)
-            async def character(ctx: discord.ext.commands.Context, characters_1: typing.Optional[app_commands.Choice[str]], characters_2: typing.Optional[app_commands.Choice[str]], characters_3: typing.Optional[app_commands.Choice[str]], characters_4: typing.Optional[app_commands.Choice[str]]):
-                if sum(1 for v in (characters_1, characters_2, characters_3, characters_4) if v) > 1:
-                    await ctx.send("More than one character was selected. Using the first selection.", ephemeral=True)
-                selected_character = ((characters_1 or characters_2 or characters_3 or characters_4) and (characters_1 or characters_2 or characters_3 or characters_4).value) or ''
-                await process_character(ctx, selected_character)
+        @client.hybrid_command(description="Choose a character")
+        async def character(ctx: discord.ext.commands.Context):
+            # View containing Selects for Characters
+            try:
+                warned_too_many_character = False # TODO use the warned_once feature?
+                # SelectOptionsView in '/modules/utils_discord.py'
+                characters_view = SelectOptionsView(items_for_character, 
+                                                custom_id_prefix='characters', 
+                                                placeholder_prefix='Characters: ', 
+                                                unload_item=None,
+                                                warned=warned_too_many_character)
+                view_message = await ctx.send('### Select an LLM Model.', view=characters_view, ephemeral=True)
+                await characters_view.wait()
+                
+                selected_item = characters_view.get_selected()
+                await view_message.delete()
+                await process_character(ctx, selected_item)
+                
+            except Exception as e:
+                logging.error(f"An error occurred while selecting a Character from '/characters' command: {e}")
 
 #################################################################
 ####################### /IMGMODEL COMMAND #######################
@@ -4077,8 +4020,6 @@ if sd_enabled:
     
     items_for_img_model = [i["imgmodel_name"] for i in all_imgmodels]
 
-#    unload_imgmodel = items_for_img_model.pop(0)
-
     @client.hybrid_command(description="Choose an imgmodel")
     async def imgmodel(ctx: discord.ext.commands.Context):
         # View containing Selects for Image models
@@ -4122,97 +4063,31 @@ async def process_llmmodel(ctx, selected_llmmodel):
         logging.error(f"Error processing /llmmodel command: {e}")
 
 if textgenwebui_enabled and all_llmmodels:
-    
-    _llm_model_hash_dict = {str(hash(llmmodel)):llmmodel for llmmodel in all_llmmodels}
-    
-    llmmodel_options = [app_commands.Choice(name=llmmodel[:100], value=str(hash(llmmodel))) for llmmodel in all_llmmodels[:25]]
-    llmmodel_options_label = f'{llmmodel_options[1].name[0]}-{llmmodel_options[-1].name[0]}'.lower() # Using second "Name" since first name is "None"
-    if len(all_llmmodels) > 25:
-        llmmodel_options1 = [app_commands.Choice(name=llmmodel[:100], value=str(hash(llmmodel))) for llmmodel in all_llmmodels[25:50]]
-        llmmodel_options1_label = f'{llmmodel_options1[0].name[0]}-{llmmodel_options1[-1].name[0]}'.lower()
-        if llmmodel_options1_label == llmmodel_options_label:
-            llmmodel_options1_label = f'{llmmodel_options1_label}_1'
-        if len(all_llmmodels) > 50:
-            llmmodel_options2 = [app_commands.Choice(name=llmmodel[:100], value=str(hash(llmmodel))) for llmmodel in all_llmmodels[50:75]]
-            llmmodel_options2_label = f'{llmmodel_options2[0].name[0]}-{llmmodel_options2[-1].name[0]}'.lower()
-            if llmmodel_options2_label == llmmodel_options_label or llmmodel_options2_label == llmmodel_options1_label:
-                llmmodel_options2_label = f'{llmmodel_options2_label}_2'
-            if len(all_llmmodels) > 75:
-                llmmodel_options3 = [app_commands.Choice(name=llmmodel[:100], value=str(hash(llmmodel))) for llmmodel in all_llmmodels[75:100]]
-                llmmodel_options3_label = f'{llmmodel_options3[0].name[0]}-{llmmodel_options3[-1].name[0]}'.lower()
-                if llmmodel_options3_label == llmmodel_options_label or llmmodel_options3_label == llmmodel_options1_label or llmmodel_options3_label == llmmodel_options2_label:
-                    llmmodel_options3_label = f'{llmmodel_options3_label}_3'
-                if len(all_llmmodels) > 100:
-                    all_llmmodels = all_llmmodels[:100]
-                    logging.warning("'/llmmodel' command only allows up to 100 LLM models. Some models were omitted.")
 
-    if len(all_llmmodels) <= 25:
-        @client.hybrid_command(name="llmmodel", description='Choose an LLM model')
-        @app_commands.rename(llmmodels=f'llm-models_{llmmodel_options_label}')
-        @app_commands.describe(llmmodels=f'LLM models {llmmodel_options_label.upper()}')
-        @app_commands.choices(llmmodels=llmmodel_options)
-        async def llmmodel(ctx: discord.ext.commands.Context, llmmodels: typing.Optional[app_commands.Choice[str]]):
-            selected_llmmodel = llmmodels.value if llmmodels is not None else ''
-            if selected_llmmodel:
-                selected_llmmodel = _llm_model_hash_dict[selected_llmmodel]
-            await process_llmmodel(ctx, selected_llmmodel)
+    items_for_llm_model = [i for i in all_llmmodels]
 
-    elif 25 < len(all_llmmodels) <= 50:
-        @client.hybrid_command(name="llmmodel", description='Choose an LLM model (pick only one)')
-        @app_commands.rename(models_1=f'llm-models_{llmmodel_options_label}')
-        @app_commands.describe(models_1=f'LLM models {llmmodel_options_label.upper()}')
-        @app_commands.choices(models_1=llmmodel_options)
-        @app_commands.rename(models_2=f'llm-models_{llmmodel_options1_label}')
-        @app_commands.describe(models_2=f'LLM models {llmmodel_options1_label.upper()}')
-        @app_commands.choices(models_2=llmmodel_options1)
-        async def llmmodel(ctx: discord.ext.commands.Context, models_1: typing.Optional[app_commands.Choice[str]], models_2: typing.Optional[app_commands.Choice[str]]):
-            if models_1 and models_2:
-                await ctx.send("More than one LLM model was selected. Using the first selection.", ephemeral=True)
-            selected_llmmodel = ((models_1 or models_2) and (models_1 or models_2).value) or ''
-            if selected_llmmodel:
-                selected_llmmodel = _llm_model_hash_dict[selected_llmmodel]
-            await process_llmmodel(ctx, selected_llmmodel)
+    unload_llmmodel = items_for_llm_model.pop(0)
 
-    elif 50 < len(all_llmmodels) <= 75:
-        @client.hybrid_command(name="llmmodel", description='Choose an LLM model (pick only one)')
-        @app_commands.rename(models_1=f'llm-models_{llmmodel_options_label}')
-        @app_commands.describe(models_1=f'LLM models {llmmodel_options_label.upper()}')
-        @app_commands.choices(models_1=llmmodel_options)
-        @app_commands.rename(models_2=f'llm-models_{llmmodel_options1_label}')
-        @app_commands.describe(models_2=f'LLM models {llmmodel_options1_label.upper()}')
-        @app_commands.choices(models_2=llmmodel_options1)
-        @app_commands.rename(models_3=f'llm-models_{llmmodel_options2_label}')
-        @app_commands.describe(models_3=f'LLM models {llmmodel_options2_label.upper()}')
-        @app_commands.choices(models_3=llmmodel_options2)
-        async def llmmodel(ctx: discord.ext.commands.Context, models_1: typing.Optional[app_commands.Choice[str]], models_2: typing.Optional[app_commands.Choice[str]], models_3: typing.Optional[app_commands.Choice[str]]):
-            if sum(1 for v in (models_1, models_2, models_3) if v) > 1:
-                await ctx.send("More than one LLM model was selected. Using the first selection.", ephemeral=True)
-            selected_llmmodel = ((models_1 or models_2 or models_3) and (models_1 or models_2 or models_3).value) or ''
-            if selected_llmmodel:
-                selected_llmmodel = _llm_model_hash_dict[selected_llmmodel]
-            await process_llmmodel(ctx, selected_llmmodel)
-
-    elif 75 < len(all_llmmodels) <= 100:
-        @client.hybrid_command(name="llmmodel", description='Choose an LLM model (pick only one)')
-        @app_commands.rename(models_1=f'llm-models_{llmmodel_options_label}')
-        @app_commands.describe(models_1=f'LLM models {llmmodel_options_label.upper()}')
-        @app_commands.choices(models_1=llmmodel_options)
-        @app_commands.rename(models_2=f'llm-models_{llmmodel_options1_label}')
-        @app_commands.describe(models_2=f'LLM models {llmmodel_options1_label.upper()}')
-        @app_commands.choices(models_2=llmmodel_options1)
-        @app_commands.rename(models_3=f'llm-models_{llmmodel_options2_label}')
-        @app_commands.describe(models_3=f'LLM models {llmmodel_options2_label.upper()}')
-        @app_commands.choices(models_3=llmmodel_options2)
-        @app_commands.rename(models_4=f'llm-models_{llmmodel_options3_label}')
-        @app_commands.describe(models_4=f'LLM models {llmmodel_options3_label.upper()}')
-        @app_commands.choices(models_4=llmmodel_options3)
-        async def llmmodel(ctx: discord.ext.commands.Context, models_1: typing.Optional[app_commands.Choice[str]], models_2: typing.Optional[app_commands.Choice[str]], models_3: typing.Optional[app_commands.Choice[str]], models_4: typing.Optional[app_commands.Choice[str]]):
-            if sum(1 for v in (models_1, models_2, models_3, models_4) if v) > 1:
-                await ctx.send("More than one LLM model was selected. Using the first selection.", ephemeral=True)
-            selected_llmmodel = ((models_1 or models_2 or models_3 or models_4) and (models_1 or models_2 or models_3 or models_4).value) or ''
-            if selected_llmmodel:
-                selected_llmmodel = _llm_model_hash_dict[selected_llmmodel]
-            await process_llmmodel(ctx, selected_llmmodel)
+    @client.hybrid_command(description="Choose an LLM Model")
+    async def llmmodel(ctx: discord.ext.commands.Context):
+        # View containing Selects for LLM models
+        try:
+            warned_too_many_llm_model = False # TODO use the warned_once feature?
+            # SelectOptionsView in '/modules/utils_discord.py'
+            llmmodels_view = SelectOptionsView(items_for_llm_model, 
+                                               custom_id_prefix='llmmodels', 
+                                               placeholder_prefix='LLMModels: ', 
+                                               unload_item=unload_llmmodel,
+                                               warned=warned_too_many_llm_model)
+            view_message = await ctx.send('### Select an LLM Model.', view=llmmodels_view, ephemeral=True)
+            await llmmodels_view.wait()
+            
+            selected_item = llmmodels_view.get_selected()
+            await view_message.delete()
+            await process_llmmodel(ctx, selected_item)
+            
+        except Exception as e:
+            logging.error(f"An error occurred while selecting an LLM model from '/llmmodel' command: {e}")
 
 #################################################################
 ####################### /SPEAK COMMAND #######################
