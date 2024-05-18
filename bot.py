@@ -3811,7 +3811,7 @@ if textgenwebui_enabled:
                                                 placeholder_prefix='Characters: ', 
                                                 unload_item=None,
                                                 warned=warned_too_many_character)
-                view_message = await ctx.send('### Select an LLM Model.', view=characters_view, ephemeral=True)
+                view_message = await ctx.send('### Select a Character.', view=characters_view, ephemeral=True)
                 await characters_view.wait()
 
                 selected_item = characters_view.get_selected()
@@ -4004,7 +4004,7 @@ async def process_imgmodel(ctx, selected_imgmodel_value):
 
 if sd_enabled:
 
-    @client.hybrid_command(description="Choose an imgmodel")
+    @client.hybrid_command(description="Choose an Img Model")
     async def imgmodel(ctx: discord.ext.commands.Context):
         try:
             all_imgmodels = await fetch_imgmodels()
