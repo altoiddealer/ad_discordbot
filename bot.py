@@ -37,7 +37,7 @@ sys.path.append("ad_discordbot")
 from ad_discordbot.modules.database import Database, ActiveSettings, StarBoard
 from ad_discordbot.modules.utils_shared import task_semaphore, shared_path
 from ad_discordbot.modules.utils_misc import fix_dict, update_dict, sum_update_dict, update_dict_matched_keys
-from ad_discordbot.modules.utils_discord import ireply, send_long_message
+from ad_discordbot.modules.utils_discord import ireply, send_long_message, SelectedListItem, SelectOptionsView
 from ad_discordbot.modules.utils_files import load_file, merge_base, save_yaml_file
 
 bot_active_settings = ActiveSettings()
@@ -314,7 +314,7 @@ def init_textgenwebui_settings():
     elif Path("settings.yaml").exists():
         settings_file = Path("settings.yaml")
     if settings_file is not None:
-        logging.info(f"Loading settings from {settings_file}...")
+        logging.info(f"Loading text-generation-webui settings from {settings_file}...")
         file_contents = open(settings_file, 'r', encoding='utf-8').read()
         new_settings = json.loads(file_contents) if settings_file.suffix == "json" else yaml.safe_load(file_contents)
         shared.settings.update(new_settings)
@@ -397,6 +397,8 @@ def init_textgenwebui_extensions():
     return tts_client, tts_api_key, tts_voice_key, tts_lang_key
 
 def init_textgenwebui_llmmodels():
+    all_llmmodels = utils.get_available_models()
+
     # Model defined through --model
     if shared.args.model is not None:
         shared.model_name = shared.args.model
@@ -469,7 +471,6 @@ if textgenwebui_enabled:
     init_textgenwebui_settings()
     tts_client, tts_api_key, tts_voice_key, tts_lang_key = init_textgenwebui_extensions()
     # Get list of available models
-    all_llmmodels = utils.get_available_models()
     init_textgenwebui_llmmodels()
     asyncio.run(load_llm_model())
     shared.generation_lock = Lock()
@@ -489,13 +490,15 @@ async def process_tasks_in_background():
 #################################################################
 ## Function to automatically change image models
 # Select imgmodel based on mode, while avoid repeating current imgmodel
-async def auto_select_imgmodel(current_imgmodel_name, imgmodel_names, mode='random'):   
+async def auto_select_imgmodel(current_imgmodel_name, mode='random'):   
     try:
+        all_imgmodels = await fetch_imgmodels()
         imgmodels = copy.deepcopy(all_imgmodels)
+        all_imgmodel_names = [imgmodel.get('imgmodel_name', '') for imgmodel in all_imgmodels] 
         if mode == 'random':
             if current_imgmodel_name:
                 matched_imgmodel = None
-                for imgmodel, imgmodel_name in zip(imgmodels, imgmodel_names):
+                for imgmodel, imgmodel_name in zip(imgmodels, all_imgmodel_names):
                     if imgmodel_name == current_imgmodel_name:
                         matched_imgmodel = imgmodel
                         break
@@ -503,9 +506,9 @@ async def auto_select_imgmodel(current_imgmodel_name, imgmodel_names, mode='rand
                     imgmodels.remove(matched_imgmodel)
             selected_imgmodel = random.choice(imgmodels)
         elif mode == 'cycle':
-            if current_imgmodel_name in imgmodel_names:
-                current_index = imgmodel_names.index(current_imgmodel_name)
-                next_index = (current_index + 1) % len(imgmodel_names)  # Cycle to the beginning if at the end
+            if current_imgmodel_name in all_imgmodel_names:
+                current_index = all_imgmodel_names.index(current_imgmodel_name)
+                next_index = (current_index + 1) % len(all_imgmodel_names)  # Cycle to the beginning if at the end
                 selected_imgmodel = imgmodels[next_index]
             else:
                 selected_imgmodel = random.choice(imgmodels) # If no image model set yet, select randomly
@@ -523,11 +526,9 @@ async def auto_update_imgmodel_task(mode, duration):
             auto_change_settings = imgmodels_data.get('settings', {}).get('auto_change_imgmodels', {})
             channel = auto_change_settings.get('channel_announce', None)
             if channel == 11111111111111111111: channel = None
-            
-            current_imgmodel_name = bot_active_settings.get('imgmodel', {}).get('imgmodel_name', '')
-            imgmodel_names = [imgmodel.get('imgmodel_name', '') for imgmodel in all_imgmodels]           
+            current_imgmodel_name = bot_settings.settings['imgmodel'].get('imgmodel_name', '')
             # Select an imgmodel automatically
-            selected_imgmodel = await auto_select_imgmodel(current_imgmodel_name, imgmodel_names, mode)
+            selected_imgmodel = await auto_select_imgmodel(current_imgmodel_name, mode)
             if channel: channel = client.get_channel(channel)
             
             async with task_semaphore:
@@ -1035,6 +1036,7 @@ async def process_llm_payload_tags(user_name, channel, llm_payload, llm_prompt, 
         char_params = change_character or swap_character or {} # 'character_change' will trump 'character_swap'
         if char_params:
             # Error handling
+            all_characters, _ = get_all_characters()
             if not any(char_params == char['name'] for char in all_characters):
                 logging.error(f'Character not found: {char_params}')
             else:
@@ -1056,6 +1058,7 @@ async def process_llm_payload_tags(user_name, channel, llm_payload, llm_prompt, 
                 mode = 'change' if params == change_llmmodel else 'swap'
                 verb = 'Changing' if mode == 'change' else 'Swapping'
                 # Error handling
+                all_llmmodels = utils.get_available_models()
                 if not any(params == model for model in all_llmmodels):
                     logging.error(f'LLM model not found: {params}')
                 else:
@@ -3795,88 +3798,29 @@ def get_all_characters():
     return all_characters, filtered_characters
 
 if textgenwebui_enabled:
-    all_characters, filtered_characters = get_all_characters()
-    if filtered_characters:
-        character_options = [app_commands.Choice(name=character["name"][:100], value=character["name"]) for character in filtered_characters[:25]]
-        character_options_label = f'{character_options[0].name[0]}-{character_options[-1].name[0]}'.lower()
-        if len(filtered_characters) > 25:
-            character_options1 = [app_commands.Choice(name=character["name"][:100], value=character["name"]) for character in filtered_characters[25:50]]
-            character_options1_label = f'{character_options1[0].name[0]}-{character_options1[-1].name[0]}'.lower()
-            if character_options1_label == character_options_label:
-                character_options1_label = f'{character_options1_label}_1'
-            if len(filtered_characters) > 50:
-                character_options2 = [app_commands.Choice(name=character["name"][:100], value=character["name"]) for character in filtered_characters[50:75]]
-                character_options2_label = f'{character_options2[0].name[0]}-{character_options2[-1].name[0]}'.lower()
-                if character_options2_label == character_options_label or character_options2_label == character_options1_label:
-                    character_options2_label = f'{character_options2_label}_2'
-                if len(filtered_characters) > 75:
-                    character_options3 = [app_commands.Choice(name=character["name"][:100], value=character["name"]) for character in filtered_characters[75:100]]
-                    character_options3_label = f'{character_options3[0].name[0]}-{character_options3[-1].name[0]}'.lower()
-                    if character_options3_label == character_options_label or character_options3_label == character_options1_label or character_options3_label == character_options2_label:
-                        character_options3_label = f'{character_options2_label}_3'
-                    if len(filtered_characters) > 100:
-                        filtered_characters = filtered_characters[:100]
-                        logging.warning("'/character' command only allows up to 100 characters. Some characters were omitted.")
+    # Command to change characters
+    @client.hybrid_command(description="Choose a character")
+    async def character(ctx: discord.ext.commands.Context):
+        try:
+            _, filtered_characters = get_all_characters()
+            if filtered_characters:
+                items_for_character = [i['name'] for i in filtered_characters]
+                warned_too_many_character = False # TODO use the warned_once feature?
+                characters_view = SelectOptionsView(items_for_character, 
+                                                custom_id_prefix='characters', 
+                                                placeholder_prefix='Characters: ', 
+                                                unload_item=None,
+                                                warned=warned_too_many_character)
+                view_message = await ctx.send('### Select an LLM Model.', view=characters_view, ephemeral=True)
+                await characters_view.wait()
 
-        if len(filtered_characters) <= 25:
-            @client.hybrid_command(name="character", description='Choose an character')
-            @app_commands.rename(characters=f'characters_{character_options_label}')
-            @app_commands.describe(characters=f'characters {character_options_label.upper()}')
-            @app_commands.choices(characters=character_options)
-            async def character(ctx: discord.ext.commands.Context, characters: typing.Optional[app_commands.Choice[str]]):
-                selected_character = characters.value if characters is not None else ''
-                await process_character(ctx, selected_character)
-
-        elif 25 < len(filtered_characters) <= 50:
-            @client.hybrid_command(name="character", description='Choose an character (pick only one)')
-            @app_commands.rename(characters_1=f'characters_{character_options_label}')
-            @app_commands.describe(characters_1=f'characters {character_options_label.upper()}')
-            @app_commands.choices(characters_1=character_options)
-            @app_commands.rename(characters_2=f'characters_{character_options1_label}')
-            @app_commands.describe(characters_2=f'characters {character_options1_label.upper()}')
-            @app_commands.choices(characters_2=character_options1)
-            async def character(ctx: discord.ext.commands.Context, characters_1: typing.Optional[app_commands.Choice[str]], characters_2: typing.Optional[app_commands.Choice[str]]):
-                if characters_1 and characters_2:
-                    await ctx.send("More than one character was selected. Using the first selection.", ephemeral=True)
-                selected_character = ((characters_1 or characters_2) and (characters_1 or characters_2).value) or ''
-                await process_character(ctx, selected_character)
-
-        elif 50 < len(filtered_characters) <= 75:
-            @client.hybrid_command(name="character", description='Choose an character (pick only one)')
-            @app_commands.rename(characters_1=f'characters_{character_options_label}')
-            @app_commands.describe(characters_1=f'characters {character_options_label.upper()}')
-            @app_commands.choices(characters_1=character_options)
-            @app_commands.rename(characters_2=f'characters_{character_options1_label}')
-            @app_commands.describe(characters_2=f'characters {character_options1_label.upper()}')
-            @app_commands.choices(characters_2=character_options1)
-            @app_commands.rename(characters_3=f'characters_{character_options2_label}')
-            @app_commands.describe(characters_3=f'characters {character_options2_label.upper()}')
-            @app_commands.choices(characters_3=character_options2)
-            async def character(ctx: discord.ext.commands.Context, characters_1: typing.Optional[app_commands.Choice[str]], characters_2: typing.Optional[app_commands.Choice[str]], characters_3: typing.Optional[app_commands.Choice[str]]):
-                if sum(1 for v in (characters_1, characters_2, characters_3) if v) > 1:
-                    await ctx.send("More than one character was selected. Using the first selection.", ephemeral=True)
-                selected_character = ((characters_1 or characters_2 or characters_3) and (characters_1 or characters_2 or characters_3).value) or ''
-                await process_character(ctx, selected_character)
-
-        elif 75 < len(filtered_characters) <= 100:
-            @client.hybrid_command(name="character", description='Choose an character (pick only one)')
-            @app_commands.rename(characters_1=f'characters_{character_options_label}')
-            @app_commands.describe(characters_1=f'characters {character_options_label.upper()}')
-            @app_commands.choices(characters_1=character_options)
-            @app_commands.rename(characters_2=f'characters_{character_options1_label}')
-            @app_commands.describe(characters_2=f'characters {character_options1_label.upper()}')
-            @app_commands.choices(characters_2=character_options1)
-            @app_commands.rename(characters_3=f'characters_{character_options2_label}')
-            @app_commands.describe(characters_3=f'characters {character_options2_label.upper()}')
-            @app_commands.choices(characters_3=character_options2)
-            @app_commands.rename(characters_4=f'characters_{character_options3_label}')
-            @app_commands.describe(characters_4=f'characters {character_options3_label.upper()}')
-            @app_commands.choices(characters_4=character_options3)
-            async def character(ctx: discord.ext.commands.Context, characters_1: typing.Optional[app_commands.Choice[str]], characters_2: typing.Optional[app_commands.Choice[str]], characters_3: typing.Optional[app_commands.Choice[str]], characters_4: typing.Optional[app_commands.Choice[str]]):
-                if sum(1 for v in (characters_1, characters_2, characters_3, characters_4) if v) > 1:
-                    await ctx.send("More than one character was selected. Using the first selection.", ephemeral=True)
-                selected_character = ((characters_1 or characters_2 or characters_3 or characters_4) and (characters_1 or characters_2 or characters_3 or characters_4).value) or ''
-                await process_character(ctx, selected_character)
+                selected_item = characters_view.get_selected()
+                await view_message.delete()
+                await process_character(ctx, selected_item)
+            else:
+                await ctx.send('There are no characters available', ephemeral=True)
+        except Exception as e:
+            logging.error(f"An error occurred while selecting a Character from '/characters' command: {e}")
 
 #################################################################
 ####################### /IMGMODEL COMMAND #######################
@@ -3902,26 +3846,22 @@ async def filter_imgmodels(imgmodels):
 # Build list of imgmodels depending on user preference (user .yaml / API)
 async def fetch_imgmodels():
     try:
-        try:
-            imgmodels = await sd_api(endpoint='/sdapi/v1/sd-models', method='get', json=None, retry=False)
-            # Update 'title' keys in fetched list for uniformity
-            for imgmodel in imgmodels:
-                if 'title' in imgmodel:
-                    imgmodel['sd_model_checkpoint'] = imgmodel.pop('title')
-        except Exception as e:
-            logging.error(f"Error fetching image models from {SD_CLIENT} API: {e}")
-            if str(e).startswith('Cannot connect to host'):
-                logging.warning('"/imgmodels" command will initialize as an empty list. Stable Diffusion must be running before launching ad_discordbot.')
-            return ''
-        if imgmodels:
-            imgmodels = await filter_imgmodels(imgmodels)
-            return imgmodels
+        imgmodels = await sd_api(endpoint='/sdapi/v1/sd-models', method='get', json=None, retry=False)
+        # Update 'title' keys in fetched list for uniformity
+        for imgmodel in imgmodels:
+            if 'title' in imgmodel:
+                imgmodel['sd_model_checkpoint'] = imgmodel.pop('title')
+            if 'model_name' in imgmodel:
+                imgmodel['imgmodel_name'] = imgmodel.pop('model_name')
+        imgmodels = await filter_imgmodels(imgmodels)
+        return imgmodels
     except Exception as e:
         logging.error(f"Error fetching image models: {e}")
+        return {}
 
 async def update_imgmodel(channel, selected_imgmodel, selected_imgmodel_tags):
     try:
-        current_w, current_h = bot_active_settings['imgmodel'].get('payload', {}).get('width', 512), bot_active_settings['imgmodel'].get('payload', {}).get('height', 512)
+        current_w, current_h = bot_settings.settings['imgmodel'].get('payload', {}).get('width', 512), bot_settings.settings['imgmodel'].get('payload', {}).get('height', 512)
         new_w, new_h = selected_imgmodel.get('payload', {}).get('width', 512), selected_imgmodel.get('payload', {}).get('height', 512)
         bot_active_settings['imgmodel'] = selected_imgmodel
         bot_active_settings['imgmodel']['tags'] = selected_imgmodel_tags
@@ -3938,7 +3878,7 @@ async def update_imgmodel(channel, selected_imgmodel, selected_imgmodel_tags):
         #     await channel.send(embed=change_embed)
         #     return
         # Load the imgmodel and VAE via API
-        model_data = bot_active_settings['imgmodel'].get('override_settings') or bot_active_settings['imgmodel']['payload'].get('override_settings')
+        model_data = bot_settings.settings['imgmodel'].get('override_settings') or bot_settings.settings['imgmodel']['payload'].get('override_settings')
         _ = await sd_api(endpoint='/sdapi/v1/options', method='post', json=model_data, retry=True)
         # Update size options for /image command
         current_avg = average_width_height(current_w, current_h)    # get current average width/height
@@ -4028,6 +3968,7 @@ async def get_selected_imgmodel_data(selected_imgmodel_value):
         # if selected_imgmodel_value == 'Exit':
         #      selected_imgmodel = {'imgmodel_name': 'None were selected'}
         #     return selected_imgmodel
+        all_imgmodels = await fetch_imgmodels()
         all_imgmodel_data = copy.deepcopy(all_imgmodels)
         for imgmodel in all_imgmodel_data:
             # check that the value matches a valid checkpoint
@@ -4062,125 +4003,31 @@ async def process_imgmodel(ctx, selected_imgmodel_value):
         logging.error(f"Error processing selected imgmodel from /imgmodel command: {e}")
 
 if sd_enabled:
-    all_imgmodels = []
-    all_imgmodels = asyncio.run(fetch_imgmodels())
 
-    if all_imgmodels:
-        for imgmodel in all_imgmodels:
-            if 'model_name' in imgmodel:
-                imgmodel['imgmodel_name'] = imgmodel.pop('model_name')
-        
-        ### IF API IMG MODEL UNLOADING GETS EVER DEBUGGED
-        # unload_options = [app_commands.Choice(name="Unload Model", value="None"),
-        # app_commands.Choice(name="Do Not Unload Model", value="Exit")]
-        
-        _img_model_hash_dict = {str(hash(imgmodel["imgmodel_name"])):imgmodel["imgmodel_name"] for imgmodel in all_imgmodels}
-
-        imgmodel_options = [app_commands.Choice(name=imgmodel["imgmodel_name"][:100], value=str(hash(imgmodel["imgmodel_name"]))) for imgmodel in all_imgmodels[:25]]
-        imgmodel_options_label = f'{imgmodel_options[0].name[0]}-{imgmodel_options[-1].name[0]}'.lower()
-        if len(all_imgmodels) > 25:
-            imgmodel_options1 = [app_commands.Choice(name=imgmodel["imgmodel_name"][:100], value=str(hash(imgmodel["imgmodel_name"]))) for imgmodel in all_imgmodels[25:50]]
-            imgmodel_options1_label = f'{imgmodel_options1[0].name[0]}-{imgmodel_options1[-1].name[0]}'.lower()
-            if imgmodel_options1_label == imgmodel_options_label:
-                imgmodel_options1_label = f'{imgmodel_options1_label}_1'
-            if len(all_imgmodels) > 50:
-                imgmodel_options2 = [app_commands.Choice(name=imgmodel["imgmodel_name"][:100], value=str(hash(imgmodel["imgmodel_name"]))) for imgmodel in all_imgmodels[50:75]]
-                imgmodel_options2_label = f'{imgmodel_options2[0].name[0]}-{imgmodel_options2[-1].name[0]}'.lower()
-                if imgmodel_options2_label == imgmodel_options_label or imgmodel_options2_label == imgmodel_options1_label:
-                    imgmodel_options2_label = f'{imgmodel_options2_label}_2'
-                if len(all_imgmodels) > 75:
-                    imgmodel_options3 = [app_commands.Choice(name=imgmodel["imgmodel_name"][:100], value=str(hash(imgmodel["imgmodel_name"]))) for imgmodel in all_imgmodels[75:100]]
-                    imgmodel_options3_label = f'{imgmodel_options3[0].name[0]}-{imgmodel_options3[-1].name[0]}'.lower()
-                    if imgmodel_options3_label == imgmodel_options_label or imgmodel_options3_label == imgmodel_options1_label or imgmodel_options3_label == imgmodel_options2_label:
-                        imgmodel_options3_label = f'{imgmodel_options2_label}_3'
-                    if len(all_imgmodels) > 100:
-                        all_imgmodels = all_imgmodels[:100]
-                        logging.warning("'/imgmodel' command only allows up to 100 image models. Some models were omitted.")
-
-        if len(all_imgmodels) <= 25:
-            @client.hybrid_command(name="imgmodel", description='Choose an imgmodel')
-            @app_commands.rename(imgmodels=f'imgmodels_{imgmodel_options_label}')
-            @app_commands.describe(imgmodels=f'Imgmodels {imgmodel_options_label.upper()}')
-            @app_commands.choices(imgmodels=imgmodel_options)
-            async def imgmodel(ctx: discord.ext.commands.Context, imgmodels: typing.Optional[app_commands.Choice[str]]):
-        # @app_commands.choices(unload=unload_options) ### IF API IMG MODEL UNLOADING GETS EVER DEBUGGED
-        # async def imgmodel(ctx: discord.ext.commands.Context, imgmodels: typing.Optional[app_commands.Choice[str]], unload: typing.Optional[app_commands.Choice[str]]):
-        #     if imgmodels and unload:
-        #         await ctx.send("More than one option was selected. Using the first selection.", ephemeral=True)
-        #     selected_imgmodel = ((imgmodels or unload) and (imgmodels or unload).value) or ''
-                selected_imgmodel = imgmodels.value if imgmodels is not None else ''
-                if selected_imgmodel:
-                    selected_imgmodel = _img_model_hash_dict[selected_imgmodel]
-                await process_imgmodel(ctx, selected_imgmodel)
-
-        elif 25 < len(all_imgmodels) <= 50:
-            @client.hybrid_command(name="imgmodel", description='Choose an imgmodel (pick only one)')
-            @app_commands.rename(models_1=f'imgmodels_{imgmodel_options_label}')
-            @app_commands.describe(models_1=f'Imgmodels {imgmodel_options_label.upper()}')
-            @app_commands.choices(models_1=imgmodel_options)
-            @app_commands.rename(models_2=f'imgmodels_{imgmodel_options1_label}')
-            @app_commands.describe(models_2=f'Imgmodels {imgmodel_options1_label.upper()}')
-            @app_commands.choices(models_2=imgmodel_options1)
-            async def imgmodel(ctx: discord.ext.commands.Context, models_1: typing.Optional[app_commands.Choice[str]], models_2: typing.Optional[app_commands.Choice[str]]):
-        # @app_commands.choices(unload=unload_options) ### IF API IMG MODEL UNLOADING GETS EVER DEBUGGED
-        # async def imgmodel(ctx: discord.ext.commands.Context, models_1: typing.Optional[app_commands.Choice[str]], models_2: typing.Optional[app_commands.Choice[str]], unload: typing.Optional[app_commands.Choice[str]]):
-        #     if sum(1 for v in (models_1, models_2, unload) if v) > 1:
-                if models_1 and models_2:
-                    await ctx.send("More than one option was selected. Using the first selection.", ephemeral=True)
-        #     selected_imgmodel = ((models_1 or models_2 or unload) and (models_1 or models_2 or unload).value) or ''
-                selected_imgmodel = ((models_1 or models_2) and (models_1 or models_2).value) or ''
-                if selected_imgmodel:
-                    selected_imgmodel = _img_model_hash_dict[selected_imgmodel]
-                await process_imgmodel(ctx, selected_imgmodel)
-
-        elif 50 < len(all_imgmodels) <= 75:
-            @client.hybrid_command(name="imgmodel", description='Choose an imgmodel (pick only one)')
-            @app_commands.rename(models_1=f'imgmodels_{imgmodel_options_label}')
-            @app_commands.describe(models_1=f'Imgmodels {imgmodel_options_label.upper()}')
-            @app_commands.choices(models_1=imgmodel_options)
-            @app_commands.rename(models_2=f'imgmodels_{imgmodel_options1_label}')
-            @app_commands.describe(models_2=f'Imgmodels {imgmodel_options1_label.upper()}')
-            @app_commands.choices(models_2=imgmodel_options1)
-            @app_commands.rename(models_3=f'imgmodels_{imgmodel_options2_label}')
-            @app_commands.describe(models_3=f'Imgmodels {imgmodel_options2_label.upper()}')
-            @app_commands.choices(models_3=imgmodel_options2)
-            async def imgmodel(ctx: discord.ext.commands.Context, models_1: typing.Optional[app_commands.Choice[str]], models_2: typing.Optional[app_commands.Choice[str]], models_3: typing.Optional[app_commands.Choice[str]]):
-        # @app_commands.choices(unload=unload_options) ### IF API IMG MODEL UNLOADING GETS EVER DEBUGGED
-        # async def imgmodel(ctx: discord.ext.commands.Context, models_1: typing.Optional[app_commands.Choice[str]], models_2: typing.Optional[app_commands.Choice[str]], models_3: typing.Optional[app_commands.Choice[str]], unload: typing.Optional[app_commands.Choice[str]]):
-        #     if sum(1 for v in (models_1, models_2, models_3, unload) if v) > 1:
-                if sum(1 for v in (models_1, models_2, models_3) if v) > 1:
-                    await ctx.send("More than one option was selected. Using the first selection.", ephemeral=True)
-        #     selected_imgmodel = ((models_1 or models_2 or models_3 or unload) and (models_1 or models_2 or models_3 or unload).value) or ''
-                selected_imgmodel = ((models_1 or models_2 or models_3) and (models_1 or models_2 or models_3).value) or ''
-                if selected_imgmodel:
-                    selected_imgmodel = _img_model_hash_dict[selected_imgmodel]
-                await process_imgmodel(ctx, selected_imgmodel)
-
-        elif 75 < len(all_imgmodels) <= 100:
-            @client.hybrid_command(name="imgmodel", description='Choose an imgmodel (pick only one)')
-            @app_commands.rename(models_1=f'imgmodels_{imgmodel_options_label}')
-            @app_commands.describe(models_1=f'Imgmodels {imgmodel_options_label.upper()}')
-            @app_commands.choices(models_1=imgmodel_options)
-            @app_commands.rename(models_2=f'imgmodels_{imgmodel_options1_label}')
-            @app_commands.describe(models_2=f'Imgmodels {imgmodel_options1_label.upper()}')
-            @app_commands.choices(models_2=imgmodel_options1)
-            @app_commands.rename(models_3=f'imgmodels_{imgmodel_options2_label}')
-            @app_commands.describe(models_3=f'Imgmodels {imgmodel_options2_label.upper()}')
-            @app_commands.choices(models_3=imgmodel_options2)
-            @app_commands.rename(models_4=f'imgmodels_{imgmodel_options3_label}')
-            @app_commands.describe(models_4=f'Imgmodels {imgmodel_options3_label.upper()}')
-            @app_commands.choices(models_4=imgmodel_options3)
-            async def imgmodel(ctx: discord.ext.commands.Context, models_1: typing.Optional[app_commands.Choice[str]], models_2: typing.Optional[app_commands.Choice[str]], models_3: typing.Optional[app_commands.Choice[str]], models_4: typing.Optional[app_commands.Choice[str]]):
-        # @app_commands.choices(unload=unload_options) ### IF API IMG MODEL UNLOADING GETS EVER DEBUGGED
-        # async def imgmodel(ctx: discord.ext.commands.Context, models_1: typing.Optional[app_commands.Choice[str]], models_2: typing.Optional[app_commands.Choice[str]], models_3: typing.Optional[app_commands.Choice[str]], models_4: typing.Optional[app_commands.Choice[str]], unload: typing.Optional[app_commands.Choice[str]]):
-        #     if sum(1 for v in (models_1, models_2, models_3, models_4, unload) if v) > 1:
-                if sum(1 for v in (models_1, models_2, models_3, models_4) if v) > 1:
-                    await ctx.send("More than one option was selected. Using the first selection.", ephemeral=True)
-        #     selected_imgmodel = ((models_1 or models_2 or models_3 or models_4 or unload) and (models_1 or models_2 or models_3 or models_4 or unload).value) or ''
-                selected_imgmodel = ((models_1 or models_2 or models_3 or models_4) and (models_1 or models_2 or models_3 or models_4).value) or ''
-                if selected_imgmodel:
-                    selected_imgmodel = _img_model_hash_dict[selected_imgmodel]
-                await process_imgmodel(ctx, selected_imgmodel)
+    @client.hybrid_command(description="Choose an imgmodel")
+    async def imgmodel(ctx: discord.ext.commands.Context):
+        try:
+            all_imgmodels = await fetch_imgmodels()
+            if all_imgmodels:
+                ### IF API IMG MODEL UNLOADING GETS EVER DEBUGGED
+                # unload_options = [app_commands.Choice(name="Unload Model", value="None"),
+                # app_commands.Choice(name="Do Not Unload Model", value="Exit")]
+                items_for_img_model = [i["imgmodel_name"] for i in all_imgmodels]
+                warned_too_many_img_model = False # TODO use the warned_once feature?
+                imgmodels_view = SelectOptionsView(items_for_img_model, 
+                                                custom_id_prefix='imgmodels', 
+                                                placeholder_prefix='ImgModels: ', 
+                                                unload_item=None,
+                                                warned=warned_too_many_img_model)
+                view_message = await ctx.send('### Select an Image Model.', view=imgmodels_view, ephemeral=True)
+                await imgmodels_view.wait()
+                selected_item = imgmodels_view.get_selected()
+                await view_message.delete()
+                await process_imgmodel(ctx, selected_item)
+            else:
+                await ctx.send('There are no Img models available', ephemeral=True)
+        except Exception as e:
+            logging.error(f"An error occurred while selecting an Img model from '/imgmodel' command: {e}")
 
 #################################################################
 ####################### /LLMMODEL COMMAND #######################
@@ -4202,98 +4049,30 @@ async def process_llmmodel(ctx, selected_llmmodel):
     except Exception as e:
         logging.error(f"Error processing /llmmodel command: {e}")
 
-if textgenwebui_enabled and all_llmmodels:
-    
-    _llm_model_hash_dict = {str(hash(llmmodel)):llmmodel for llmmodel in all_llmmodels}
-    
-    llmmodel_options = [app_commands.Choice(name=llmmodel[:100], value=str(hash(llmmodel))) for llmmodel in all_llmmodels[:25]]
-    llmmodel_options_label = f'{llmmodel_options[1].name[0]}-{llmmodel_options[-1].name[0]}'.lower() # Using second "Name" since first name is "None"
-    if len(all_llmmodels) > 25:
-        llmmodel_options1 = [app_commands.Choice(name=llmmodel[:100], value=str(hash(llmmodel))) for llmmodel in all_llmmodels[25:50]]
-        llmmodel_options1_label = f'{llmmodel_options1[0].name[0]}-{llmmodel_options1[-1].name[0]}'.lower()
-        if llmmodel_options1_label == llmmodel_options_label:
-            llmmodel_options1_label = f'{llmmodel_options1_label}_1'
-        if len(all_llmmodels) > 50:
-            llmmodel_options2 = [app_commands.Choice(name=llmmodel[:100], value=str(hash(llmmodel))) for llmmodel in all_llmmodels[50:75]]
-            llmmodel_options2_label = f'{llmmodel_options2[0].name[0]}-{llmmodel_options2[-1].name[0]}'.lower()
-            if llmmodel_options2_label == llmmodel_options_label or llmmodel_options2_label == llmmodel_options1_label:
-                llmmodel_options2_label = f'{llmmodel_options2_label}_2'
-            if len(all_llmmodels) > 75:
-                llmmodel_options3 = [app_commands.Choice(name=llmmodel[:100], value=str(hash(llmmodel))) for llmmodel in all_llmmodels[75:100]]
-                llmmodel_options3_label = f'{llmmodel_options3[0].name[0]}-{llmmodel_options3[-1].name[0]}'.lower()
-                if llmmodel_options3_label == llmmodel_options_label or llmmodel_options3_label == llmmodel_options1_label or llmmodel_options3_label == llmmodel_options2_label:
-                    llmmodel_options3_label = f'{llmmodel_options3_label}_3'
-                if len(all_llmmodels) > 100:
-                    all_llmmodels = all_llmmodels[:100]
-                    logging.warning("'/llmmodel' command only allows up to 100 LLM models. Some models were omitted.")
+if textgenwebui_enabled:
 
-    if len(all_llmmodels) <= 25:
-        @client.hybrid_command(name="llmmodel", description='Choose an LLM model')
-        @app_commands.rename(llmmodels=f'llm-models_{llmmodel_options_label}')
-        @app_commands.describe(llmmodels=f'LLM models {llmmodel_options_label.upper()}')
-        @app_commands.choices(llmmodels=llmmodel_options)
-        async def llmmodel(ctx: discord.ext.commands.Context, llmmodels: typing.Optional[app_commands.Choice[str]]):
-            selected_llmmodel = llmmodels.value if llmmodels is not None else ''
-            if selected_llmmodel:
-                selected_llmmodel = _llm_model_hash_dict[selected_llmmodel]
-            await process_llmmodel(ctx, selected_llmmodel)
-
-    elif 25 < len(all_llmmodels) <= 50:
-        @client.hybrid_command(name="llmmodel", description='Choose an LLM model (pick only one)')
-        @app_commands.rename(models_1=f'llm-models_{llmmodel_options_label}')
-        @app_commands.describe(models_1=f'LLM models {llmmodel_options_label.upper()}')
-        @app_commands.choices(models_1=llmmodel_options)
-        @app_commands.rename(models_2=f'llm-models_{llmmodel_options1_label}')
-        @app_commands.describe(models_2=f'LLM models {llmmodel_options1_label.upper()}')
-        @app_commands.choices(models_2=llmmodel_options1)
-        async def llmmodel(ctx: discord.ext.commands.Context, models_1: typing.Optional[app_commands.Choice[str]], models_2: typing.Optional[app_commands.Choice[str]]):
-            if models_1 and models_2:
-                await ctx.send("More than one LLM model was selected. Using the first selection.", ephemeral=True)
-            selected_llmmodel = ((models_1 or models_2) and (models_1 or models_2).value) or ''
-            if selected_llmmodel:
-                selected_llmmodel = _llm_model_hash_dict[selected_llmmodel]
-            await process_llmmodel(ctx, selected_llmmodel)
-
-    elif 50 < len(all_llmmodels) <= 75:
-        @client.hybrid_command(name="llmmodel", description='Choose an LLM model (pick only one)')
-        @app_commands.rename(models_1=f'llm-models_{llmmodel_options_label}')
-        @app_commands.describe(models_1=f'LLM models {llmmodel_options_label.upper()}')
-        @app_commands.choices(models_1=llmmodel_options)
-        @app_commands.rename(models_2=f'llm-models_{llmmodel_options1_label}')
-        @app_commands.describe(models_2=f'LLM models {llmmodel_options1_label.upper()}')
-        @app_commands.choices(models_2=llmmodel_options1)
-        @app_commands.rename(models_3=f'llm-models_{llmmodel_options2_label}')
-        @app_commands.describe(models_3=f'LLM models {llmmodel_options2_label.upper()}')
-        @app_commands.choices(models_3=llmmodel_options2)
-        async def llmmodel(ctx: discord.ext.commands.Context, models_1: typing.Optional[app_commands.Choice[str]], models_2: typing.Optional[app_commands.Choice[str]], models_3: typing.Optional[app_commands.Choice[str]]):
-            if sum(1 for v in (models_1, models_2, models_3) if v) > 1:
-                await ctx.send("More than one LLM model was selected. Using the first selection.", ephemeral=True)
-            selected_llmmodel = ((models_1 or models_2 or models_3) and (models_1 or models_2 or models_3).value) or ''
-            if selected_llmmodel:
-                selected_llmmodel = _llm_model_hash_dict[selected_llmmodel]
-            await process_llmmodel(ctx, selected_llmmodel)
-
-    elif 75 < len(all_llmmodels) <= 100:
-        @client.hybrid_command(name="llmmodel", description='Choose an LLM model (pick only one)')
-        @app_commands.rename(models_1=f'llm-models_{llmmodel_options_label}')
-        @app_commands.describe(models_1=f'LLM models {llmmodel_options_label.upper()}')
-        @app_commands.choices(models_1=llmmodel_options)
-        @app_commands.rename(models_2=f'llm-models_{llmmodel_options1_label}')
-        @app_commands.describe(models_2=f'LLM models {llmmodel_options1_label.upper()}')
-        @app_commands.choices(models_2=llmmodel_options1)
-        @app_commands.rename(models_3=f'llm-models_{llmmodel_options2_label}')
-        @app_commands.describe(models_3=f'LLM models {llmmodel_options2_label.upper()}')
-        @app_commands.choices(models_3=llmmodel_options2)
-        @app_commands.rename(models_4=f'llm-models_{llmmodel_options3_label}')
-        @app_commands.describe(models_4=f'LLM models {llmmodel_options3_label.upper()}')
-        @app_commands.choices(models_4=llmmodel_options3)
-        async def llmmodel(ctx: discord.ext.commands.Context, models_1: typing.Optional[app_commands.Choice[str]], models_2: typing.Optional[app_commands.Choice[str]], models_3: typing.Optional[app_commands.Choice[str]], models_4: typing.Optional[app_commands.Choice[str]]):
-            if sum(1 for v in (models_1, models_2, models_3, models_4) if v) > 1:
-                await ctx.send("More than one LLM model was selected. Using the first selection.", ephemeral=True)
-            selected_llmmodel = ((models_1 or models_2 or models_3 or models_4) and (models_1 or models_2 or models_3 or models_4).value) or ''
-            if selected_llmmodel:
-                selected_llmmodel = _llm_model_hash_dict[selected_llmmodel]
-            await process_llmmodel(ctx, selected_llmmodel)
+    @client.hybrid_command(description="Choose an LLM Model")
+    async def llmmodel(ctx: discord.ext.commands.Context):
+        try:
+            all_llmmodels = utils.get_available_models()
+            if all_llmmodels:
+                items_for_llm_model = [i for i in all_llmmodels]
+                unload_llmmodel = items_for_llm_model.pop(0)
+                warned_too_many_llm_model = False # TODO use the warned_once feature?
+                llmmodels_view = SelectOptionsView(items_for_llm_model, 
+                                                custom_id_prefix='llmmodels', 
+                                                placeholder_prefix='LLMModels: ', 
+                                                unload_item=unload_llmmodel,
+                                                warned=warned_too_many_llm_model)
+                view_message = await ctx.send('### Select an LLM Model.', view=llmmodels_view, ephemeral=True)
+                await llmmodels_view.wait()
+                selected_item = llmmodels_view.get_selected()
+                await view_message.delete()
+                await process_llmmodel(ctx, selected_item)
+            else:
+                await ctx.send('There are no LLM models available', ephemeral=True)
+        except Exception as e:
+            logging.error(f"An error occurred while selecting an LLM model from '/llmmodel' command: {e}")
 
 #################################################################
 ####################### /SPEAK COMMAND #######################

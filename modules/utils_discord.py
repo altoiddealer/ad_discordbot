@@ -1,6 +1,8 @@
 from ad_discordbot.modules.logs import import_track, log, get_logger; import_track(__file__, fp=True)
 logging = get_logger(__name__)
 from ad_discordbot.modules.utils_shared import task_semaphore
+import discord
+
 
 # Send message response to user's interaction command
 async def ireply(i, process):
@@ -72,3 +74,93 @@ async def send_long_message(channel, message_text):
                 chunk_text, code_block_inserted = ensure_even_code_blocks(message_text, code_block_inserted)
                 sent_message = await channel.send(chunk_text)
                 break
+            
+class SelectedListItem(discord.ui.Select):
+    def __init__(self, options, placeholder, custom_id):
+        super().__init__(placeholder=placeholder, min_values=0, max_values=1, options=options, custom_id=custom_id)
+
+    async def callback(self, interaction: discord.Interaction):
+        if self.values:
+            self.view.selected_item = int(self.values[0])
+        await interaction.response.defer()
+        # Stop the view if there is only one menu item (skip "Submit" button)
+        if self.view.num_menus == 1:
+            self.view.stop()
+        
+class SelectOptionsView(discord.ui.View):
+    '''
+    Use view.warned to check if too many items message has been logged.
+    Pass warned=True to bypass warning.
+    '''
+
+    def __init__(self, all_items, max_menus=4, max_items_per_menu=25, custom_id_prefix='items', placeholder_prefix='Items ', unload_item=None, warned=False):
+        super().__init__()
+        # Get item value for Submit and Unload buttons
+        models_submit_btn = None
+        models_unload_btn = None
+        for child in self.children:
+            if child.custom_id == 'models_submit':
+                models_submit_btn = child
+            elif child.custom_id == 'models_unload':
+                models_unload_btn = child
+
+        # Value for Unload model, if any
+        self.unload_item = unload_item
+        # Remove "Unload" button if N/A for command
+        if not self.unload_item:
+            self.remove_item(models_unload_btn)
+
+        self.selected_item = None
+        self.warned = warned
+        
+        assert max_items_per_menu <= 25
+        assert max_menus <= 4
+        
+        self.all_items = all_items
+        self.num_menus = 0
+
+        all_choices = [discord.SelectOption(label=name[:100], value=ii) for ii, name in enumerate(self.all_items)]
+
+        for menu_ii in range(max_menus): # 4 max dropdowns
+            local_options = all_choices[max_items_per_menu*menu_ii: max_items_per_menu*(menu_ii+1)]
+            if not local_options: # end of items
+                break
+            
+            self.add_item(SelectedListItem(options=local_options,
+                                            placeholder=f'{placeholder_prefix}{self.label_formatter(local_options, menu_ii)}', 
+                                            custom_id=f"{custom_id_prefix}_{menu_ii}_select",
+                                            ))
+            
+        menu_ii += 1
+        self.num_menus += 1 # Count dropdowns. If only one, "Submit" button will be removed
+        local_options = all_choices[max_items_per_menu*menu_ii: max_items_per_menu*(menu_ii+1)]
+        if local_options and not self.warned:
+            logging.warning(f'Too many models, the menu will be truncated to the first {max_items_per_menu*max_menus}.')
+            self.warned = True
+
+        # Remove Submit button if only one dropdown
+        if self.num_menus == 1:
+            self.remove_item(models_submit_btn)
+            
+    def label_formatter(self, local_options, menu_ii):
+        return f'{local_options[0].label[0]}-{local_options[-1].label[0]}'.upper()
+    
+    def get_selected(self, items:list=None):
+        if self.selected_item == self.unload_item:
+            return self.unload_item
+        items = items or self.all_items
+        return items[self.selected_item]
+
+    @discord.ui.button(label='Submit', style=discord.ButtonStyle.primary, custom_id="models_submit", row=4)
+    async def submit_button(self, interaction: discord.Interaction, button:discord.ui.Button):
+        if self.selected_item is None:
+            await interaction.response.send_message('No Image model selected.', ephemeral=True, delete_after=5)
+        else:
+            await interaction.response.defer()
+            self.stop()
+
+    @discord.ui.button(label='Unload Model', style=discord.ButtonStyle.danger, custom_id="models_unload", row=4)
+    async def unload_model_button(self, interaction: discord.Interaction, button:discord.ui.Button):
+        self.selected_item = self.unload_item
+        await interaction.response.defer()
+        self.stop()
