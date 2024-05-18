@@ -43,12 +43,12 @@ def get_logger(name):
 log.test = test
 log_level = logging.DEBUG
 
-log_formatter = ColoredFormatter(f'{Fore.BLACK}{Back.WHITE}{{asctime}}.{{msecs:0<3.0f}} {Back.LIGHTBLACK_EX}#{{lineno:<5}}{Style.RESET_ALL}{Fore.LIGHTWHITE_EX}{{levelname}}{{message}}{Style.RESET_ALL}', datefmt='%H:%M:%S', style='{')
+log_formatter = ColoredFormatter(f'{Fore.BLACK}{Back.WHITE}%(asctime)s.%(msecs)03d{Back.BLACK} {Back.LIGHTBLACK_EX}#%(lineno)-5d{Style.RESET_ALL} {Fore.LIGHTWHITE_EX}%(levelname)s%(message)s{Style.RESET_ALL}', datefmt='%H:%M:%S')
 log.setLevel(log_level)
 
 
 def add_file_handler(level=logging.DEBUG, fp="latest.log", **kw):
-    log_formatter_file = ColoredFormatter(f'[{{asctime:15}}] {{levelname:8}} #{{lineno:<5}} ({{name}}) {{module}}.{{funcName}} -> {{message}}', use_color=False, style='{')
+    log_formatter_file = ColoredFormatter('[%(asctime)-15s] %(levelname)-8s #%(lineno)-5d (%(name)s) %(module)s.%(funcName)s -> %(message)s', use_color=False)
     file_handler = logging.FileHandler(fp, encoding='utf-8', **kw)
     file_handler.setFormatter(log_formatter_file)
     file_handler.setLevel(level)
