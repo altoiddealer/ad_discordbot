@@ -202,7 +202,7 @@ if sd_enabled:
                         r = await response.json()
                         return r
                     else:
-                        logging.error(f'{SD_URL}{endpoint} response: "{response.status}"')
+                        logging.error(f'{SD_URL}{endpoint} response: {response.status} "{response.reason}"')
                         if retry and response.status in [408, 500]:
                             logging.info("Retrying the request in 3 seconds...")
                             await asyncio.sleep(3)
