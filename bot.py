@@ -2082,7 +2082,7 @@ async def format_next_flow(next_flow, user, text):
             flow_name = f": {value}"
         # format prompt before feeding it back into on_message_task()
         elif key == 'format_prompt':
-            formatting = [value]
+            formatting = {'format_prompt': [value]}
             text = process_tag_formatting(user, text, formatting)
         # apply wildcards
         text = await dynamic_prompting(user, text, i=None)
