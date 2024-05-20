@@ -3870,11 +3870,11 @@ async def filter_imgmodels(imgmodels:list) -> list:
     except Exception as e:
         logging.error(f"Error filtering image model list: {e}")
 
-# Build list of imgmodels depending on user preference (user .yaml / API)
+# Get current list of imgmodels from API
 async def fetch_imgmodels() -> list:
     try:
         imgmodels = await sd_api(endpoint='/sdapi/v1/sd-models', method='get', json=None, retry=False)
-        # Update 'title' keys in fetched list for uniformity
+        # Replace key names for easier management
         for imgmodel in imgmodels:
             if 'title' in imgmodel:
                 imgmodel['sd_model_checkpoint'] = imgmodel.pop('title')
