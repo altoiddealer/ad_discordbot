@@ -32,6 +32,8 @@ from shutil import copyfile
 import sys
 import traceback
 
+from typing import Union
+
 sys.path.append("ad_discordbot")
 
 from ad_discordbot.modules.database import Database, ActiveSettings, StarBoard
@@ -620,7 +622,7 @@ async def first_run():
         bot_database.set('first_run', False)
 
 # Unpack tag presets and add global tag keys
-async def update_tags(tags):
+async def update_tags(tags:list) -> list:
     if not isinstance(tags, list):
         logging.warning(f'''One or more "tags" are improperly formatted. Please ensure each tag is formatted as a list item designated with a hyphen (-)''')
         return tags
@@ -647,6 +649,7 @@ async def update_tags(tags):
                     tag[key] = value
         updated_tags = await expand_triggers(updated_tags) # expand any simplified trigger phrases
         return updated_tags
+    
     except Exception as e:
         logging.error(f"Error loading tag presets: {e}")
         return tags
@@ -1220,7 +1223,7 @@ def process_tag_trumps(matches:list, trump_params:list=[]):
         logging.error(f"Error processing matched tags: {e}")
         return matches  # return original matches if error occurs
 
-def match_tags(search_text, tags, phase='llm'):
+def match_tags(search_text:str, tags:dict, phase='llm') -> dict:
     try:
         # Remove 'llm' tags if pre-LLM phase, to be added back to unmatched tags list at the end of function
         if phase == 'llm':
@@ -1267,11 +1270,12 @@ def match_tags(search_text, tags, phase='llm'):
         if 'user' in unmatched:
             del unmatched['user'] # Remove after first phase. Controls the 'llm' tag processing at function start.
         return updated_tags
+    
     except Exception as e:
         logging.error(f"Error matching tags: {e}")
         return tags
 
-def sort_tags(all_tags):
+def sort_tags(all_tags: list) -> Union[list, dict]:
     try:
         sorted_tags = {'matches': [], 'unmatched': {'user': [], 'llm': [], 'userllm': []}, 'trump_params': []}
         for tag in all_tags:
@@ -1287,41 +1291,45 @@ def sort_tags(all_tags):
             else:
                 logging.warning(f"Ignoring unknown search_mode: {search_mode}")
         return sorted_tags
+    
     except Exception as e:
         logging.error(f"Error sorting tags: {e}")
         return all_tags
 
-async def expand_triggers(all_tags):
+
+def _expand_value(value:str) -> str:
+    # Split the value on commas
+    parts = value.split(',')
+    expanded_values = []
+    for part in parts:
+        # Check if the part contains curly brackets
+        if '{' in part and '}' in part:
+            # Use regular expression to find all curly bracket groups
+            group_matches = patterns.in_curly_brackets.findall(part)
+            permutations = list(product(*[group_match.split('|') for group_match in group_matches]))
+            # Replace each curly bracket group with permutations
+            for perm in permutations:
+                expanded_part = part
+                for part_match in group_matches:
+                    expanded_part = expanded_part.replace('{' + part_match + '}', perm[group_matches.index(part_match)], 1)
+                expanded_values.append(expanded_part)
+        else:
+            expanded_values.append(part)
+    return ','.join(expanded_values)
+
+async def expand_triggers(all_tags:list) -> list:
     try:
-        def expand_value(value):
-            # Split the value on commas
-            parts = value.split(',')
-            expanded_values = []
-            for part in parts:
-                # Check if the part contains curly brackets
-                if '{' in part and '}' in part:
-                    # Use regular expression to find all curly bracket groups
-                    group_matches = patterns.in_curly_brackets.findall(part)
-                    permutations = list(product(*[group_match.split('|') for group_match in group_matches]))
-                    # Replace each curly bracket group with permutations
-                    for perm in permutations:
-                        expanded_part = part
-                        for part_match in group_matches:
-                            expanded_part = expanded_part.replace('{' + part_match + '}', perm[group_matches.index(part_match)], 1)
-                        expanded_values.append(expanded_part)
-                else:
-                    expanded_values.append(part)
-            return ','.join(expanded_values)
         for tag in all_tags:
             if 'trigger' in tag:
-                tag['trigger'] = expand_value(tag['trigger'])
-        return all_tags
+                tag['trigger'] = _expand_value(tag['trigger'])
+    
     except Exception as e:
         logging.error(f"Error expanding tags: {e}")
-        return all_tags
+        
+    return all_tags
 
 # Function to convert string values to bool/int/float
-def extract_value(value_str):
+def extract_value(value_str:str) -> Union[bool, int, float]:
     try:
         value_str = value_str.strip()
         if value_str.lower() == 'true':
@@ -1338,10 +1346,11 @@ def extract_value(value_str):
                 return int(value_str)
             except ValueError:
                 return value_str
+            
     except Exception as e:
         logging.error(f"Error converting string to bool/int/float: {e}")
 
-def parse_tag_from_text_value(value_str):
+def parse_tag_from_text_value(value_str:str) -> str:
     try:
         if value_str.startswith('{') and value_str.endswith('}'):
             inner_text = value_str[1:-1]  # Remove outer curly brackets
@@ -1376,6 +1385,7 @@ def parse_tag_from_text_value(value_str):
                 return value_str.strip('"')
             else:
                 return extract_value(value_str)
+            
     except Exception as e:
         logging.error(f"Error parsing nested value: {e}")
 
@@ -1426,7 +1436,7 @@ async def get_tags(text):
         logging.error(f"Error getting tags: {e}")
         return text, []      
 
-async def init_llm_payload(user, text):
+async def init_llm_payload(user:str, text:str) -> dict:
     llm_payload = copy.deepcopy(bot_settings.settings['llmstate'])
     llm_payload['text'] = text
     name1 = user
@@ -2943,7 +2953,7 @@ def collect_img_tag_values(tags):
         logging.error(f"Error collecting Img tag values: {e}")
         return sd_output_dir, tags
 
-def init_img_payload(img_prompt, neg_prompt):
+def init_img_payload(img_prompt:str, neg_prompt:str) -> dict:
     try:
         # Initialize img_payload settings
         img_payload = {"prompt": img_prompt, "negative_prompt": neg_prompt, "width": 512, "height": 512, "steps": 20, "resize_mode": 1}
@@ -2956,7 +2966,7 @@ def init_img_payload(img_prompt, neg_prompt):
     except Exception as e:
         logging.error(f"Error initializing img payload: {e}")
 
-def match_img_tags(img_prompt, tags:dict):
+def match_img_tags(img_prompt:str, tags:dict) -> dict:
     try:
         # Unmatch any previously matched tags which try to insert text into the img_prompt
         for tag in tags['matches'][:]:  # Iterate over a copy of the list
@@ -3117,7 +3127,7 @@ if sd_enabled:
         if (width + height) % 2 != 0: avg += 1
         return avg
 
-    async def get_imgcmd_choices(size_options, style_options):
+    async def get_imgcmd_choices(size_options, style_options) -> tuple[list[app_commands.Choice], list[app_commands.Choice]]:
         try:
             size_choices = [
                 app_commands.Choice(name=option['name'], value=option['name'])
@@ -3126,6 +3136,7 @@ if sd_enabled:
                 app_commands.Choice(name=option['name'], value=option['name'])
                 for option in style_options]
             return size_choices, style_choices
+        
         except Exception as e:
             logging.error(f"An error occurred while building choices for /image: {e}")  
 
@@ -3148,10 +3159,11 @@ if sd_enabled:
             # Get style and controlnet options
             style_options = options.get('styles', {})
             return size_options, style_options
+        
         except Exception as e:
             logging.error(f"An error occurred while building options for /image: {e}")
 
-    async def get_cnet_data():
+    async def get_cnet_data() -> dict:
         filtered_cnet_data = {}
         if config['sd']['extensions'].get(f'controlnet_enabled', False):
             try:
