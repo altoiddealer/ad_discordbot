@@ -35,7 +35,7 @@ import traceback
 sys.path.append("ad_discordbot")
 
 from ad_discordbot.modules.database import Database, ActiveSettings, StarBoard
-from ad_discordbot.modules.utils_shared import task_semaphore, shared_path
+from ad_discordbot.modules.utils_shared import task_semaphore, shared_path, patterns
 from ad_discordbot.modules.utils_misc import fix_dict, update_dict, sum_update_dict, update_dict_matched_keys
 from ad_discordbot.modules.utils_discord import ireply, send_long_message, SelectedListItem, SelectOptionsView
 from ad_discordbot.modules.utils_files import load_file, merge_base, save_yaml_file
@@ -920,8 +920,7 @@ def format_prompt_with_recent_output(user:str, prompt:str):
     try:
         formatted_prompt = prompt
         # Find all matches of {user_x} and {llm_x} in the prompt
-        pattern = r'\{(user|llm|history)_([0-9]+)\}'
-        matches = re.findall(pattern, prompt)
+        matches = patterns.llm_recent_roles.findall(prompt)
         # Iterate through the matches
         for match in matches:
             prefix, index = match
@@ -1302,7 +1301,7 @@ async def expand_triggers(all_tags):
                 # Check if the part contains curly brackets
                 if '{' in part and '}' in part:
                     # Use regular expression to find all curly bracket groups
-                    group_matches = re.findall(r'\{([^}]+)\}', part)
+                    group_matches = patterns.in_curly_brackets.findall(part)
                     permutations = list(product(*[group_match.split('|') for group_match in group_matches]))
                     # Replace each curly bracket group with permutations
                     for perm in permutations:
@@ -1357,7 +1356,7 @@ def parse_tag_from_text_value(value_str):
             result_list = []
             # if list of lists
             if inner_text.startswith('[') and inner_text.endswith(']'):
-                sublist_strings = re.findall(r'\[[^\[\]]*\]', inner_text)
+                sublist_strings = patterns.brackets.findall(inner_text)
                 for sublist_string in sublist_strings:
                     sublist_string = sublist_string.strip()
                     sublist_values = parse_tag_from_text_value(sublist_string)
@@ -1395,9 +1394,8 @@ def parse_key_pair_from_text(kv_pair):
 def get_tags_from_text(text):
     try:
         tags_from_text = []
-        pattern = r'\[\[([^\[\]]*?(?:\[\[.*?\]\][^\[\]]*?)*?)\]\]'
-        matches = re.findall(pattern, text)
-        detagged_text = re.sub(pattern, '', text)
+        matches = patterns.tags.findall(text)
+        detagged_text = patterns.tags.sub('', text)
         for match in matches:
             tag_dict = {}
             tag_pairs = match.split('|')
@@ -1446,7 +1444,6 @@ async def init_llm_payload(user, text):
 
 def get_wildcard_value(matched_text, dir_path='ad_discordbot/wildcards'):
     selected_option = None
-    braces_pat = r'{{([^{}]+?)}}(?=[^\w$:]|$$|$)'   # {{this syntax|separate items can be divided|another item}}
     search_phrase = matched_text[2:] if matched_text.startswith('##') else matched_text
     search_path = f"{search_phrase}.txt"
     # List files in the directory
@@ -1471,7 +1468,7 @@ def get_wildcard_value(matched_text, dir_path='ad_discordbot/wildcards'):
                         selected_option = random.choice(lines).strip()
     # Check if selected option has braces pattern
     if selected_option:
-        braces_match = re.search(braces_pat, selected_option)
+        braces_match = patterns.braces.search(selected_option)
         if braces_match:
             braces_phrase = braces_match.group(1)
             selected_option = get_braces_value(braces_phrase)
@@ -1509,7 +1506,6 @@ def choose_dynaprompt_option(options, num_choices=1):
     return [value for _, value in chosen_values]
 
 def get_braces_value(matched_text):
-    wildcard_pat = r'##[\w-]+(?=[^\w-]|$)'  # ##this-syntax represents a wildcard .txt file
     num_choices = 1
     separator = None
     if '$$' in matched_text:
@@ -1534,7 +1530,7 @@ def get_braces_value(matched_text):
     chosen_options = choose_dynaprompt_option(options, num_choices)
     # Check for selected wildcards
     for index, option in enumerate(chosen_options):
-        wildcard_match = re.search(wildcard_pat, option)
+        wildcard_match = patterns.wildcard.search(option)
         if wildcard_match:
             wildcard_phrase = wildcard_match.group()
             wildcard_value = get_wildcard_value(matched_text=wildcard_phrase, dir_path='ad_discordbot/wildcards')
@@ -1557,12 +1553,9 @@ async def dynamic_prompting(user, text, i=None):
     
     # copy text for adding comments
     text_with_comments = text
-    # define patterns
-    braces_pat = r'{{([^{}]+?)}}(?=[^\w$:]|$$|$)'   # {{this syntax|separate items can be divided|another item}}
-    wildcard_pat = r'##[\w-]+(?=[^\w-]|$)'          # ##this-syntax represents a wildcard .txt file
     # Process braces patterns
     braces_start_indexes = []
-    braces_matches = re.finditer(braces_pat, text)
+    braces_matches = patterns.braces.finditer(text)
     braces_matches = sorted(braces_matches, key=lambda x: -x.start())  # Sort matches in reverse order by their start indices
     for match in braces_matches:
         braces_start_indexes.append(match.start())  # retain all start indexes for updating 'text_with_comments' for wildcard match phase
@@ -1574,7 +1567,7 @@ async def dynamic_prompting(user, text, i=None):
         highlighted_changes = '`' + replaced_text + '`'
         text_with_comments = text_with_comments.replace(match.group(0), highlighted_changes, 1)
     # Process wildcards not in braces
-    wildcard_matches = re.finditer(wildcard_pat, text)
+    wildcard_matches = patterns.wildcard.finditer(text)
     wildcard_matches = sorted(wildcard_matches, key=lambda x: -x.start())  # Sort matches in reverse order by their start indices
     for match in wildcard_matches:
         matched_text = match.group()
@@ -1777,7 +1770,7 @@ async def llm_gen(llm_payload):
                 if len(vis_resp) > 0:
                     last_vis_resp = vis_resp[-1][-1]
                     if 'audio src=' in last_vis_resp:
-                        audio_format_match = re.search(r'audio src="file/(.*?\.(wav|mp3))"', last_vis_resp)
+                        audio_format_match = patterns.audio_src.search(last_vis_resp)
                         if audio_format_match:
                             tts_resp = audio_format_match.group(1)
             return last_resp, tts_resp  # bot's reply
@@ -2437,17 +2430,17 @@ def apply_loractl(tags):
         # Flatten the matches dictionary values to get a list of all tags (including those within tuples)
         matched_tags = [tag if isinstance(tag, dict) else tag[0] for tag in tags['matches']]
         # Filter the matched tags to include only those with certain patterns in their text fields
-        lora_tags = [tag for tag in matched_tags if any(re.findall(r'<lora:[^:]+:[^>]+>', text) for text in (tag.get('positive_prompt', ''), tag.get('positive_prompt_prefix', ''), tag.get('positive_prompt_suffix', '')))]
+        lora_tags = [tag for tag in matched_tags if any(patterns.sd_lora.findall(text) for text in (tag.get('positive_prompt', ''), tag.get('positive_prompt_prefix', ''), tag.get('positive_prompt_suffix', '')))]
         if len(lora_tags) >= config['sd']['extensions']['lrctl']['min_loras']:
             for index, tag in enumerate(lora_tags):
                 # Determine the key with a non-empty value among the specified keys
                 used_key = next((key for key in ['positive_prompt', 'positive_prompt_prefix', 'positive_prompt_suffix'] if tag.get(key, '')), None)
                 if used_key:  # If a key with a non-empty value is found
                     positive_prompt = tag[used_key]
-                    lora_matches = re.findall(r'<lora:[^:]+:[^>]+>', positive_prompt)
+                    lora_matches = patterns.sd_lora.findall(positive_prompt)
                     if lora_matches:
                         for lora_match in lora_matches:
-                            lora_weight_match = re.search(r'(?<=:)\d+(\.\d+)?', lora_match) # Extract lora weight
+                            lora_weight_match = patterns.sd_lora_weight.search(lora_match) # Extract lora weight
                             if lora_weight_match:
                                 lora_weight = float(lora_weight_match.group())
                                 # Selecting the appropriate scaling based on the index

@@ -30,7 +30,21 @@ shared_path = SharedPath()
 
 
 
-class SharedRegex:
-    braces_pat = r'{{([^{}]+?)}}(?=[^\w$:]|$$|$)'   # {{this syntax|separate items can be divided|another item}}
-    wildcard_pat = r'##[\w-]+(?=[^\w-]|$)'          # ##this-syntax represents a wildcard .txt file
+class SharedRegex: # Search for [ (]r['"] in vscode
+    braces = re.compile(r'{{([^{}]+?)}}(?=[^\w$:]|$$|$)') # {{this syntax|separate items can be divided|another item}}
+    wildcard = re.compile(r'##[\w-]+(?=[^\w-]|$)') # ##this-syntax represents a wildcard .txt file
+    audio_src = re.compile(r'audio src="file/(.*?\.(wav|mp3))"', flags=re.IGNORECASE)
     
+    sd_lora = re.compile(r'<lora:[^:]+:[^>]+>')
+    sd_lora_weight = re.compile(r'(?<=:)\d+(\.\d+)?')
+    
+    llm_recent_roles = re.compile(r'\{(user|llm|history)_([0-9]+)\}', flags=re.IGNORECASE)
+    
+    curly_brackets = re.compile(r'\{[^{}]*\}') # Selects all {dicts} {}
+    in_curly_brackets = re.compile(r'\{([^{}]+)\}') # Selects {contents} of dicts
+    brackets = re.compile(r'\[[^\[\]]*\]') # Selects whole list
+    in_brackets = re.compile(r'\[([^\[\]]*)\]') # Selects contents of list
+
+    tags = re.compile(r'\[\[([^\[\]]*?(?:\[\[.*?\]\][^\[\]]*?)*?)\]\]')
+
+patterns = SharedRegex()
