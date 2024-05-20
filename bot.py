@@ -1139,7 +1139,7 @@ def collect_llm_tag_values(tags):
         logging.error(f"Error collecting LLM tag values: {e}")
         return llm_payload_mods, formatting
 
-def process_tag_insertions(prompt, tags):
+def process_tag_insertions(prompt:str, tags:dict):
     try:
         # iterate over a copy of the matches, preserving the structure of the original matches list
         tuple_matches = copy.deepcopy(tags['matches'])
@@ -1190,7 +1190,7 @@ def process_tag_insertions(prompt, tags):
         logging.error(f"Error processing LLM prompt tags: {e}")
         return prompt, tags
 
-def process_tag_trumps(matches, trump_params=[]):
+def process_tag_trumps(matches:list, trump_params:list=[]):
     try:
         # Collect all 'trump' parameters for all matched tags
         trump_params = set(trump_params)
@@ -1690,13 +1690,18 @@ async def hybrid_llm_img_gen(user, channel, source, text, tags, llm_payload, par
             if last_resp is not None:
                 logging.info("reply sent: \"" + user.name + ": {'text': '" + llm_payload["text"] + "', 'response': '" + last_resp + "'}\"")
             else:
-                if should_gen_image and sd_enabled: last_resp = copy.copy(text)
-                else: return
+                if should_gen_image and sd_enabled: 
+                    last_resp = text
+                else: 
+                    return
+                
             # if LLM model swapping was triggered
             if mode == 'swap':
                 params['llmmodel']['llmmodel_name'] = orig_llmmodel
                 change_embed = await change_llmmodel_task(user, channel, params)    # Swap LLM Model back
-                if change_embed: await change_embed.delete()                        # Delete embed again after the second call
+                if change_embed: 
+                    await change_embed.delete()                                     # Delete embed again after the second call
+                    
         # process image generation (A1111 / Forge)
         if sd_enabled:
             tags = match_img_tags(last_resp, tags)
@@ -1718,9 +1723,13 @@ async def hybrid_llm_img_gen(user, channel, source, text, tags, llm_payload, par
         if img_gen_embed_info:
             img_gen_embed_info.title = f'An error occurred while processing "{source}" request'
             img_gen_embed_info.description = e
-            if img_gen_embed: await img_gen_embed.edit(embed=img_gen_embed_info)
-            else: await channel.send(embed=img_gen_embed_info)
-        if change_embed: await change_embed.delete()
+            if img_gen_embed: 
+                await img_gen_embed.edit(embed=img_gen_embed_info)
+            else: 
+                await channel.send(embed=img_gen_embed_info)
+                
+        if change_embed: 
+            await change_embed.delete()
 
 #################################################################
 ##################### QUEUED LLM GENERATION #####################
@@ -2049,14 +2058,15 @@ def should_bot_do(key, default, tags={}):   # Used to check if should:
     return default
 
 # For @ mentioning users who were not last replied to
-previous_user_id = ''
+previous_user_mention = ''
 
-def update_mention(user_id, last_resp=''):
-    global previous_user_id
-    mention_resp = copy.copy(last_resp)                    
-    if user_id != previous_user_id:
-        mention_resp = f"{user_id} {last_resp}"
-    previous_user_id = user_id
+def update_mention(user_mention:str, last_resp:str=''):
+    global previous_user_mention
+    mention_resp = last_resp
+    
+    if user_mention != previous_user_mention:
+        mention_resp = f"{user_mention} {last_resp}"
+    previous_user_mention = user_mention
     return mention_resp
 
 flow_event = asyncio.Event()
@@ -2483,11 +2493,11 @@ def apply_imgcmd_params(img_payload, params):
         logging.error(f"Error initializing img payload: {e}")
         return img_payload
 
-def process_img_prompt_tags(img_payload, tags):
+def process_img_prompt_tags(img_payload:dict, tags:dict) -> dict:
     try:
         img_prompt, tags = process_tag_insertions(img_payload['prompt'], tags)
-        updated_positive_prompt = copy.copy(img_prompt)
-        updated_negative_prompt = copy.copy(img_payload['negative_prompt'])
+        updated_positive_prompt = img_prompt
+        updated_negative_prompt = img_payload['negative_prompt']
         matches = tags['matches']
         for tag in matches:
             join = tag.get('img_text_joining', ' ')
@@ -2509,10 +2519,11 @@ def process_img_prompt_tags(img_payload, tags):
                 updated_negative_prompt = updated_negative_prompt + join + tag['negative_prompt_suffix']
         img_payload['prompt'] = updated_positive_prompt
         img_payload['negative_prompt'] = updated_negative_prompt
-        return img_payload
+    
     except Exception as e:
         logging.error(f"Error processing Img prompt tags: {e}")
-        return img_payload
+        
+    return img_payload
 
 def random_value_from_range(value_range):
     if isinstance(value_range, (list, tuple)) and len(value_range) == 2:
@@ -2525,13 +2536,13 @@ def random_value_from_range(value_range):
     logging.warning(f'Invalid value range "{value_range}". Defaulting to "0".')
     return 0
 
-def convert_lists_to_tuples(dictionary):
+def convert_lists_to_tuples(dictionary:dict) -> dict:
     for key, value in dictionary.items():
         if isinstance(value, list) and len(value) == 2 and all(isinstance(item, (int, float)) for item in value) and not any(isinstance(item, bool) for item in value):
             dictionary[key] = tuple(value)
     return dictionary
 
-def process_param_variances(param_variances):
+def process_param_variances(param_variances: dict) -> dict:
     try:
         param_variances = convert_lists_to_tuples(param_variances) # Only converts lists containing ints and floats (not strings or bools) 
         processed_params = copy.deepcopy(param_variances)
@@ -2555,6 +2566,7 @@ def process_param_variances(param_variances):
                 logging.warning(f'Invalid params "{key}", "{value}" will not be applied.')
                 processed_params.pop(key)  # Remove invalid key
         return processed_params
+    
     except Exception as e:
         logging.error(f"Error processing param variances: {e}")
         return {}
@@ -2940,13 +2952,16 @@ def init_img_payload(img_prompt, neg_prompt):
         img_payload.update(imgmodel_img_payload)
         img_payload['override_settings'] = copy.deepcopy(bot_settings.settings['imgmodel'].get('override_settings', {}))
         return img_payload
+    
     except Exception as e:
         logging.error(f"Error initializing img payload: {e}")
 
-def match_img_tags(img_prompt, tags):
+def match_img_tags(img_prompt, tags:dict):
     try:
         # Unmatch any previously matched tags which try to insert text into the img_prompt
         for tag in tags['matches'][:]:  # Iterate over a copy of the list
+            tag:dict
+            
             if tag.get('imgtag_matched_early'): # extract text insertion key pairs from previously matched tags
                 new_tag = {}
                 tag_copy = copy.copy(tag)
@@ -2967,10 +2982,11 @@ def match_img_tags(img_prompt, tags):
             if tag.get('imgtag_matched_early') and tag.get('imgtag_uninserted'):
                 tags['matches'].append(tag)
                 tags['unmatched']['userllm'].remove(tag)
-        return tags
+    
     except Exception as e:
         logging.error(f"Error matching tags for img phase: {e}")
-        return tags
+        
+    return tags
 
 async def img_gen_task(user, channel, source, img_prompt, params, i=None, tags={}):
     try:
@@ -3824,7 +3840,7 @@ if textgenwebui_enabled:
 ####################### /IMGMODEL COMMAND #######################
 #################################################################
 # Apply user defined filters to imgmodel list
-async def filter_imgmodels(imgmodels):
+async def filter_imgmodels(imgmodels:list) -> list:
     try:
         imgmodels_data = load_file(shared_path.img_models)
         filter_list = imgmodels_data.get('settings', {}).get('filter', None)
@@ -3838,11 +3854,12 @@ async def filter_imgmodels(imgmodels):
                 )
             ]
         return imgmodels
+    
     except Exception as e:
         logging.error(f"Error filtering image model list: {e}")
 
 # Build list of imgmodels depending on user preference (user .yaml / API)
-async def fetch_imgmodels():
+async def fetch_imgmodels() -> list:
     try:
         imgmodels = await sd_api(endpoint='/sdapi/v1/sd-models', method='get', json=None, retry=False)
         # Update 'title' keys in fetched list for uniformity
@@ -3853,9 +3870,10 @@ async def fetch_imgmodels():
                 imgmodel['imgmodel_name'] = imgmodel.pop('model_name')
         imgmodels = await filter_imgmodels(imgmodels)
         return imgmodels
+    
     except Exception as e:
         logging.error(f"Error fetching image models: {e}")
-        return {}
+        return []
 
 async def update_imgmodel(channel, selected_imgmodel, selected_imgmodel_tags):
     try:
@@ -3926,7 +3944,7 @@ async def guess_model_data(selected_imgmodel, presets):
     except Exception as e:
         logging.error(f"Error guessing selected imgmodel data: {e}")
 
-async def merge_imgmodel_data(selected_imgmodel):
+async def merge_imgmodel_data(selected_imgmodel:dict):
     try:
         selected_imgmodel_name = selected_imgmodel.get('imgmodel_name')
         ### IF API IMG MODEL UNLOADING GETS EVER DEBUGGED
@@ -3945,6 +3963,7 @@ async def merge_imgmodel_data(selected_imgmodel):
                 imgmodel_settings['payload'] = matched_preset.get('payload', {})
         imgmodel_settings['override_settings']['sd_model_checkpoint'] = selected_imgmodel['sd_model_checkpoint']
         imgmodel_settings['imgmodel_name'] = selected_imgmodel_name
+        
         # Replace input dictionary
         selected_imgmodel = imgmodel_settings
         # Merge the selected imgmodel data with base imgmodel data
@@ -3952,10 +3971,11 @@ async def merge_imgmodel_data(selected_imgmodel):
         # Unpack any tag presets
         selected_imgmodel_tags = await update_tags(selected_imgmodel_tags)
         return selected_imgmodel, selected_imgmodel_name, selected_imgmodel_tags
+    
     except Exception as e:
         logging.error(f"Error merging selected imgmodel data with base imgmodel data: {e}")
 
-async def get_selected_imgmodel_data(selected_imgmodel_value):
+async def get_selected_imgmodel_data(selected_imgmodel_value:str) -> dict:
     try:
         selected_imgmodel = {}
         ### IF API IMG MODEL UNLOADING GETS EVER DEBUGGED
@@ -3967,8 +3987,7 @@ async def get_selected_imgmodel_data(selected_imgmodel_value):
         #      selected_imgmodel = {'imgmodel_name': 'None were selected'}
         #     return selected_imgmodel
         all_imgmodels = await fetch_imgmodels()
-        all_imgmodel_data = copy.deepcopy(all_imgmodels)
-        for imgmodel in all_imgmodel_data:
+        for imgmodel in all_imgmodels:
             # check that the value matches a valid checkpoint
             if imgmodel.get('imgmodel_name') == selected_imgmodel_value:
                 selected_imgmodel = {
@@ -3980,6 +3999,7 @@ async def get_selected_imgmodel_data(selected_imgmodel_value):
         if not selected_imgmodel:
             logging.error(f'Img model not found: {selected_imgmodel_value}')
         return selected_imgmodel 
+    
     except Exception as e:
         logging.error(f"Error getting selected imgmodel data: {e}")
         return {}
@@ -4481,6 +4501,7 @@ class Settings:
             base_tags = copy.deepcopy(base_tags_data)
             base_tags = await update_tags(base_tags)
             self.base_tags = base_tags
+            
         except Exception as e:
             logging.error(f"Error updating client base tags: {e}")
 
