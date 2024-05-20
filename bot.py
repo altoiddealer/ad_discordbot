@@ -923,7 +923,7 @@ def format_prompt_with_recent_output(user:str, prompt:str):
     try:
         formatted_prompt = prompt
         # Find all matches of {user_x} and {llm_x} in the prompt
-        matches = patterns.llm_recent_roles.findall(prompt)
+        matches = patterns.recent_msg_roles.findall(prompt)
         # Iterate through the matches
         for match in matches:
             prefix, index = match
@@ -1322,7 +1322,7 @@ async def expand_triggers(all_tags:list) -> list:
         for tag in all_tags:
             if 'trigger' in tag:
                 tag['trigger'] = _expand_value(tag['trigger'])
-    
+
     except Exception as e:
         logging.error(f"Error expanding tags: {e}")
         
@@ -1404,8 +1404,8 @@ def parse_key_pair_from_text(kv_pair):
 def get_tags_from_text(text):
     try:
         tags_from_text = []
-        matches = patterns.tags.findall(text)
-        detagged_text = patterns.tags.sub('', text)
+        matches = patterns.instant_tags.findall(text)
+        detagged_text = patterns.instant_tags.sub('', text)
         for match in matches:
             tag_dict = {}
             tag_pairs = match.split('|')
