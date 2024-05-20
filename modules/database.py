@@ -82,7 +82,7 @@ class BaseFileMemory:
     
     def load(self, data:dict=None):
         if not data:
-            data = load_file(self._fp) or {}
+            data = load_file(self._fp, {})
             if not isinstance(data, dict):
                 raise Exception(f'Failed to import: "{self._fp}" wrong data type, expected dict, got {type(data)}')
             
@@ -210,6 +210,6 @@ class StarBoard(BaseFileMemory):
         _old_active = os.path.join(shared_path.dir_root, 'starboard_messages.yaml')
         state = self._migrate_from_file(_old_active, load=False) # v1
         if state:
-            data = load_file(self._fp) # convert list to dict
-            self.load(data=dict(messages=data))
+            data = load_file(self._fp, [])      # load old file as list
+            self.load(data=dict(messages=data)) # convert list to dict
         
