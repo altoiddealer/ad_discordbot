@@ -522,7 +522,7 @@ async def auto_update_imgmodel_task(mode, duration):
     while True:
         await asyncio.sleep(duration)
         try:
-            imgmodels_data = load_file(shared_path.img_models)
+            imgmodels_data = load_file(shared_path.img_models, {})
             auto_change_settings = imgmodels_data.get('settings', {}).get('auto_change_imgmodels', {})
             channel = auto_change_settings.get('channel_announce', None)
             if channel == 11111111111111111111: channel = None
@@ -560,7 +560,7 @@ if sd_enabled:
 async def start_auto_change_imgmodels():
     try:
         global imgmodel_update_task
-        imgmodels_data = load_file(shared_path.img_models)
+        imgmodels_data = load_file(shared_path.img_models, {})
         auto_change_settings = imgmodels_data.get('settings', {}).get('auto_change_imgmodels', {})
         mode = auto_change_settings.get('mode', 'random')
         frequency = auto_change_settings.get('frequency', 1.0)
@@ -625,7 +625,7 @@ async def update_tags(tags):
         logging.warning(f'''One or more "tags" are improperly formatted. Please ensure each tag is formatted as a list item designated with a hyphen (-)''')
         return tags
     try:
-        tags_data = load_file(shared_path.tags)
+        tags_data = load_file(shared_path.tags, {})
         global_tag_keys = tags_data.get('global_tag_keys', [])
         tag_presets = tags_data.get('tag_presets', [])
         updated_tags = []
@@ -671,7 +671,7 @@ async def on_ready():
         await bg_task_queue.put(client.tree.sync())
         # Start background task to to change image models automatically
         if sd_enabled:
-            imgmodels_data = load_file(shared_path.img_models)
+            imgmodels_data = load_file(shared_path.img_models, {})
             if imgmodels_data and imgmodels_data.get('settings', {}).get('auto_change_imgmodels', {}).get('enabled', False):
                 await bg_task_queue.put(start_auto_change_imgmodels())
         logging.info("Bot is ready")
@@ -3059,7 +3059,7 @@ if sd_enabled:
     # Updates size options for /image command
     def update_size_options(average):
         global size_choices
-        options = load_file(shared_path.cmd_options)
+        options = load_file(shared_path.cmd_options, {})
         sizes = options.get('sizes', [])
         aspect_ratios = [size.get("ratio") for size in sizes.get('ratios', [])]
         size_choices.clear()  # Clear the existing list
@@ -3131,7 +3131,7 @@ if sd_enabled:
 
     async def get_imgcmd_options():
         try:
-            options = load_file(shared_path.cmd_options)
+            options = load_file(shared_path.cmd_options, {})
             options = dict(options)
             # Get sizes and aspect ratios from 'dict_cmdoptions.yaml'
             sizes = options.get('sizes', {})
@@ -3799,11 +3799,11 @@ def get_all_characters():
                 character['name'] = file.stem
                 all_characters.append(character)
 
-                char_data = load_file(file)
-                if char_data is None:
+                char_data = load_file(file, {})
+                if not char_data:
                     continue
                 
-                char_data = dict(char_data)
+                char_data = dict(char_data) # TODO does yaml loader behave weird that we need to convert it to a dict here?
                 if char_data.get('bot_in_character_menu', True):
                     filtered_characters.append(character)
 
@@ -3842,7 +3842,7 @@ if textgenwebui_enabled:
 # Apply user defined filters to imgmodel list
 async def filter_imgmodels(imgmodels:list) -> list:
     try:
-        imgmodels_data = load_file(shared_path.img_models)
+        imgmodels_data = load_file(shared_path.img_models, {})
         filter_list = imgmodels_data.get('settings', {}).get('filter', None)
         exclude_list = imgmodels_data.get('settings', {}).get('exclude', None)
         if filter_list or exclude_list:
@@ -3954,7 +3954,7 @@ async def merge_imgmodel_data(selected_imgmodel:dict):
         # Get tags if defined
         selected_imgmodel_tags = None
         imgmodel_settings = {'payload': {}, 'override_settings': {}}
-        imgmodels_data = load_file(shared_path.img_models)
+        imgmodels_data = load_file(shared_path.img_models, {})
         if imgmodels_data.get('settings', {}).get('auto_change_imgmodels', {}).get('guess_model_params', True):
             imgmodel_presets = copy.deepcopy(imgmodels_data.get('presets', []))
             matched_preset = await guess_model_data(selected_imgmodel, imgmodel_presets)
@@ -4496,7 +4496,7 @@ class Settings:
 
     async def update_base_tags(self):
         try:
-            tags_data = load_file(shared_path.tags)
+            tags_data = load_file(shared_path.tags, {})
             base_tags_data = tags_data.get('base_tags', [])
             base_tags = copy.deepcopy(base_tags_data)
             base_tags = await update_tags(base_tags)

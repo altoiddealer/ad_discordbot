@@ -7,7 +7,7 @@ import os
 logging = get_logger(__name__)
 
 # Function to load .json, .yml or .yaml files
-def load_file(file_path):
+def load_file(file_path, default=None):
     try:
         file_suffix = Path(file_path).suffix.lower()
 
@@ -17,16 +17,22 @@ def load_file(file_path):
                     data = json.load(file)
                 else:
                     data = yaml.safe_load(file)
+                    
+            if data is None:
+                return default
             return data
+        
         else:
             logging.error(f"Unsupported file format: {file_suffix}: {file_path}")
-            return None
+            return default
+        
     except FileNotFoundError:
         logging.error(f"File not found: {file_path}")
-        return None
+        return default
+    
     except Exception as e:
         logging.error(f"An error occurred while reading {file_path}: {str(e)}")
-        return None
+        return default
     
 def merge_base(newsettings, basekey):
     def deep_update(original, update):
@@ -36,7 +42,7 @@ def merge_base(newsettings, basekey):
             else:
                 original[key] = value
     try:
-        base_settings = load_file(shared_path.base_settings)
+        base_settings = load_file(shared_path.base_settings, {})
         keys = basekey.split(',')
         current_dict = base_settings
         for key in keys:
