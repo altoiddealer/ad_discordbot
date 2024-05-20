@@ -210,6 +210,6 @@ class StarBoard(BaseFileMemory):
         _old_active = os.path.join(shared_path.dir_root, 'starboard_messages.yaml')
         state = self._migrate_from_file(_old_active, load=False) # v1
         if state:
-            data = load_file(self._fp, []) # convert list to dict
-            self.load(data=dict(messages=data))
+            data = load_file(self._fp, [])      # load old file as list
+            self.load(data=dict(messages=data)) # convert list to dict
         
