@@ -493,27 +493,27 @@ async def process_tasks_in_background():
 async def auto_select_imgmodel(current_imgmodel_name, mode='random'):   
     try:
         all_imgmodels = await fetch_imgmodels()
-        imgmodels = copy.deepcopy(all_imgmodels)
-        all_imgmodel_names = [imgmodel.get('imgmodel_name', '') for imgmodel in all_imgmodels] 
+        all_imgmodel_names = [imgmodel.get('imgmodel_name', '') for imgmodel in all_imgmodels]
+        
+        current_index = None
+        if current_imgmodel_name and current_imgmodel_name in all_imgmodel_names:
+            current_index = all_imgmodel_names.index(current_imgmodel_name)
+            
         if mode == 'random':
-            if current_imgmodel_name:
-                matched_imgmodel = None
-                for imgmodel, imgmodel_name in zip(imgmodels, all_imgmodel_names):
-                    if imgmodel_name == current_imgmodel_name:
-                        matched_imgmodel = imgmodel
-                        break
-                if len(imgmodels) >= 2 and matched_imgmodel is not None:
-                    imgmodels.remove(matched_imgmodel)
-            selected_imgmodel = random.choice(imgmodels)
+            if current_index is not None and len(all_imgmodels) > 1:
+                all_imgmodels.pop(current_index)
+                
+            return random.choice(all_imgmodels)
+            
         elif mode == 'cycle':
-            if current_imgmodel_name in all_imgmodel_names:
-                current_index = all_imgmodel_names.index(current_imgmodel_name)
+            if current_index is not None:
                 next_index = (current_index + 1) % len(all_imgmodel_names)  # Cycle to the beginning if at the end
-                selected_imgmodel = imgmodels[next_index]
+                return all_imgmodels[next_index]
+            
             else:
-                selected_imgmodel = random.choice(imgmodels) # If no image model set yet, select randomly
                 logging.info("The previous imgmodel name was not matched in list of fetched imgmodels, so cannot 'cycle'. New imgmodel was instead picked at random.")
-        return selected_imgmodel
+                return random.choice(all_imgmodels) # If no image model set yet, select randomly
+
     except Exception as e:
         logging.error(f"Error automatically selecting image model: {e}")
 
@@ -916,9 +916,9 @@ async def swap_llm_character(char_name, user_name, llm_payload):
         logging.error(f"An error occurred while loading the file for swap_character: {e}")
         return llm_payload
 
-def format_prompt_with_recent_output(user, prompt):
+def format_prompt_with_recent_output(user:str, prompt:str):
     try:
-        formatted_prompt = copy.copy(prompt)
+        formatted_prompt = prompt
         # Find all matches of {user_x} and {llm_x} in the prompt
         pattern = r'\{(user|llm|history)_([0-9]+)\}'
         matches = re.findall(pattern, prompt)
@@ -944,9 +944,9 @@ def format_prompt_with_recent_output(user, prompt):
         logging.error(f'An error occurred while formatting prompt with recent messages: {e}')
         return prompt
 
-def process_tag_formatting(user, prompt, formatting):
+def process_tag_formatting(user:str, prompt:str, formatting:dict):
     try:
-        updated_prompt = copy.copy(prompt)
+        updated_prompt = prompt
         format_prompt = formatting.get('format_prompt', [])
         time_offset = formatting.get('time_offset', None)
         time_format = formatting.get('time_format', None)
@@ -1554,11 +1554,9 @@ async def dynamic_prompting(user, text, i=None):
             logging.warning(f"'{shared_path.config}' is missing a new parameter 'dynamic_prompting_enabled'. Defaulting to 'True' (enabled) ")
     if not dynamic_prompting:
         return text
+    
     # copy text for adding comments
     text_with_comments = text
-    # define wildcards directions
-    wildcard_dir = 'ad_discordbot/wildcards'
-    os.makedirs(wildcard_dir, exist_ok=True)
     # define patterns
     braces_pat = r'{{([^{}]+?)}}(?=[^\w$:]|$$|$)'   # {{this syntax|separate items can be divided|another item}}
     wildcard_pat = r'##[\w-]+(?=[^\w-]|$)'          # ##this-syntax represents a wildcard .txt file
@@ -1580,7 +1578,7 @@ async def dynamic_prompting(user, text, i=None):
     wildcard_matches = sorted(wildcard_matches, key=lambda x: -x.start())  # Sort matches in reverse order by their start indices
     for match in wildcard_matches:
         matched_text = match.group()
-        replaced_text = get_wildcard_value(matched_text=matched_text, dir_path=wildcard_dir)
+        replaced_text = get_wildcard_value(matched_text=matched_text, dir_path=shared_path.dir_wildcards)
         if replaced_text:
             start, end = match.start(), match.end()
             # Replace matched text
@@ -1621,7 +1619,7 @@ async def on_message(i):
 #################################################################
 #################### QUEUED FROM ON MESSAGE #####################
 #################################################################
-async def on_message_task(user, channel, source, text, i):
+async def on_message_task(user:discord.User, channel:discord.TextChannel, source:str, text:str, i):
     try:
         params = {}
         # collects all tags, sorted into sub-lists by phase (user / llm / userllm)
@@ -1633,8 +1631,9 @@ async def on_message_task(user, channel, source, text, i):
         if should_gen_text:
             # build llm_payload with defaults
             llm_payload = await init_llm_payload(user.name, text)
+            
             # make working copy of user's request (without @ mention)
-            llm_prompt = copy.copy(text)
+            llm_prompt = text
             # apply tags to prompt
             llm_prompt, tags = process_tag_insertions(llm_prompt, tags)
             # collect matched tag values
@@ -1645,14 +1644,16 @@ async def on_message_task(user, channel, source, text, i):
             llm_prompt = process_tag_formatting(user.name, llm_prompt, formatting)
             # offload to ai_gen queue
             llm_payload['text'] = llm_prompt
+            
             await hybrid_llm_img_gen(user, channel, source, text, tags, llm_payload, params, i)
             return
+        
         should_gen_image = should_bot_do('should_gen_image', default=False, tags=tags)
         if should_gen_image:
             if await sd_online(channel):
                 await channel.send(f'Bot was triggered by Tags to not respond with text.\n**Processing image generation using your input as the prompt ...**', delete_after=5) # msg for if LLM model is unloaded
-            llm_prompt = copy.copy(text)
-            await img_gen_task(user.name, channel, source, llm_prompt, params, i, tags)
+            await img_gen_task(user.name, channel, source, text, params, i, tags)
+            
     except Exception as e:
         logging.error(f"An error occurred processing on_message request: {e}")
 
@@ -1667,9 +1668,11 @@ async def hybrid_llm_img_gen(user, channel, source, text, tags, llm_payload, par
         send_user_image = params.get('send_user_image', [])
         mode = llmmodel_params.get('mode', 'change') # default to 'change' unless a tag was triggered with 'swap'
         if llmmodel_params:
-            orig_llmmodel = copy.deepcopy(shared.model_name)                    # copy current LLM model name
+            orig_llmmodel = shared.model_name                                   # copy current LLM model name
             change_embed = await change_llmmodel_task(user, channel, params)    # Change LLM model
-            if mode == 'swap' and change_embed: await change_embed.delete()                      # Delete embed before the second call
+            if mode == 'swap' and change_embed:                                 # Delete embed before the second call
+                await change_embed.delete()
+                
         # make a 'Prompting...' embed when generating text for an image response
         should_gen_image = should_bot_do('should_gen_image', default=False, tags=tags)
         if should_gen_image and textgenwebui_enabled:
@@ -2036,6 +2039,7 @@ def should_bot_do(key, default, tags={}):   # Used to check if should:
         if not textgenwebui_enabled:
             if key == 'should_gen_text' or key == 'should_send_text':
                 return False
+            
         matches = tags.get('matches', {})   # - generate image
         if matches:                         # - send text response
             for item in matches:            # - send image response
@@ -2045,10 +2049,11 @@ def should_bot_do(key, default, tags={}):   # Used to check if should:
                     tag = item
                 if key in tag:
                     return bool(tag.get(key, default))
-        return default
+    
     except Exception as e:
         logging.error(f"An error occurred while checking if bot should do '{key}': {e}")
-        return default
+        
+    return default
 
 # For @ mentioning users who were not last replied to
 previous_user_id = ''
