@@ -23,7 +23,8 @@ imgmodel:
     sd_vae: Automatic
   payload:
     restore_faces: False
-    sampler_name: "DPM++ 2M Karras"
+    sampler_name: "DPM++ 2M"
+    scheduler: karras
     steps: 30
     cfg_scale: 7
     height: 896

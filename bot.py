@@ -2429,6 +2429,30 @@ def clean_img_payload(img_payload):
         # Workaround for denoising strength bug
         if not img_payload.get('enable_hr', False) and not img_payload.get('init_images', False):
             img_payload['denoising_strength'] = None
+
+        # Fix SD Client compatibility for sampler names / schedulers
+        sampler_name = img_payload.get('sampler_name', '')
+        if sampler_name:
+            known_schedulers = [' uniform', ' karras', ' exponential', ' polyexponential', ' sgm uniform']
+            for value in known_schedulers:
+                if sampler_name.lower().endswith(value):
+                    if not bot_database.was_warned('sampler_name'):
+                        bot_database.update_was_warned('sampler_name')
+                        # Extract the value (without leading space) and set it to the 'scheduler' key
+                        img_payload['scheduler'] = value.strip()
+                        if SD_CLIENT == 'A1111 SD WebUI':
+                            logging.warning(f'Img payload value "sampler_name": "{sampler_name}" is incompatible with current version of "{SD_CLIENT}". "{value}" must be omitted from "sampler_name", and instead used for the "scheduler" parameter. This is being corrected automatically. To avoid this warning, please update "sampler_name" parameter wherever present in your settings.')
+                            # Remove the matched part from sampler_name
+                            start_index = sampler_name.lower().rfind(value)
+                            fixed_sampler_name = sampler_name[:start_index].strip()
+                            img_payload['sampler_name'] = fixed_sampler_name
+                            settings_dict = bot_settings.get_settings_dict()
+                            bot_settings.settings['imgmodel']['payload']['sampler_name'] = fixed_sampler_name
+                            bot_settings.settings['imgmodel']['payload']['scheduler'] = value.strip()
+                        else:
+                            logging.warning(f'Img payload value "sampler_name": "{sampler_name}" may cause an error due to the scheduler ("{value}") being part of the value. The scheduler may be expected as a separate parameter in current version of "{SD_CLIENT}".')
+                        break
+
         # Delete all empty keys
         keys_to_delete = []
         for key, value in img_payload.items():
