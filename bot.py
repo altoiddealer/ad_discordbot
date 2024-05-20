@@ -32,10 +32,12 @@ from shutil import copyfile
 import sys
 import traceback
 
+from typing import Union
+
 sys.path.append("ad_discordbot")
 
 from ad_discordbot.modules.database import Database, ActiveSettings, StarBoard
-from ad_discordbot.modules.utils_shared import task_semaphore, shared_path
+from ad_discordbot.modules.utils_shared import task_semaphore, shared_path, patterns
 from ad_discordbot.modules.utils_misc import fix_dict, update_dict, sum_update_dict, update_dict_matched_keys
 from ad_discordbot.modules.utils_discord import ireply, send_long_message, SelectedListItem, SelectOptionsView
 from ad_discordbot.modules.utils_files import load_file, merge_base, save_yaml_file
@@ -493,27 +495,27 @@ async def process_tasks_in_background():
 async def auto_select_imgmodel(current_imgmodel_name, mode='random'):   
     try:
         all_imgmodels = await fetch_imgmodels()
-        imgmodels = copy.deepcopy(all_imgmodels)
-        all_imgmodel_names = [imgmodel.get('imgmodel_name', '') for imgmodel in all_imgmodels] 
+        all_imgmodel_names = [imgmodel.get('imgmodel_name', '') for imgmodel in all_imgmodels]
+        
+        current_index = None
+        if current_imgmodel_name and current_imgmodel_name in all_imgmodel_names:
+            current_index = all_imgmodel_names.index(current_imgmodel_name)
+            
         if mode == 'random':
-            if current_imgmodel_name:
-                matched_imgmodel = None
-                for imgmodel, imgmodel_name in zip(imgmodels, all_imgmodel_names):
-                    if imgmodel_name == current_imgmodel_name:
-                        matched_imgmodel = imgmodel
-                        break
-                if len(imgmodels) >= 2 and matched_imgmodel is not None:
-                    imgmodels.remove(matched_imgmodel)
-            selected_imgmodel = random.choice(imgmodels)
+            if current_index is not None and len(all_imgmodels) > 1:
+                all_imgmodels.pop(current_index)
+                
+            return random.choice(all_imgmodels)
+            
         elif mode == 'cycle':
-            if current_imgmodel_name in all_imgmodel_names:
-                current_index = all_imgmodel_names.index(current_imgmodel_name)
+            if current_index is not None:
                 next_index = (current_index + 1) % len(all_imgmodel_names)  # Cycle to the beginning if at the end
-                selected_imgmodel = imgmodels[next_index]
+                return all_imgmodels[next_index]
+            
             else:
-                selected_imgmodel = random.choice(imgmodels) # If no image model set yet, select randomly
                 logging.info("The previous imgmodel name was not matched in list of fetched imgmodels, so cannot 'cycle'. New imgmodel was instead picked at random.")
-        return selected_imgmodel
+                return random.choice(all_imgmodels) # If no image model set yet, select randomly
+
     except Exception as e:
         logging.error(f"Error automatically selecting image model: {e}")
 
@@ -522,7 +524,7 @@ async def auto_update_imgmodel_task(mode, duration):
     while True:
         await asyncio.sleep(duration)
         try:
-            imgmodels_data = load_file(shared_path.img_models)
+            imgmodels_data = load_file(shared_path.img_models, {})
             auto_change_settings = imgmodels_data.get('settings', {}).get('auto_change_imgmodels', {})
             channel = auto_change_settings.get('channel_announce', None)
             if channel == 11111111111111111111: channel = None
@@ -560,7 +562,7 @@ if sd_enabled:
 async def start_auto_change_imgmodels():
     try:
         global imgmodel_update_task
-        imgmodels_data = load_file(shared_path.img_models)
+        imgmodels_data = load_file(shared_path.img_models, {})
         auto_change_settings = imgmodels_data.get('settings', {}).get('auto_change_imgmodels', {})
         mode = auto_change_settings.get('mode', 'random')
         frequency = auto_change_settings.get('frequency', 1.0)
@@ -620,12 +622,12 @@ async def first_run():
         bot_database.set('first_run', False)
 
 # Unpack tag presets and add global tag keys
-async def update_tags(tags):
+async def update_tags(tags:list) -> list:
     if not isinstance(tags, list):
         logging.warning(f'''One or more "tags" are improperly formatted. Please ensure each tag is formatted as a list item designated with a hyphen (-)''')
         return tags
     try:
-        tags_data = load_file(shared_path.tags)
+        tags_data = load_file(shared_path.tags, {})
         global_tag_keys = tags_data.get('global_tag_keys', [])
         tag_presets = tags_data.get('tag_presets', [])
         updated_tags = []
@@ -647,6 +649,7 @@ async def update_tags(tags):
                     tag[key] = value
         updated_tags = await expand_triggers(updated_tags) # expand any simplified trigger phrases
         return updated_tags
+    
     except Exception as e:
         logging.error(f"Error loading tag presets: {e}")
         return tags
@@ -671,7 +674,7 @@ async def on_ready():
         await bg_task_queue.put(client.tree.sync())
         # Start background task to to change image models automatically
         if sd_enabled:
-            imgmodels_data = load_file(shared_path.img_models)
+            imgmodels_data = load_file(shared_path.img_models, {})
             if imgmodels_data and imgmodels_data.get('settings', {}).get('auto_change_imgmodels', {}).get('enabled', False):
                 await bg_task_queue.put(start_auto_change_imgmodels())
         logging.info("Bot is ready")
@@ -916,12 +919,11 @@ async def swap_llm_character(char_name, user_name, llm_payload):
         logging.error(f"An error occurred while loading the file for swap_character: {e}")
         return llm_payload
 
-def format_prompt_with_recent_output(user, prompt):
+def format_prompt_with_recent_output(user:str, prompt:str):
     try:
-        formatted_prompt = copy.copy(prompt)
+        formatted_prompt = prompt
         # Find all matches of {user_x} and {llm_x} in the prompt
-        pattern = r'\{(user|llm|history)_([0-9]+)\}'
-        matches = re.findall(pattern, prompt)
+        matches = patterns.llm_recent_roles.findall(prompt)
         # Iterate through the matches
         for match in matches:
             prefix, index = match
@@ -944,9 +946,9 @@ def format_prompt_with_recent_output(user, prompt):
         logging.error(f'An error occurred while formatting prompt with recent messages: {e}')
         return prompt
 
-def process_tag_formatting(user, prompt, formatting):
+def process_tag_formatting(user:str, prompt:str, formatting:dict):
     try:
-        updated_prompt = copy.copy(prompt)
+        updated_prompt = prompt
         format_prompt = formatting.get('format_prompt', [])
         time_offset = formatting.get('time_offset', None)
         time_format = formatting.get('time_format', None)
@@ -1140,7 +1142,7 @@ def collect_llm_tag_values(tags):
         logging.error(f"Error collecting LLM tag values: {e}")
         return llm_payload_mods, formatting
 
-def process_tag_insertions(prompt, tags):
+def process_tag_insertions(prompt:str, tags:dict):
     try:
         # iterate over a copy of the matches, preserving the structure of the original matches list
         tuple_matches = copy.deepcopy(tags['matches'])
@@ -1191,7 +1193,7 @@ def process_tag_insertions(prompt, tags):
         logging.error(f"Error processing LLM prompt tags: {e}")
         return prompt, tags
 
-def process_tag_trumps(matches, trump_params=[]):
+def process_tag_trumps(matches:list, trump_params:list=[]):
     try:
         # Collect all 'trump' parameters for all matched tags
         trump_params = set(trump_params)
@@ -1221,7 +1223,7 @@ def process_tag_trumps(matches, trump_params=[]):
         logging.error(f"Error processing matched tags: {e}")
         return matches  # return original matches if error occurs
 
-def match_tags(search_text, tags, phase='llm'):
+def match_tags(search_text:str, tags:dict, phase='llm') -> dict:
     try:
         # Remove 'llm' tags if pre-LLM phase, to be added back to unmatched tags list at the end of function
         if phase == 'llm':
@@ -1268,11 +1270,12 @@ def match_tags(search_text, tags, phase='llm'):
         if 'user' in unmatched:
             del unmatched['user'] # Remove after first phase. Controls the 'llm' tag processing at function start.
         return updated_tags
+    
     except Exception as e:
         logging.error(f"Error matching tags: {e}")
         return tags
 
-def sort_tags(all_tags):
+def sort_tags(all_tags: list) -> Union[list, dict]:
     try:
         sorted_tags = {'matches': [], 'unmatched': {'user': [], 'llm': [], 'userllm': []}, 'trump_params': []}
         for tag in all_tags:
@@ -1288,41 +1291,45 @@ def sort_tags(all_tags):
             else:
                 logging.warning(f"Ignoring unknown search_mode: {search_mode}")
         return sorted_tags
+    
     except Exception as e:
         logging.error(f"Error sorting tags: {e}")
         return all_tags
 
-async def expand_triggers(all_tags):
+
+def _expand_value(value:str) -> str:
+    # Split the value on commas
+    parts = value.split(',')
+    expanded_values = []
+    for part in parts:
+        # Check if the part contains curly brackets
+        if '{' in part and '}' in part:
+            # Use regular expression to find all curly bracket groups
+            group_matches = patterns.in_curly_brackets.findall(part)
+            permutations = list(product(*[group_match.split('|') for group_match in group_matches]))
+            # Replace each curly bracket group with permutations
+            for perm in permutations:
+                expanded_part = part
+                for part_match in group_matches:
+                    expanded_part = expanded_part.replace('{' + part_match + '}', perm[group_matches.index(part_match)], 1)
+                expanded_values.append(expanded_part)
+        else:
+            expanded_values.append(part)
+    return ','.join(expanded_values)
+
+async def expand_triggers(all_tags:list) -> list:
     try:
-        def expand_value(value):
-            # Split the value on commas
-            parts = value.split(',')
-            expanded_values = []
-            for part in parts:
-                # Check if the part contains curly brackets
-                if '{' in part and '}' in part:
-                    # Use regular expression to find all curly bracket groups
-                    group_matches = re.findall(r'\{([^}]+)\}', part)
-                    permutations = list(product(*[group_match.split('|') for group_match in group_matches]))
-                    # Replace each curly bracket group with permutations
-                    for perm in permutations:
-                        expanded_part = part
-                        for part_match in group_matches:
-                            expanded_part = expanded_part.replace('{' + part_match + '}', perm[group_matches.index(part_match)], 1)
-                        expanded_values.append(expanded_part)
-                else:
-                    expanded_values.append(part)
-            return ','.join(expanded_values)
         for tag in all_tags:
             if 'trigger' in tag:
-                tag['trigger'] = expand_value(tag['trigger'])
-        return all_tags
+                tag['trigger'] = _expand_value(tag['trigger'])
+    
     except Exception as e:
         logging.error(f"Error expanding tags: {e}")
-        return all_tags
+        
+    return all_tags
 
 # Function to convert string values to bool/int/float
-def extract_value(value_str):
+def extract_value(value_str:str) -> Union[bool, int, float]:
     try:
         value_str = value_str.strip()
         if value_str.lower() == 'true':
@@ -1339,10 +1346,11 @@ def extract_value(value_str):
                 return int(value_str)
             except ValueError:
                 return value_str
+            
     except Exception as e:
         logging.error(f"Error converting string to bool/int/float: {e}")
 
-def parse_tag_from_text_value(value_str):
+def parse_tag_from_text_value(value_str:str) -> str:
     try:
         if value_str.startswith('{') and value_str.endswith('}'):
             inner_text = value_str[1:-1]  # Remove outer curly brackets
@@ -1357,7 +1365,7 @@ def parse_tag_from_text_value(value_str):
             result_list = []
             # if list of lists
             if inner_text.startswith('[') and inner_text.endswith(']'):
-                sublist_strings = re.findall(r'\[[^\[\]]*\]', inner_text)
+                sublist_strings = patterns.brackets.findall(inner_text)
                 for sublist_string in sublist_strings:
                     sublist_string = sublist_string.strip()
                     sublist_values = parse_tag_from_text_value(sublist_string)
@@ -1377,6 +1385,7 @@ def parse_tag_from_text_value(value_str):
                 return value_str.strip('"')
             else:
                 return extract_value(value_str)
+            
     except Exception as e:
         logging.error(f"Error parsing nested value: {e}")
 
@@ -1395,9 +1404,8 @@ def parse_key_pair_from_text(kv_pair):
 def get_tags_from_text(text):
     try:
         tags_from_text = []
-        pattern = r'\[\[([^\[\]]*?(?:\[\[.*?\]\][^\[\]]*?)*?)\]\]'
-        matches = re.findall(pattern, text)
-        detagged_text = re.sub(pattern, '', text)
+        matches = patterns.tags.findall(text)
+        detagged_text = patterns.tags.sub('', text)
         for match in matches:
             tag_dict = {}
             tag_pairs = match.split('|')
@@ -1428,7 +1436,7 @@ async def get_tags(text):
         logging.error(f"Error getting tags: {e}")
         return text, []      
 
-async def init_llm_payload(user, text):
+async def init_llm_payload(user:str, text:str) -> dict:
     llm_payload = copy.deepcopy(bot_settings.settings['llmstate'])
     llm_payload['text'] = text
     name1 = user
@@ -1446,7 +1454,6 @@ async def init_llm_payload(user, text):
 
 def get_wildcard_value(matched_text, dir_path='ad_discordbot/wildcards'):
     selected_option = None
-    braces_pat = r'{{([^{}]+?)}}(?=[^\w$:]|$$|$)'   # {{this syntax|separate items can be divided|another item}}
     search_phrase = matched_text[2:] if matched_text.startswith('##') else matched_text
     search_path = f"{search_phrase}.txt"
     # List files in the directory
@@ -1471,7 +1478,7 @@ def get_wildcard_value(matched_text, dir_path='ad_discordbot/wildcards'):
                         selected_option = random.choice(lines).strip()
     # Check if selected option has braces pattern
     if selected_option:
-        braces_match = re.search(braces_pat, selected_option)
+        braces_match = patterns.braces.search(selected_option)
         if braces_match:
             braces_phrase = braces_match.group(1)
             selected_option = get_braces_value(braces_phrase)
@@ -1509,7 +1516,6 @@ def choose_dynaprompt_option(options, num_choices=1):
     return [value for _, value in chosen_values]
 
 def get_braces_value(matched_text):
-    wildcard_pat = r'##[\w-]+(?=[^\w-]|$)'  # ##this-syntax represents a wildcard .txt file
     num_choices = 1
     separator = None
     if '$$' in matched_text:
@@ -1534,7 +1540,7 @@ def get_braces_value(matched_text):
     chosen_options = choose_dynaprompt_option(options, num_choices)
     # Check for selected wildcards
     for index, option in enumerate(chosen_options):
-        wildcard_match = re.search(wildcard_pat, option)
+        wildcard_match = patterns.wildcard.search(option)
         if wildcard_match:
             wildcard_phrase = wildcard_match.group()
             wildcard_value = get_wildcard_value(matched_text=wildcard_phrase, dir_path='ad_discordbot/wildcards')
@@ -1554,17 +1560,12 @@ async def dynamic_prompting(user, text, i=None):
             logging.warning(f"'{shared_path.config}' is missing a new parameter 'dynamic_prompting_enabled'. Defaulting to 'True' (enabled) ")
     if not dynamic_prompting:
         return text
+    
     # copy text for adding comments
     text_with_comments = text
-    # define wildcards directions
-    wildcard_dir = 'ad_discordbot/wildcards'
-    os.makedirs(wildcard_dir, exist_ok=True)
-    # define patterns
-    braces_pat = r'{{([^{}]+?)}}(?=[^\w$:]|$$|$)'   # {{this syntax|separate items can be divided|another item}}
-    wildcard_pat = r'##[\w-]+(?=[^\w-]|$)'          # ##this-syntax represents a wildcard .txt file
     # Process braces patterns
     braces_start_indexes = []
-    braces_matches = re.finditer(braces_pat, text)
+    braces_matches = patterns.braces.finditer(text)
     braces_matches = sorted(braces_matches, key=lambda x: -x.start())  # Sort matches in reverse order by their start indices
     for match in braces_matches:
         braces_start_indexes.append(match.start())  # retain all start indexes for updating 'text_with_comments' for wildcard match phase
@@ -1576,11 +1577,11 @@ async def dynamic_prompting(user, text, i=None):
         highlighted_changes = '`' + replaced_text + '`'
         text_with_comments = text_with_comments.replace(match.group(0), highlighted_changes, 1)
     # Process wildcards not in braces
-    wildcard_matches = re.finditer(wildcard_pat, text)
+    wildcard_matches = patterns.wildcard.finditer(text)
     wildcard_matches = sorted(wildcard_matches, key=lambda x: -x.start())  # Sort matches in reverse order by their start indices
     for match in wildcard_matches:
         matched_text = match.group()
-        replaced_text = get_wildcard_value(matched_text=matched_text, dir_path=wildcard_dir)
+        replaced_text = get_wildcard_value(matched_text=matched_text, dir_path=shared_path.dir_wildcards)
         if replaced_text:
             start, end = match.start(), match.end()
             # Replace matched text
@@ -1621,7 +1622,7 @@ async def on_message(i):
 #################################################################
 #################### QUEUED FROM ON MESSAGE #####################
 #################################################################
-async def on_message_task(user, channel, source, text, i):
+async def on_message_task(user:discord.User, channel:discord.TextChannel, source:str, text:str, i):
     try:
         params = {}
         # collects all tags, sorted into sub-lists by phase (user / llm / userllm)
@@ -1633,8 +1634,9 @@ async def on_message_task(user, channel, source, text, i):
         if should_gen_text:
             # build llm_payload with defaults
             llm_payload = await init_llm_payload(user.name, text)
+            
             # make working copy of user's request (without @ mention)
-            llm_prompt = copy.copy(text)
+            llm_prompt = text
             # apply tags to prompt
             llm_prompt, tags = process_tag_insertions(llm_prompt, tags)
             # collect matched tag values
@@ -1645,14 +1647,16 @@ async def on_message_task(user, channel, source, text, i):
             llm_prompt = process_tag_formatting(user.name, llm_prompt, formatting)
             # offload to ai_gen queue
             llm_payload['text'] = llm_prompt
+            
             await hybrid_llm_img_gen(user, channel, source, text, tags, llm_payload, params, i)
             return
+        
         should_gen_image = should_bot_do('should_gen_image', default=False, tags=tags)
         if should_gen_image:
             if await sd_online(channel):
                 await channel.send(f'Bot was triggered by Tags to not respond with text.\n**Processing image generation using your input as the prompt ...**', delete_after=5) # msg for if LLM model is unloaded
-            llm_prompt = copy.copy(text)
-            await img_gen_task(user.name, channel, source, llm_prompt, params, i, tags)
+            await img_gen_task(user.name, channel, source, text, params, i, tags)
+            
     except Exception as e:
         logging.error(f"An error occurred processing on_message request: {e}")
 
@@ -1667,9 +1671,11 @@ async def hybrid_llm_img_gen(user, channel, source, text, tags, llm_payload, par
         send_user_image = params.get('send_user_image', [])
         mode = llmmodel_params.get('mode', 'change') # default to 'change' unless a tag was triggered with 'swap'
         if llmmodel_params:
-            orig_llmmodel = copy.deepcopy(shared.model_name)                    # copy current LLM model name
+            orig_llmmodel = shared.model_name                                   # copy current LLM model name
             change_embed = await change_llmmodel_task(user, channel, params)    # Change LLM model
-            if mode == 'swap' and change_embed: await change_embed.delete()                      # Delete embed before the second call
+            if mode == 'swap' and change_embed:                                 # Delete embed before the second call
+                await change_embed.delete()
+                
         # make a 'Prompting...' embed when generating text for an image response
         should_gen_image = should_bot_do('should_gen_image', default=False, tags=tags)
         if should_gen_image and textgenwebui_enabled:
@@ -1694,13 +1700,18 @@ async def hybrid_llm_img_gen(user, channel, source, text, tags, llm_payload, par
             if last_resp is not None:
                 logging.info("reply sent: \"" + user.name + ": {'text': '" + llm_payload["text"] + "', 'response': '" + last_resp + "'}\"")
             else:
-                if should_gen_image and sd_enabled: last_resp = copy.copy(text)
-                else: return
+                if should_gen_image and sd_enabled: 
+                    last_resp = text
+                else: 
+                    return
+                
             # if LLM model swapping was triggered
             if mode == 'swap':
                 params['llmmodel']['llmmodel_name'] = orig_llmmodel
                 change_embed = await change_llmmodel_task(user, channel, params)    # Swap LLM Model back
-                if change_embed: await change_embed.delete()                        # Delete embed again after the second call
+                if change_embed: 
+                    await change_embed.delete()                                     # Delete embed again after the second call
+                    
         # process image generation (A1111 / Forge)
         if sd_enabled:
             tags = match_img_tags(last_resp, tags)
@@ -1722,9 +1733,13 @@ async def hybrid_llm_img_gen(user, channel, source, text, tags, llm_payload, par
         if img_gen_embed_info:
             img_gen_embed_info.title = f'An error occurred while processing "{source}" request'
             img_gen_embed_info.description = e
-            if img_gen_embed: await img_gen_embed.edit(embed=img_gen_embed_info)
-            else: await channel.send(embed=img_gen_embed_info)
-        if change_embed: await change_embed.delete()
+            if img_gen_embed: 
+                await img_gen_embed.edit(embed=img_gen_embed_info)
+            else: 
+                await channel.send(embed=img_gen_embed_info)
+                
+        if change_embed: 
+            await change_embed.delete()
 
 #################################################################
 ##################### QUEUED LLM GENERATION #####################
@@ -1774,7 +1789,7 @@ async def llm_gen(llm_payload):
                 if len(vis_resp) > 0:
                     last_vis_resp = vis_resp[-1][-1]
                     if 'audio src=' in last_vis_resp:
-                        audio_format_match = re.search(r'audio src="file/(.*?\.(wav|mp3))"', last_vis_resp)
+                        audio_format_match = patterns.audio_src.search(last_vis_resp)
                         if audio_format_match:
                             tts_resp = audio_format_match.group(1)
             return last_resp, tts_resp  # bot's reply
@@ -2036,6 +2051,7 @@ def should_bot_do(key, default, tags={}):   # Used to check if should:
         if not textgenwebui_enabled:
             if key == 'should_gen_text' or key == 'should_send_text':
                 return False
+            
         matches = tags.get('matches', {})   # - generate image
         if matches:                         # - send text response
             for item in matches:            # - send image response
@@ -2045,20 +2061,22 @@ def should_bot_do(key, default, tags={}):   # Used to check if should:
                     tag = item
                 if key in tag:
                     return bool(tag.get(key, default))
-        return default
+    
     except Exception as e:
         logging.error(f"An error occurred while checking if bot should do '{key}': {e}")
-        return default
+        
+    return default
 
 # For @ mentioning users who were not last replied to
-previous_user_id = ''
+previous_user_mention = ''
 
-def update_mention(user_id, last_resp=''):
-    global previous_user_id
-    mention_resp = copy.copy(last_resp)                    
-    if user_id != previous_user_id:
-        mention_resp = f"{user_id} {last_resp}"
-    previous_user_id = user_id
+def update_mention(user_mention:str, last_resp:str=''):
+    global previous_user_mention
+    mention_resp = last_resp
+    
+    if user_mention != previous_user_mention:
+        mention_resp = f"{user_mention} {last_resp}"
+    previous_user_mention = user_mention
     return mention_resp
 
 flow_event = asyncio.Event()
@@ -2432,17 +2450,17 @@ def apply_loractl(tags):
         # Flatten the matches dictionary values to get a list of all tags (including those within tuples)
         matched_tags = [tag if isinstance(tag, dict) else tag[0] for tag in tags['matches']]
         # Filter the matched tags to include only those with certain patterns in their text fields
-        lora_tags = [tag for tag in matched_tags if any(re.findall(r'<lora:[^:]+:[^>]+>', text) for text in (tag.get('positive_prompt', ''), tag.get('positive_prompt_prefix', ''), tag.get('positive_prompt_suffix', '')))]
+        lora_tags = [tag for tag in matched_tags if any(patterns.sd_lora.findall(text) for text in (tag.get('positive_prompt', ''), tag.get('positive_prompt_prefix', ''), tag.get('positive_prompt_suffix', '')))]
         if len(lora_tags) >= config['sd']['extensions']['lrctl']['min_loras']:
             for index, tag in enumerate(lora_tags):
                 # Determine the key with a non-empty value among the specified keys
                 used_key = next((key for key in ['positive_prompt', 'positive_prompt_prefix', 'positive_prompt_suffix'] if tag.get(key, '')), None)
                 if used_key:  # If a key with a non-empty value is found
                     positive_prompt = tag[used_key]
-                    lora_matches = re.findall(r'<lora:[^:]+:[^>]+>', positive_prompt)
+                    lora_matches = patterns.sd_lora.findall(positive_prompt)
                     if lora_matches:
                         for lora_match in lora_matches:
-                            lora_weight_match = re.search(r'(?<=:)\d+(\.\d+)?', lora_match) # Extract lora weight
+                            lora_weight_match = patterns.sd_lora_weight.search(lora_match) # Extract lora weight
                             if lora_weight_match:
                                 lora_weight = float(lora_weight_match.group())
                                 # Selecting the appropriate scaling based on the index
@@ -2485,11 +2503,11 @@ def apply_imgcmd_params(img_payload, params):
         logging.error(f"Error initializing img payload: {e}")
         return img_payload
 
-def process_img_prompt_tags(img_payload, tags):
+def process_img_prompt_tags(img_payload:dict, tags:dict) -> dict:
     try:
         img_prompt, tags = process_tag_insertions(img_payload['prompt'], tags)
-        updated_positive_prompt = copy.copy(img_prompt)
-        updated_negative_prompt = copy.copy(img_payload['negative_prompt'])
+        updated_positive_prompt = img_prompt
+        updated_negative_prompt = img_payload['negative_prompt']
         matches = tags['matches']
         for tag in matches:
             join = tag.get('img_text_joining', ' ')
@@ -2511,10 +2529,11 @@ def process_img_prompt_tags(img_payload, tags):
                 updated_negative_prompt = updated_negative_prompt + join + tag['negative_prompt_suffix']
         img_payload['prompt'] = updated_positive_prompt
         img_payload['negative_prompt'] = updated_negative_prompt
-        return img_payload
+    
     except Exception as e:
         logging.error(f"Error processing Img prompt tags: {e}")
-        return img_payload
+        
+    return img_payload
 
 def random_value_from_range(value_range):
     if isinstance(value_range, (list, tuple)) and len(value_range) == 2:
@@ -2527,13 +2546,13 @@ def random_value_from_range(value_range):
     logging.warning(f'Invalid value range "{value_range}". Defaulting to "0".')
     return 0
 
-def convert_lists_to_tuples(dictionary):
+def convert_lists_to_tuples(dictionary:dict) -> dict:
     for key, value in dictionary.items():
         if isinstance(value, list) and len(value) == 2 and all(isinstance(item, (int, float)) for item in value) and not any(isinstance(item, bool) for item in value):
             dictionary[key] = tuple(value)
     return dictionary
 
-def process_param_variances(param_variances):
+def process_param_variances(param_variances: dict) -> dict:
     try:
         param_variances = convert_lists_to_tuples(param_variances) # Only converts lists containing ints and floats (not strings or bools) 
         processed_params = copy.deepcopy(param_variances)
@@ -2557,6 +2576,7 @@ def process_param_variances(param_variances):
                 logging.warning(f'Invalid params "{key}", "{value}" will not be applied.')
                 processed_params.pop(key)  # Remove invalid key
         return processed_params
+    
     except Exception as e:
         logging.error(f"Error processing param variances: {e}")
         return {}
@@ -2933,7 +2953,7 @@ def collect_img_tag_values(tags):
         logging.error(f"Error collecting Img tag values: {e}")
         return sd_output_dir, tags
 
-def init_img_payload(img_prompt, neg_prompt):
+def init_img_payload(img_prompt:str, neg_prompt:str) -> dict:
     try:
         # Initialize img_payload settings
         img_payload = {"prompt": img_prompt, "negative_prompt": neg_prompt, "width": 512, "height": 512, "steps": 20, "resize_mode": 1}
@@ -2942,13 +2962,16 @@ def init_img_payload(img_prompt, neg_prompt):
         img_payload.update(imgmodel_img_payload)
         img_payload['override_settings'] = copy.deepcopy(bot_settings.settings['imgmodel'].get('override_settings', {}))
         return img_payload
+    
     except Exception as e:
         logging.error(f"Error initializing img payload: {e}")
 
-def match_img_tags(img_prompt, tags):
+def match_img_tags(img_prompt:str, tags:dict) -> dict:
     try:
         # Unmatch any previously matched tags which try to insert text into the img_prompt
         for tag in tags['matches'][:]:  # Iterate over a copy of the list
+            tag:dict
+            
             if tag.get('imgtag_matched_early'): # extract text insertion key pairs from previously matched tags
                 new_tag = {}
                 tag_copy = copy.copy(tag)
@@ -2969,10 +2992,11 @@ def match_img_tags(img_prompt, tags):
             if tag.get('imgtag_matched_early') and tag.get('imgtag_uninserted'):
                 tags['matches'].append(tag)
                 tags['unmatched']['userllm'].remove(tag)
-        return tags
+    
     except Exception as e:
         logging.error(f"Error matching tags for img phase: {e}")
-        return tags
+        
+    return tags
 
 async def img_gen_task(user, channel, source, img_prompt, params, i=None, tags={}):
     try:
@@ -3045,7 +3069,7 @@ if sd_enabled:
     # Updates size options for /image command
     def update_size_options(average):
         global size_choices
-        options = load_file(shared_path.cmd_options)
+        options = load_file(shared_path.cmd_options, {})
         sizes = options.get('sizes', [])
         aspect_ratios = [size.get("ratio") for size in sizes.get('ratios', [])]
         size_choices.clear()  # Clear the existing list
@@ -3103,7 +3127,7 @@ if sd_enabled:
         if (width + height) % 2 != 0: avg += 1
         return avg
 
-    async def get_imgcmd_choices(size_options, style_options):
+    async def get_imgcmd_choices(size_options, style_options) -> tuple[list[app_commands.Choice], list[app_commands.Choice]]:
         try:
             size_choices = [
                 app_commands.Choice(name=option['name'], value=option['name'])
@@ -3112,12 +3136,13 @@ if sd_enabled:
                 app_commands.Choice(name=option['name'], value=option['name'])
                 for option in style_options]
             return size_choices, style_choices
+        
         except Exception as e:
             logging.error(f"An error occurred while building choices for /image: {e}")  
 
     async def get_imgcmd_options():
         try:
-            options = load_file(shared_path.cmd_options)
+            options = load_file(shared_path.cmd_options, {})
             options = dict(options)
             # Get sizes and aspect ratios from 'dict_cmdoptions.yaml'
             sizes = options.get('sizes', {})
@@ -3134,10 +3159,11 @@ if sd_enabled:
             # Get style and controlnet options
             style_options = options.get('styles', {})
             return size_options, style_options
+        
         except Exception as e:
             logging.error(f"An error occurred while building options for /image: {e}")
 
-    async def get_cnet_data():
+    async def get_cnet_data() -> dict:
         filtered_cnet_data = {}
         if config['sd']['extensions'].get(f'controlnet_enabled', False):
             try:
@@ -3785,11 +3811,11 @@ def get_all_characters():
                 character['name'] = file.stem
                 all_characters.append(character)
 
-                char_data = load_file(file)
-                if char_data is None:
+                char_data = load_file(file, {})
+                if not char_data:
                     continue
                 
-                char_data = dict(char_data)
+                char_data = dict(char_data) # TODO does yaml loader behave weird that we need to convert it to a dict here?
                 if char_data.get('bot_in_character_menu', True):
                     filtered_characters.append(character)
 
@@ -3826,9 +3852,9 @@ if textgenwebui_enabled:
 ####################### /IMGMODEL COMMAND #######################
 #################################################################
 # Apply user defined filters to imgmodel list
-async def filter_imgmodels(imgmodels):
+async def filter_imgmodels(imgmodels:list) -> list:
     try:
-        imgmodels_data = load_file(shared_path.img_models)
+        imgmodels_data = load_file(shared_path.img_models, {})
         filter_list = imgmodels_data.get('settings', {}).get('filter', None)
         exclude_list = imgmodels_data.get('settings', {}).get('exclude', None)
         if filter_list or exclude_list:
@@ -3840,11 +3866,12 @@ async def filter_imgmodels(imgmodels):
                 )
             ]
         return imgmodels
+    
     except Exception as e:
         logging.error(f"Error filtering image model list: {e}")
 
 # Build list of imgmodels depending on user preference (user .yaml / API)
-async def fetch_imgmodels():
+async def fetch_imgmodels() -> list:
     try:
         imgmodels = await sd_api(endpoint='/sdapi/v1/sd-models', method='get', json=None, retry=False)
         # Update 'title' keys in fetched list for uniformity
@@ -3855,9 +3882,10 @@ async def fetch_imgmodels():
                 imgmodel['imgmodel_name'] = imgmodel.pop('model_name')
         imgmodels = await filter_imgmodels(imgmodels)
         return imgmodels
+    
     except Exception as e:
         logging.error(f"Error fetching image models: {e}")
-        return {}
+        return []
 
 async def update_imgmodel(channel, selected_imgmodel, selected_imgmodel_tags):
     try:
@@ -3928,7 +3956,7 @@ async def guess_model_data(selected_imgmodel, presets):
     except Exception as e:
         logging.error(f"Error guessing selected imgmodel data: {e}")
 
-async def merge_imgmodel_data(selected_imgmodel):
+async def merge_imgmodel_data(selected_imgmodel:dict):
     try:
         selected_imgmodel_name = selected_imgmodel.get('imgmodel_name')
         ### IF API IMG MODEL UNLOADING GETS EVER DEBUGGED
@@ -3938,7 +3966,7 @@ async def merge_imgmodel_data(selected_imgmodel):
         # Get tags if defined
         selected_imgmodel_tags = None
         imgmodel_settings = {'payload': {}, 'override_settings': {}}
-        imgmodels_data = load_file(shared_path.img_models)
+        imgmodels_data = load_file(shared_path.img_models, {})
         if imgmodels_data.get('settings', {}).get('auto_change_imgmodels', {}).get('guess_model_params', True):
             imgmodel_presets = copy.deepcopy(imgmodels_data.get('presets', []))
             matched_preset = await guess_model_data(selected_imgmodel, imgmodel_presets)
@@ -3947,6 +3975,7 @@ async def merge_imgmodel_data(selected_imgmodel):
                 imgmodel_settings['payload'] = matched_preset.get('payload', {})
         imgmodel_settings['override_settings']['sd_model_checkpoint'] = selected_imgmodel['sd_model_checkpoint']
         imgmodel_settings['imgmodel_name'] = selected_imgmodel_name
+        
         # Replace input dictionary
         selected_imgmodel = imgmodel_settings
         # Merge the selected imgmodel data with base imgmodel data
@@ -3954,10 +3983,11 @@ async def merge_imgmodel_data(selected_imgmodel):
         # Unpack any tag presets
         selected_imgmodel_tags = await update_tags(selected_imgmodel_tags)
         return selected_imgmodel, selected_imgmodel_name, selected_imgmodel_tags
+    
     except Exception as e:
         logging.error(f"Error merging selected imgmodel data with base imgmodel data: {e}")
 
-async def get_selected_imgmodel_data(selected_imgmodel_value):
+async def get_selected_imgmodel_data(selected_imgmodel_value:str) -> dict:
     try:
         selected_imgmodel = {}
         ### IF API IMG MODEL UNLOADING GETS EVER DEBUGGED
@@ -3969,8 +3999,7 @@ async def get_selected_imgmodel_data(selected_imgmodel_value):
         #      selected_imgmodel = {'imgmodel_name': 'None were selected'}
         #     return selected_imgmodel
         all_imgmodels = await fetch_imgmodels()
-        all_imgmodel_data = copy.deepcopy(all_imgmodels)
-        for imgmodel in all_imgmodel_data:
+        for imgmodel in all_imgmodels:
             # check that the value matches a valid checkpoint
             if imgmodel.get('imgmodel_name') == selected_imgmodel_value:
                 selected_imgmodel = {
@@ -3982,6 +4011,7 @@ async def get_selected_imgmodel_data(selected_imgmodel_value):
         if not selected_imgmodel:
             logging.error(f'Img model not found: {selected_imgmodel_value}')
         return selected_imgmodel 
+    
     except Exception as e:
         logging.error(f"Error getting selected imgmodel data: {e}")
         return {}
@@ -4478,11 +4508,12 @@ class Settings:
 
     async def update_base_tags(self):
         try:
-            tags_data = load_file(shared_path.tags)
+            tags_data = load_file(shared_path.tags, {})
             base_tags_data = tags_data.get('base_tags', [])
             base_tags = copy.deepcopy(base_tags_data)
             base_tags = await update_tags(base_tags)
             self.base_tags = base_tags
+            
         except Exception as e:
             logging.error(f"Error updating client base tags: {e}")
 
