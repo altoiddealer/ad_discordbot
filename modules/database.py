@@ -97,10 +97,7 @@ class BaseFileMemory:
         pass
     
     def get(self, key, default=None):
-        if key in self:
-            return getattr(self, key)
-        
-        return default
+        return getattr(self, key, default)
     
     ###########
     # Migration
@@ -184,14 +181,16 @@ class Database(BaseFileMemory):
         self.warned_once = data.pop('warned_once', {})
 
 
-    def last_user_msg(self, channel_id):
+    def last_user_msg_for(self, channel_id):
         return self.last_user_msg.get(channel_id, None)
 
     def update_last_user_msg(self, channel_id, value=None, save_now=False):
         if not isinstance(self.last_user_msg, dict):
             self.last_user_msg = {}
-        if self.last_user_msg.get(channel_id, None) is None:
+        
+        if not channel_id in self.last_user_msg:
             save_now = True
+        
         self.last_user_msg[channel_id] = time.time()
         if save_now:
             self.save()
@@ -226,9 +225,10 @@ class StarBoard(BaseFileMemory):
 
 class Statistics(BaseFileMemory):
     def __init__(self) -> None:
-        super().__init__(shared_path.statistics, version=1)
         self._llm_gen_time_start_last:float
         self.llm_statistics:dict[str, float]
+        
+        super().__init__(shared_path.statistics, version=1)
 
     def get_statistics_dict(self, prefix):
         attribute_name = f"{prefix}_statistics"
