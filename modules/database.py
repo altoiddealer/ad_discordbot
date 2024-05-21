@@ -251,12 +251,12 @@ class _Statistic:
 class Statistics(BaseFileMemory):
     def __init__(self) -> None:
         self._llm_gen_time_start_last: float
-        self.llm_statistics: _Statistic
+        self.llm: _Statistic
         
         super().__init__(shared_path.statistics, version=1)
 
     def load_defaults(self, data: dict):
-        self.llm_statistics = _Statistic(self, data.pop('llm_statistics', {}))
+        self.llm = _Statistic(self, data.pop('llm', {}))
         
     def save_pre_process(self, data):
         # Replace outgoing data with json serializable
