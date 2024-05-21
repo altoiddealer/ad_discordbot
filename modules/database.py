@@ -225,7 +225,7 @@ class StarBoard(BaseFileMemory):
 
 class Statistics(BaseFileMemory):
     def __init__(self) -> None:
-        self._llm_gen_time_start_last:float # I don't think it matters, but I put the type hints before variables are initialized - Reality
+        self._llm_gen_time_start_last:float
         self.llm_statistics:dict[str, float]
         
         super().__init__(shared_path.statistics, version=1)
