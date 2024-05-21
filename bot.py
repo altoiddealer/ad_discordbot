@@ -1750,23 +1750,24 @@ async def hybrid_llm_img_gen(user, channel, source, text, tags, llm_payload, par
 # Update LLM Gen Statistics
 def update_llm_gen_statistics(last_resp):
     try:
-        total_gens = bot_statistics.get_statistics('llm_gen', 'generations_total', default=0)
+        total_gens = bot_statistics.llm_statistics.get('generations_total', 0)
         total_gens += 1
-        bot_statistics.update_statistics('llm_gen', 'generations_total', value=total_gens)
+        bot_statistics.llm_statistics['generations_total'] = total_gens
         # Update tokens statistics
         last_tokens = int(count_tokens(last_resp))
-        bot_statistics.update_statistics('llm_gen', 'num_tokens_last', value=last_tokens)
-        total_tokens = bot_statistics.get_statistics('llm_gen', 'num_tokens_total', default=0)
+        bot_statistics.llm_statistics['num_tokens_last'] = last_tokens
+        total_tokens = bot_statistics.llm_statistics.get('num_tokens_total', 0)
         total_tokens += last_tokens
-        bot_statistics.update_statistics('llm_gen', 'num_tokens_total', value=total_tokens)
+        bot_statistics.llm_statistics['num_tokens_total'] = total_tokens
         # Update time statistics
-        total_time = bot_statistics.get_statistics('llm_gen', 'time_total', 0.0)
+        total_time = bot_statistics.llm_statistics.get('time_total', 0)
         total_time += (time.time() - bot_statistics._llm_gen_time_start_last)
-        bot_statistics.update_statistics('llm_gen', 'time_total', value=total_time)
+        bot_statistics.llm_statistics['time_total'] = total_time
         # Update averages
-        bot_statistics.update_statistics('llm_gen', 'tokens_per_gen_avg', value=(total_tokens/total_gens))
-        bot_statistics.update_statistics('llm_gen', 'tokens_per_sec_avg', value=(total_tokens/total_time), save_now=True)
-    except:
+        bot_statistics.llm_statistics['tokens_per_gen_avg'] = total_tokens/total_gens
+        bot_statistics.llm_statistics['tokens_per_sec_avg'] = total_tokens/total_time
+        bot_statistics.save()
+    except Exception as e:
         logging.error(f'An error occurred while saving LLM gen statistics: {e}')  
 
 # Add guild data
@@ -1776,7 +1777,7 @@ def apply_server_mode(llm_payload, i=None):
             name1 = f'Server: {i.guild}'
             llm_payload['state']['name1'] = name1
             llm_payload['state']['name1_instruct'] = name1
-        except:
+        except Exception as e:
             logging.error(f'An error occurred while applying Server Mode: {e}')       
     return llm_payload
 
@@ -3628,7 +3629,7 @@ if system_embed_info:
 
     @client.hybrid_command(description="Display performance statistics")
     async def statistics_llm_gen(ctx):
-        statistics_dict = bot_statistics.get_statistics_dict('llm')
+        statistics_dict = bot_statistics.llm_statistics
         description_lines = [f"{key}: {value}" for key, value in statistics_dict.items()]
         formatted_description = "\n".join(description_lines)
         system_embed_info.title = "Bot LLM Gen Statistics:"
