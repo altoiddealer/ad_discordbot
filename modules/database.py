@@ -222,34 +222,46 @@ class StarBoard(BaseFileMemory):
         if state:
             data = load_file(self._fp, [])      # load old file as list
             self.load(data=dict(messages=data)) # convert list to dict
+            
+            
+class _Statistic:
+    def __init__(self, db, data) -> None:
+        self.db: Statistics = db
+        self.data: dict = data
+        
+    def set(self, key, value, save_now=False):
+        if not key in self.data:
+            save_now = True
+            
+        self.data[key] = value
+        if save_now:
+            self.db.save()
+            
+    def get(self, key, default=None):
+        return self.data.get(key, default)
+    
+    def __setitem__(self, key, item):
+        self.data[key] = item
+
+    def __getitem__(self, key):
+        return self.data[key]
+    
+    
 
 class Statistics(BaseFileMemory):
     def __init__(self) -> None:
-        self._llm_gen_time_start_last:float
-        self.llm_statistics:dict[str, float]
+        self._llm_gen_time_start_last: float
+        self.llm_statistics: _Statistic
         
         super().__init__(shared_path.statistics, version=1)
 
-    def get_statistics_dict(self, prefix):
-        attribute_name = f"{prefix}_statistics"
-        return getattr(self, attribute_name, {})
-
-    def get_statistics(self, prefix, flag_name, default=None):
-        attribute_name = f"{prefix}_statistics"
-        statistics = getattr(self, attribute_name, None)
-        if statistics is None:
-            return default
-        return statistics.get(flag_name, default)
-
-    def update_statistics(self, prefix, flag_name, value=None, save_now=None):
-        attribute_name = f"{prefix}_statistics"
-        statistics = getattr(self, attribute_name, None)
-        if statistics is None:
-            statistics = {}
-            setattr(self, attribute_name, statistics)
-
-        if statistics.get(flag_name, None) is None:
-            save_now = True
-        statistics[flag_name] = value
-        if save_now:
-            self.save()
+    def load_defaults(self, data: dict):
+        self.llm_statistics = _Statistic(self, data.pop('llm_statistics', {}))
+        
+    def save_pre_process(self, data):
+        # Replace outgoing data with json serializable
+        for k,v in data.items():
+            if isinstance(v, _Statistic):
+                data[k] = v.data
+        
+        return data
