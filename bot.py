@@ -41,6 +41,7 @@ from ad_discordbot.modules.utils_shared import task_semaphore, shared_path, patt
 from ad_discordbot.modules.utils_misc import fix_dict, update_dict, sum_update_dict, update_dict_matched_keys, format_time
 from ad_discordbot.modules.utils_discord import ireply, send_long_message, SelectedListItem, SelectOptionsView
 from ad_discordbot.modules.utils_files import load_file, merge_base, save_yaml_file
+from ad_discordbot.modules.utils_aspect_ratios import round_to_precision, res_to_model_fit, dims_from_ar, avg_from_dims, get_aspect_ratio_parts, calculate_aspect_ratio_sizes
 
 bot_active_settings = ActiveSettings()
 starboard = StarBoard()
@@ -2760,6 +2761,7 @@ async def process_img_payload_tags(img_payload, mods, params):
         change_imgmodel = mods.get('change_imgmodel', None)
         swap_imgmodel = mods.get('swap_imgmodel', None)
         payload = mods.get('payload', None)
+        aspect_ratio = mods.get('aspect_ratio', None)
         param_variances = mods.get('param_variances', {})
         controlnet = mods.get('controlnet', [])
         forge_couple = mods.get('forge_couple', {})
@@ -2768,9 +2770,8 @@ async def process_img_payload_tags(img_payload, mods, params):
         img2img = mods.get('img2img', {})
         img2img_mask = mods.get('img2img_mask', {})
         send_user_image = mods.get('send_user_image', [])
-        endpoint = '/sdapi/v1/txt2img'
         # Process the tag matches
-        if flow or img_censoring or change_imgmodel or swap_imgmodel or payload or param_variances or controlnet or forge_couple or layerdiffuse or reactor or img2img or img2img_mask or send_user_image:
+        if flow or img_censoring or change_imgmodel or swap_imgmodel or payload or aspect_ratio or param_variances or controlnet or forge_couple or layerdiffuse or reactor or img2img or img2img_mask or send_user_image:
             # Flow handling
             if flow is not None and not flow_event.is_set():
                 await build_flow_queue(flow)
@@ -2801,6 +2802,13 @@ async def process_img_payload_tags(img_payload, mods, params):
                     update_dict(img_payload, payload)
                 else:
                     logging.warning("A tag was matched with invalid 'payload'; must be a dictionary.")
+            # Aspect Ratio
+            if aspect_ratio:
+                current_avg = get_current_avg_from_dims()
+                n, d = get_aspect_ratio_parts(aspect_ratio)
+                w, h = dims_from_ar(current_avg, n, d)
+                img_payload['width'], img_payload['height'] = w, h
+                logging.info(f'[TAGS] Applied aspect ratio "{aspect_ratio}" (Width: "{w}", Height: "{h}").')
             # Param variances handling
             if param_variances:
                 processed_params = process_param_variances(param_variances)
@@ -2936,6 +2944,8 @@ def collect_img_tag_values(tags):
                     img_payload_mods['change_imgmodel'] = str(value)
                 elif key == 'swap_imgmodel' and img_payload_mods.get('swap_imgmodel') is None:
                     img_payload_mods['swap_imgmodel'] = str(value)
+                elif key == 'aspect_ratio' and img_payload_mods.get('aspect_ratio') is None:
+                    img_payload_mods['aspect_ratio'] = str(value)
                 elif key == 'payload': # Allow multiple to accumulate
                     try:
                         if img_payload_mods.get('payload'):
@@ -3158,41 +3168,6 @@ if sd_enabled:
         await update_cnet_options()
         await client.tree.sync()
 
-    def round_to_precision(val, prec):
-        return round(val / prec) * prec
-
-    def res_to_model_fit(width, height, mp_target):
-        mp = width * height
-        scale = math.sqrt(mp_target / mp)
-        new_wid = int(round_to_precision(width * scale, 64))
-        new_hei = int(round_to_precision(height * scale, 64))
-        return new_wid, new_hei
-
-    def calculate_aspect_ratio_sizes(avg, aspect_ratios):
-        ratio_options = []
-        mp_target = avg*avg
-        doubleavg = avg*2
-        for ratio in aspect_ratios:
-            ratio_parts = tuple(map(int, ratio.replace(':', '/').split('/')))
-            ratio_sum = ratio_parts[0]+ratio_parts[1]
-            # Approximate the width and height based on the average and aspect ratio
-            width = round((ratio_parts[0]/ratio_sum)*doubleavg)
-            height = round((ratio_parts[1]/ratio_sum)*doubleavg)
-            # Round to correct megapixel precision
-            width, height = res_to_model_fit(width, height, mp_target)
-            if width > height: aspect_type = "landscape"
-            elif width < height: aspect_type = "portrait"
-            else: aspect_type = "square"
-            # Format the result
-            size_name = f"{width} x {height} ({ratio} {aspect_type})"
-            ratio_options.append({'name': size_name, 'width': width, 'height': height})
-        return ratio_options
-
-    def average_width_height(width, height):
-        avg = (width + height) // 2
-        if (width + height) % 2 != 0: avg += 1
-        return avg
-
     async def get_imgcmd_choices(size_options, style_options) -> tuple[list[app_commands.Choice], list[app_commands.Choice]]:
         try:
             size_choices = [
@@ -3206,6 +3181,11 @@ if sd_enabled:
         except Exception as e:
             logging.error(f"An error occurred while building choices for /image: {e}")  
 
+    def get_current_avg_from_dims():
+        w = bot_active_settings.get('imgmodel', {}).get('payload', {}).get('width', 512)
+        h = bot_active_settings.get('imgmodel', {}).get('payload', {}).get('height', 512)
+        return avg_from_dims(w, h)
+
     async def get_imgcmd_options():
         try:
             options = load_file(shared_path.cmd_options, {})
@@ -3214,10 +3194,8 @@ if sd_enabled:
             sizes = options.get('sizes', {})
             aspect_ratios = [size.get("ratio") for size in sizes.get('ratios', [])]
             # Calculate the average and aspect ratio sizes
-            width = bot_active_settings.get('imgmodel', {}).get('payload', {}).get('width', 512)
-            height = bot_active_settings.get('imgmodel', {}).get('payload', {}).get('height', 512)
-            average = average_width_height(width, height)
-            ratio_options = calculate_aspect_ratio_sizes(average, aspect_ratios)
+            current_avg = get_current_avg_from_dims()
+            ratio_options = calculate_aspect_ratio_sizes(current_avg, aspect_ratios)
             # Collect any defined static sizes
             static_options = sizes.get('static_sizes', [])
             # Merge dynamic and static sizes
@@ -3970,8 +3948,9 @@ async def fetch_imgmodels() -> list:
 
 async def update_imgmodel(channel, selected_imgmodel, selected_imgmodel_tags):
     try:
-        current_w, current_h = bot_settings.settings['imgmodel'].get('payload', {}).get('width', 512), bot_settings.settings['imgmodel'].get('payload', {}).get('height', 512)
-        new_w, new_h = selected_imgmodel.get('payload', {}).get('width', 512), selected_imgmodel.get('payload', {}).get('height', 512)
+        # get current/new average width/height for '/image' cmd size options
+        current_avg = get_current_avg_from_dims()
+        new_avg = avg_from_dims(selected_imgmodel.get('payload', {}).get('width', 512), selected_imgmodel.get('payload', {}).get('height', 512))
         bot_active_settings['imgmodel'] = selected_imgmodel
         bot_active_settings['imgmodel']['tags'] = selected_imgmodel_tags
         bot_active_settings.save()
@@ -3989,10 +3968,8 @@ async def update_imgmodel(channel, selected_imgmodel, selected_imgmodel_tags):
         # Load the imgmodel and VAE via API
         model_data = bot_settings.settings['imgmodel'].get('override_settings') or bot_settings.settings['imgmodel']['payload'].get('override_settings')
         _ = await sd_api(endpoint='/sdapi/v1/options', method='post', json=model_data, retry=True)
-        # Update size options for /image command
-        current_avg = average_width_height(current_w, current_h)    # get current average width/height
-        new_avg = average_width_height(new_w, new_h)                # get new average width/height
-        if current_avg != new_avg:                                  # Update size options in menus if they are different
+        # Update size options for /image command if old/new averages are different
+        if current_avg != new_avg:
             await bg_task_queue.put(update_image_cmd_menus(new_avg))
     except Exception as e:
         logging.error(f"Error updating settings with the selected imgmodel data: {e}")
