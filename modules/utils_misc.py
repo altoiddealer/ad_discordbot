@@ -50,3 +50,17 @@ def update_dict_matched_keys(d, u):
         else:
             d[k] = v
     return d
+
+# Converts seconds to other values
+def format_time(seconds):
+    if seconds < 60:
+        return seconds, "secs"
+    elif seconds < 3600:
+        minutes = seconds / 60
+        return f"{minutes:.2f}", "mins"
+    elif seconds < 86400:
+        hours = seconds / 3600
+        return f"{hours:.2f}", "hrs"
+    else:
+        days = seconds / 86400
+        return f"{days:.2f}", "days"

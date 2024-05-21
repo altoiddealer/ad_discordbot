@@ -97,10 +97,7 @@ class BaseFileMemory:
         pass
     
     def get(self, key, default=None):
-        if key in self:
-            return getattr(self, key)
-        
-        return default
+        return getattr(self, key, default)
     
     ###########
     # Migration
@@ -149,7 +146,7 @@ class Database(BaseFileMemory):
         self.first_run:bool
         self.last_character:str
         self.last_change:float
-        self.last_user_msg:float
+        self.last_user_msg:dict[str, float]
         self.main_channels:list[int]
         self.warned_once:dict[str, bool]
         
@@ -179,11 +176,25 @@ class Database(BaseFileMemory):
         self.first_run = data.pop('first_run', True)
         self.last_character = data.pop('last_character', None)
         self.last_change = data.pop('last_change', time.time())
-        self.last_user_msg = data.pop('last_user_msg', time.time())
+        self.last_user_msg = data.pop('last_user_msg', {})
         self.main_channels = data.pop('main_channels', [])
         self.warned_once = data.pop('warned_once', {})
+
+
+    def last_user_msg_for(self, channel_id):
+        return self.last_user_msg.get(channel_id, None)
+
+    def update_last_user_msg(self, channel_id, value=None, save_now=False):
+        if not isinstance(self.last_user_msg, dict):
+            self.last_user_msg = {}
         
+        if not channel_id in self.last_user_msg:
+            save_now = True
         
+        self.last_user_msg[channel_id] = time.time()
+        if save_now:
+            self.save()
+
     def was_warned(self, flag_name):
         return self.warned_once.get(flag_name, False)
 
@@ -200,7 +211,6 @@ class ActiveSettings(BaseFileMemory):
         _old_active = os.path.join(shared_path.dir_root, 'activesettings.yaml')
         self._migrate_from_file(_old_active, load=True)
         
-        
 class StarBoard(BaseFileMemory):
     def __init__(self) -> None:
         self.messages:list
@@ -212,4 +222,46 @@ class StarBoard(BaseFileMemory):
         if state:
             data = load_file(self._fp, [])      # load old file as list
             self.load(data=dict(messages=data)) # convert list to dict
+            
+            
+class _Statistic:
+    def __init__(self, db, data) -> None:
+        self.db: Statistics = db
+        self.data: dict = data
         
+    def set(self, key, value, save_now=False):
+        if not key in self.data:
+            save_now = True
+            
+        self.data[key] = value
+        if save_now:
+            self.db.save()
+            
+    def get(self, key, default=None):
+        return self.data.get(key, default)
+    
+    def __setitem__(self, key, item):
+        self.data[key] = item
+
+    def __getitem__(self, key):
+        return self.data[key]
+    
+    
+
+class Statistics(BaseFileMemory):
+    def __init__(self) -> None:
+        self._llm_gen_time_start_last: float
+        self.llm: _Statistic
+        
+        super().__init__(shared_path.statistics, version=1)
+
+    def load_defaults(self, data: dict):
+        self.llm = _Statistic(self, data.pop('llm', {}))
+        
+    def save_pre_process(self, data):
+        # Replace outgoing data with json serializable
+        for k,v in data.items():
+            if isinstance(v, _Statistic):
+                data[k] = v.data
+        
+        return data
