@@ -1,38 +1,5 @@
 # Options for /image command
-# You can add and adjust: ControlNet models, preset Size options, and Styles.
-# Valid ControlNet models listed here: (http://127.0.0.1:7860/docs#/default/model_list_controlnet_model_list_get)
-# Valid ControlNet modules listed here: (http://127.0.0.1:7860/docs#/default/module_list_controlnet_module_list_get)
-controlnet:
-- name: Canny
-  model: "diffusers_xl_canny_full [2b69fca4]"
-  module: canny
-  guidance_end: 1.0
-  weight: 1.0
-- name: Depth
-  model: "diffusers_xl_depth_full [2f51180b]"
-  module: depth
-  guidance_end: 1.0
-  weight: 1.0
-- name: Open Pose
-  model: "thibaud_xl_openpose_256lora [14288071]"
-  module: openpose_full
-  guidance_end: 1.0
-  weight: 1.0
-- name: Scribble
-  model: "sai_xl_sketch_256lora [cd3389b1]"
-  module: scribble_hed
-  guidance_end: 1.0
-  weight: 1.0
-- name: Softedge
-  model: "sargezt_xl_softedge [b6f7415b]"
-  module: hed
-  guidance_end: 1.0
-  weight: 1.0
-- name: Lineart
-  model: "t2i-adapter_diffusers_xl_lineart [bae0efef]"
-  module: lineart_standard
-  guidance_end: 0.5
-  weight: 0.8
+# You can add and adjust preset Size options and Styles.
 sizes:
   ratios:     # Correct width/height are calculated for each ratio on current payload values.
   - ratio: '16:9'

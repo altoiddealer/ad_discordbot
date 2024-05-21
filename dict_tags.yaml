@@ -121,21 +121,23 @@ base_tags:
 tag_presets:
   - tag_preset_name: SDXL Turbo Payload   # Each tag preset must be named
     tags:                                 # Tag presets must be nested under a 'tags' key
-      - payload: {width: 896, height: 1152, cfg_scale: 2, steps: 5, sampler_name: 'DPM++ SDE', scheduler: karras} # Stable Diffusion payload can be modified using 'payload'. Must be formatted as a dictionary.
+      - aspect_ratio: '3:4'
+      - payload: {cfg_scale: 2, steps: 5, sampler_name: 'DPM++ SDE', scheduler: karras} # Stable Diffusion payload can be modified using 'payload'. Must be formatted as a dictionary.
       #- img_param_variances: {cfg_scale: [-0.5,0.5], steps: [-1,1], hr_scale: [-0.1,0.1], hr_enabled: true}
   
   - tag_preset_name: SDXL Payload
     tags:
-      - payload: {width: 896, height: 1152, cfg_scale: 7, steps: 25, sampler_name: 'DPM++ 2M',  scheduler: karras, hr_scale: 1.2}
+      - aspect_ratio: '3:4'
+      - payload: {cfg_scale: 7, steps: 25, sampler_name: 'DPM++ 2M',  scheduler: karras, hr_scale: 1.2}
       #- img_param_variances: {cfg_scale: [-2,3], steps: [0,10], hr_scale: [-0.1,0.1], hr_enabled: true}
 
   - tag_preset_name: SDXL Tags
     tags:
       - trigger: 'vertical,selfie,self {photo|portrait}'
-        payload: {width: 896, height: 1152}
+      - aspect_ratio: '3:4'
         
       - trigger: 'horizontal,landscape'
-        payload: {width: 1152, height: 896}
+      - aspect_ratio: '4:3'
 
       - trigger: 'plain'
         payload: {override_settings: {CLIP_stop_at_last_layers: 2}} # Nested payload dictionary settings can also be modified. Must be formatted as a dictionary.
@@ -159,7 +161,8 @@ tag_presets:
 
   - tag_preset_name: SD15 Tags
     tags:
-      - payload: {width: 512, height: 512, cfg_scale: 10, steps: 40, sampler_name: 'DPM++ 2M', scheduler: karras, hr_scale: 2, hr_enabled: true, denoise_strength: 0.5}
+      - aspect_ratio: '1:1'
+      - payload: {cfg_scale: 10, steps: 40, sampler_name: 'DPM++ 2M', scheduler: karras, hr_scale: 2, hr_enabled: true, denoise_strength: 0.5}
       #- img_param_variances: {cfg_scale: [-3,1], steps: [-10,10], hr_scale: [-0.5,0.2]}
 
       - positive_prompt_prefix: 'masterpiece, detailed, '                                                 # '_prefix' makes this inserted at the beginning of the image prompt
@@ -227,6 +230,7 @@ tag_presets:
 #   negative_prompt: 'string'         Insert text at the end of the image negative prompt ('_suffix' also works)
 #   img_text_joining: ', '            Relevant to all insertion methods except "replace"
 #   payload: {dictionary}             Replacements for Stable Diffusion payload. Must be formatted as a dictionary.
+#   aspect_ratio: 'string'            This a shortcut to dynamically set the payload width/height dimensions based on the current average dimensions. Valid values examples: '4:3', '16:9', '2:3', etc
 #   img_param_variances: {dictionary} Randomization ranges for Stable Diffusion payload parameters. Must be formatted as a dictionary.
 #   img2img: 'string'                 Uses a local image as img2img input. Value values: Image in 'user_images' (png/jpg/txt in base64) -OR- Directory name in '/user_images/' (Picks a random image or random image from random subdirectory)
 #   img2img_mask: 'string'            AKA Inpainting. Won't have any effect without img2img also triggered. Should be a greyscale image. Value values: Image in 'user_images' (png/jpg/txt in base64) -OR- Directory name in '/user_images/' (Picks a random image or random image from random subdirectory)
