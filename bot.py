@@ -2394,38 +2394,65 @@ def clean_img_payload(img_payload):
                 unique_values_list.append(value)
         processed_negative_prompt = ', '.join(unique_values_list)
         img_payload['negative_prompt'] = processed_negative_prompt
-        # Delete unwanted extension keys
-        if img_payload.get('alwayson_scripts', {}):
-            # Warn Non-Forge:
-            if SD_CLIENT != 'SD WebUI Forge':
-                if img_payload['alwayson_scripts']['forge_couple']['args'].get('enabled', False):
-                    logging.warning(f'forge_couple is not known to be compatible with "{SD_CLIENT}". Not applying forge_couple...')
-                    bot_database.update_was_warned('forgecouple')
-                if img_payload['alwayson_scripts']['layerdiffuse']['args'].get('enabled', False):
-                    logging.warning(f'layerdiffuse is not known to be compatible with "{SD_CLIENT}". Not applying layerdiffuse...')
-                    bot_database.update_was_warned('layerdiffuse')
-            # Clean ControlNet
-            if not config['sd']['extensions'].get('controlnet_enabled', False):
-                del img_payload['alwayson_scripts']['controlnet'] # Delete all 'controlnet' keys if disabled by config
-            # Clean ReActor
-            if not config['sd']['extensions'].get('reactor_enabled', False):
-                del img_payload['alwayson_scripts']['reactor'] # Delete all 'reactor' keys if disabled by config
-            else:
-                img_payload['alwayson_scripts']['reactor']['args'] = list(img_payload['alwayson_scripts']['reactor']['args'].values()) # convert dictionary to list
-            # Clean Forge Couple
-            if not config['sd']['extensions'].get('forgecouple_enabled', False) or img_payload.get('init_images', False):
-                del img_payload['alwayson_scripts']['forge_couple'] # Delete all 'forge_couple' keys if disabled by config
+
+        # Clean up extension keys
+        extensions = config.get('sd', {}).get('extensions', {})
+        alwayson_scripts = img_payload.get('alwayson_scripts', {})
+        # Clean ControlNet
+        if alwayson_scripts.get('controlnet'):
+            # Delete all 'controlnet' keys if disabled by config
+            if not extensions.get('controlnet_enabled'):
+                del alwayson_scripts['controlnet']
+        # Clean Forge Couple
+        if alwayson_scripts.get('forge_couple'):
+            # Delete all 'forge_couple' keys if disabled by config
+            if not extensions.get('forgecouple_enabled') or img_payload.get('init_images'):
+                del alwayson_scripts['forge_couple']
             else:
                 img_payload['alwayson_scripts']['forge_couple']['args'] = list(img_payload['alwayson_scripts']['forge_couple']['args'].values()) # convert dictionary to list
                 img_payload['alwayson_scripts']['forge couple'] = img_payload['alwayson_scripts'].pop('forge_couple') # Add the required space between "forge" and "couple" ("forge couple")
-            # Clean layerdiffuse
-            if not config['sd']['extensions'].get('layerdiffuse_enabled', False):
-                del img_payload['alwayson_scripts']['layerdiffuse'] # Delete all 'layerdiffuse' keys if disabled by config
+        # Clean layerdiffuse
+        if alwayson_scripts.get('layerdiffuse'):
+            # Delete all 'layerdiffuse' keys if disabled by config
+            if not extensions.get('layerdiffuse_enabled'):
+                del alwayson_scripts['layerdiffuse']
             else:
                 img_payload['alwayson_scripts']['layerdiffuse']['args'] = list(img_payload['alwayson_scripts']['layerdiffuse']['args'].values()) # convert dictionary to list
+        # Clean ReActor
+        if alwayson_scripts.get('reactor'):
+            # Delete all 'reactor' keys if disabled by config
+            if not extensions.get('reactor_enabled'):
+                del alwayson_scripts['reactor']
+            else:
+                img_payload['alwayson_scripts']['reactor']['args'] = list(img_payload['alwayson_scripts']['reactor']['args'].values()) # convert dictionary to list
+
         # Workaround for denoising strength bug
         if not img_payload.get('enable_hr', False) and not img_payload.get('init_images', False):
             img_payload['denoising_strength'] = None
+
+        # Fix SD Client compatibility for sampler names / schedulers
+        sampler_name = img_payload.get('sampler_name', '')
+        if sampler_name:
+            known_schedulers = [' uniform', ' karras', ' exponential', ' polyexponential', ' sgm uniform']
+            for value in known_schedulers:
+                if sampler_name.lower().endswith(value):
+                    if not bot_database.was_warned('sampler_name'):
+                        bot_database.update_was_warned('sampler_name')
+                        # Extract the value (without leading space) and set it to the 'scheduler' key
+                        img_payload['scheduler'] = value.strip()
+                        if SD_CLIENT == 'A1111 SD WebUI':
+                            logging.warning(f'Img payload value "sampler_name": "{sampler_name}" is incompatible with current version of "{SD_CLIENT}". "{value}" must be omitted from "sampler_name", and instead used for the "scheduler" parameter. This is being corrected automatically. To avoid this warning, please update "sampler_name" parameter wherever present in your settings.')
+                            # Remove the matched part from sampler_name
+                            start_index = sampler_name.lower().rfind(value)
+                            fixed_sampler_name = sampler_name[:start_index].strip()
+                            img_payload['sampler_name'] = fixed_sampler_name
+                            settings_dict = bot_settings.get_settings_dict()
+                            bot_settings.settings['imgmodel']['payload']['sampler_name'] = fixed_sampler_name
+                            bot_settings.settings['imgmodel']['payload']['scheduler'] = value.strip()
+                        else:
+                            logging.warning(f'Img payload value "sampler_name": "{sampler_name}" may cause an error due to the scheduler ("{value}") being part of the value. The scheduler may be expected as a separate parameter in current version of "{SD_CLIENT}".')
+                        break
+
         # Delete all empty keys
         keys_to_delete = []
         for key, value in img_payload.items():
@@ -2433,10 +2460,9 @@ def clean_img_payload(img_payload):
                 keys_to_delete.append(key)
         for key in keys_to_delete:
             del img_payload[key]
-        return img_payload
     except Exception as e:
         logging.error(f"An error occurred when cleaning img_payload: {e}")
-        return img_payload
+    return img_payload
 
 def apply_loractl(tags):
     try:
@@ -2844,26 +2870,13 @@ def collect_img_extension_mods(mods):
 
 def collect_img_tag_values(tags):
     sd_output_dir = 'ad_discordbot/sd_outputs/'
-    img_payload_mods = {
-        'flow': None,
-        'img_censoring': None,
-        'change_imgmodel': None,
-        'swap_imgmodel': None,
-        'payload': {},
-        'param_variances': {},
-        'controlnet': [],
-        'forge_couple': {},
-        'layerdiffuse': {},
-        'reactor': {},
-        'send_user_image': [],
-        'img2img': {},
-        'img2img_mask': {}
-        }
+    img_payload_mods = {}
     payload_order_hack = {}
     controlnet_args = {}
     forge_couple_args = {}
     layerdiffuse_args = {}
     reactor_args = {}
+    extensions = config.get('sd', {}).get('extensions', {})
     try:
         for tag in tags['matches']:
             if isinstance(tag, tuple):
@@ -2871,17 +2884,17 @@ def collect_img_tag_values(tags):
             for key, value in tag.items():
                 if key == 'sd_output_dir':
                     sd_output_dir = str(value)
-                elif key == 'flow' and img_payload_mods['flow'] is None:
+                elif key == 'flow' and img_payload_mods.get('flow') is None:
                     img_payload_mods['flow'] = dict(value)
-                elif key == 'img_censoring' and img_payload_mods['img_censoring'] is None:
+                elif key == 'img_censoring' and img_payload_mods.get('img_censoring') is None:
                     img_payload_mods['img_censoring'] = int(value)
-                elif key == 'change_imgmodel' and img_payload_mods['change_imgmodel'] is None:
+                elif key == 'change_imgmodel' and img_payload_mods.get('change_imgmodel') is None:
                     img_payload_mods['change_imgmodel'] = str(value)
-                elif key == 'swap_imgmodel' and img_payload_mods['swap_imgmodel'] is None:
+                elif key == 'swap_imgmodel' and img_payload_mods.get('swap_imgmodel') is None:
                     img_payload_mods['swap_imgmodel'] = str(value)
                 elif key == 'payload': # Allow multiple to accumulate
                     try:
-                        if img_payload_mods['payload']:
+                        if img_payload_mods.get('payload'):
                             payload_order_hack = dict(value)
                             update_dict(payload_order_hack, img_payload_mods['payload'])
                             img_payload_mods['payload'] = payload_order_hack                           
@@ -2890,62 +2903,71 @@ def collect_img_tag_values(tags):
                     except:
                         logging.warning("Error processing a matched 'payload' tag; ensure it is a dictionary.")
                 elif key == 'img_param_variances': # Allow multiple to accumulate
+                    img_payload_mods.setdefault('param_variances', {})
                     try:
                         update_dict(img_payload_mods['param_variances'], dict(value))
                     except:
                         logging.warning("Error processing a matched 'img_param_variances' tag; ensure it is a dictionary.")
-                # get layerdiffuse tag params                    
-                elif key == 'layerdiffuse':
+                # get any ControlNet extension params
+                elif key.startswith('controlnet') and extensions.get('controlnet_enabled'):
+                    index = int(key[len('controlnet'):]) if key != 'controlnet' else 0  # Determine the index (cnet unit) for main controlnet args
+                    controlnet_args.setdefault(index, {}).update({'image': value, 'enabled': True})         # Update controlnet args at the specified index
+                elif key.startswith('cnet') and extensions.get('controlnet_enabled'):
+                    # Determine the index for controlnet_args sublist
+                    if key.startswith('cnet_'):
+                        index = int(key.split('_')[0][len('cnet'):]) if not key.startswith('cnet_') else 0  # Determine the index (cnet unit) for additional controlnet args
+                    controlnet_args.setdefault(index, {}).update({key.split('_', 1)[-1]: value})   # Update controlnet args at the specified index
+                # get any layerdiffuse extension params
+                elif key == 'layerdiffuse' and extensions.get('layerdiffuse_enabled'):
                     img_payload_mods['layerdiffuse']['method'] = str(value)
-                elif key.startswith('laydiff_'):
+                elif key.startswith('laydiff_') and extensions.get('layerdiffuse_enabled'):
                     laydiff_key = key[len('laydiff_'):]
                     layerdiffuse_args[laydiff_key] = value
-                # get any user image(s)
-                elif key == 'send_user_image':
-                    user_image_args = get_image_tag_args('User image', str(value), key=None, set_dir=None)
-                    user_image = discord.File(user_image_args)
-                    img_payload_mods['send_user_image'].append(user_image_args)
-                # get reactor tag params
-                elif key == 'reactor':
+                # get any ReActor extension params
+                elif key == 'reactor' and extensions.get('reactor_enabled'):
                     img_payload_mods['reactor']['image'] = value
-                elif key.startswith('reactor_'):
+                elif key.startswith('reactor_') and extensions.get('reactor_enabled'):
                     reactor_key = key[len('reactor_'):]
                     reactor_args[reactor_key] = value
-                # get forge_couple tag params                    
-                elif key == 'forge_couple':
+                # get any Forge Couple extension params
+                elif key == 'forge_couple' and extensions.get('forgecouple_enabled'):
                     if value.startswith('['):
                         img_payload_mods['forge_couple']['maps'] = list(value)
                     else: img_payload_mods['forge_couple']['direction'] = str(value)
-                elif key.startswith('couple_'):
+                elif key.startswith('couple_') and extensions.get('forgecouple_enabled'):
                     forge_couple_key = key[len('couple_'):]
                     if value.startswith('['):
                         forge_couple_args[forge_couple_key] = list(value)
                     else:
                         forge_couple_args[forge_couple_key] = str(value)
-                # get controlnet tag params
-                elif key.startswith('controlnet'):
-                    index = int(key[len('controlnet'):]) if key != 'controlnet' else 0  # Determine the index (cnet unit) for main controlnet args
-                    controlnet_args.setdefault(index, {}).update({'image': value, 'enabled': True})         # Update controlnet args at the specified index
-                elif key.startswith('cnet'):
-                    # Determine the index for controlnet_args sublist
-                    if key.startswith('cnet_'):
-                        index = int(key.split('_')[0][len('cnet'):]) if not key.startswith('cnet_') else 0  # Determine the index (cnet unit) for additional controlnet args
-                    controlnet_args.setdefault(index, {}).update({key.split('_', 1)[-1]: value})   # Update controlnet args at the specified index
                 # get any img2img
                 elif key == 'img2img':
                     img_payload_mods['img2img'] = str(value) # get base64 in next function
                 # get any inpaint mask
                 elif key == 'img2img_mask':
                     img_payload_mods['img2img_mask'] = str(value) # get base64 in next function
+                # get any user image(s)
+                elif key == 'send_user_image':
+                    user_image_args = get_image_tag_args('User image', str(value), key=None, set_dir=None)
+                    user_image = discord.File(user_image_args)
+                    img_payload_mods['send_user_image'].append(user_image_args)
         # Add the collected SD WebUI extension args to the img_payload_mods dict
-        for index in sorted(set(controlnet_args.keys())):   # This flattens down any gaps between collected ControlNet units (ensures lowest index is 0, next is 1, and so on)
-            cnet_basesettings = copy.copy(bot_settings.settings['imgmodel']['payload']['alwayson_scripts']['controlnet']['args'][0])  # Copy of required dict items
-            cnet_unit_args = controlnet_args.get(index, {})
-            cnet_unit = update_dict(cnet_basesettings, cnet_unit_args)
-            img_payload_mods['controlnet'].append(cnet_unit)
-        img_payload_mods['forge_couple'].update(forge_couple_args)
-        img_payload_mods['layerdiffuse'].update(layerdiffuse_args)
-        img_payload_mods['reactor'].update(reactor_args)
+        if controlnet_args:
+            img_payload_mods.setdefault('controlnet', [])
+            for index in sorted(set(controlnet_args.keys())):   # This flattens down any gaps between collected ControlNet units (ensures lowest index is 0, next is 1, and so on)
+                cnet_basesettings = copy.copy(bot_settings.settings['imgmodel']['payload']['alwayson_scripts']['controlnet']['args'][0])  # Copy of required dict items
+                cnet_unit_args = controlnet_args.get(index, {})
+                cnet_unit = update_dict(cnet_basesettings, cnet_unit_args)
+                img_payload_mods['controlnet'].append(cnet_unit)
+        if forge_couple_args:
+            img_payload_mods.setdefault('forge_couple', {})
+            img_payload_mods['forge_couple'].update(forge_couple_args)
+        if layerdiffuse_args:
+            img_payload_mods.setdefault('layerdiffuse', {})
+            img_payload_mods['layerdiffuse'].update(layerdiffuse_args)
+        if reactor_args:
+            img_payload_mods.setdefault('reactor', {})
+            img_payload_mods['reactor'].update(reactor_args)
 
         img_payload_mods = collect_img_extension_mods(img_payload_mods)
         return sd_output_dir, img_payload_mods
@@ -4394,25 +4416,45 @@ class Behavior:
 # Sub-classes under a main class 'Settings'
 class ImgModel:
     def __init__(self):
+        self.tags = []
         self.imgmodel_name = '' # label used for /imgmodel command
         self.override_settings = {}
-        self.img_payload = {
-            'alwayson_scripts': {
-                'controlnet': {
-                    'args': [{'enabled': False, 'image': None, 'mask_image': None, 'model': 'None', 'module': 'None', 'weight': 1.0, 'processor_res': 64, 'pixel_perfect': True, 'guidance_start': 0.0, 'guidance_end': 1.0, 'threshold_a': 64, 'threshold_b': 64, 'control_mode': 0, 'resize_mode': 1, 'lowvram': False, 'save_detected_map': False}]
-                },
-                'layerdiffuse': {
-                    'args': {'enabled': False, 'method': '(SDXL) Only Generate Transparent Image (Attention Injection)', 'weight': 1.0, 'stop_at': 1.0, 'foreground': None, 'background': None, 'blending': None, 'resize_mode': 'Crop and Resize', 'output_mat_for_i2i': False, 'fg_prompt': '', 'bg_prompt': '', 'blended_prompt': ''}
-                },
-                'forge_couple': {
-                    'args': {'enable': False, 'mode': 'Basic', 'sep': 'SEP', 'direction': 'Horizontal', 'global_effect': 'First Line', 'global_weight': 0.5, 'maps': [['0:0.5', '0.0:1.0', '1.0'],['0.5:1.0', '0.0:1.0', '1.0']]}
-                },                
-                'reactor': {
-                    'args': {'image': '', 'enabled': False, 'source_faces': '0', 'target_faces': '0', 'model': 'inswapper_128.onnx', 'restore_face': 'CodeFormer', 'restore_visibility': 1, 'restore_upscale': True, 'upscaler': '4x_NMKD-Superscale-SP_178000_G', 'scale': 1.5, 'upscaler_visibility': 1, 'swap_in_source_img': False, 'swap_in_gen_img': True, 'log_level': 1, 'gender_detect_source': 0, 'gender_detect_target': 0, 'save_original': False, 'codeformer_weight': 0.8, 'source_img_hash_check': False, 'target_img_hash_check': False, 'system': 'CUDA', 'face_mask_correction': True, 'source_type': 0, 'face_model': '', 'source_folder': '', 'multiple_source_images': None, 'random_img': True, 'force_upscale': True, 'threshold': 0.6, 'max_faces': 2}
-                }
-            }
-        }
-        self.tags = []
+        self.img_payload = {'alwayson_scripts': {}}
+        self.init_sd_extensions()
+    
+    def init_sd_extensions(self):
+        extensions = config.get('sd', {}).get('extensions', {})
+        # Initialize ControlNet defaults
+        if extensions.get('controlnet_enabled'):
+            self.img_payload['alwayson_scripts']['controlnet'] = {'args': [{
+                'enabled': False, 'image': None, 'mask_image': None, 'model': 'None', 'module': 'None', 'weight': 1.0, 'processor_res': 64, 'pixel_perfect': True, 
+                'guidance_start': 0.0, 'guidance_end': 1.0, 'threshold_a': 64, 'threshold_b': 64, 'control_mode': 0, 'resize_mode': 1, 'lowvram': False, 'save_detected_map': False}]}
+        # Initialize Forge Couple defaults
+        if extensions.get('forgecouple_enabled'):
+            if SD_CLIENT == 'SD WebUI Forge':
+                self.img_payload['alwayson_scripts']['forge_couple'] = {'args': {
+                    'enable': False, 'mode': 'Basic', 'sep': 'SEP', 'direction': 'Horizontal', 'global_effect': 'First Line',
+                    'global_weight': 0.5, 'maps': [['0:0.5', '0.0:1.0', '1.0'],['0.5:1.0', '0.0:1.0', '1.0']]}}
+            # Warn Non-Forge:
+            else:
+                extensions['forgecouple_enabled'] = False
+                logging.warning(f'Forge Couple is not known to be compatible with "{SD_CLIENT}". Extension disabled.')
+        # Initialize layerdiffuse defaults
+        if extensions.get('layerdiffuse_enabled'):
+            if SD_CLIENT == 'SD WebUI Forge':
+                self.img_payload['alwayson_scripts']['layerdiffuse'] = {'args': {
+                    'enabled': False, 'method': '(SDXL) Only Generate Transparent Image (Attention Injection)', 'weight': 1.0, 'stop_at': 1.0, 'foreground': None, 'background': None,
+                    'blending': None, 'resize_mode': 'Crop and Resize', 'output_mat_for_i2i': False, 'fg_prompt': '', 'bg_prompt': '', 'blended_prompt': ''}}
+            else:
+                extensions['layerdiffuse_enabled'] = False
+                logging.warning(f'layerdiffuse is not known to be compatible with "{SD_CLIENT}". Extension disabled.')
+        # Initialize ReActor defaults
+        if extensions.get('reactor_enabled'):
+            self.img_payload['alwayson_scripts']['reactor'] = {'args': {
+                'image': '', 'enabled': False, 'source_faces': '0', 'target_faces': '0', 'model': 'inswapper_128.onnx', 'restore_face': 'CodeFormer', 'restore_visibility': 1,
+                'restore_upscale': True, 'upscaler': '4x_NMKD-Superscale-SP_178000_G', 'scale': 1.5, 'upscaler_visibility': 1, 'swap_in_source_img': False, 'swap_in_gen_img': True, 'log_level': 1,
+                'gender_detect_source': 0, 'gender_detect_target': 0, 'save_original': False, 'codeformer_weight': 0.8, 'source_img_hash_check': False, 'target_img_hash_check': False, 'system': 'CUDA',
+                'face_mask_correction': True, 'source_type': 0, 'face_model': '', 'source_folder': '', 'multiple_source_images': None, 'random_img': True, 'force_upscale': True, 'threshold': 0.6, 'max_faces': 2}}
 
 class LLMContext:
     def __init__(self):
