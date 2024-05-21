@@ -152,7 +152,6 @@ class Database(BaseFileMemory):
         self.last_user_msg:dict[str, float]
         self.main_channels:list[int]
         self.warned_once:dict[str, bool]
-        self.llm_statistic:dict[str, float]
         
         super().__init__(shared_path.database, version=2)
         
@@ -183,7 +182,7 @@ class Database(BaseFileMemory):
         self.last_user_msg = data.pop('last_user_msg', {})
         self.main_channels = data.pop('main_channels', [])
         self.warned_once = data.pop('warned_once', {})
-        self.llm_gen_statistics = data.pop('llm_gen_statistics', {})
+
 
     def last_user_msg(self, channel_id):
         return self.last_user_msg.get(channel_id, None)
@@ -196,11 +195,44 @@ class Database(BaseFileMemory):
         self.last_user_msg[channel_id] = time.time()
         if save_now:
             self.save()
+
+    def was_warned(self, flag_name):
+        return self.warned_once.get(flag_name, False)
+
+    def update_was_warned(self, flag_name, value=True, save_now=True):
+        self.warned_once[flag_name] = value
+        if save_now:
+            self.save()
+            
+class ActiveSettings(BaseFileMemory):
+    def __init__(self) -> None:
+        super().__init__(shared_path.active_settings, version=2)
         
-    # def get_statistics_dict(self, prefix):
-    #     attribute_name = f"{prefix}_statistics"
-    #     statistics = getattr(self, attribute_name, {})
-    #     print("statistics", statistics)
+    def run_migration(self):
+        _old_active = os.path.join(shared_path.dir_root, 'activesettings.yaml')
+        self._migrate_from_file(_old_active, load=True)
+        
+class StarBoard(BaseFileMemory):
+    def __init__(self) -> None:
+        self.messages:list
+        super().__init__(shared_path.starboard, version=2)
+        
+    def run_migration(self):
+        _old_active = os.path.join(shared_path.dir_root, 'starboard_messages.yaml')
+        state = self._migrate_from_file(_old_active, load=False) # v1
+        if state:
+            data = load_file(self._fp, [])      # load old file as list
+            self.load(data=dict(messages=data)) # convert list to dict
+
+class Statistics(BaseFileMemory):
+    def __init__(self) -> None:
+        super().__init__(shared_path.statistics, version=1)
+        self._llm_gen_time_start_last:float
+        self.llm_statistics:dict[str, float]
+
+    def get_statistics_dict(self, prefix):
+        attribute_name = f"{prefix}_statistics"
+        return getattr(self, attribute_name, {})
 
     def get_statistics(self, prefix, flag_name, default=None):
         attribute_name = f"{prefix}_statistics"
@@ -221,33 +253,3 @@ class Database(BaseFileMemory):
         statistics[flag_name] = value
         if save_now:
             self.save()
-
-    def was_warned(self, flag_name):
-        return self.warned_once.get(flag_name, False)
-
-    def update_was_warned(self, flag_name, value=True, save_now=True):
-        self.warned_once[flag_name] = value
-        if save_now:
-            self.save()
-            
-class ActiveSettings(BaseFileMemory):
-    def __init__(self) -> None:
-        super().__init__(shared_path.active_settings, version=2)
-        
-    def run_migration(self):
-        _old_active = os.path.join(shared_path.dir_root, 'activesettings.yaml')
-        self._migrate_from_file(_old_active, load=True)
-        
-        
-class StarBoard(BaseFileMemory):
-    def __init__(self) -> None:
-        self.messages:list
-        super().__init__(shared_path.starboard, version=2)
-        
-    def run_migration(self):
-        _old_active = os.path.join(shared_path.dir_root, 'starboard_messages.yaml')
-        state = self._migrate_from_file(_old_active, load=False) # v1
-        if state:
-            data = load_file(self._fp, [])      # load old file as list
-            self.load(data=dict(messages=data)) # convert list to dict
-        

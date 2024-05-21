@@ -36,7 +36,7 @@ from typing import Union
 
 sys.path.append("ad_discordbot")
 
-from ad_discordbot.modules.database import Database, ActiveSettings, StarBoard
+from ad_discordbot.modules.database import Database, ActiveSettings, StarBoard, Statistics
 from ad_discordbot.modules.utils_shared import task_semaphore, shared_path, patterns
 from ad_discordbot.modules.utils_misc import fix_dict, update_dict, sum_update_dict, update_dict_matched_keys
 from ad_discordbot.modules.utils_discord import ireply, send_long_message, SelectedListItem, SelectOptionsView
@@ -1750,24 +1750,22 @@ async def hybrid_llm_img_gen(user, channel, source, text, tags, llm_payload, par
 # Update LLM Gen Statistics
 def update_llm_gen_statistics(last_resp):
     try:
-        total_gens = bot_database.get_statistics('llm_gen', 'generations_total', default=0)
+        total_gens = bot_statistics.get_statistics('llm_gen', 'generations_total', default=0)
         total_gens += 1
-        bot_database.update_statistics('llm_gen', 'generations_total', value=total_gens)
+        bot_statistics.update_statistics('llm_gen', 'generations_total', value=total_gens)
         # Update tokens statistics
         last_tokens = int(count_tokens(last_resp))
-        bot_database.update_statistics('llm_gen', 'num_tokens_last', value=last_tokens)
-        total_tokens = bot_database.get_statistics('llm_gen', 'num_tokens_total', default=0)
+        bot_statistics.update_statistics('llm_gen', 'num_tokens_last', value=last_tokens)
+        total_tokens = bot_statistics.get_statistics('llm_gen', 'num_tokens_total', default=0)
         total_tokens += last_tokens
-        bot_database.update_statistics('llm_gen', 'num_tokens_total', value=total_tokens)
+        bot_statistics.update_statistics('llm_gen', 'num_tokens_total', value=total_tokens)
         # Update time statistics
-        last_time_start = bot_database.get_statistics('llm_gen', 'time_start_last')
-        last_time = time.time() - last_time_start
-        total_time = bot_database.get_statistics('llm_gen', 'time_total', 0.0)
-        total_time += last_time
-        bot_database.update_statistics('llm_gen', 'time_total', value=total_time)
+        total_time = bot_statistics.get_statistics('llm_gen', 'time_total', 0.0)
+        total_time += (time.time() - bot_statistics._llm_gen_time_start_last)
+        bot_statistics.update_statistics('llm_gen', 'time_total', value=total_time)
         # Update averages
-        bot_database.update_statistics('llm_gen', 'tokens_per_gen_avg', value=(total_tokens/total_gens))
-        bot_database.update_statistics('llm_gen', 'tokens_per_sec_avg', value=(total_tokens/total_time), save_now=True)
+        bot_statistics.update_statistics('llm_gen', 'tokens_per_gen_avg', value=(total_tokens/total_gens))
+        bot_statistics.update_statistics('llm_gen', 'tokens_per_sec_avg', value=(total_tokens/total_time), save_now=True)
     except:
         logging.error(f'An error occurred while saving LLM gen statistics: {e}')  
 
@@ -1815,7 +1813,7 @@ async def llm_gen(llm_payload):
         loop = asyncio.get_event_loop()
 
         # Store time for statistics
-        bot_database.update_statistics('llm_gen', 'time_start_last', value=time.time(), save_now=False)
+        bot_statistics._llm_gen_time_start_last = time.time()
 
         # Subprocess prevents losing discord heartbeat
         def process_responses():
@@ -3628,15 +3626,14 @@ if system_embed_info:
     async def helpmenu(ctx):
         await ctx.send(embed=system_embed_info)
 
-    # @client.hybrid_command(description="Display performance statistics")
-    # async def statistics_llm_gen(ctx):
-    #     statistics_dict = bot_database.get_statistics_dict('llm')
-    #     statistics_dict.pop('time_start_last', None)
-    #     description_lines = [f"{key}: {value}" for key, value in statistics_dict.items()]
-    #     formatted_description = "\n".join(description_lines)
-    #     system_embed_info.title = "Bot LLM Gen Statistics:"
-    #     system_embed_info.description = f">>> {formatted_description}"
-    #     await ctx.send(embed=system_embed_info)
+    @client.hybrid_command(description="Display performance statistics")
+    async def statistics_llm_gen(ctx):
+        statistics_dict = bot_statistics.get_statistics_dict('llm')
+        description_lines = [f"{key}: {value}" for key, value in statistics_dict.items()]
+        formatted_description = "\n".join(description_lines)
+        system_embed_info.title = "Bot LLM Gen Statistics:"
+        system_embed_info.description = f">>> {formatted_description}"
+        await ctx.send(embed=system_embed_info)
 
 @client.hybrid_command(description="Toggle current channel as main channel for bot to auto-reply without needing to be called")
 async def main(i):
@@ -4728,6 +4725,7 @@ class History:
 
 bot_behavior = Behavior() # needs to be loaded before settings
 bot_database = Database()
+bot_statistics = Statistics()
 bot_settings = Settings(bot_behavior=bot_behavior)
 bot_history = History()
 
