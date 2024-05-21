@@ -301,6 +301,7 @@ if textgenwebui_enabled:
     from modules.LoRA import add_lora_to_model
     from modules.models import load_model, unload_model
     from modules.models_settings import get_model_metadata, update_model_parameters, get_fallback_settings, infer_loader
+    from modules.prompts import count_tokens
 
 ## Majority of this code section is copypasta from modules/server.py
 
@@ -1596,14 +1597,14 @@ async def dynamic_prompting(user, text, i=None):
     if i and (braces_matches or wildcard_matches):
         await i.reply(content=f"__Text with **[Dynamic Prompting](<https://github.com/altoiddealer/ad_discordbot/wiki/dynamic-prompting>)**__:\n>>> **{user}**: {text_with_comments}", mention_author=False, silent=True)
     return text
-
+    
 @client.event
 async def on_message(i):
     try:
         text = i.clean_content # primarly converts @mentions to actual user names
         if textgenwebui_enabled and not bot_behavior.bot_should_reply(i, text): return # Check that bot should reply or not
-        # Store the current time. The value will save locally to bot_database_v2.yaml at another time
-        bot_database.set('last_user_msg', time.time(), save_now=False)
+        # Store the current time. The value will save locally to database.yaml at another time
+        bot_database.update_last_user_msg(i.channel.id, save_now=False)
         # if @ mentioning bot, remove the @ mention from user prompt
         if text.startswith(f"@{bot_database.last_character} "):
             text = text.replace(f"@{bot_database.last_character} ", "", 1)
@@ -1694,6 +1695,8 @@ async def hybrid_llm_img_gen(user, channel, source, text, tags, llm_payload, par
                     bot_database.update_was_warned('no_llmmodel')
                     await channel.send(f'(Cannot process text request: No LLM model is currently loaded. Use "/llmmodel" to load a model.)', delete_after=10)
                     logging.warning(f'Bot tried to generate text for {user}, but no LLM model was loaded')
+            # Check to apply Server Mode
+            llm_payload = apply_server_mode(llm_payload, i)
             # generate text with textgen-webui
             last_resp, tts_resp = await llm_gen(llm_payload)
             # If no text was generated, treat user input at the response
@@ -1744,8 +1747,43 @@ async def hybrid_llm_img_gen(user, channel, source, text, tags, llm_payload, par
 #################################################################
 ##################### QUEUED LLM GENERATION #####################
 #################################################################
+# Update LLM Gen Statistics
+def update_llm_gen_statistics(last_resp):
+    try:
+        total_gens = bot_database.get_statistics('llm_gen', 'generations_total', default=0)
+        total_gens += 1
+        bot_database.update_statistics('llm_gen', 'generations_total', value=total_gens)
+        # Update tokens statistics
+        last_tokens = int(count_tokens(last_resp))
+        bot_database.update_statistics('llm_gen', 'num_tokens_last', value=last_tokens)
+        total_tokens = bot_database.get_statistics('llm_gen', 'num_tokens_total', default=0)
+        total_tokens += last_tokens
+        bot_database.update_statistics('llm_gen', 'num_tokens_total', value=total_tokens)
+        # Update time statistics
+        last_time_start = bot_database.get_statistics('llm_gen', 'time_start_last')
+        last_time = time.time() - last_time_start
+        total_time = bot_database.get_statistics('llm_gen', 'time_total', 0.0)
+        total_time += last_time
+        bot_database.update_statistics('llm_gen', 'time_total', value=total_time)
+        # Update averages
+        bot_database.update_statistics('llm_gen', 'tokens_per_gen_avg', value=(total_tokens/total_gens))
+        bot_database.update_statistics('llm_gen', 'tokens_per_sec_avg', value=(total_tokens/total_time), save_now=True)
+    except:
+        logging.error(f'An error occurred while saving LLM gen statistics: {e}')  
+
+# Add guild data
+def apply_server_mode(llm_payload, i=None):
+    if i and config.get('textgenwebui', {}).get('server_mode', False):
+        try:
+            name1 = f'Server: {i.guild}'
+            llm_payload['state']['name1'] = name1
+            llm_payload['state']['name1_instruct'] = name1
+        except:
+            logging.error(f'An error occurred while applying Server Mode: {e}')       
+    return llm_payload
+
 # Add dynamic stopping strings
-async def extra_stopping_strings(llm_payload):
+def extra_stopping_strings(llm_payload):
     try:
         name1_value = llm_payload['state']['name1']
         name2_value = llm_payload['state']['name2']
@@ -1763,18 +1801,21 @@ async def extra_stopping_strings(llm_payload):
         if "name2" in stopping_strings:
             stopping_strings = stopping_strings.replace("name2", name2_value)
         llm_payload['state']['stopping_strings'] = stopping_strings
-        return llm_payload
     except Exception as e:
         logging.error(f'An error occurred while updating stopping strings: {e}')
-        return llm_payload
+    return llm_payload
     
 # Send LLM Payload - get response
 async def llm_gen(llm_payload):
     try:
         if shared.model_name == 'None':
             return None, None
-        llm_payload = await extra_stopping_strings(llm_payload)
+        llm_payload = extra_stopping_strings(llm_payload)
+
         loop = asyncio.get_event_loop()
+
+        # Store time for statistics
+        bot_database.update_statistics('llm_gen', 'time_start_last', value=time.time(), save_now=False)
 
         # Subprocess prevents losing discord heartbeat
         def process_responses():
@@ -1797,8 +1838,10 @@ async def llm_gen(llm_payload):
         # Offload the synchronous task to a separate thread using run_in_executor
         last_resp, tts_resp = await loop.run_in_executor(None, process_responses)
 
-        save_to_history = llm_payload.get('save_to_history', True)
-        bot_history.manage_history(prompt=llm_payload['text'], reply=last_resp, save_to_history=save_to_history)
+        if last_resp:
+            update_llm_gen_statistics(last_resp) # Update statistics
+            save_to_history = llm_payload.get('save_to_history', True)
+            bot_history.manage_history(prompt=llm_payload['text'], reply=last_resp, save_to_history=save_to_history)
 
         return last_resp, tts_resp
     except Exception as e:
@@ -1828,6 +1871,8 @@ async def cont_regen_task(i, user, text, channel, source, message):
             system_embed_info.title = f'{cmd} ... '
             system_embed_info.description = f'{cmd} text for {user}'
             system_embed = await channel.send(embed=system_embed_info)
+        # Check to apply Server Mode
+        llm_payload = apply_server_mode(llm_payload, i)
         last_resp, tts_resp = await llm_gen(llm_payload)
         if system_embed: await system_embed.delete()
         if last_resp is None:
@@ -3583,6 +3628,16 @@ if system_embed_info:
     async def helpmenu(ctx):
         await ctx.send(embed=system_embed_info)
 
+    # @client.hybrid_command(description="Display performance statistics")
+    # async def statistics_llm_gen(ctx):
+    #     statistics_dict = bot_database.get_statistics_dict('llm')
+    #     statistics_dict.pop('time_start_last', None)
+    #     description_lines = [f"{key}: {value}" for key, value in statistics_dict.items()]
+    #     formatted_description = "\n".join(description_lines)
+    #     system_embed_info.title = "Bot LLM Gen Statistics:"
+    #     system_embed_info.description = f">>> {formatted_description}"
+    #     await ctx.send(embed=system_embed_info)
+
 @client.hybrid_command(description="Toggle current channel as main channel for bot to auto-reply without needing to be called")
 async def main(i):
     try:
@@ -4365,6 +4420,16 @@ class Behavior:
         self.go_wild_in_channel = True
         self.conversation_recency = 600
         self.user_conversations = {}
+        # New Behaviors
+        self.maximum_typing_speed = -1
+        self.responsiveness = 1.0
+        self.max_reply_delay: 30.0
+        self.msg_size_affects_delay: False
+        self.spontaneous_msg_chance: 0.0
+        self.spontaneous_msg_max_consecutive: -1
+        self.spontaneous_msg_min_wait: 10.0
+        self.spontaneous_msg_max_wait: 60.0
+        self.spontaneous_msg_prompts: {}
 
     def update_behavior(self, behavior):
         for key, value in behavior.items():

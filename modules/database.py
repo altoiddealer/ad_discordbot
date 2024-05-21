@@ -149,9 +149,10 @@ class Database(BaseFileMemory):
         self.first_run:bool
         self.last_character:str
         self.last_change:float
-        self.last_user_msg:float
+        self.last_user_msg:dict[str, float]
         self.main_channels:list[int]
         self.warned_once:dict[str, bool]
+        self.llm_statistic:dict[str, float]
         
         super().__init__(shared_path.database, version=2)
         
@@ -179,11 +180,48 @@ class Database(BaseFileMemory):
         self.first_run = data.pop('first_run', True)
         self.last_character = data.pop('last_character', None)
         self.last_change = data.pop('last_change', time.time())
-        self.last_user_msg = data.pop('last_user_msg', time.time())
+        self.last_user_msg = data.pop('last_user_msg', {})
         self.main_channels = data.pop('main_channels', [])
         self.warned_once = data.pop('warned_once', {})
+        self.llm_gen_statistics = data.pop('llm_gen_statistics', {})
+
+    def last_user_msg(self, channel_id):
+        return self.last_user_msg.get(channel_id, None)
+
+    def update_last_user_msg(self, channel_id, value=None, save_now=False):
+        if not isinstance(self.last_user_msg, dict):
+            self.last_user_msg = {}
+        if self.last_user_msg.get(channel_id, None) is None:
+            save_now = True
+        self.last_user_msg[channel_id] = time.time()
+        if save_now:
+            self.save()
         
-        
+    # def get_statistics_dict(self, prefix):
+    #     attribute_name = f"{prefix}_statistics"
+    #     statistics = getattr(self, attribute_name, {})
+    #     print("statistics", statistics)
+
+    def get_statistics(self, prefix, flag_name, default=None):
+        attribute_name = f"{prefix}_statistics"
+        statistics = getattr(self, attribute_name, None)
+        if statistics is None:
+            return default
+        return statistics.get(flag_name, default)
+
+    def update_statistics(self, prefix, flag_name, value=None, save_now=None):
+        attribute_name = f"{prefix}_statistics"
+        statistics = getattr(self, attribute_name, None)
+        if statistics is None:
+            statistics = {}
+            setattr(self, attribute_name, statistics)
+
+        if statistics.get(flag_name, None) is None:
+            save_now = True
+        statistics[flag_name] = value
+        if save_now:
+            self.save()
+
     def was_warned(self, flag_name):
         return self.warned_once.get(flag_name, False)
 
