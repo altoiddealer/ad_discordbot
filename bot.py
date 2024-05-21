@@ -38,7 +38,7 @@ sys.path.append("ad_discordbot")
 
 from ad_discordbot.modules.database import Database, ActiveSettings, StarBoard, Statistics
 from ad_discordbot.modules.utils_shared import task_semaphore, shared_path, patterns
-from ad_discordbot.modules.utils_misc import fix_dict, update_dict, sum_update_dict, update_dict_matched_keys
+from ad_discordbot.modules.utils_misc import fix_dict, update_dict, sum_update_dict, update_dict_matched_keys, format_time
 from ad_discordbot.modules.utils_discord import ireply, send_long_message, SelectedListItem, SelectOptionsView
 from ad_discordbot.modules.utils_files import load_file, merge_base, save_yaml_file
 
@@ -1762,10 +1762,10 @@ def update_llm_gen_statistics(last_resp):
         # Update time statistics
         total_time = bot_statistics.llm.get('time_total', 0)
         total_time += (time.time() - bot_statistics._llm_gen_time_start_last)
-        bot_statistics.llm['time_total'] = total_time
+        bot_statistics.llm['time_total'] = round(total_time, 4)
         # Update averages
         bot_statistics.llm['tokens_per_gen_avg'] = total_tokens/total_gens
-        bot_statistics.llm['tokens_per_sec_avg'] = total_tokens/total_time
+        bot_statistics.llm['tokens_per_sec_avg'] = round((total_tokens/total_time), 4)
         bot_statistics.save()
     except Exception as e:
         logging.error(f'An error occurred while saving LLM gen statistics: {e}')  
@@ -3630,7 +3630,13 @@ if system_embed_info:
     @client.hybrid_command(description="Display performance statistics")
     async def statistics_llm_gen(ctx):
         statistics_dict = bot_statistics.llm.data
-        description_lines = [f"{key}: {value}" for key, value in statistics_dict.items()]
+        description_lines = []
+        for key, value in statistics_dict.items():
+            if key == 'time_total' or key == 'tokens_per_sec_avg':
+                formatted_value, label = format_time(value)
+                description_lines.append(f"{key}: {formatted_value} {label}")
+            else:
+                description_lines.append(f"{key}: {value}")
         formatted_description = "\n".join(description_lines)
         system_embed_info.title = "Bot LLM Gen Statistics:"
         system_embed_info.description = f">>> {formatted_description}"
