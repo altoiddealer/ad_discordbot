@@ -380,15 +380,16 @@ def init_textgenwebui_extensions():
         if tts_client == 'alltalk_tts':
             tts_voice_key = 'voice'
             tts_lang_key = 'language'
-        if tts_client == 'coqui_tts':
+        elif tts_client == 'coqui_tts':
             tts_voice_key = 'voice'
             tts_lang_key = 'language'
-        if tts_client == 'silero_tts':
+        elif tts_client == 'silero_tts':
             tts_voice_key = 'speaker'
             tts_lang_key = 'language'
-        if tts_client == 'elevenlabs_tts':
+        elif tts_client == 'elevenlabs_tts':
             tts_voice_key = 'selected_voice'
             tts_lang_key = ''
+            
         if tts_client not in shared.args.extensions:
             shared.args.extensions.append(tts_client)
 
