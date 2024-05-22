@@ -23,17 +23,21 @@ Note: **text-generation-webui** and **Stable Diffusion** features can be indepen
 <details>
   <summary>click to expand</summary>
 
+   **05/22/2024:** Big Update - Easier to Update Moving Forward
+
+    - The directory '/internal/' which contains persistent settings (not intended to be modified by users)
+      is no longer part of the bot package.  Instead, '/internal/' and its contents are created dynamically if missing.
+    - User settings are now present in a '/settings_templates/' which will be automatically copied into the root directory,
+      if not done manually by users.  This allows the bot to be easily updated with conflicts due to modified files.
+
+  ---
+
    **05/16/2024:** Significant Changes to File Structure
 
     - The main bot script has grown massive, so it is now split to modules (new '/modules/' subdirectory)
     - activesettings.yaml is now in an '/internal/' subdirectory. Your settings will migrate automatically.
     - 'bot.db' has been superceded by a 'database.yaml' file. Your settings will migrate automatically.
     - Note: Changes to 'dict_base_settings.yaml' and 'activesettings.yaml' are just comment updates
-
-  **New file structure**
-
-  <img width="549" alt="331227041-2d1da765-9928-41fc-8579-b17bbffa57f3" src="https://github.com/altoiddealer/ad_discordbot/assets/1613484/41735b36-9ccd-462e-a125-8c7e08dd7130">
-
 
   ---
 
