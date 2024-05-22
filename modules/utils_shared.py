@@ -2,30 +2,51 @@ from ad_discordbot.modules.logs import import_track, log, get_logger; import_tra
 import asyncio
 import os
 import re
+from shutil import copyfile
 logging = get_logger(__name__)
 
 task_semaphore = asyncio.Semaphore(1)
 
 class SharedPath:
+
+    def init_user_config_files(root, src_dir, file) -> str:
+        dest_path = os.path.join(root, file)
+        if not os.path.exists(dest_path):
+            src_path = os.path.join(src_dir, file)
+            if os.path.exists(src_path):
+                copyfile(src_path, dest_path)
+                logging.info(f'Copied default user setting template "/{file}/" to "{root}".')
+            else:
+                logging.error(f'Required settings file "/{file}/" not found in "{root}" or "{src_dir}".')
+        return dest_path
+
+    def init_shared_paths(root, dir, reason) -> str:
+        path = os.path.join(root, dir)
+        if not os.path.exists(path):
+            logging.info(f'Creating "/{dir}/" for {reason}.')
+        os.makedirs(path, exist_ok=True)
+        return path
+
     dir_root = 'ad_discordbot'
-    dir_internal = os.path.join(dir_root, 'internal')
-    os.makedirs(dir_internal, exist_ok=True)
 
     # Internal
+    dir_internal = init_shared_paths(dir_root, 'internal', 'persistent settings not intended to be modified by users')
     active_settings = os.path.join(dir_internal, 'activesettings.yaml')
     starboard = os.path.join(dir_internal, 'starboard_messages.yaml')
     database = os.path.join(dir_internal, 'database.yaml')
     statistics = os.path.join(dir_internal, 'statistics.yaml')
 
     # Configs
-    config = os.path.join(dir_root, 'config.yaml')
-    base_settings = os.path.join(dir_root, 'dict_base_settings.yaml')
-    cmd_options = os.path.join(dir_root, 'dict_cmdoptions.yaml')
-    img_models = os.path.join(dir_root, 'dict_imgmodels.yaml')
-    tags = os.path.join(dir_root, 'dict_tags.yaml')
-    
-    dir_wildcards = os.path.join(dir_root, 'wildcards')
-    os.makedirs(dir_wildcards, exist_ok=True)
+    templates = os.path.join(dir_root, 'settings_templates')
+
+    config = init_user_config_files(dir_root, templates, 'config.yaml')
+    base_settings = init_user_config_files(dir_root, templates, 'dict_base_settings.yaml')
+    cmd_options = init_user_config_files(dir_root, templates, 'dict_cmdoptions.yaml')
+    img_models = init_user_config_files(dir_root, templates, 'dict_imgmodels.yaml')
+    tags = init_user_config_files(dir_root, templates, 'dict_tags.yaml')
+
+    # Wildcards
+    init_shared_paths(dir_root, 'wildcards', "wildcard files for Dynamic Prompting feature. Refer to the bot's wiki on GitHub for more information.")
 
 shared_path = SharedPath()
 
@@ -33,12 +54,12 @@ class SharedRegex: # Search for [ (]r['"] in vscode
     braces = re.compile(r'{{([^{}]+?)}}(?=[^\w$:]|$$|$)') # {{this syntax|separate items can be divided|another item}}
     wildcard = re.compile(r'##[\w-]+(?=[^\w-]|$)') # ##this-syntax represents a wildcard .txt file
     audio_src = re.compile(r'audio src="file/(.*?\.(wav|mp3))"', flags=re.IGNORECASE)
-    
+
     sd_lora = re.compile(r'<lora:[^:]+:[^>]+>')
     sd_lora_weight = re.compile(r'(?<=:)\d+(\.\d+)?')
-    
+
     recent_msg_roles = re.compile(r'\{(user|llm|history)_([0-9]+)\}', flags=re.IGNORECASE)
-    
+
     curly_brackets = re.compile(r'\{[^{}]*\}') # Selects all {dicts} {}
     in_curly_brackets = re.compile(r'\{([^{}]+)\}') # Selects {contents} of dicts
     brackets = re.compile(r'\[[^\[\]]*\]') # Selects whole list

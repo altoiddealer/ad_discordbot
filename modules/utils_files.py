@@ -7,8 +7,7 @@ import os
 logging = get_logger(__name__)
 
 # Function to load .json, .yml or .yaml files
-def load_file(file_path, default=None):
-    data = None
+def load_file(file_path, default=None, missing_okay=False):
     try:
         file_suffix = Path(file_path).suffix.lower()
 
@@ -18,23 +17,24 @@ def load_file(file_path, default=None):
                     data = json.load(file)
                 else:
                     data = yaml.safe_load(file)
-                    
+
             if data is None:
                 return default
             return data
-        
+
         else:
             logging.error(f"Unsupported file format: {file_suffix}: {file_path}")
             return default
-        
+
     except FileNotFoundError:
-        logging.error(f"File not found: {file_path}")
+        if not missing_okay:
+            logging.error(f"File not found: {file_path}")
         return default
-    
+
     except Exception as e:
         logging.error(f"An error occurred while reading {file_path}: {str(e)}")
         return default
-    
+
 def merge_base(newsettings, basekey):
     def deep_update(original, update):
         for key, value in update.items():
@@ -56,24 +56,24 @@ def merge_base(newsettings, basekey):
     except Exception as e:
         logging.error(f"Error loading '{shared_path.base_settings}' ({basekey}): {e}")
         return newsettings
-    
+
 def save_yaml_file(file_path, data):
     try:
         with open(file_path, 'w') as file:
             yaml.dump(data, file, encoding='utf-8', default_flow_style=False, width=float("inf"), sort_keys=False)
     except Exception as e:
         logging.error(f"An error occurred while saving {file_path}: {str(e)}")
-        
-        
+
+
 def make_fp_unique(fp):
     c = 0 # already adds 1
     name, ext = fp.rsplit('.',1)
-    
+
     if name.endswith(')'): # check if already a (1)
         name_, num = name.rsplit(' ',1)
         if num[1:-1].isdigit() and num[0] == '(':
             name = name_
-    
+
     format_path = f'{name} ({{0}}).{ext}'
     while os.path.isfile(fp): # TODO could optimize with get dupe num
         c += 1

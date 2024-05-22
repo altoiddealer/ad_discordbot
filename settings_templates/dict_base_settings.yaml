@@ -76,7 +76,7 @@ imgmodel:
             ["0.5:1.0","0.0:1.0","1.0"]   # if 'mode: Mask', then 'maps' should be a list of dictionaries [{'mask': <base64>, 'weight:' 1.0}, {'mask'...}] )
             ]
       layerdiffuse:         # layerdiffuse extension arguments
-        args:               
+        args:
           enabled: false                  # Enable layerdiffuse
           method: '(SDXL) Only Generate Transparent Image (Attention Injection)' # Method
           weight: 1.0                     # Weight of alpha channel (0.0 - 1.0)

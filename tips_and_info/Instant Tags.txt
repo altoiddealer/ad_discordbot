@@ -1,7 +1,7 @@
 This feature is primarily useful for controlling extensions such as ControlNet, layerdiffuse, ReActor, and any more to come...
 
 ###########################################
-Tags can be created and activated on-demand 
+Tags can be created and activated on-demand
 ###########################################
 
 by using this sytax in your prompt:
