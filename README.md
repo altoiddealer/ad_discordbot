@@ -263,7 +263,7 @@ Note: **text-generation-webui** and **Stable Diffusion** features can be indepen
 
    `/text-generation-webui/ad_discordbot/(remaining files)`
    
-5. Copy all settings template files from **/settings_templates/** -> into **/ad_discordbot/**
+5. Copy all settings template files from **/ad_discordbot/settings_templates/** -> into **/ad_discordbot/**
 
    `config.yaml` , `dict_base_settings.yaml` , `dict_cmdoptions.yaml` , `dict_imgmodels.yaml` , `dict_tags.yaml`
    
