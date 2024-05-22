@@ -29,14 +29,14 @@ class ColoredFormatter(logging.Formatter):
         name = record.name
         if self.use_color and levelname in COLORS:
             record.levelname = COLORS[levelname].format(levelname=levelname, name=name)
-            
+
         f = logging.Formatter.format(self, record)
         record.levelname = levelname
         return f
-    
+
 def test(message, *args, **kws):
     log._log(TEST_LEVEL, message, args, **kws)
-    
+
 def get_logger(name):
     return log.getChild(name)
 
@@ -76,6 +76,6 @@ def import_track(string, fp=False):
         string = string.lstrip(os.sep)
         string = string.rsplit('.',1)[0]
         string = string.replace(os.sep,'.')
-        
+
     _import_log.debug(f'IMPORT {string}')
-    
+

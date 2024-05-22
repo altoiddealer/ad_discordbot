@@ -124,7 +124,7 @@ tag_presets:
       - aspect_ratio: '3:4'
       - payload: {cfg_scale: 2, steps: 5, sampler_name: 'DPM++ SDE', scheduler: karras} # Stable Diffusion payload can be modified using 'payload'. Must be formatted as a dictionary.
       #- img_param_variances: {cfg_scale: [-0.5,0.5], steps: [-1,1], hr_scale: [-0.1,0.1], hr_enabled: true}
-  
+
   - tag_preset_name: SDXL Payload
     tags:
       - aspect_ratio: '3:4'
@@ -135,7 +135,7 @@ tag_presets:
     tags:
       - trigger: 'vertical,selfie,self {photo|portrait}'
       - aspect_ratio: '3:4'
-        
+
       - trigger: 'horizontal,landscape'
       - aspect_ratio: '4:3'
 

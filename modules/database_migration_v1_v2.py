@@ -8,18 +8,18 @@ from ad_discordbot.modules.utils_shared import shared_path
 class OldDatabase:
     def __init__(self):
         self.migrate = False
-        
+
         if os.path.isfile('OUTDATED_bot_v1.db'):
             os.rename('OUTDATED_bot_v1.db', os.path.join(shared_path.dir_internal, 'OUTDATED_bot_v1.db'))
             logging.info('Moved old DB file to internal')
-        
+
         if not os.path.isfile('bot.db'):
             return
-        
+
         logging.warning('Old bot.db file exists')
         logging.info('Migrating old database to new bot_database_v2.yaml')
         os.rename('bot.db', 'OUTDATED_bot_v1.db')
-        
+
         self.first_run = self.initialize_first_run()
         self.last_character = self.initialize_last_setting('last_character')
         self.last_change = self.initialize_last_time('last_change')
@@ -27,8 +27,8 @@ class OldDatabase:
         self.main_channels = self.initialize_main_channels()
         self.warned_once = self.initialize_warned_once()
         self.migrate = True
-        
-        
+
+
     def initialize_last_setting(self, location):
         try:
             with sqlite3.connect('OUTDATED_bot_v1.db') as conn:
@@ -38,7 +38,7 @@ class OldDatabase:
                 row = c.fetchone()
                 if row is None:
                     return
-                
+
                 return row[0]
         except Exception as e:
             logging.error(f"Error initializing {location}: {e}")
@@ -64,14 +64,14 @@ class OldDatabase:
                 c.execute(f'''CREATE TABLE IF NOT EXISTS {location} (timestamp TEXT)''')
                 c.execute(f'''SELECT timestamp FROM {location}''')
                 timestamp = c.fetchone()
-                
+
                 ts = timestamp[0] if timestamp else None
-                
+
                 if ts is None:
                     now = datetime.now()
                     ts = now.strftime('%Y-%m-%d %H:%M:%S')
                     return ts
-        
+
             ts = datetime.strptime(ts, '%Y-%m-%d %H:%M:%S')
             ts = ts.timestamp()
             return ts
@@ -93,7 +93,7 @@ class OldDatabase:
             c = conn.cursor()
             c.execute('''CREATE TABLE IF NOT EXISTS warned_once (flag_name TEXT UNIQUE, value INTEGER)''')
             conn.commit()
-        
+
         data = {}
         for k,_ in [('loractl', 0), ('char_tts', 0), ('no_llmmodel', 0), ('forgecouple', 0), ('layerdiffuse', 0), ('dynaprompt', 0)]:
             v = self.was_warned(k)
