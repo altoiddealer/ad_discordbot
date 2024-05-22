@@ -205,7 +205,17 @@ class Database(BaseFileMemory):
             
 class ActiveSettings(BaseFileMemory):
     def __init__(self) -> None:
+        self.behavior: dict
+        self.imgmodel: dict
+        self.llmcontext: dict
+        self.llmstate: dict
         super().__init__(shared_path.active_settings, version=2)
+        
+    def load_defaults(self, data: dict):
+        self.behavior = data.pop('behavior', {})
+        self.imgmodel = data.pop('imgmodel', {})
+        self.llmcontext = data.pop('llmcontext', {})
+        self.llmstate = data.pop('llmstate', {})
         
     def run_migration(self):
         _old_active = os.path.join(shared_path.dir_root, 'activesettings.yaml')
@@ -215,6 +225,9 @@ class StarBoard(BaseFileMemory):
     def __init__(self) -> None:
         self.messages:list
         super().__init__(shared_path.starboard, version=2)
+        
+    def load_defaults(self, data: dict):
+        self.messages = data.pop('messages', [])
         
     def run_migration(self):
         _old_active = os.path.join(shared_path.dir_root, 'starboard_messages.yaml')
