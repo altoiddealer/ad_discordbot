@@ -43,8 +43,11 @@ from ad_discordbot.modules.utils_discord import ireply, send_long_message, Selec
 from ad_discordbot.modules.utils_files import load_file, merge_base, save_yaml_file
 from ad_discordbot.modules.utils_aspect_ratios import round_to_precision, res_to_model_fit, dims_from_ar, avg_from_dims, get_aspect_ratio_parts, calculate_aspect_ratio_sizes
 
+# Databases
 bot_active_settings = ActiveSettings()
 starboard = StarBoard()
+bot_database = Database()
+bot_statistics = Statistics()
 
 #################################################################
 #################### DISCORD / BOT STARTUP ######################
@@ -4708,8 +4711,6 @@ class History:
         logging.info("Starting new conversation.")
 
 bot_behavior = Behavior() # needs to be loaded before settings
-bot_database = Database()
-bot_statistics = Statistics()
 bot_settings = Settings(bot_behavior=bot_behavior)
 bot_history = History()
 
