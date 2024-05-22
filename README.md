@@ -28,7 +28,7 @@ Note: **text-generation-webui** and **Stable Diffusion** features can be indepen
     - The directory '/internal/' which contains persistent settings (not intended to be modified by users)
       is no longer part of the bot package.  Instead, '/internal/' and its contents are created dynamically if missing.
     - User settings are now present in a '/settings_templates/' which will be automatically copied into the root directory,
-      if not done manually by users.  This allows the bot to be easily updated with conflicts due to modified files.
+      if not done manually by users.  This allows the bot to be easily updated without conflicts due to modified files.
 
   ---
 
