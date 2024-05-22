@@ -1603,7 +1603,7 @@ async def dynamic_prompting(user, text, i=None):
     return text
 
 @client.event
-async def on_message(i):
+async def on_message(i: discord.Interaction):
     try:
         text = i.clean_content # primarly converts @mentions to actual user names
         if textgenwebui_enabled and not bot_behavior.bot_should_reply(i, text): return # Check that bot should reply or not
@@ -1618,8 +1618,8 @@ async def on_message(i):
         async with task_semaphore:
             async with i.channel.typing():
                 logging.info(f'reply requested: {i.author} said: "{text}"')
-                await on_message_task(i.author, i.channel, 'on_message', text, i)
-                await run_flow_if_any(i.author, i.channel, 'on_message', text)
+                await on_message_task(i, 'on_message', text)
+                await run_flow_if_any(i, 'on_message', text)
 
     except Exception as e:
         logging.error(f"An error occurred in on_message: {e}")
@@ -1627,8 +1627,10 @@ async def on_message(i):
 #################################################################
 #################### QUEUED FROM ON MESSAGE #####################
 #################################################################
-async def on_message_task(user:discord.User, channel:discord.TextChannel, source:str, text:str, i):
+async def on_message_task(i: discord.Interaction, source:str, text:str):
     try:
+        user = i.author
+        channel = i.channel
         params = {}
         # collects all tags, sorted into sub-lists by phase (user / llm / userllm)
         text, tags = await get_tags(text)
@@ -1653,7 +1655,7 @@ async def on_message_task(user:discord.User, channel:discord.TextChannel, source
             # offload to ai_gen queue
             llm_payload['text'] = llm_prompt
 
-            await hybrid_llm_img_gen(user, channel, source, text, tags, llm_payload, params, i)
+            await hybrid_llm_img_gen(i, source, text, tags, llm_payload, params)
             return
 
         should_gen_image = should_bot_do('should_gen_image', default=False, tags=tags)
@@ -1665,12 +1667,14 @@ async def on_message_task(user:discord.User, channel:discord.TextChannel, source
     except Exception as e:
         logging.error(f"An error occurred processing on_message request: {e}")
 
-async def hybrid_llm_img_gen(user, channel, source, text, tags, llm_payload, params, i=None):
+async def hybrid_llm_img_gen(i: discord.Interaction, source:str, text:str, tags:dict, llm_payload:dict, params:dict):
     try:
+        user = i.author
+        channel = i.channel
         change_embed = None
         img_gen_embed = None
         tts_resp = None
-        img_note = ''
+
         # Check params to see if an LLM model change/swap was triggered by Tags
         llmmodel_params = params.get('llmmodel', {})
         send_user_image = params.get('send_user_image', [])
@@ -1702,7 +1706,7 @@ async def hybrid_llm_img_gen(user, channel, source, text, tags, llm_payload, par
             # Check to apply Server Mode
             llm_payload = apply_server_mode(llm_payload, i)
             # generate text with textgen-webui
-            last_resp, tts_resp = await llm_gen(llm_payload)
+            last_resp, tts_resp = await llm_gen(llm_payload, i)
             # If no text was generated, treat user input at the response
             if last_resp is not None:
                 logging.info("reply sent: \"" + user.name + ": {'text': '" + llm_payload["text"] + "', 'response': '" + last_resp + "'}\"")
@@ -1752,7 +1756,7 @@ async def hybrid_llm_img_gen(user, channel, source, text, tags, llm_payload, par
 ##################### QUEUED LLM GENERATION #####################
 #################################################################
 # Update LLM Gen Statistics
-def update_llm_gen_statistics(last_resp):
+def update_llm_gen_statistics(last_resp:str):
     try:
         total_gens = bot_statistics.llm.get('generations_total', 0)
         total_gens += 1
@@ -1775,7 +1779,7 @@ def update_llm_gen_statistics(last_resp):
         logging.error(f'An error occurred while saving LLM gen statistics: {e}')
 
 # Add guild data
-def apply_server_mode(llm_payload, i=None):
+def apply_server_mode(llm_payload:dict, i=None):
     if i and config.get('textgenwebui', {}).get('server_mode', False):
         try:
             name1 = f'Server: {i.guild}'
@@ -1786,7 +1790,7 @@ def apply_server_mode(llm_payload, i=None):
     return llm_payload
 
 # Add dynamic stopping strings
-def extra_stopping_strings(llm_payload):
+def extra_stopping_strings(llm_payload:dict):
     try:
         name1_value = llm_payload['state']['name1']
         name2_value = llm_payload['state']['name2']
@@ -1809,7 +1813,7 @@ def extra_stopping_strings(llm_payload):
     return llm_payload
 
 # Send LLM Payload - get response
-async def llm_gen(llm_payload):
+async def llm_gen(llm_payload:dict, i=None):
     try:
         if shared.model_name == 'None':
             return None, None
@@ -1846,6 +1850,9 @@ async def llm_gen(llm_payload):
             save_to_history = llm_payload.get('save_to_history', True)
             bot_history.manage_history(prompt=llm_payload['text'], reply=last_resp, save_to_history=save_to_history)
 
+        if tts_resp and (voice_client != i.guild.voice_client):
+            tts_resp = None
+
         return last_resp, tts_resp
     except Exception as e:
         logging.error(f'An error occurred in llm_gen(): {e}')
@@ -1854,8 +1861,10 @@ async def llm_gen(llm_payload):
         traceback.print_exc()
         return None, None
 
-async def cont_regen_task(i, user, text, channel, source, message):
+async def cont_regen_task(i:discord.Interaction, source:str, text:str, message:discord.message):
     try:
+        user = i.user.display_name
+        channel = i.channel
         cmd = ''
         system_embed = None
         llm_payload = await init_llm_payload(user, text)
@@ -1876,14 +1885,16 @@ async def cont_regen_task(i, user, text, channel, source, message):
             system_embed = await channel.send(embed=system_embed_info)
         # Check to apply Server Mode
         llm_payload = apply_server_mode(llm_payload, i)
-        last_resp, tts_resp = await llm_gen(llm_payload)
-        if system_embed: await system_embed.delete()
+        last_resp, tts_resp = await llm_gen(llm_payload, i)
+        if system_embed:
+            await system_embed.delete()
         if last_resp is None:
             return
         logging.info("reply sent: \"" + user + ": {'text': '" + llm_payload["text"] + "', 'response': '" + last_resp + "'}\"")
         fetched_message = await channel.fetch_message(message)
         await fetched_message.delete()
-        if tts_resp: await process_tts_resp(channel, tts_resp)
+        if tts_resp:
+            await process_tts_resp(channel, tts_resp)
         if source == 'regen':
             await i.followup.send('__Regenerated text:__', silent=True)
         await send_long_message(channel, last_resp)
@@ -1896,9 +1907,12 @@ async def cont_regen_task(i, user, text, channel, source, message):
             await i.followup.send(none_msg, silent=True)
         else:
             await i.followup.send(e_msg, silent=True)
-        if system_embed: await system_embed.delete()
+        if system_embed:
+            await system_embed.delete()
 
-async def speak_task(user, channel, text, params):
+async def speak_task(ctx, text:str, params:dict):
+    user = ctx.author
+    channel = ctx.channel
     try:
         system_embed = None
         if shared.model_name == 'None':
@@ -1916,8 +1930,9 @@ async def speak_task(user, channel, text, params):
         llm_payload['save_to_history'] = False
         tts_args = params.get('tts_args', {})
         await update_extensions(tts_args)
-        _, tts_resp = await llm_gen(llm_payload)
-        if system_embed: await system_embed.delete()
+        _, tts_resp = await llm_gen(llm_payload, ctx)
+        if system_embed:
+            await system_embed.delete()
         if tts_resp is None:
             return
         await process_tts_resp(channel, tts_resp)
@@ -1936,7 +1951,8 @@ async def speak_task(user, channel, text, params):
         if system_embed_info:
             system_embed_info.title = "An error occurred while generating tts for '/speak'"
             system_embed_info.description = e
-            if system_embed: await system_embed.edit(embed=system_embed_info)
+            if system_embed:
+                await system_embed.edit(embed=system_embed_info)
 
 #################################################################
 ###################### QUEUED MODEL CHANGE ######################
@@ -2173,7 +2189,9 @@ async def peek_flow_queue(queue, user, text):
         await queue.put(item_to_put_back)
     return flow_name, formatted_text
 
-async def flow_task(user, channel, source, text):
+async def flow_task(i, source, text):
+    user = i.user
+    channel = i.channel
     try:
         global flow_event
         flow_embed = None
@@ -2189,7 +2207,7 @@ async def flow_task(user, channel, source, text):
                 flow_embed_info.description = flow_embed_info.description.replace("**Processing", ":white_check_mark: **")
                 flow_embed_info.description += f'**Processing Step {total_flow_steps + 1 - remaining_flow_steps}/{total_flow_steps}**{flow_name}\n'
                 if flow_embed: await flow_embed.edit(embed=flow_embed_info)
-            await on_message_task(user, channel, source, text, i=None)
+            await on_message_task(i, source, text)
         if flow_embed_info:
             flow_embed_info.title = f"Flow completed for {user}"
             flow_embed_info.description = flow_embed_info.description.replace("**Processing", ":white_check_mark: **")
@@ -2207,10 +2225,10 @@ async def flow_task(user, channel, source, text):
         flow_queue.task_done()
 
 
-async def run_flow_if_any(user, channel, source, text):
+async def run_flow_if_any(i, source, text):
     if flow_queue.qsize() > 0:
         # flows are activated in process_llm_payload_tags(), and is where the flow queue is populated
-        await flow_task(user, channel, source, text)
+        await flow_task(i, source, text)
 
 #################################################################
 #################### QUEUED IMAGE GENERATION ####################
@@ -3594,7 +3612,7 @@ if sd_enabled:
                     # offload to ai_gen queue
                     logging.info(f'{ctx.author} used "/image": "{prompt}"')
                     await img_gen_task(ctx.author, ctx.channel, 'image', prompt, params, i=None, tags={})
-                    await run_flow_if_any(ctx.author, ctx.channel, 'image', prompt)
+                    await run_flow_if_any(ctx, 'image', prompt)
 
         except Exception as e:
             logging.error(f"An error occurred in image(): {e}")
@@ -3687,12 +3705,12 @@ if textgenwebui_enabled:
             async with i.channel.typing():
                 # offload to ai_gen queue
                 logging.info(f'{i.user.display_name} used "Regenerate"')
-                await cont_regen_task(i, i.user.display_name, text, i.channel, 'regen', message.id)
-                await run_flow_if_any(i.user.display_name, i.channel, 'regen', text)
+                await cont_regen_task(i, 'regen', text, message.id)
+                await run_flow_if_any(i, 'regen', text)
 
     # Context menu command to Continue last reply
     @client.tree.context_menu(name="continue")
-    async def continue_llm_gen(i: discord.Interaction, message: discord.Message):
+    async def continue_llm_gen(i: discord.Interaction, message:discord.Message):
         text = message.content
         await i.response.defer(thinking=False)
 
@@ -3700,8 +3718,8 @@ if textgenwebui_enabled:
             async with i.channel.typing():
                 # offload to ai_gen queue
                 logging.info(f'{i.user.display_name} used "Continue"')
-                await cont_regen_task(i, i.user.display_name, text, i.channel, 'cont', message.id)
-                await run_flow_if_any(i.user.display_name, i.channel, 'cont', text)
+                await cont_regen_task(i, 'cont', text, message.id)
+                await run_flow_if_any(i, 'cont', text)
 
 async def load_character_data(char_name):
     char_data = None
@@ -4279,8 +4297,8 @@ async def process_speak(ctx, input_text, selected_voice=None, lang=None, voice_i
                 # offload to ai_gen queue
                 logging.info(f'{ctx.author} used "/speak": "{input_text}"')
                 params = {'tts_args': tts_args, 'user_voice': user_voice}
-                await speak_task(ctx.author, ctx.channel, input_text, params)
-                await run_flow_if_any(ctx.author, ctx.channel, 'speak', input_text)
+                await speak_task(ctx, input_text, params)
+                await run_flow_if_any(ctx, 'speak', input_text)
 
     except Exception as e:
         logging.error(f"Error processing tts request: {e}")
