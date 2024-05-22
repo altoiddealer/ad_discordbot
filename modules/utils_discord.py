@@ -15,9 +15,9 @@ async def ireply(i, process):
         #     del_time = 1
     except Exception as e:
         logging.error(f"Error sending message response to user's interaction command: {e}")
-        
-        
-        
+
+
+
 async def send_long_message(channel, message_text):
     """ Splits a longer message into parts while preserving sentence boundaries and code blocks """
     activelang = ''
@@ -74,7 +74,7 @@ async def send_long_message(channel, message_text):
                 chunk_text, code_block_inserted = ensure_even_code_blocks(message_text, code_block_inserted)
                 sent_message = await channel.send(chunk_text)
                 break
-            
+
 class SelectedListItem(discord.ui.Select):
     def __init__(self, options, placeholder, custom_id):
         super().__init__(placeholder=placeholder, min_values=0, max_values=1, options=options, custom_id=custom_id)
@@ -85,7 +85,7 @@ class SelectedListItem(discord.ui.Select):
         await interaction.response.defer()
         # if self.view.num_menus == 1: # Stop the view if there is only one menu item (skip "Submit" button)
         self.view.stop()
-        
+
 class SelectOptionsView(discord.ui.View):
     '''
     Use view.warned to check if too many items message has been logged.
@@ -111,10 +111,10 @@ class SelectOptionsView(discord.ui.View):
 
         self.selected_item = None
         self.warned = warned
-        
+
         assert max_items_per_menu <= 25
         assert max_menus <= 4
-        
+
         self.all_items = all_items
         #self.num_menus = 0
 
@@ -124,9 +124,9 @@ class SelectOptionsView(discord.ui.View):
             local_options = all_choices[max_items_per_menu*menu_ii: max_items_per_menu*(menu_ii+1)]
             if not local_options: # end of items
                 break
-            
+
             self.add_item(SelectedListItem(options=local_options,
-                                            placeholder=f'{placeholder_prefix}{self.label_formatter(local_options, menu_ii)}', 
+                                            placeholder=f'{placeholder_prefix}{self.label_formatter(local_options, menu_ii)}',
                                             custom_id=f"{custom_id_prefix}_{menu_ii}_select",
                                             ))
             #self.num_menus += 1 # Count dropdowns. If only one, "Submit" button will be removed
@@ -140,10 +140,10 @@ class SelectOptionsView(discord.ui.View):
         # Remove Submit button if only one dropdown
         # if self.num_menus == 1:
         #     self.remove_item(models_submit_btn)
-            
+
     def label_formatter(self, local_options, menu_ii):
         return f'{local_options[0].label[0]}-{local_options[-1].label[0]}'.upper()
-    
+
     def get_selected(self, items:list=None):
         if self.selected_item == self.unload_item:
             return self.unload_item
