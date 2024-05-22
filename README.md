@@ -2,7 +2,8 @@
 
 ### Uniting LLM ([text-generation-webui](https://github.com/oobabooga/text-generation-webui)) and Img Gen ([A1111](https://github.com/AUTOMATIC1111/stable-diffusion-webui) / [Forge](https://github.com/lllyasviel/stable-diffusion-webui-forge)) for chat & professional use.
 
-Note: **text-generation-webui** and **Stable Diffusion** features can be independently enabled/disabled in main config file. Neither is **"required"**.
+- **text-generation-webui** is required. **Stable Diffusion** is optional.
+- The features of both can be independently enabled/disabled in the main config file.
 
 ---
 
