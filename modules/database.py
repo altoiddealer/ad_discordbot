@@ -9,10 +9,11 @@ from ad_discordbot.modules.utils_files import make_fp_unique
 import os
 
 class BaseFileMemory:
-    def __init__(self, fp, version=0) -> None:
+    def __init__(self, fp, version=0, missing_okay=False) -> None:
         self._latest_version = version
         self._fp = fp
         self._did_migration = False
+        self._missing_okay = missing_okay
         
         # Attempts to load, but if file not found, continue to migration
         self.load()
@@ -82,7 +83,7 @@ class BaseFileMemory:
     
     def load(self, data:dict=None):
         if not data:
-            data = load_file(self._fp, {})
+            data = load_file(self._fp, {}, missing_okay=self._missing_okay)
             if not isinstance(data, dict):
                 raise Exception(f'Failed to import: "{self._fp}" wrong data type, expected dict, got {type(data)}')
             
@@ -150,7 +151,7 @@ class Database(BaseFileMemory):
         self.main_channels:list[int]
         self.warned_once:dict[str, bool]
         
-        super().__init__(shared_path.database, version=2)
+        super().__init__(shared_path.database, version=2, missing_okay=True)
         
     def run_migration(self):
         self._migrate_v1_v2()
@@ -209,7 +210,7 @@ class ActiveSettings(BaseFileMemory):
         self.imgmodel: dict
         self.llmcontext: dict
         self.llmstate: dict
-        super().__init__(shared_path.active_settings, version=2)
+        super().__init__(shared_path.active_settings, version=2, missing_okay=True)
         
     def load_defaults(self, data: dict):
         self.behavior = data.pop('behavior', {})
@@ -224,7 +225,7 @@ class ActiveSettings(BaseFileMemory):
 class StarBoard(BaseFileMemory):
     def __init__(self) -> None:
         self.messages:list
-        super().__init__(shared_path.starboard, version=2)
+        super().__init__(shared_path.starboard, version=2, missing_okay=True)
         
     def load_defaults(self, data: dict):
         self.messages = data.pop('messages', [])
@@ -266,7 +267,7 @@ class Statistics(BaseFileMemory):
         self._llm_gen_time_start_last: float
         self.llm: _Statistic
         
-        super().__init__(shared_path.statistics, version=1)
+        super().__init__(shared_path.statistics, version=1, missing_okay=True)
 
     def load_defaults(self, data: dict):
         self.llm = _Statistic(self, data.pop('llm', {}))

@@ -7,7 +7,7 @@ import os
 logging = get_logger(__name__)
 
 # Function to load .json, .yml or .yaml files
-def load_file(file_path, default=None):
+def load_file(file_path, default=None, missing_okay=False):
     data = None
     try:
         file_suffix = Path(file_path).suffix.lower()
@@ -28,7 +28,8 @@ def load_file(file_path, default=None):
             return default
         
     except FileNotFoundError:
-        logging.error(f"File not found: {file_path}")
+        if not missing_okay:
+            logging.error(f"File not found: {file_path}")
         return default
     
     except Exception as e:
