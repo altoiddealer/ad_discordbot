@@ -216,6 +216,9 @@ class StarBoard(BaseFileMemory):
         self.messages:list
         super().__init__(shared_path.starboard, version=2)
         
+    def load_defaults(self, data: dict):
+        self.messages = data.pop('messages', [])
+        
     def run_migration(self):
         _old_active = os.path.join(shared_path.dir_root, 'starboard_messages.yaml')
         state = self._migrate_from_file(_old_active, load=False) # v1
