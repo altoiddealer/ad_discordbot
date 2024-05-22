@@ -3629,7 +3629,7 @@ if system_embed_info:
 
     @client.hybrid_command(description="Display performance statistics")
     async def statistics_llm_gen(ctx):
-        statistics_dict = bot_statistics.llm_statistics
+        statistics_dict = bot_statistics.llm_statistics.data
         description_lines = [f"{key}: {value}" for key, value in statistics_dict.items()]
         formatted_description = "\n".join(description_lines)
         system_embed_info.title = "Bot LLM Gen Statistics:"
