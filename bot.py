@@ -199,7 +199,7 @@ if sd_enabled:
     if SD_URL is None:
         SD_URL = config['sd'].get('A1111', 'http://127.0.0.1:7860')
 
-    async def sd_api(endpoint, method='get', json=None, retry=True):
+    async def sd_api(endpoint:str, method='get', json=None, retry=True):
         try:
             async with aiohttp.ClientSession() as session:
                 request_method = getattr(session, method.lower())
@@ -251,7 +251,7 @@ if sd_enabled:
             system_embed = None
             await ctx.send(f"**`/restart_sd_client` __will not work__ unless {SD_CLIENT} was launched with flag: `--api-server-stop`**", delete_after=10)
             await sd_api(endpoint='/sdapi/v1/server-restart', method='post', json=None, retry=False)
-            title = f"{ctx.author} used '/restart_sd_client'. Restarting {SD_CLIENT} ..."
+            title = f"{ctx.author.display_name} used '/restart_sd_client'. Restarting {SD_CLIENT} ..."
             if system_embed_info:
                 system_embed_info.title = title
                 system_embed_info.description = f'Attempting to re-establish connection in 5 seconds (Attempt 1 of 10)'
@@ -527,26 +527,28 @@ async def auto_select_imgmodel(current_imgmodel_name, mode='random'):
 # Task to auto-select an imgmodel at user defined interval
 async def auto_update_imgmodel_task(mode, duration):
     while True:
-        await asyncio.sleep(duration)
+        #await asyncio.sleep(duration)
         try:
             imgmodels_data = load_file(shared_path.img_models, {})
             auto_change_settings = imgmodels_data.get('settings', {}).get('auto_change_imgmodels', {})
             channel = auto_change_settings.get('channel_announce', None)
-            if channel == 11111111111111111111: channel = None
+            if channel == 11111111111111111111:
+                channel = None
             current_imgmodel_name = bot_settings.settings['imgmodel'].get('imgmodel_name', '')
             # Select an imgmodel automatically
             selected_imgmodel = await auto_select_imgmodel(current_imgmodel_name, mode)
-            if channel: channel = client.get_channel(channel)
+            if channel:
+                channel = client.get_channel(channel)
 
             async with task_semaphore:
                 # offload to ai_gen queue
                 params = {'imgmodel': selected_imgmodel}
-                await change_imgmodel_task('Automatically', channel, params)
+                await change_imgmodel_task('Automatically', channel, params, i=None)
                 logging.info("Automatically updated imgmodel settings")
 
         except Exception as e:
             logging.error(f"Error automatically updating image model: {e}")
-        #await asyncio.sleep(duration)
+        await asyncio.sleep(duration)
 
 imgmodel_update_task = None # Global variable allows process to be cancelled and restarted (reset sleep timer)
 
@@ -905,26 +907,23 @@ def get_time(offset=0.0, time_format=None, date_format=None):
         logging.error(f"Error when getting date/time: {e}")
         return '', ''
 
-async def swap_llm_character(char_name, user_name, llm_payload):
+async def swap_llm_character(char_name:str, user_name:str, llm_payload:dict):
     try:
         char_data = await load_character_data(char_name)
         name1 = user_name
-        name2 = ''
         if char_data.get('state', {}):
             llm_payload['state'] = char_data['state']
             llm_payload['state']['name1'] = name1
-        if char_data.get('name', 'AI'):
-            llm_payload['state']['name2'] = char_data['name']
-            llm_payload['state']['character_menu'] = char_data['name']
-        if char_data.get('context', ''):
-            llm_payload['state']['context'] = char_data['context']
+        llm_payload['state']['name2'] = char_data.get('name', 'AI')
+        llm_payload['state']['character_menu'] = char_data.get('name', 'AI')
+        llm_payload['state']['context'] = char_data.get('context', '')
         llm_payload = await fix_llm_payload(llm_payload) # Add any missing required information
         return llm_payload
     except Exception as e:
         logging.error(f"An error occurred while loading the file for swap_character: {e}")
         return llm_payload
 
-def format_prompt_with_recent_output(user:str, prompt:str):
+def format_prompt_with_recent_output(user_name:str, prompt:str):
     try:
         formatted_prompt = prompt
         # Find all matches of {user_x} and {llm_x} in the prompt
@@ -942,7 +941,7 @@ def format_prompt_with_recent_output(user:str, prompt:str):
             elif prefix == 'history' and 0 <= index <= 10:
                 user_message = bot_history.recent_messages['user'][index] if index < len(bot_history.recent_messages['user']) else ''
                 llm_message = bot_history.recent_messages['llm'][index] if index < len(bot_history.recent_messages['llm']) else ''
-                formatted_history = f'"{user}:" {user_message}\n"{bot_database.last_character}:" {llm_message}\n'
+                formatted_history = f'"{user_name}:" {user_message}\n"{bot_database.last_character}:" {llm_message}\n'
                 matched_syntax = f"{prefix}_{index}"
                 formatted_prompt = formatted_prompt.replace(f"{{{matched_syntax}}}", formatted_history)
         formatted_prompt = formatted_prompt.replace('{last_image}', '__temp/temp_img_0.png')
@@ -951,7 +950,7 @@ def format_prompt_with_recent_output(user:str, prompt:str):
         logging.error(f'An error occurred while formatting prompt with recent messages: {e}')
         return prompt
 
-def process_tag_formatting(user:str, prompt:str, formatting:dict):
+def process_tag_formatting(user_name:str, prompt:str, formatting:dict):
     try:
         updated_prompt = prompt
         format_prompt = formatting.get('format_prompt', [])
@@ -963,7 +962,7 @@ def process_tag_formatting(user:str, prompt:str, formatting:dict):
             for fmt_prompt in format_prompt:
                 updated_prompt = fmt_prompt.replace('{prompt}', updated_prompt)
         # format prompt with any defined recent messages
-        updated_prompt = format_prompt_with_recent_output(user, updated_prompt)
+        updated_prompt = format_prompt_with_recent_output(user_name, updated_prompt)
         # Format time if defined
         new_time, new_date = get_time(time_offset, time_format, date_format)
         updated_prompt = updated_prompt.replace('{time}', new_time)
@@ -1002,8 +1001,9 @@ async def build_flow_queue(input_flow):
     except Exception as e:
         logging.error(f"Error building Flow: {e}")
 
-async def process_llm_payload_tags(user_name, channel, llm_payload, llm_prompt, mods):
+async def process_llm_payload_tags(i, llm_payload:dict, llm_prompt:str, mods:dict):
     try:
+        user_name = i.author.display_name
         char_params = {}
         params = {}
         flow = mods.get('flow', None)
@@ -1050,7 +1050,7 @@ async def process_llm_payload_tags(user_name, channel, llm_payload, llm_prompt, 
                 if char_params == change_character:
                     verb = 'Changing'
                     char_params = {'character': {'char_name': char_params, 'mode': 'change', 'verb': verb}}
-                    await change_char_task(user_name, channel, 'Tags', char_params)
+                    await change_char_task(i, 'Tags', char_params)
                 else:
                     verb = 'Swapping'
                     llm_payload = await swap_llm_character(swap_character, user_name, llm_payload)
@@ -1441,10 +1441,10 @@ async def get_tags(text):
         logging.error(f"Error getting tags: {e}")
         return text, []
 
-async def init_llm_payload(user:str, text:str) -> dict:
+async def init_llm_payload(user_name:str, text:str) -> dict:
     llm_payload = copy.deepcopy(bot_settings.settings['llmstate'])
     llm_payload['text'] = text
-    name1 = user
+    name1 = user_name
     name2 = bot_settings.settings['llmcontext']['name']
     context = bot_settings.settings['llmcontext']['context']
     llm_payload['state']['name1'] = name1
@@ -1558,7 +1558,7 @@ def get_braces_value(matched_text):
         replaced_text = ', '.join(chosen_options) if num_choices > 1 else chosen_options[0]
     return replaced_text
 
-async def dynamic_prompting(user, text, i=None):
+async def dynamic_prompting(user_name:str, text:str, i=None):
     if not config.get('dynamic_prompting_enabled', True):
         if not bot_database.was_warned('dynaprompt'):
             bot_database.update_was_warned('dynaprompt')
@@ -1599,7 +1599,7 @@ async def dynamic_prompting(user, text, i=None):
             text_with_comments = (text_with_comments[:adjusted_start] + highlighted_changes + text_with_comments[adjusted_end:])
     # send a message showing the selected options
     if i and (braces_matches or wildcard_matches):
-        await i.reply(content=f"__Text with **[Dynamic Prompting](<https://github.com/altoiddealer/ad_discordbot/wiki/dynamic-prompting>)**__:\n>>> **{user}**: {text_with_comments}", mention_author=False, silent=True)
+        await i.reply(content=f"__Text with **[Dynamic Prompting](<https://github.com/altoiddealer/ad_discordbot/wiki/dynamic-prompting>)**__:\n>>> **{user_name}**: {text_with_comments}", mention_author=False, silent=True)
     return text
 
 @client.event
@@ -1613,11 +1613,11 @@ async def on_message(i: discord.Interaction):
         if text.startswith(f"@{bot_database.last_character} "):
             text = text.replace(f"@{bot_database.last_character} ", "", 1)
         # apply wildcards
-        text = await dynamic_prompting(i.author, text, i)
+        text = await dynamic_prompting(i.author.display_name, text, i)
 
         async with task_semaphore:
             async with i.channel.typing():
-                logging.info(f'reply requested: {i.author} said: "{text}"')
+                logging.info(f'reply requested: {i.author.display_name} said: "{text}"')
                 await on_message_task(i, 'on_message', text)
                 await run_flow_if_any(i, 'on_message', text)
 
@@ -1629,7 +1629,7 @@ async def on_message(i: discord.Interaction):
 #################################################################
 async def on_message_task(i: discord.Interaction, source:str, text:str):
     try:
-        user = i.author
+        user_name = i.author.display_name
         channel = i.channel
         params = {}
         # collects all tags, sorted into sub-lists by phase (user / llm / userllm)
@@ -1640,7 +1640,7 @@ async def on_message_task(i: discord.Interaction, source:str, text:str):
         should_gen_text = should_bot_do('should_gen_text', default=True, tags=tags)
         if should_gen_text:
             # build llm_payload with defaults
-            llm_payload = await init_llm_payload(user.name, text)
+            llm_payload = await init_llm_payload(user_name, text)
 
             # make working copy of user's request (without @ mention)
             llm_prompt = text
@@ -1649,9 +1649,9 @@ async def on_message_task(i: discord.Interaction, source:str, text:str):
             # collect matched tag values
             llm_payload_mods, formatting = collect_llm_tag_values(tags)
             # apply tags relevant to LLM payload
-            llm_payload, llm_prompt, params = await process_llm_payload_tags(user.name, channel, llm_payload, llm_prompt, llm_payload_mods)
+            llm_payload, llm_prompt, params = await process_llm_payload_tags(i, llm_payload, llm_prompt, llm_payload_mods)
             # apply formatting tags to LLM prompt
-            llm_prompt = process_tag_formatting(user.name, llm_prompt, formatting)
+            llm_prompt = process_tag_formatting(user_name, llm_prompt, formatting)
             # offload to ai_gen queue
             llm_payload['text'] = llm_prompt
 
@@ -1662,14 +1662,14 @@ async def on_message_task(i: discord.Interaction, source:str, text:str):
         if should_gen_image:
             if await sd_online(channel):
                 await channel.send(f'Bot was triggered by Tags to not respond with text.\n**Processing image generation using your input as the prompt ...**', delete_after=5) # msg for if LLM model is unloaded
-            await img_gen_task(user.name, channel, source, text, params, i, tags)
+            await img_gen_task(source, text, params, i, tags)
 
     except Exception as e:
         logging.error(f"An error occurred processing on_message request: {e}")
 
 async def hybrid_llm_img_gen(i: discord.Interaction, source:str, text:str, tags:dict, llm_payload:dict, params:dict):
     try:
-        user = i.author
+        user_name = i.author.display_name
         channel = i.channel
         change_embed = None
         img_gen_embed = None
@@ -1681,7 +1681,7 @@ async def hybrid_llm_img_gen(i: discord.Interaction, source:str, text:str, tags:
         mode = llmmodel_params.get('mode', 'change') # default to 'change' unless a tag was triggered with 'swap'
         if llmmodel_params:
             orig_llmmodel = shared.model_name                                   # copy current LLM model name
-            change_embed = await change_llmmodel_task(user, channel, params)    # Change LLM model
+            change_embed = await change_llmmodel_task(i, params)    # Change LLM model
             if mode == 'swap' and change_embed:                                 # Delete embed before the second call
                 await change_embed.delete()
 
@@ -1702,14 +1702,14 @@ async def hybrid_llm_img_gen(i: discord.Interaction, source:str, text:str, tags:
                 if not bot_database.was_warned('no_llmmodel'):
                     bot_database.update_was_warned('no_llmmodel')
                     await channel.send(f'(Cannot process text request: No LLM model is currently loaded. Use "/llmmodel" to load a model.)', delete_after=10)
-                    logging.warning(f'Bot tried to generate text for {user}, but no LLM model was loaded')
+                    logging.warning(f'Bot tried to generate text for {user_name}, but no LLM model was loaded')
             # Check to apply Server Mode
             llm_payload = apply_server_mode(llm_payload, i)
             # generate text with textgen-webui
             last_resp, tts_resp = await llm_gen(llm_payload, i)
             # If no text was generated, treat user input at the response
             if last_resp is not None:
-                logging.info("reply sent: \"" + user.name + ": {'text': '" + llm_payload["text"] + "', 'response': '" + last_resp + "'}\"")
+                logging.info("reply sent: \"" + user_name + ": {'text': '" + llm_payload["text"] + "', 'response': '" + last_resp + "'}\"")
             else:
                 if should_gen_image and sd_enabled:
                     last_resp = text
@@ -1719,7 +1719,7 @@ async def hybrid_llm_img_gen(i: discord.Interaction, source:str, text:str, tags:
             # if LLM model swapping was triggered
             if mode == 'swap':
                 params['llmmodel']['llmmodel_name'] = orig_llmmodel
-                change_embed = await change_llmmodel_task(user, channel, params)    # Swap LLM Model back
+                change_embed = await change_llmmodel_task(i, params)    # Swap LLM Model back
                 if change_embed:
                     await change_embed.delete()                                     # Delete embed again after the second call
 
@@ -1730,9 +1730,9 @@ async def hybrid_llm_img_gen(i: discord.Interaction, source:str, text:str, tags:
                 should_gen_image = should_bot_do('should_gen_image', default=False, tags=tags) # Check again post-LLM
             if should_gen_image:
                 if img_gen_embed: await img_gen_embed.delete()
-                await img_gen_task(user, channel, source, last_resp, params, i, tags)
+                await img_gen_task(source, last_resp, params, i, tags)
         if tts_resp: await process_tts_resp(channel, tts_resp)
-        mention_resp = update_mention(user.mention, last_resp) # @mention non-consecutive users
+        mention_resp = update_mention(i.author.mention, last_resp) # @mention non-consecutive users
         should_send_text = should_bot_do('should_send_text', default=True, tags=tags)
         if should_send_text:
             await send_long_message(channel, mention_resp)
@@ -1863,11 +1863,11 @@ async def llm_gen(llm_payload:dict, i=None):
 
 async def cont_regen_task(i:discord.Interaction, source:str, text:str, message:discord.message):
     try:
-        user = i.user.display_name
+        user_name = i.author.display_name
         channel = i.channel
         cmd = ''
         system_embed = None
-        llm_payload = await init_llm_payload(user, text)
+        llm_payload = await init_llm_payload(user_name, text)
         llm_payload['save_to_history'] = False
         if source == 'cont':
             cmd = 'Continuing'
@@ -1877,11 +1877,11 @@ async def cont_regen_task(i:discord.Interaction, source:str, text:str, message:d
             llm_payload['regenerate'] = True
         if shared.model_name == 'None':
             await channel.send('(Cannot process text request: No LLM model is currently loaded. Use "/llmmodel" to load a model.)', delete_after=5)
-            logging.warning(f'{user} used {cmd} but no LLM model was loaded')
+            logging.warning(f'{user_name} used {cmd} but no LLM model was loaded')
             return
         if system_embed_info:
             system_embed_info.title = f'{cmd} ... '
-            system_embed_info.description = f'{cmd} text for {user}'
+            system_embed_info.description = f'{cmd} text for {user_name}'
             system_embed = await channel.send(embed=system_embed_info)
         # Check to apply Server Mode
         llm_payload = apply_server_mode(llm_payload, i)
@@ -1890,7 +1890,7 @@ async def cont_regen_task(i:discord.Interaction, source:str, text:str, message:d
             await system_embed.delete()
         if last_resp is None:
             return
-        logging.info("reply sent: \"" + user + ": {'text': '" + llm_payload["text"] + "', 'response': '" + last_resp + "'}\"")
+        logging.info("reply sent: \"" + user_name + ": {'text': '" + llm_payload["text"] + "', 'response': '" + last_resp + "'}\"")
         fetched_message = await channel.fetch_message(message)
         await fetched_message.delete()
         if tts_resp:
@@ -1911,19 +1911,19 @@ async def cont_regen_task(i:discord.Interaction, source:str, text:str, message:d
             await system_embed.delete()
 
 async def speak_task(ctx, text:str, params:dict):
-    user = ctx.author
+    user_name = ctx.author.display_name
     channel = ctx.channel
     try:
         system_embed = None
         if shared.model_name == 'None':
             await channel.send('Cannot process "/speak" request: No LLM model is currently loaded. Use "/llmmodel" to load a model.)', delete_after=5)
-            logging.warning(f'Bot tried to generate tts for {user}, but no LLM model was loaded')
+            logging.warning(f'Bot tried to generate tts for {user_name}, but no LLM model was loaded')
             return
         if system_embed_info:
-            system_embed_info.title = f'{user} requested tts ... '
+            system_embed_info.title = f'{user_name} requested tts ... '
             system_embed_info.description = ''
             system_embed = await channel.send(embed=system_embed_info)
-        llm_payload = await init_llm_payload(user.name, text)
+        llm_payload = await init_llm_payload(user_name, text)
         llm_payload['_continue'] = True
         llm_payload['state']['max_new_tokens'] = 1
         llm_payload['state']['history'] = {'internal': [[text, text]], 'visible': [[text, text]]}
@@ -1941,7 +1941,7 @@ async def speak_task(ctx, text:str, params:dict):
             if 'api_key' in sub_dict:
                 sub_dict.pop('api_key')
         if system_embed_info:
-            system_embed_info.title = f'{user.name} requested tts:'
+            system_embed_info.title = f'{user_name} requested tts:'
             system_embed_info.description = f"**Params:** {tts_args}\n**Text:** {text}"
             system_embed = await channel.send(embed=system_embed_info)
         await update_extensions(bot_settings.settings['llmcontext'].get('extensions', {})) # Restore character specific extension settings
@@ -1958,8 +1958,11 @@ async def speak_task(ctx, text:str, params:dict):
 ###################### QUEUED MODEL CHANGE ######################
 #################################################################
 # Process selected Img model
-async def change_imgmodel_task(user, channel, params):
+async def change_imgmodel_task(user_name:str, channel, params:dict, i=None):
     try:
+        if i:
+            user_name = i.author.display_name
+            channel = i.channel
         change_embed = None
         await sd_online(channel) # Can't change Img model if not online!
         imgmodel_params = params.get('imgmodel')
@@ -1993,7 +1996,7 @@ async def change_imgmodel_task(user, channel, params):
         # if imgmodel_name != 'None': ### IF API IMG MODEL UNLOADING GETS EVER DEBUGGED
         if channel and change_embed_info:
             if change_embed: await change_embed.delete()
-            change_embed_info.title = f"{user} changed Img model:"
+            change_embed_info.title = f"{user_name} changed Img model:"
             change_embed_info.description = f'**{imgmodel_name}**'
             change_embed = await channel.send(embed=change_embed_info)
         logging.info(f"Image model changed to: {imgmodel_name}")
@@ -2011,8 +2014,10 @@ async def change_imgmodel_task(user, channel, params):
         return False
 
 # Process selected LLM model
-async def change_llmmodel_task(user, channel, params):
+async def change_llmmodel_task(i, params:dict):
     try:
+        user_name = i.author.display_name
+        channel = i.channel
         change_embed = None
         llmmodel_params = params.get('llmmodel', {})
         llmmodel_name = llmmodel_params.get('llmmodel_name')
@@ -2042,10 +2047,10 @@ async def change_llmmodel_task(user, channel, params):
                 return change_embed             # return the embed so it can be deleted by the caller
             if change_embed_info:
                 if llmmodel_name == 'None':
-                    change_embed_info.title = f"{user} unloaded the LLM model"
+                    change_embed_info.title = f"{user_name} unloaded the LLM model"
                     change_embed_info.description = 'Use "/llmmodel" to load a new one'
                 else:
-                    change_embed_info.title = f"{user} changed LLM model:"
+                    change_embed_info.title = f"{user_name} changed LLM model:"
                     change_embed_info.description = f'**{llmmodel_name}**'
                 if change_embed: await change_embed.delete()
                 await channel.send(embed=change_embed_info)
@@ -2062,8 +2067,10 @@ async def change_llmmodel_task(user, channel, params):
 #################################################################
 #################### QUEUED CHARACTER CHANGE ####################
 #################################################################
-async def change_char_task(user, channel, source, params):
+async def change_char_task(i, source:str, params:dict):
     try:
+        user_name = i.author.display_name
+        channel = i.channel
         change_embed = None
         char_params = params.get('character', {})
         char_name = char_params.get('char_name', {})
@@ -2071,13 +2078,13 @@ async def change_char_task(user, channel, source, params):
         mode = char_params.get('mode', 'change')
         if change_embed_info:
             change_embed_info.title = f'{verb} character ... '
-            change_embed_info.description = f'{user} requested character {mode}: "{char_name}"'
+            change_embed_info.description = f'{user_name} requested character {mode}: "{char_name}"'
             change_embed = await channel.send(embed=change_embed_info)
         # Change character
         await change_character(char_name, channel, source)
         if change_embed: await change_embed.delete()
         if change_embed_info:
-            change_embed_info.title = f"{user} changed character:"
+            change_embed_info.title = f"{user_name} changed character:"
             change_embed_info.description = f'**{char_name}**'
             await channel.send(embed=change_embed_info)
         # Send message to channel
@@ -2096,11 +2103,11 @@ async def change_char_task(user, channel, source, params):
             else:
                 message = f'**{char_name}** has entered the chat"'
         await send_long_message(channel, message)
-        logging.info(f"Character changed to: {char_name}")
+        logging.info(f"Character loaded: {char_name}")
     except Exception as e:
-        logging.error(f"An error occurred while changing character for /character: {e}")
+        logging.error(f'An error occurred while loading character for "{source}": {e}')
         if change_embed_info:
-            change_embed_info.title = "An error occurred while changing character"
+            change_embed_info.title = "An error occurred while loading character"
             change_embed_info.description = e
             if change_embed: await change_embed.edit(embed=change_embed_info)
 
@@ -2134,7 +2141,7 @@ def should_bot_do(key, default, tags={}):   # Used to check if should:
 # For @ mentioning users who were not last replied to
 previous_user_mention = ''
 
-def update_mention(user_mention:str, last_resp:str=''):
+def update_mention(user_mention:discord.User.mention, last_resp:str=''):
     global previous_user_mention
     mention_resp = last_resp
 
@@ -2149,13 +2156,13 @@ flow_queue = asyncio.Queue()
 #################################################################
 ########################## QUEUED FLOW ##########################
 #################################################################
-async def format_next_flow(next_flow, user, text):
+async def format_next_flow(next_flow, user_name:str, text:str):
     flow_name = ''
     formatted_flow_tags = {}
     for key, value in next_flow.items():
         # see if any tag values have dynamic formatting (user prompt, LLM reply, etc)
         if isinstance(value, str):
-            formatted_value = format_prompt_with_recent_output(user, value)       # output will be a string
+            formatted_value = format_prompt_with_recent_output(user_name, value)       # output will be a string
             if formatted_value != value:                                        # if the value changed,
                 formatted_value = parse_tag_from_text_value(formatted_value)    # convert new string to correct value type
             formatted_flow_tags[key] = formatted_value
@@ -2165,21 +2172,21 @@ async def format_next_flow(next_flow, user, text):
         # format prompt before feeding it back into on_message_task()
         elif key == 'format_prompt':
             formatting = {'format_prompt': [value]}
-            text = process_tag_formatting(user, text, formatting)
+            text = process_tag_formatting(user_name, text, formatting)
         # apply wildcards
-        text = await dynamic_prompting(user, text, i=None)
+        text = await dynamic_prompting(user_name, text, i=None)
     next_flow.update(formatted_flow_tags) # commit updates
     return flow_name, text
 
 # function to get a copy of the next queue item while maintaining the original queue
-async def peek_flow_queue(queue, user, text):
+async def peek_flow_queue(queue, user_name:str, text:str):
     temp_queue = asyncio.Queue()
     total_queue_size = queue.qsize()
     first_flow = None
     while queue.qsize() > 0:
         if queue.qsize() == total_queue_size:
             item = await queue.get()
-            flow_name, formatted_text = await format_next_flow(item, user, text)
+            flow_name, formatted_text = await format_next_flow(item, user_name, text)
         else:
             item = await queue.get()
         await temp_queue.put(item)
@@ -2189,19 +2196,19 @@ async def peek_flow_queue(queue, user, text):
         await queue.put(item_to_put_back)
     return flow_name, formatted_text
 
-async def flow_task(i, source, text):
-    user = i.user
+async def flow_task(i, source:str, text:str):
+    user_name = i.author.display_name
     channel = i.channel
     try:
         global flow_event
         flow_embed = None
         total_flow_steps = flow_queue.qsize()
         if flow_embed_info:
-            flow_embed_info.title = f'Processing Flow for {user} with {total_flow_steps} steps'
+            flow_embed_info.title = f'Processing Flow for {user_name} with {total_flow_steps} steps'
             flow_embed_info.description = ''
             flow_embed = await channel.send(embed=flow_embed_info)
         while flow_queue.qsize() > 0:   # flow_queue items are removed in get_tags()
-            flow_name, text = await peek_flow_queue(flow_queue, user, text)
+            flow_name, text = await peek_flow_queue(flow_queue, user_name, text)
             remaining_flow_steps = flow_queue.qsize()
             if flow_embed_info:
                 flow_embed_info.description = flow_embed_info.description.replace("**Processing", ":white_check_mark: **")
@@ -2209,7 +2216,7 @@ async def flow_task(i, source, text):
                 if flow_embed: await flow_embed.edit(embed=flow_embed_info)
             await on_message_task(i, source, text)
         if flow_embed_info:
-            flow_embed_info.title = f"Flow completed for {user}"
+            flow_embed_info.title = f"Flow completed for {user_name}"
             flow_embed_info.description = flow_embed_info.description.replace("**Processing", ":white_check_mark: **")
             if flow_embed: await flow_embed.edit(embed=flow_embed_info)
         flow_event.clear()              # flag that flow is no longer processing
@@ -2225,7 +2232,7 @@ async def flow_task(i, source, text):
         flow_queue.task_done()
 
 
-async def run_flow_if_any(i, source, text):
+async def run_flow_if_any(i, source:str, text:str):
     if flow_queue.qsize() > 0:
         # flows are activated in process_llm_payload_tags(), and is where the flow queue is populated
         await flow_task(i, source, text)
@@ -3095,12 +3102,14 @@ def match_img_tags(img_prompt:str, tags:dict) -> dict:
 
     return tags
 
-async def img_gen_task(user, channel, source, img_prompt, params, i=None, tags={}):
+async def img_gen_task(source:str, img_prompt:str, params:dict, i=None, tags={}):
+    user_name = i.author.display_name or None
+    channel = i.channel
     try:
         check_key = bot_settings.settings['imgmodel'].get('override_settings') or bot_settings.settings['imgmodel']['payload'].get('override_settings')
         if check_key.get('sd_model_checkpoint') == 'None': # Model currently unloaded
             await channel.send("**Cannot process image request:** No Img model is currently loaded")
-            logging.warning(f'Bot tried to generate image for {user}, but no Img model was loaded')
+            logging.warning(f'Bot tried to generate image for {user_name}, but no Img model was loaded')
         if not tags:
             img_prompt, tags = await get_tags(img_prompt)
             tags = match_img_tags(img_prompt, tags)
@@ -3136,14 +3145,14 @@ async def img_gen_task(user, channel, source, img_prompt, params, i=None, tags={
         if imgmodel_params:
             img_payload['override_settings']['sd_model_checkpoint'] = imgmodel_params['imgmodel'].get('imgmodel_name')
             current_imgmodel = imgmodel_params['imgmodel'].get('current_imgmodel', '')
-            should_swap = await change_imgmodel_task(user, channel, imgmodel_params)
+            should_swap = await change_imgmodel_task(user_name, channel, imgmodel_params, i)
         # Generate and send images
         endpoint = params.get('endpoint', '/sdapi/v1/txt2img')
         await process_image_gen(img_payload, censor_mode, channel, tags, endpoint, sd_output_dir)
         should_send_text = should_bot_do('should_send_text', default=True, tags=tags)
         should_gen_text = should_bot_do('should_gen_text', default=True, tags=tags)
         if (source == 'image' or (should_send_text and not should_gen_text)) and img_send_embed_info:
-            img_send_embed_info.title = f"{user} requested an image:"
+            img_send_embed_info.title = f"{user_name} requested an image:"
             img_send_embed_info.description = params.get('message', img_prompt)
             if i:
                 if hasattr(i, 'followup'): await i.followup.reply(embed=img_send_embed_info)
@@ -3153,7 +3162,7 @@ async def img_gen_task(user, channel, source, img_prompt, params, i=None, tags={
             await channel.send(file=send_user_image) if len(send_user_image) == 1 else await channel.send(files=send_user_image)
         # If switching back to original Img model
         if should_swap:
-            await change_imgmodel_task(user, channel, params={'imgmodel': {'imgmodel_name': current_imgmodel, 'mode': 'swap_back', 'verb': 'Swapping back to'}})
+            await change_imgmodel_task(user_name, channel, params={'imgmodel': {'imgmodel_name': current_imgmodel, 'mode': 'swap_back', 'verb': 'Swapping back to'}})
         return
     except Exception as e:
         logging.error(f"An error occurred in img_gen_task(): {e}")
@@ -3339,7 +3348,7 @@ if sd_enabled:
         img2img_dict = {}
         cnet_dict = {}
         try:
-            prompt = await dynamic_prompting(ctx.author, prompt, i=None)
+            prompt = await dynamic_prompting(ctx.author.display_name, prompt, i=None)
             message = f"**Prompt:** {prompt}"
             if size:
                 selected_size = next((option for option in size_options if option['name'] == size), None)
@@ -3610,8 +3619,8 @@ if sd_enabled:
             async with task_semaphore:
                 async with ctx.channel.typing():
                     # offload to ai_gen queue
-                    logging.info(f'{ctx.author} used "/image": "{prompt}"')
-                    await img_gen_task(ctx.author, ctx.channel, 'image', prompt, params, i=None, tags={})
+                    logging.info(f'{ctx.author.display_name} used "/image": "{prompt}"')
+                    await img_gen_task('image', prompt, params, ctx, tags={})
                     await run_flow_if_any(ctx, 'image', prompt)
 
         except Exception as e:
@@ -3661,7 +3670,7 @@ async def main(i):
 async def sync(ctx: discord.ext.commands.Context):
     try:
         await ctx.reply('Syncing client tree. Note: Menus may not update instantly.', ephemeral=True, delete_after=10)
-        logging.info(f"{ctx.author} used '/sync' to sync the client.tree (refresh commands).")
+        logging.info(f"{ctx.author.display_name} used '/sync' to sync the client.tree (refresh commands).")
         await bg_task_queue.put(client.tree.sync()) # Process this in the background
     except Exception as e:
         logging.error(f"Error syncing client.tree with '/sync': {e}")
@@ -3679,9 +3688,9 @@ if textgenwebui_enabled:
 
             async with task_semaphore:
                 # offload to ai_gen queue
-                logging.info(f'{ctx.author} used "/reset": "{bot_database.last_character}"')
+                logging.info(f'{ctx.author.display_name} used "/reset": "{bot_database.last_character}"')
                 params = {'character': {'char_name': bot_database.last_character, 'verb': 'Resetting', 'mode': 'reset'}}
-                await change_char_task(ctx.author, ctx.channel, 'reset', params)
+                await change_char_task(ctx, 'reset', params)
 
         except Exception as e:
             logging.error(f"Error with /reset: {e}")
@@ -3704,7 +3713,7 @@ if textgenwebui_enabled:
         async with task_semaphore:
             async with i.channel.typing():
                 # offload to ai_gen queue
-                logging.info(f'{i.user.display_name} used "Regenerate"')
+                logging.info(f'{i.author.display_name} used "Regenerate"')
                 await cont_regen_task(i, 'regen', text, message.id)
                 await run_flow_if_any(i, 'regen', text)
 
@@ -3717,7 +3726,7 @@ if textgenwebui_enabled:
         async with task_semaphore:
             async with i.channel.typing():
                 # offload to ai_gen queue
-                logging.info(f'{i.user.display_name} used "Continue"')
+                logging.info(f'{i.author.display_name} used "Continue"')
                 await cont_regen_task(i, 'cont', text, message.id)
                 await run_flow_if_any(i, 'cont', text)
 
@@ -3874,9 +3883,9 @@ async def process_character(ctx, selected_character_value):
 
         async with task_semaphore:
             # offload to ai_gen queue
-            logging.info(f'{ctx.author} used "/character": "{char_name}"')
+            logging.info(f'{ctx.author.display_name} used "/character": "{char_name}"')
             params = {'character': {'char_name': char_name, 'verb': 'Changing', 'mode': 'change'}}
-            await change_char_task(ctx.author, ctx.channel, 'character', params)
+            await change_char_task(ctx, 'character', params)
 
     except Exception as e:
         logging.error(f"Error processing selected character from /character command: {e}")
@@ -4104,9 +4113,9 @@ async def process_imgmodel(ctx, selected_imgmodel_value):
 
         async with task_semaphore:
             # offload to ai_gen queue
-            logging.info(f'{ctx.author} used "/imgmodel": "{selected_imgmodel_value}"')
+            logging.info(f'{ctx.author.display_name} used "/imgmodel": "{selected_imgmodel_value}"')
             params = {'imgmodel': {'imgmodel_name': selected_imgmodel_value}}
-            await change_imgmodel_task(ctx.author, ctx.channel, params)
+            await change_imgmodel_task(ctx.author.display_name, ctx.channel, params, ctx)
 
     except Exception as e:
         logging.error(f"Error processing selected imgmodel from /imgmodel command: {e}")
@@ -4151,9 +4160,9 @@ async def process_llmmodel(ctx, selected_llmmodel):
 
         async with task_semaphore:
             # offload to ai_gen queue
-            logging.info(f'{ctx.author} used "/llmmodel": "{selected_llmmodel}"')
+            logging.info(f'{ctx.author.display_name} used "/llmmodel": "{selected_llmmodel}"')
             params = {'llmmodel': {'llmmodel_name': selected_llmmodel, 'verb': 'Changing', 'mode': 'change'}}
-            await change_llmmodel_task(ctx.author, ctx.channel, params)
+            await change_llmmodel_task(ctx, params)
 
     except Exception as e:
         logging.error(f"Error processing /llmmodel command: {e}")
@@ -4295,7 +4304,7 @@ async def process_speak(ctx, input_text, selected_voice=None, lang=None, voice_i
         async with task_semaphore:
             async with ctx.channel.typing():
                 # offload to ai_gen queue
-                logging.info(f'{ctx.author} used "/speak": "{input_text}"')
+                logging.info(f'{ctx.author.display_name} used "/speak": "{input_text}"')
                 params = {'tts_args': tts_args, 'user_voice': user_voice}
                 await speak_task(ctx, input_text, params)
                 await run_flow_if_any(ctx, 'speak', input_text)
