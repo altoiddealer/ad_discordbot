@@ -2,13 +2,25 @@ from ad_discordbot.modules.logs import import_track, log, get_logger; import_tra
 import asyncio
 import os
 import re
+from shutil import copyfile
 logging = get_logger(__name__)
 
 task_semaphore = asyncio.Semaphore(1)
 
 class SharedPath:
 
-    def init_shared_path(root, dir, reason) -> str:
+    def init_user_config_files(root, src_dir, file) -> str:
+        dest_path = os.path.join(root, file)
+        if not os.path.exists(dest_path):
+            src_path = os.path.join(src_dir, file)
+            if os.path.exists(src_path):
+                copyfile(src_path, dest_path)
+                logging.info(f'Copied default user setting template "/{file}/" to "{root}".')
+            else:
+                logging.error(f'Required settings file "/{file}/" not found in "{root}" or "{src_dir}".')
+        return dest_path
+
+    def init_shared_paths(root, dir, reason) -> str:
         path = os.path.join(root, dir)
         if not os.path.exists(path):
             logging.info(f'Creating "/{dir}/" for {reason}.')
@@ -18,21 +30,23 @@ class SharedPath:
     dir_root = 'ad_discordbot'
 
     # Internal
-    dir_internal = init_shared_path(dir_root, 'internal', 'persistent settings not intended to be modified by users')
+    dir_internal = init_shared_paths(dir_root, 'internal', 'persistent settings not intended to be modified by users')
     active_settings = os.path.join(dir_internal, 'activesettings.yaml')
     starboard = os.path.join(dir_internal, 'starboard_messages.yaml')
     database = os.path.join(dir_internal, 'database.yaml')
     statistics = os.path.join(dir_internal, 'statistics.yaml')
 
     # Configs
-    config = os.path.join(dir_root, 'config.yaml')
-    base_settings = os.path.join(dir_root, 'dict_base_settings.yaml')
-    cmd_options = os.path.join(dir_root, 'dict_cmdoptions.yaml')
-    img_models = os.path.join(dir_root, 'dict_imgmodels.yaml')
-    tags = os.path.join(dir_root, 'dict_tags.yaml')
+    templates = os.path.join(dir_root, 'settings_templates')
+
+    config = init_user_config_files(dir_root, templates, 'config.yaml')
+    base_settings = init_user_config_files(dir_root, templates, 'dict_base_settings.yaml')
+    cmd_options = init_user_config_files(dir_root, templates, 'dict_cmdoptions.yaml')
+    img_models = init_user_config_files(dir_root, templates, 'dict_imgmodels.yaml')
+    tags = init_user_config_files(dir_root, templates, 'dict_tags.yaml')
 
     # Wildcards
-    init_shared_path(dir_root, 'wildcards', "wildcard files for Dynamic Prompting feature. Refer to the bot's wiki on GitHub for more information.")
+    init_shared_paths(dir_root, 'wildcards', "wildcard files for Dynamic Prompting feature. Refer to the bot's wiki on GitHub for more information.")
 
 shared_path = SharedPath()
 

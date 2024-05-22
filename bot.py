@@ -3035,7 +3035,7 @@ def collect_img_tag_values(tags):
 def init_img_payload(img_prompt:str, neg_prompt:str) -> dict:
     try:
         # Initialize img_payload settings
-        img_payload = {"prompt": img_prompt, "negative_prompt": neg_prompt, "width": 512, "height": 512, "steps": 20, "resize_mode": 1}
+        img_payload = {"prompt": img_prompt, "negative_prompt": neg_prompt}
         # Apply settings from imgmodel configuration
         imgmodel_img_payload = copy.deepcopy(bot_settings.settings['imgmodel'].get('payload', {}))
         img_payload.update(imgmodel_img_payload)
