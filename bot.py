@@ -336,7 +336,9 @@ def load_extensions(extensions, available_extensions):
     for index, name in enumerate(shared.args.extensions):
         if name in available_extensions:
             if name != 'api':
-                logging.info(f'Loading the extension "{name}"')
+                if not bot_database.was_warned(name):
+                    bot_database.update_was_warned(name)
+                    logging.info(f'Loading the extension "{name}"')
             try:
                 try:
                     exec(f"import extensions.{name}.script")
@@ -866,13 +868,13 @@ async def upload_tts_file(channel, tts_resp):
             await channel.send("The audio file exceeds Discord limitation even after conversion.")
         # if save_mode > 0: os.remove(mp3_path) # currently broken
 
-async def process_tts_resp(channel, tts_resp):
+async def process_tts_resp(channel, tts_resp, i=None):
     play_mode = int(tts_settings.get('play_mode', 0))
     # Upload to interaction channel
     if play_mode > 0:
         await upload_tts_file(channel, tts_resp)
     # Play in voice channel
-    if play_mode != 1:
+    if play_mode != 1 and (voice_client == i.guild.voice_client):
         await bg_task_queue.put(play_in_voice_channel(tts_resp)) # run task in background
 
 #################################################################
@@ -1001,11 +1003,10 @@ async def build_flow_queue(input_flow):
     except Exception as e:
         logging.error(f"Error building Flow: {e}")
 
-async def process_llm_payload_tags(i, llm_payload:dict, llm_prompt:str, mods:dict):
+async def process_llm_payload_tags(i, llm_payload:dict, llm_prompt:str, mods:dict, params={}):
     try:
         user_name = i.author.display_name
         char_params = {}
-        params = {}
         flow = mods.get('flow', None)
         save_to_history = mods.get('save_to_history', None)
         load_history = mods.get('load_history', None)
@@ -1056,21 +1057,20 @@ async def process_llm_payload_tags(i, llm_payload:dict, llm_prompt:str, mods:dic
                     llm_payload = await swap_llm_character(swap_character, user_name, llm_payload)
                 logging.info(f'[TAGS] {verb} Character: {char_params}')
         # LLM model handling
-        params = change_llmmodel or swap_llmmodel or {} # 'llmmodel_change' will trump 'llmmodel_swap'
-        if params:
-            if params == shared.model_name:
+        model_change = change_llmmodel or swap_llmmodel or None # 'llmmodel_change' will trump 'llmmodel_swap'
+        if model_change:
+            if model_change == shared.model_name:
                 logging.info(f'[TAGS] LLM model was triggered to change, but it is the same as current ("{shared.model_name}").')
-                params = {} # return empty dict
             else:
-                mode = 'change' if params == change_llmmodel else 'swap'
+                mode = 'change' if model_change == change_llmmodel else 'swap'
                 verb = 'Changing' if mode == 'change' else 'Swapping'
                 # Error handling
                 all_llmmodels = utils.get_available_models()
-                if not any(params == model for model in all_llmmodels):
-                    logging.error(f'LLM model not found: {params}')
+                if not any(model_change == model for model in all_llmmodels):
+                    logging.error(f'LLM model not found: {model_change}')
                 else:
-                    logging.info(f'[TAGS] {verb} LLM Model: {params}')
-                    params = {'llmmodel': {'llmmodel_name': params, 'mode': mode, 'verb': verb}}
+                    logging.info(f'[TAGS] {verb} LLM Model: {model_change}')
+                    params['llmmodel'] = {'llmmodel_name': params, 'mode': mode, 'verb': verb}
         # Send User Image handling
         if send_user_image:
             params['send_user_image'] = send_user_image
@@ -1631,14 +1631,16 @@ async def on_message_task(i: discord.Interaction, source:str, text:str):
     try:
         user_name = i.author.display_name
         channel = i.channel
-        params = {}
+        params = {} # dictionary to pass parameters through the event
         # collects all tags, sorted into sub-lists by phase (user / llm / userllm)
         text, tags = await get_tags(text)
         # match tags labeled for user / userllm.
         tags = match_tags(text, tags, phase='llm')
-        # check if triggered to not respond with text
-        should_gen_text = should_bot_do('should_gen_text', default=True, tags=tags)
-        if should_gen_text:
+        # check what bot should do
+        bot_will_do = bot_should_do(tags)
+        params['bot_will_do'] = bot_will_do
+        # do what bot should do
+        if bot_will_do['should_gen_text']:
             # build llm_payload with defaults
             llm_payload = await init_llm_payload(user_name, text)
 
@@ -1649,17 +1651,15 @@ async def on_message_task(i: discord.Interaction, source:str, text:str):
             # collect matched tag values
             llm_payload_mods, formatting = collect_llm_tag_values(tags)
             # apply tags relevant to LLM payload
-            llm_payload, llm_prompt, params = await process_llm_payload_tags(i, llm_payload, llm_prompt, llm_payload_mods)
+            llm_payload, llm_prompt, params = await process_llm_payload_tags(i, llm_payload, llm_prompt, llm_payload_mods, params)
             # apply formatting tags to LLM prompt
             llm_prompt = process_tag_formatting(user_name, llm_prompt, formatting)
             # offload to ai_gen queue
             llm_payload['text'] = llm_prompt
 
             await hybrid_llm_img_gen(i, source, text, tags, llm_payload, params)
-            return
 
-        should_gen_image = should_bot_do('should_gen_image', default=False, tags=tags)
-        if should_gen_image:
+        elif bot_will_do['should_gen_image']:
             if await sd_online(channel):
                 await channel.send(f'Bot was triggered by Tags to not respond with text.\n**Processing image generation using your input as the prompt ...**', delete_after=5) # msg for if LLM model is unloaded
             await img_gen_task(source, text, params, i, tags)
@@ -1671,6 +1671,7 @@ async def hybrid_llm_img_gen(i: discord.Interaction, source:str, text:str, tags:
     try:
         user_name = i.author.display_name
         channel = i.channel
+        bot_will_do = params['bot_will_do']
         change_embed = None
         img_gen_embed = None
         tts_resp = None
@@ -1680,14 +1681,13 @@ async def hybrid_llm_img_gen(i: discord.Interaction, source:str, text:str, tags:
         send_user_image = params.get('send_user_image', [])
         mode = llmmodel_params.get('mode', 'change') # default to 'change' unless a tag was triggered with 'swap'
         if llmmodel_params:
-            orig_llmmodel = shared.model_name                                   # copy current LLM model name
+            orig_llmmodel = shared.model_name                       # copy current LLM model name
             change_embed = await change_llmmodel_task(i, params)    # Change LLM model
-            if mode == 'swap' and change_embed:                                 # Delete embed before the second call
+            if mode == 'swap' and change_embed:                     # Delete embed before the second call
                 await change_embed.delete()
 
         # make a 'Prompting...' embed when generating text for an image response
-        should_gen_image = should_bot_do('should_gen_image', default=False, tags=tags)
-        if should_gen_image and textgenwebui_enabled:
+        if bot_will_do['should_gen_image'] and textgenwebui_enabled:
             if await sd_online(channel):
                 if shared.model_name == 'None':
                     await channel.send('**Processing image generation using message as the image prompt ...**', delete_after=5) # msg for if LLM model is unloaded
@@ -1705,13 +1705,17 @@ async def hybrid_llm_img_gen(i: discord.Interaction, source:str, text:str, tags:
                     logging.warning(f'Bot tried to generate text for {user_name}, but no LLM model was loaded')
             # Check to apply Server Mode
             llm_payload = apply_server_mode(llm_payload, i)
-            # generate text with textgen-webui
-            last_resp, tts_resp = await llm_gen(llm_payload, i)
+            # Only generate TTS for the server conntected to Voice Channel
+            tts_sw = None
+            if (not bot_will_do['should_send_text']) or (voice_client and (voice_client != i.guild.voice_client) and int(tts_settings.get('play_mode', 0)) == 0):
+                tts_sw = await toggle_tts(toggle='off')
+            # generate text with text-gen-webui
+            last_resp, tts_resp = await llm_gen(llm_payload, tts_sw)
             # If no text was generated, treat user input at the response
             if last_resp is not None:
                 logging.info("reply sent: \"" + user_name + ": {'text': '" + llm_payload["text"] + "', 'response': '" + last_resp + "'}\"")
             else:
-                if should_gen_image and sd_enabled:
+                if bot_will_do['should_gen_image'] and sd_enabled:
                     last_resp = text
                 else:
                     return
@@ -1721,20 +1725,21 @@ async def hybrid_llm_img_gen(i: discord.Interaction, source:str, text:str, tags:
                 params['llmmodel']['llmmodel_name'] = orig_llmmodel
                 change_embed = await change_llmmodel_task(i, params)    # Swap LLM Model back
                 if change_embed:
-                    await change_embed.delete()                                     # Delete embed again after the second call
+                    await change_embed.delete()                         # Delete embed again after the second call
 
         # process image generation (A1111 / Forge)
         if sd_enabled:
             tags = match_img_tags(last_resp, tags)
-            if not should_gen_image:
-                should_gen_image = should_bot_do('should_gen_image', default=False, tags=tags) # Check again post-LLM
-            if should_gen_image:
-                if img_gen_embed: await img_gen_embed.delete()
+            bot_will_do = bot_should_do(tags, bot_will_do) # check for updates from tags
+            if bot_will_do['should_gen_image']:
+                if img_gen_embed:
+                    await img_gen_embed.delete()
+                params['bot_will_do'] = bot_will_do
                 await img_gen_task(source, last_resp, params, i, tags)
-        if tts_resp: await process_tts_resp(channel, tts_resp)
+        if tts_resp:
+            await process_tts_resp(channel, tts_resp, i)
         mention_resp = update_mention(i.author.mention, last_resp) # @mention non-consecutive users
-        should_send_text = should_bot_do('should_send_text', default=True, tags=tags)
-        if should_send_text:
+        if bot_will_do['should_send_text']:
             await send_long_message(channel, mention_resp)
         if send_user_image:
             await channel.send(file=send_user_image) if len(send_user_image) == 1 else await channel.send(files=send_user_image)
@@ -1812,8 +1817,24 @@ def extra_stopping_strings(llm_payload:dict):
         logging.error(f'An error occurred while updating stopping strings: {e}')
     return llm_payload
 
+# Only generate TTS for the server conntected to Voice Channel
+async def toggle_tts(toggle='on', tts_sw=None):
+    try:
+        extensions = copy.deepcopy(bot_settings.settings['llmcontext'].get('extensions', {}))
+        if toggle == 'off' and extensions.get(tts_client, {}).get('activate'):
+            extensions[tts_client]['activate'] = False
+            await update_extensions(extensions)
+            # Return True if subsequent toggle_tts() should enable TTS
+            return True
+        if tts_sw:
+            extensions[tts_client]['activate'] = True
+            await update_extensions(extensions)
+    except Exception as e:
+        logging.error(f'An error occurred while toggling the TTS on/off in llm_gen(): {e}')
+    return None
+
 # Send LLM Payload - get response
-async def llm_gen(llm_payload:dict, i=None):
+async def llm_gen(llm_payload:dict, tts_sw=None):
     try:
         if shared.model_name == 'None':
             return None, None
@@ -1850,8 +1871,8 @@ async def llm_gen(llm_payload:dict, i=None):
             save_to_history = llm_payload.get('save_to_history', True)
             bot_history.manage_history(prompt=llm_payload['text'], reply=last_resp, save_to_history=save_to_history)
 
-        if tts_resp and (voice_client != i.guild.voice_client):
-            tts_resp = None
+        # Toggle TTS back on if it was toggled off
+        await toggle_tts(toggle='on', tts_sw=tts_sw)
 
         return last_resp, tts_resp
     except Exception as e:
@@ -1885,7 +1906,12 @@ async def cont_regen_task(i:discord.Interaction, source:str, text:str, message:d
             system_embed = await channel.send(embed=system_embed_info)
         # Check to apply Server Mode
         llm_payload = apply_server_mode(llm_payload, i)
-        last_resp, tts_resp = await llm_gen(llm_payload, i)
+        # Only generate TTS for the server conntected to Voice Channel
+        tts_sw = None
+        if voice_client and (voice_client != i.guild.voice_client) and int(tts_settings.get('play_mode', 0)) == 0:
+            tts_sw = await toggle_tts(toggle='off')
+        # generate text with text-gen-webui
+        last_resp, tts_resp = await llm_gen(llm_payload, tts_sw)
         if system_embed:
             await system_embed.delete()
         if last_resp is None:
@@ -1894,7 +1920,7 @@ async def cont_regen_task(i:discord.Interaction, source:str, text:str, message:d
         fetched_message = await channel.fetch_message(message)
         await fetched_message.delete()
         if tts_resp:
-            await process_tts_resp(channel, tts_resp)
+            await process_tts_resp(channel, tts_resp, i)
         if source == 'regen':
             await i.followup.send('__Regenerated text:__', silent=True)
         await send_long_message(channel, last_resp)
@@ -1930,12 +1956,12 @@ async def speak_task(ctx, text:str, params:dict):
         llm_payload['save_to_history'] = False
         tts_args = params.get('tts_args', {})
         await update_extensions(tts_args)
-        _, tts_resp = await llm_gen(llm_payload, ctx)
+        _, tts_resp = await llm_gen(llm_payload)
         if system_embed:
             await system_embed.delete()
         if tts_resp is None:
             return
-        await process_tts_resp(channel, tts_resp)
+        await process_tts_resp(channel, tts_resp, ctx)
         # remove api key (don't want to share this to the world!)
         for sub_dict in tts_args.values():
             if 'api_key' in sub_dict:
@@ -2114,29 +2140,36 @@ async def change_char_task(i, source:str, params:dict):
 #################################################################
 ######################## MAIN TASK QUEUE ########################
 #################################################################
-def should_bot_do(key, default, tags={}):   # Used to check if should:
-    try:                                    # - generate text
-        if not sd_enabled:
-            if key == 'should_gen_image' or key == 'should_send_image':
-                return False
-        if not textgenwebui_enabled:
-            if key == 'should_gen_text' or key == 'should_send_text':
-                return False
-
-        matches = tags.get('matches', {})   # - generate image
-        if matches:                         # - send text response
-            for item in matches:            # - send image response
+def bot_should_do(tags={}, prior_set={}):
+    # Defaults
+    bot_will_do = {'should_gen_text': True,
+                   'should_send_text': True,
+                   'should_gen_image': False,
+                   'should_send_image': True}
+    # Update defaults with anything previously set
+    bot_will_do.update(prior_set)
+    try:
+        # iterate through matched tags and update
+        matches = tags.get('matches', {})
+        if matches:
+            for item in matches:
                 if isinstance(item, tuple):
-                    tag, start, end = item
+                    tag, _, _ = item
                 else:
                     tag = item
-                if key in tag:
-                    return bool(tag.get(key, default))
-
+                for key, value in tag.items():
+                    if key in bot_will_do:
+                        bot_will_do[key] = value
+        # Disable things as set by config
+        if not textgenwebui_enabled:
+            bot_will_do['should_gen_text'] = False
+            bot_will_do['should_send_text'] = False
+        if not sd_enabled:
+            bot_will_do['should_gen_image'] = False
+            bot_will_do['should_send_image'] = False
     except Exception as e:
         logging.error(f"An error occurred while checking if bot should do '{key}': {e}")
-
-    return default
+    return bot_will_do
 
 # For @ mentioning users who were not last replied to
 previous_user_mention = ''
@@ -2394,7 +2427,7 @@ async def save_images_and_return(temp_dir, img_payload, endpoint):
         return [], e
     return images, pnginfo
 
-async def sd_img_gen(channel, temp_dir, img_payload, endpoint):
+async def sd_img_gen(channel, temp_dir:str, img_payload:dict, endpoint:str):
     try:
         reactor_args = img_payload.get('alwayson_scripts', {}).get('reactor', {}).get('args', [])
         last_item = reactor_args[-1] if reactor_args else None
@@ -2425,8 +2458,10 @@ async def sd_img_gen(channel, temp_dir, img_payload, endpoint):
         logging.error(f'Error processing images in {SD_CLIENT} API module: {e}')
         return []
 
-async def process_image_gen(img_payload, censor_mode, channel, tags, endpoint, sd_output_dir='ad_discordbot/sd_outputs/'):
+async def process_image_gen(img_payload:dict, channel, params:dict, endpoint:str, sd_output_dir='ad_discordbot/sd_outputs/'):
     try:
+        bot_will_do = params.get('bot_will_do', {})
+        censor_mode = params.get('censor_mode', 0)
         # Ensure the necessary directories exist
         os.makedirs(sd_output_dir, exist_ok=True)
         temp_dir = 'ad_discordbot/user_images/__temp/'
@@ -2441,8 +2476,7 @@ async def process_image_gen(img_payload, censor_mode, channel, tags, endpoint, s
         if censor_mode == 1:
             file_prefix = 'SPOILER_temp_img_'
         image_files = [discord.File(f'{temp_dir}/temp_img_{idx}.png', filename=f'{file_prefix}{idx}.png') for idx in range(len(images))]
-        should_send_image = should_bot_do('should_send_image', default=True, tags=tags)
-        if should_send_image:
+        if bot_will_do['should_send_image']:
             await channel.send(files=image_files)
         # Save the image at index 0 with the date/time naming convention
         timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
@@ -2805,7 +2839,7 @@ async def process_img_payload_tags(img_payload, mods, params):
                 await build_flow_queue(flow)
             # Img censoring handling
             if img_censoring and img_censoring > 0:
-                img_payload['img_censoring'] = img_censoring
+                params['censor_mode'] = img_censoring
                 logging.info(f"[TAGS] Censoring: {'Image Blurred' if img_censoring == 1 else 'Generation Blocked'}")
             # Imgmodel handling
             imgmodel_params = change_imgmodel or swap_imgmodel or None
@@ -2832,11 +2866,14 @@ async def process_img_payload_tags(img_payload, mods, params):
                     logging.warning("A tag was matched with invalid 'payload'; must be a dictionary.")
             # Aspect Ratio
             if aspect_ratio:
-                current_avg = get_current_avg_from_dims()
-                n, d = get_aspect_ratio_parts(aspect_ratio)
-                w, h = dims_from_ar(current_avg, n, d)
-                img_payload['width'], img_payload['height'] = w, h
-                logging.info(f'[TAGS] Applied aspect ratio "{aspect_ratio}" (Width: "{w}", Height: "{h}").')
+                try:
+                    current_avg = get_current_avg_from_dims()
+                    n, d = get_aspect_ratio_parts(aspect_ratio)
+                    w, h = dims_from_ar(current_avg, n, d)
+                    img_payload['width'], img_payload['height'] = w, h
+                    logging.info(f'[TAGS] Applied aspect ratio "{aspect_ratio}" (Width: "{w}", Height: "{h}").')
+                except:
+                    pass
             # Param variances handling
             if param_variances:
                 processed_params = process_param_variances(param_variances)
@@ -3105,6 +3142,8 @@ def match_img_tags(img_prompt:str, tags:dict) -> dict:
 async def img_gen_task(source:str, img_prompt:str, params:dict, i=None, tags={}):
     user_name = i.author.display_name or None
     channel = i.channel
+    bot_will_do = params.get('bot_will_do', {})
+    censor_mode = params.get('censor_mode', 0)
     try:
         check_key = bot_settings.settings['imgmodel'].get('override_settings') or bot_settings.settings['imgmodel']['payload'].get('override_settings')
         if check_key.get('sd_model_checkpoint') == 'None': # Model currently unloaded
@@ -3113,6 +3152,7 @@ async def img_gen_task(source:str, img_prompt:str, params:dict, i=None, tags={})
         if not tags:
             img_prompt, tags = await get_tags(img_prompt)
             tags = match_img_tags(img_prompt, tags)
+            bot_will_do = bot_should_do(tags)
         # Initialize img_payload
         neg_prompt = params.get('neg_prompt', '')
         img_payload = init_img_payload(img_prompt, neg_prompt)
@@ -3122,15 +3162,12 @@ async def img_gen_task(source:str, img_prompt:str, params:dict, i=None, tags={})
         # Apply tags relevant to Img gen
         img_payload, imgmodel_params, params = await process_img_payload_tags(img_payload, img_payload_mods, params)
         # Check censoring
-        censor_mode = None
-        if img_payload.get('img_censoring', 0) > 0:
-            censor_mode = img_payload['img_censoring']
-            if censor_mode == 2:
-                if img_send_embed_info:
-                    img_send_embed_info.title = "Image prompt was flagged as inappropriate."
-                    img_send_embed_info.description = ""
-                    await channel.send(embed=img_send_embed_info)
-                return censor_mode
+        if censor_mode == 2:
+            if img_send_embed_info:
+                img_send_embed_info.title = "Image prompt was flagged as inappropriate."
+                img_send_embed_info.description = ""
+                await channel.send(embed=img_send_embed_info)
+            return
         # Process loractl
         if config['sd']['extensions'].get('lrctl', {}).get('enabled', False):
             tags = apply_loractl(tags)
@@ -3148,10 +3185,8 @@ async def img_gen_task(source:str, img_prompt:str, params:dict, i=None, tags={})
             should_swap = await change_imgmodel_task(user_name, channel, imgmodel_params, i)
         # Generate and send images
         endpoint = params.get('endpoint', '/sdapi/v1/txt2img')
-        await process_image_gen(img_payload, censor_mode, channel, tags, endpoint, sd_output_dir)
-        should_send_text = should_bot_do('should_send_text', default=True, tags=tags)
-        should_gen_text = should_bot_do('should_gen_text', default=True, tags=tags)
-        if (source == 'image' or (should_send_text and not should_gen_text)) and img_send_embed_info:
+        await process_image_gen(img_payload, channel, params, endpoint, sd_output_dir)
+        if (source == 'image' or (bot_will_do['should_send_text'] and not bot_will_do['should_gen_text'])) and img_send_embed_info:
             img_send_embed_info.title = f"{user_name} requested an image:"
             img_send_embed_info.description = params.get('message', img_prompt)
             if i:
@@ -4370,6 +4405,10 @@ if textgenwebui_enabled and tts_client and tts_client in supported_tts_clients:
         @app_commands.choices(voice=voice_options)
         @app_commands.choices(lang=lang_options)
         async def speak(ctx: discord.ext.commands.Context, input_text: str, voice: typing.Optional[app_commands.Choice[str]], lang: typing.Optional[app_commands.Choice[str]], voice_input: typing.Optional[discord.Attachment]):
+            # Only generate TTS for the server conntected to Voice Channel
+            if voice_client and (voice_client != ctx.guild.voice_client) and int(tts_settings.get('play_mode', 0)) == 0:
+                await ctx.send('Voice Channel is not enabled on this server', ephemeral=True, delete_after=5)
+                return
             selected_voice = voice.value if voice is not None else ''
             if selected_voice:
                 selected_voice = _voice_hash_dict[selected_voice]
@@ -4387,6 +4426,10 @@ if textgenwebui_enabled and tts_client and tts_client in supported_tts_clients:
         @app_commands.choices(voice_2=voice_options1)
         @app_commands.choices(lang=lang_options)
         async def speak(ctx: discord.ext.commands.Context, input_text: str, voice_1: typing.Optional[app_commands.Choice[str]], voice_2: typing.Optional[app_commands.Choice[str]], lang: typing.Optional[app_commands.Choice[str]], voice_input: typing.Optional[discord.Attachment]):
+            # Only generate TTS for the server conntected to Voice Channel
+            if voice_client and (voice_client != ctx.guild.voice_client) and int(tts_settings.get('play_mode', 0)) == 0:
+                await ctx.send('Voice Channel is not enabled on this server', ephemeral=True, delete_after=5)
+                return
             if voice_1 and voice_2:
                 await ctx.send("A voice was picked from two separate menus. Using the first selection.", ephemeral=True)
             selected_voice = ((voice_1 or voice_2) and (voice_1 or voice_2).value) or ''
@@ -4409,6 +4452,10 @@ if textgenwebui_enabled and tts_client and tts_client in supported_tts_clients:
         @app_commands.choices(voice_3=voice_options2)
         @app_commands.choices(lang=lang_options)
         async def speak(ctx: discord.ext.commands.Context, input_text: str, voice_1: typing.Optional[app_commands.Choice[str]], voice_2: typing.Optional[app_commands.Choice[str]], voice_3: typing.Optional[app_commands.Choice[str]], lang: typing.Optional[app_commands.Choice[str]], voice_input: typing.Optional[discord.Attachment]):
+            # Only generate TTS for the server conntected to Voice Channel
+            if voice_client and (voice_client != ctx.guild.voice_client) and int(tts_settings.get('play_mode', 0)) == 0:
+                await ctx.send('Voice Channel is not enabled on this server', ephemeral=True, delete_after=5)
+                return
             if sum(1 for v in (voice_1, voice_2, voice_3) if v) > 1:
                 await ctx.send("A voice was picked from two separate menus. Using the first selection.", ephemeral=True)
             selected_voice = ((voice_1 or voice_2 or voice_3) and (voice_1 or voice_2 or voice_3).value) or ''
