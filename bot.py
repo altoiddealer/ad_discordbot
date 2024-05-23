@@ -336,7 +336,9 @@ def load_extensions(extensions, available_extensions):
     for index, name in enumerate(shared.args.extensions):
         if name in available_extensions:
             if name != 'api':
-                logging.info(f'Loading the extension "{name}"')
+                if not bot_database.was_warned(name):
+                    bot_database.update_was_warned(name)
+                    logging.info(f'Loading the extension "{name}"')
             try:
                 try:
                     exec(f"import extensions.{name}.script")
