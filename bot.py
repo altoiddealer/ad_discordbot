@@ -1707,7 +1707,7 @@ async def hybrid_llm_img_gen(i: discord.Interaction, source:str, text:str, tags:
             llm_payload = apply_server_mode(llm_payload, i)
             # Only generate TTS for the server conntected to Voice Channel
             tts_sw = None
-            if voice_client and (voice_client != i.guild.voice_client) and int(tts_settings.get('play_mode', 0)) == 0:
+            if (not bot_will_do['should_send_text']) or (voice_client and (voice_client != i.guild.voice_client) and int(tts_settings.get('play_mode', 0)) == 0):
                 tts_sw = await toggle_tts(toggle='off')
             # generate text with text-gen-webui
             last_resp, tts_resp = await llm_gen(llm_payload, tts_sw)
@@ -1821,9 +1821,10 @@ def extra_stopping_strings(llm_payload:dict):
 async def toggle_tts(toggle='on', tts_sw=None):
     try:
         extensions = copy.deepcopy(bot_settings.settings['llmcontext'].get('extensions', {}))
-        if toggle == 'off':
+        if toggle == 'off' and extensions.get(tts_client, {}).get('activate'):
             extensions[tts_client]['activate'] = False
             await update_extensions(extensions)
+            # Return True if subsequent toggle_tts() should enable TTS
             return True
         if tts_sw:
             extensions[tts_client]['activate'] = True
@@ -1831,7 +1832,6 @@ async def toggle_tts(toggle='on', tts_sw=None):
     except Exception as e:
         logging.error(f'An error occurred while toggling the TTS on/off in llm_gen(): {e}')
     return None
-
 
 # Send LLM Payload - get response
 async def llm_gen(llm_payload:dict, tts_sw=None):
