@@ -2832,11 +2832,14 @@ async def process_img_payload_tags(img_payload, mods, params):
                     logging.warning("A tag was matched with invalid 'payload'; must be a dictionary.")
             # Aspect Ratio
             if aspect_ratio:
-                current_avg = get_current_avg_from_dims()
-                n, d = get_aspect_ratio_parts(aspect_ratio)
-                w, h = dims_from_ar(current_avg, n, d)
-                img_payload['width'], img_payload['height'] = w, h
-                logging.info(f'[TAGS] Applied aspect ratio "{aspect_ratio}" (Width: "{w}", Height: "{h}").')
+                try:
+                    current_avg = get_current_avg_from_dims()
+                    n, d = get_aspect_ratio_parts(aspect_ratio)
+                    w, h = dims_from_ar(current_avg, n, d)
+                    img_payload['width'], img_payload['height'] = w, h
+                    logging.info(f'[TAGS] Applied aspect ratio "{aspect_ratio}" (Width: "{w}", Height: "{h}").')
+                except:
+                    pass
             # Param variances handling
             if param_variances:
                 processed_params = process_param_variances(param_variances)
