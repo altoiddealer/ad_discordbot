@@ -1814,12 +1814,26 @@ def extra_stopping_strings(llm_payload:dict):
         logging.error(f'An error occurred while updating stopping strings: {e}')
     return llm_payload
 
+# Only generate TTS for the server conntected to Voice Channel
+async def toggle_tts(i, toggle='off'):
+    try:
+        extensions = copy.deepcopy(bot_settings.settings['llmcontext'].get('extensions', {}))
+        if toggle == 'off':
+            extensions[tts_client]['activate'] = False
+        await update_extensions(extensions)
+    except Exception as e:
+        logging.error(f'An error occurred while toggling the TTS on/off in llm_gen(): {e}')
+
 # Send LLM Payload - get response
 async def llm_gen(llm_payload:dict, i=None):
     try:
         if shared.model_name == 'None':
             return None, None
         llm_payload = extra_stopping_strings(llm_payload)
+
+        # Only generate TTS for the server conntected to Voice Channel
+        if voice_client and i and (voice_client != i.guild.voice_client):
+            await toggle_tts(i, 'off')
 
         loop = asyncio.get_event_loop()
 
@@ -1852,8 +1866,9 @@ async def llm_gen(llm_payload:dict, i=None):
             save_to_history = llm_payload.get('save_to_history', True)
             bot_history.manage_history(prompt=llm_payload['text'], reply=last_resp, save_to_history=save_to_history)
 
-        if tts_resp and (voice_client != i.guild.voice_client):
-            tts_resp = None
+        # Toggle TTS back on if it was toggled off
+        if voice_client and i and (voice_client != i.guild.voice_client):
+            await toggle_tts(i, 'on')
 
         return last_resp, tts_resp
     except Exception as e:
