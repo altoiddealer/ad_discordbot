@@ -527,7 +527,7 @@ async def auto_select_imgmodel(current_imgmodel_name, mode='random'):
 # Task to auto-select an imgmodel at user defined interval
 async def auto_update_imgmodel_task(mode, duration):
     while True:
-        #await asyncio.sleep(duration)
+        await asyncio.sleep(duration)
         try:
             imgmodels_data = load_file(shared_path.img_models, {})
             auto_change_settings = imgmodels_data.get('settings', {}).get('auto_change_imgmodels', {})
@@ -548,7 +548,7 @@ async def auto_update_imgmodel_task(mode, duration):
 
         except Exception as e:
             logging.error(f"Error automatically updating image model: {e}")
-        await asyncio.sleep(duration)
+        #await asyncio.sleep(duration)
 
 imgmodel_update_task = None # Global variable allows process to be cancelled and restarted (reset sleep timer)
 
