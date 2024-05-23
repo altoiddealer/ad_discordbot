@@ -14,13 +14,11 @@ from discord.ext import commands
 from discord import app_commands, File
 from discord.ext.commands.context import Context
 import typing
-import torch
 import io
 import base64
 import yaml
 from PIL import Image, PngImagePlugin
 import requests
-import pprint
 import aiohttp
 import math
 import time
@@ -1884,7 +1882,7 @@ async def llm_gen(llm_payload:dict, tts_sw=None):
 
 async def cont_regen_task(i:discord.Interaction, source:str, text:str, message:discord.message):
     try:
-        user_name = i.author.display_name
+        user_name = i.user.display_name
         channel = i.channel
         cmd = ''
         system_embed = None
@@ -3741,14 +3739,14 @@ if textgenwebui_enabled:
 
     # Context menu command to Regenerate last reply
     @client.tree.context_menu(name="regenerate")
-    async def regen_llm_gen(i: discord.Interaction, message: discord.Message):
+    async def regen_llm_gen(i: discord.Interaction, message:discord.Message):
         text = message.content
         await i.response.defer(thinking=False)
 
         async with task_semaphore:
             async with i.channel.typing():
                 # offload to ai_gen queue
-                logging.info(f'{i.author.display_name} used "Regenerate"')
+                logging.info(f'{i.user.display_name} used "Regenerate"')
                 await cont_regen_task(i, 'regen', text, message.id)
                 await run_flow_if_any(i, 'regen', text)
 
@@ -3761,7 +3759,7 @@ if textgenwebui_enabled:
         async with task_semaphore:
             async with i.channel.typing():
                 # offload to ai_gen queue
-                logging.info(f'{i.author.display_name} used "Continue"')
+                logging.info(f'{i.user.display_name} used "Continue"')
                 await cont_regen_task(i, 'cont', text, message.id)
                 await run_flow_if_any(i, 'cont', text)
 
