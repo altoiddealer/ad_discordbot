@@ -2,7 +2,8 @@
 
 ### Uniting LLM ([text-generation-webui](https://github.com/oobabooga/text-generation-webui)) and Img Gen ([A1111](https://github.com/AUTOMATIC1111/stable-diffusion-webui) / [Forge](https://github.com/lllyasviel/stable-diffusion-webui-forge)) for chat & professional use.
 
-Note: **text-generation-webui** and **Stable Diffusion** features can be independently enabled/disabled in main config file. Neither is **"required"**.
+- **text-generation-webui** is required. **Stable Diffusion** is optional.
+- The features of both can be independently enabled/disabled in the main config file.
 
 ---
 
@@ -23,17 +24,23 @@ Note: **text-generation-webui** and **Stable Diffusion** features can be indepen
 <details>
   <summary>click to expand</summary>
 
+   **05/22/2024:** Big Update - Easier to Update Moving Forward
+
+   Quick shoutout to @Artificiangel who has recently joined development and made **stunning contributions**.
+
+    - The directory '/internal/' which contains persistent settings (not intended to be modified by users)
+      is no longer part of the bot package.  Instead, '/internal/' and its contents are created dynamically if missing.
+    - User settings are now present in a '/settings_templates/' which will be automatically copied into the root directory,
+      if not done manually by users.  This allows the bot to be easily updated without conflicts due to modified files.
+
+  ---
+
    **05/16/2024:** Significant Changes to File Structure
 
     - The main bot script has grown massive, so it is now split to modules (new '/modules/' subdirectory)
     - activesettings.yaml is now in an '/internal/' subdirectory. Your settings will migrate automatically.
     - 'bot.db' has been superceded by a 'database.yaml' file. Your settings will migrate automatically.
     - Note: Changes to 'dict_base_settings.yaml' and 'activesettings.yaml' are just comment updates
-
-  **New file structure**
-
-  <img width="549" alt="331227041-2d1da765-9928-41fc-8579-b17bbffa57f3" src="https://github.com/altoiddealer/ad_discordbot/assets/1613484/41735b36-9ccd-462e-a125-8c7e08dd7130">
-
 
   ---
 
@@ -249,23 +256,25 @@ Note: **text-generation-webui** and **Stable Diffusion** features can be indepen
 
 2. **[Create a Discord bot account](https://discordpy.readthedocs.io/en/stable/discord.html), invite it to your server, and note its authentication token**.
 
-3. Clone this repository to a safe location. (**NOT into /text-generation-webui/**)
+3. Clone this repository into **/text-generation-webui/**
    ```
    git clone https://github.com/altoiddealer/ad_discordbot
    ```
-3. **Make a copy** of the cloned repository, into **/text-generation-webui/**
-
-   `.../text-generation-webui/ad_discordbot/`
-
-4. Move **bot.py** out of subdirectory **/ad_discordbot/** -> into the directory **/text-generation-webui/**
+4. Move **bot.py** out of **/ad_discordbot/** -> into **/text-generation-webui/**
 
    `/text-generation-webui/bot.py`
 
    `/text-generation-webui/ad_discordbot/(remaining files)`
+   
+5. Copy all settings template files from **/ad_discordbot/settings_templates/** -> into **/ad_discordbot/**
 
-5. **Add the bot token (from Step 2) into **/ad_discordbot/config.yaml**
+   `config.yaml` , `dict_base_settings.yaml` , `dict_cmdoptions.yaml` , `dict_imgmodels.yaml` , `dict_tags.yaml`
+   
+   This allows the bot to be more easily updated.  These files will copy automatically if not done manually.
 
-6. **Run the .cmd file** in text-generation-webui directory (**ex: cmd_windows.bat**), and performing the following commands:
+6. **Add the bot token (from Step 2) into **/ad_discordbot/config.yaml**
+
+7. **Run the .cmd file** in text-generation-webui directory (**ex: cmd_windows.bat**), and performing the following commands:
    ```
    pip install -r ad_discordbot\requirements.txt
    ```
@@ -343,7 +352,7 @@ Note: **text-generation-webui** and **Stable Diffusion** features can be indepen
 
 ## Updating
 
-1. **Open a cmd window** in the **/ad_discordbot/** cloned repository (See step 3 in Installation) and **git pull**
+1. **Open a cmd window** in **/ad_discordbot/** and **git pull**
    ```
    git pull
    ```
@@ -358,14 +367,14 @@ Note: **text-generation-webui** and **Stable Diffusion** features can be indepen
 
 3. **IF other files have changed ('config.yaml', 'dict_X.yaml', etc:**
 
-   **You will need to compare changes, and either:**
-   - migrate the changes into your active setup, OR
-   - migrate values from your active setup into the fresh new files
+   **The bot should continue functioning, but you may miss out on new features until migrating new settings to your existing settings**
+   - migrate the changes from the files in **`settings_templates`** into your settings,
+   - **OR** migrate values from your settings into a copy of the updated templates
 
    **Example**: config.yaml gets updated with a new feature.
 
    Solution is to either:
 
-   * Update your existing config.yaml with the new feature, OR
+   * Update your existing config.yaml with the new feature,
 
-   * Make a copy of the new config.yaml and update it with your settings.
+   * **OR** make a copy of the new config.yaml and update it with your settings.
