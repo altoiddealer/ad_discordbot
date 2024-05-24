@@ -65,14 +65,14 @@ class Config:
                 config_value = getattr(config, config_name)
                 self.config[config_name] = config_value
             except AttributeError:
-                logging.warning(f"'config.py' is missing the '{config_name}' configuration.")
+                logging.warning(f"'config.yaml' is missing the '{config_name}' configuration.")
             else:
                 if not config_value:
-                    logging.warning(f"'config.py' has an empty value for '{config_name}' configuration.")
+                    logging.warning(f"'config.yaml' has an empty value for '{config_name}' configuration.")
         try:
             self.config['dynamic_prompting'] = config.dynamic_prompting_enabled
         except:
-            logging.warning("'config.py' is missing a new parameter 'dynamic_prompting_enabled'. Defaulting to 'True' (enabled) ")
+            logging.warning("'config.yaml' is missing a new parameter 'dynamic_prompting_enabled'. Defaulting to 'True' (enabled) ")
             self.config['dynamic_prompting'] = True
 
     def init_config(self):
@@ -191,6 +191,7 @@ system_embed_info, img_gen_embed_info, img_send_embed_info, change_embed_info, f
 ################### Stable Diffusion Startup ####################
 #################################################################
 sd_enabled = config['sd'].get('enabled', True)
+SD_CLIENT = None
 
 if sd_enabled:
     SD_URL = config['sd'].get('SD_URL', None) # Get the URL from config.yaml
@@ -204,6 +205,9 @@ if sd_enabled:
                 async with request_method(url=f'{SD_URL}{endpoint}', json=json) as response:
                     if response.status == 200:
                         r = await response.json()
+                        if SD_CLIENT is None and endpoint != '/sdapi/v1/cmd-flags':
+                           await get_sd_sysinfo()
+                           bot_settings.imgmodel.refresh_enabled_extensions()
                         return r
                     else:
                         logging.error(f'{SD_URL}{endpoint} response: {response.status} "{response.reason}"')
@@ -224,6 +228,7 @@ if sd_enabled:
                 return e
 
     async def get_sd_sysinfo():
+        global SD_CLIENT
         try:
             r = await sd_api(endpoint='/sdapi/v1/cmd-flags', method='get', json=None, retry=False)
             if not r:
@@ -231,16 +236,17 @@ if sd_enabled:
 
             ui_settings_file = r.get("ui_settings_file", "")
             if "webui-forge" in ui_settings_file:
-                return 'SD WebUI Forge'
+                SD_CLIENT = 'SD WebUI Forge'
             elif "webui" in ui_settings_file:
-                return 'A1111 SD WebUI'
+                SD_CLIENT = 'A1111 SD WebUI'
             else:
-                return 'SD WebUI'
+                SD_CLIENT = 'SD WebUI'
         except Exception as e:
             logging.error(f"Error getting SD sysinfo API: {e}")
-            return None
-
-    SD_CLIENT = asyncio.run(get_sd_sysinfo()) # Stable Diffusion client name to use in messages, warnings, etc
+            SD_CLIENT = None
+        
+    # Set Stable Diffusion client name to use in messages, warnings, etc
+    asyncio.run(get_sd_sysinfo())
 
     # Function to attempt restarting the SD WebUI Client in the event it gets stuck
     @client.hybrid_command(description=f"Immediately Restarts the {SD_CLIENT} server. Requires '--api-server-stop' SD WebUI launch flag.")
@@ -284,13 +290,13 @@ if sd_enabled:
     if SD_CLIENT:
         logging.info(f"Initializing with SD WebUI enabled: '{SD_CLIENT}'")
     else:
-        sd_enabled = False
+        logging.info(f"SD WebUI currently offline. Image commands/features will function when client is active and accessible via API.'")
 
 #################################################################
 ##################### TEXTGENWEBUI STARTUP ######################
 #################################################################
 if not 'textgenwebui' in config:
-    logging.warning("'config.py' is missing a new dictionary 'textgenwebui'. Enabling TGWUI by default.")
+    logging.warning("'config.yaml' is missing a new dictionary 'textgenwebui'. Enabling TGWUI by default.")
     textgenwebui_enabled = True
 else:
     textgenwebui_enabled = config['textgenwebui'].get('enabled', True)
@@ -367,8 +373,22 @@ def init_textgenwebui_extensions():
     shared.args.extensions = []
     extensions_module.available_extensions = utils.get_available_extensions()
 
-    # If any TTS extension defined in config.py, set tts bot vars and add extension to shared.args.extensions
-    tts_client = tts_settings.get('extension', '') # tts client
+    tts_client = ''
+
+    # Initialize shared args extensions
+    for extension in shared.settings['default_extensions']:
+        shared.args.extensions = shared.args.extensions or []
+        if extension not in shared.args.extensions:
+            shared.args.extensions.append(extension)
+
+    # Get any supported TTS client found in TGWUI CMD_FLAGS
+    for extension in shared.args.extensions:
+        if extension in supported_tts_clients:
+            tts_client = extension
+            break
+
+    # If any TTS extension defined in config.yaml, set tts bot vars and add extension to shared.args.extensions
+    tts_client = tts_settings.get('extension') or tts_client or '' # tts client
     tts_api_key = None
     tts_voice_key = None
     tts_lang_key = None
@@ -393,11 +413,6 @@ def init_textgenwebui_extensions():
             shared.args.extensions.append(tts_client)
 
     # Activate the extensions
-    for extension in shared.settings['default_extensions']:
-        shared.args.extensions = shared.args.extensions or []
-        if extension not in shared.args.extensions:
-            shared.args.extensions.append(extension)
-
     if shared.args.extensions and len(shared.args.extensions) > 0:
         extensions_module.load_extensions(extensions_module.extensions, extensions_module.available_extensions)
 
@@ -749,7 +764,7 @@ async def post_active_settings():
         else:
             logging.error(f"Target channel with ID {target_channel_id} not found.")
     else:
-        logging.warning("Channel ID must be specified in config.py")
+        logging.warning("Channel ID must be specified in config.yaml")
 
 #################################################################
 ######################## TTS PROCESSING #########################
@@ -766,11 +781,11 @@ async def voice_channel(vc_setting):
                     voice_channel = client.get_channel(tts_settings['voice_channel'])
                     voice_client = await voice_channel.connect()
                 else:
-                    logging.warning(f'Bot launched with {tts_client}, but no voice channel is specified in config.py')
+                    logging.warning(f'Bot launched with {tts_client}, but no voice channel is specified in config.yaml')
             else:
                 if not bot_database.was_warned('char_tts'):
                     bot_database.update_was_warned('char_tts')
-                    logging.warning(f'Character "use_voice_channel" = True, and "voice channel" is specified in config.py, but no "tts_client" is specified in config.py')
+                    logging.warning(f'Character "use_voice_channel" = True, and "voice channel" is specified in config.yaml, but no "tts_client" is specified in config.yaml')
         except Exception as e:
             logging.error(f"An error occurred while connecting to voice channel: {e}")
     # Stop voice client if explicitly deactivated in character settings
@@ -792,7 +807,7 @@ async def update_extensions(params):
             if last_extension_params == params:
                 return # Nothing needs updating
             last_extension_params = params # Update global dict
-        # Add tts API key if one is provided in config.py
+        # Add tts API key if one is provided in config.yaml
         if tts_api_key:
             if tts_client not in last_extension_params:
                 last_extension_params[tts_client] = {'api_key': tts_api_key}
@@ -1993,10 +2008,10 @@ async def change_imgmodel_task(user_name:str, channel, params:dict, i=None):
         imgmodel_name = imgmodel_params.get('imgmodel_name', '')
         mode = imgmodel_params.get('mode', 'change')    # default to 'change
         verb = imgmodel_params.get('verb', 'Changing')  # default to 'Changing'
-        imgmodel_data = await get_selected_imgmodel_data(imgmodel_name) # params will be checkpoint name
-        imgmodel_name = imgmodel_data.get('imgmodel_name', '')
+        imgmodel = await get_selected_imgmodel_data(imgmodel_name) # params will be checkpoint name
+        imgmodel_name = imgmodel.get('imgmodel_name', '')
         # Was not 'None' and did not match any known model names/checkpoints
-        if len(imgmodel_data) < 3:
+        if len(imgmodel) < 3:
             if channel and change_embed_info:
                 change_embed_info.title = 'Failed to change Img model:'
                 change_embed_info.description = f'Img model not found: {imgmodel_name}'
@@ -2008,21 +2023,18 @@ async def change_imgmodel_task(user_name:str, channel, params:dict, i=None):
             change_embed_info.description = f'{verb} to {imgmodel_name}'
             change_embed = await channel.send(embed=change_embed_info)
         # Merge selected imgmodel/tag data with base settings
-        imgmodel_data, imgmodel_name, imgmodel_tags = await merge_imgmodel_data(imgmodel_data)
+        imgmodel, imgmodel_name, imgmodel_tags = await merge_imgmodel_data(imgmodel)
         # Soft Img model update if swapping
         if mode == 'swap' or mode == 'swap_back':
-            override_settings = imgmodel_data.get('override_settings') or imgmodel_data['payload'].get('override_settings')
-            _ = await sd_api(endpoint='/sdapi/v1/options', method='post', json=override_settings, retry=True)
-            if change_embed:
-                await change_embed.delete()
-            return True # Yes swap back
-
+            model_data = imgmodel.get('override_settings') or imgmodel['payload'].get('override_settings')
+            _ = await sd_api(endpoint='/sdapi/v1/options', method='post', json=model_data, retry=True)
+            if change_embed: await change_embed.delete()
+            return True
         # Change Img model settings
-        await update_imgmodel(channel, imgmodel_data, imgmodel_tags)
+        await update_imgmodel(channel, imgmodel, imgmodel_tags)
         # if imgmodel_name != 'None': ### IF API IMG MODEL UNLOADING GETS EVER DEBUGGED
         if channel and change_embed_info:
-            if change_embed:
-                await change_embed.delete()
+            if change_embed: await change_embed.delete()
             change_embed_info.title = f"{user_name} changed Img model:"
             change_embed_info.description = f'**{imgmodel_name}**'
             change_embed = await channel.send(embed=change_embed_info)
@@ -2035,11 +2047,9 @@ async def change_imgmodel_task(user_name:str, channel, params:dict, i=None):
         if change_embed_info:
             change_embed_info.title = "An error occurred while changing Img model"
             change_embed_info.description = e
-            if change_embed:
-                await change_embed.edit(embed=change_embed_info)
+            if change_embed: await change_embed.edit(embed=change_embed_info)
             else:
-                if channel:
-                    await channel.send(embed=change_embed_info)
+                if channel: await channel.send(embed=change_embed_info)
         return False
 
 # Process selected LLM model
@@ -2461,12 +2471,11 @@ async def sd_img_gen(channel, temp_dir:str, img_payload:dict, endpoint:str):
         logging.error(f'Error processing images in {SD_CLIENT} API module: {e}')
         return []
 
-async def process_image_gen(img_payload:dict, channel, params:dict):
+async def process_image_gen(img_payload:dict, channel, params:dict, sd_output_dir='ad_discordbot/sd_outputs/'):
     try:
-        bot_will_do = params.pop('bot_will_do', {})
-        censor_mode = params.pop('censor_mode', 0)
-        endpoint = params.pop('endpoint', '/sdapi/v1/txt2img')
-        sd_output_dir = params.pop('sd_output_dir', 'ad_discordbot/sd_outputs/')
+        bot_will_do = params.get('bot_will_do', {})
+        censor_mode = params.get('censor_mode', 0)
+        endpoint = params.get('endpoint', '/sdapi/v1/txt2img')
         # Ensure the necessary directories exist
         os.makedirs(sd_output_dir, exist_ok=True)
         temp_dir = 'ad_discordbot/user_images/__temp/'
@@ -2558,7 +2567,6 @@ def clean_img_payload(img_payload):
                             start_index = sampler_name.lower().rfind(value)
                             fixed_sampler_name = sampler_name[:start_index].strip()
                             img_payload['sampler_name'] = fixed_sampler_name
-                            settings_dict = bot_settings.get_settings_dict()
                             bot_settings.settings['imgmodel']['payload']['sampler_name'] = fixed_sampler_name
                             bot_settings.settings['imgmodel']['payload']['scheduler'] = value.strip()
                         else:
@@ -2820,8 +2828,9 @@ def get_image_tag_args(extension, value, key=None, set_dir=None):
         logging.error(f"[TAGS] Error processing {extension} tag: {e}")
         return {}
 
-async def process_img_payload_tags(img_payload:dict, mods:dict, params:dict):
+async def process_img_payload_tags(img_payload, mods, params):
     try:
+        imgmodel_params = None
         flow = mods.get('flow', None)
         img_censoring = mods.get('img_censoring', None)
         change_imgmodel = mods.get('change_imgmodel', None)
@@ -2846,20 +2855,21 @@ async def process_img_payload_tags(img_payload:dict, mods:dict, params:dict):
                 params['censor_mode'] = img_censoring
                 logging.info(f"[TAGS] Censoring: {'Image Blurred' if img_censoring == 1 else 'Generation Blocked'}")
             # Imgmodel handling
-            change_model = change_imgmodel or swap_imgmodel or None
-            if change_model:
+            imgmodel_params = change_imgmodel or swap_imgmodel or None
+            if imgmodel_params:
                     ## IF API IMG MODEL UNLOADING GETS EVER DEBUGGED
                     ## if not change_imgmodel and swap_imgmodel and swap_imgmodel == 'None':
                         # _ = await sd_api(endpoint='/sdapi/v1/unload-checkpoint', method='post', json=None, retry=True)
                 # 'change_imgmodel' will trump 'swap_imgmodel'
                 current_imgmodel = bot_settings.settings['imgmodel'].get('override_settings', {}).get('sd_model_checkpoint') or bot_settings.settings['imgmodel']['payload'].get('override_settings', {}).get('sd_model_checkpoint') or ''
-                if change_model == current_imgmodel:
+                if imgmodel_params == current_imgmodel:
                     logging.info(f'[TAGS] Img model was triggered to change, but it is the same as current ("{current_imgmodel}").')
+                    imgmodel_params = None # return None
                 else:
-                    mode = 'change' if change_model == change_imgmodel else 'swap'
+                    mode = 'change' if imgmodel_params == change_imgmodel else 'swap'
                     verb = 'Changing' if mode == 'change' else 'Swapping'
-                    logging.info(f"[TAGS] {verb} Img model: '{change_model}'")
-                    params['imgmodel'] = {'imgmodel_name': change_model, 'mode': mode, 'verb': verb, 'current_imgmodel': current_imgmodel} # return dict
+                    logging.info(f"[TAGS] {verb} Img model: '{imgmodel_params}'")
+                    imgmodel_params = {'imgmodel': {'imgmodel_name': imgmodel_params, 'mode': mode, 'verb': verb, 'current_imgmodel': current_imgmodel}} # return dict
             # Payload handling
             if payload:
                 if isinstance(payload, dict):
@@ -2910,13 +2920,14 @@ async def process_img_payload_tags(img_payload:dict, mods:dict, params:dict):
             # Send User Image handling
             if send_user_image:
                 logging.info(f"[TAGS] Sending user image{'s' if len(send_user_image) > 1 else ''}")
+        return img_payload, imgmodel_params, params
     except Exception as e:
         logging.error(f"Error processing Img tags: {e}")
-    return img_payload, params
+        return img_payload, None
 
 # The methods of this function allow multiple extensions with an identical "select image from random folder" value to share the first selected folder.
 # The function will first try to find a specific image file based on the extension's key name (ex: 'canny.png' or 'img2img_mask.jpg')
-def collect_img_extension_mods(mods:dict) -> dict:
+def collect_img_extension_mods(mods):
     controlnet = mods.get('controlnet', [])
     reactor = mods.get('reactor', None)
     img2img = mods.get('img2img', None)
@@ -2987,7 +2998,8 @@ def collect_img_extension_mods(mods:dict) -> dict:
             logging.error(f"Error collecting ReActor tag values: {e}")
     return mods
 
-def collect_img_tag_values(tags:dict, params:dict):
+def collect_img_tag_values(tags):
+    sd_output_dir = 'ad_discordbot/sd_outputs/'
     img_payload_mods = {}
     payload_order_hack = {}
     controlnet_args = {}
@@ -3001,7 +3013,7 @@ def collect_img_tag_values(tags:dict, params:dict):
                 tag = tag[0] # For tags with prompt insertion indexes
             for key, value in tag.items():
                 if key == 'sd_output_dir':
-                    params['sd_output_dir'] = str(value)
+                    sd_output_dir = str(value)
                 elif key == 'flow' and img_payload_mods.get('flow') is None:
                     img_payload_mods['flow'] = dict(value)
                 elif key == 'img_censoring' and img_payload_mods.get('img_censoring') is None:
@@ -3089,10 +3101,11 @@ def collect_img_tag_values(tags:dict, params:dict):
             img_payload_mods.setdefault('reactor', {})
             img_payload_mods['reactor'].update(reactor_args)
 
-        return img_payload_mods, params
+        img_payload_mods = collect_img_extension_mods(img_payload_mods)
+        return sd_output_dir, img_payload_mods
     except Exception as e:
         logging.error(f"Error collecting Img tag values: {e}")
-        return tags, params
+        return sd_output_dir, tags
 
 def init_img_payload(img_prompt:str, neg_prompt:str) -> dict:
     try:
@@ -3156,13 +3169,11 @@ async def img_gen_task(source:str, img_prompt:str, params:dict, i=None, tags={})
         # Initialize img_payload
         neg_prompt = params.get('neg_prompt', '')
         img_payload = init_img_payload(img_prompt, neg_prompt)
-
         # collect matched tag values
-        img_payload_mods, params = collect_img_tag_values(tags, params)
-        img_payload_mods = collect_img_extension_mods(img_payload_mods)
+        sd_output_dir, img_payload_mods = collect_img_tag_values(tags)
         send_user_image = img_payload_mods.get('send_user_image', [])
         # Apply tags relevant to Img gen
-        img_payload, params = await process_img_payload_tags(img_payload, img_payload_mods, params)
+        img_payload, imgmodel_params, params = await process_img_payload_tags(img_payload, img_payload_mods, params)
         # Check censoring
         if censor_mode == 2:
             if img_send_embed_info:
@@ -3179,37 +3190,27 @@ async def img_gen_task(source:str, img_prompt:str, params:dict, i=None, tags={})
         img_payload = apply_imgcmd_params(img_payload, params)
         # Clean anything up that gets messy
         img_payload = clean_img_payload(img_payload)
-
         # Change imgmodel if triggered by tags
         should_swap = False
-        imgmodel_params = params.get('imgmodel', {})
         if imgmodel_params:
-            # Img model is swapping/changing - set model, retain current model name for if swapping back
-            img_payload['override_settings']['sd_model_checkpoint'] = imgmodel_params['imgmodel_name']
-            current_imgmodel = imgmodel_params.pop('current_imgmodel', '')
-            should_swap = await change_imgmodel_task(user_name, channel, params, i)
-
+            img_payload['override_settings']['sd_model_checkpoint'] = imgmodel_params['imgmodel'].get('imgmodel_name')
+            current_imgmodel = imgmodel_params['imgmodel'].get('current_imgmodel', '')
+            should_swap = await change_imgmodel_task(user_name, channel, imgmodel_params, i)
         # Generate and send images
         params['bot_will_do'] = bot_will_do
-        await process_image_gen(img_payload, channel, params)
+        await process_image_gen(img_payload, channel, params, sd_output_dir)
         if (source == 'image' or (bot_will_do['should_send_text'] and not bot_will_do['should_gen_text'])) and img_send_embed_info:
             img_send_embed_info.title = f"{user_name} requested an image:"
             img_send_embed_info.description = params.get('message', img_prompt)
             if i:
-                if hasattr(i, 'followup'):
-                    await i.followup.reply(embed=img_send_embed_info)
-                else:
-                    await i.reply(embed=img_send_embed_info)
+                if hasattr(i, 'followup'): await i.followup.reply(embed=img_send_embed_info)
+                else: await i.reply(embed=img_send_embed_info)
             else: await channel.send(embed=img_send_embed_info)
-
-        # Send any user images
         if send_user_image:
             await channel.send(file=send_user_image) if len(send_user_image) == 1 else await channel.send(files=send_user_image)
-
         # If switching back to original Img model
         if should_swap:
-            params['imgmodel'] = {'imgmodel_name': current_imgmodel, 'mode': 'swap_back', 'verb': 'Swapping back to'}
-            await change_imgmodel_task(user_name, channel, params, i)
+            await change_imgmodel_task(user_name, channel, params={'imgmodel': {'imgmodel_name': current_imgmodel, 'mode': 'swap_back', 'verb': 'Swapping back to'}})
         return
     except Exception as e:
         logging.error(f"An error occurred in img_gen_task(): {e}")
@@ -3220,7 +3221,7 @@ async def img_gen_task(source:str, img_prompt:str, params:dict, i=None, tags={})
 if sd_enabled:
 
     # Updates size options for /image command
-    def update_size_options(average):
+    async def update_size_options(average):
         global size_choices
         options = load_file(shared_path.cmd_options, {})
         sizes = options.get('sizes', [])
@@ -3232,17 +3233,6 @@ if sd_enabled:
         size_choices.extend(
             app_commands.Choice(name=option['name'], value=option['name'])
             for option in size_options)
-
-    # Updates size ControlNet data for /image command
-    async def update_cnet_options():
-        global cnet_data
-        if cnet_data:
-            cnet_data = await get_cnet_data()
-
-    # Update /image command options
-    async def update_image_cmd_menus(average):
-        update_size_options(average)
-        await update_cnet_options()
         await client.tree.sync()
 
     async def get_imgcmd_choices(size_options, style_options) -> tuple[list[app_commands.Choice], list[app_commands.Choice]]:
@@ -3285,6 +3275,17 @@ if sd_enabled:
             logging.error(f"An error occurred while building options for /image: {e}")
 
     async def get_cnet_data() -> dict:
+
+        async def check_cnet_online(endpoint):
+            if config['sd']['extensions'].get('controlnet_enabled', False):
+                try:
+                    online = await sd_api(endpoint='/controlnet/model_list', method='get', json=None, retry=False)
+                    if online: return True
+                    else: return False
+                except:
+                    logging.warning(f"ControlNet is enabled in config.yaml, but was not responsive from {SD_CLIENT} API.")
+            return False
+
         filtered_cnet_data = {}
         if config['sd']['extensions'].get(f'controlnet_enabled', False):
             try:
@@ -3299,30 +3300,21 @@ if sd_enabled:
                         value['name'] = key
                         filtered_cnet_data[key] = value
             except:
-                cnet_online = await ext_online('controlnet', '/controlnet/model_list')
+                cnet_online = await check_cnet_online()
                 if cnet_online:
-                    logging.warning("ControlNet is both enabled in config.py and detected. However, ad_discordbot relies on the '/controlnet/control_types' \
+                    logging.warning("ControlNet is both enabled in config.yaml and detected. However, ad_discordbot relies on the '/controlnet/control_types' \
                         API endpoint which is missing. See here: (https://github.com/altoiddealer/ad_discordbot/wiki/troubleshooting).")
         return filtered_cnet_data
 
-    async def ext_online(ext, endpoint):
-        if config['sd']['extensions'].get(f'{ext}_enabled', False):
-            try:
-                online = await sd_api(endpoint=endpoint, method='get', json=None, retry=False)
-                if online: return True
-                else: return False
-            except:
-                logging.warning(f"{ext} is enabled in config.py, but was not responsive from {SD_CLIENT} API. Omitting option from '/image' command.")
-        return False
     # Get size and style options for /image command
     size_options, style_options = asyncio.run(get_imgcmd_options())
     size_choices, style_choices = asyncio.run(get_imgcmd_choices(size_options, style_options))
-    # Get filtered ControlNet data for /image command
-    cnet_data = asyncio.run(get_cnet_data())
-    # Test API reactor endpoint for /image command
-    reactor_online = asyncio.run(ext_online('reactor', '/reactor/models'))
 
-    if cnet_data and reactor_online:
+    # Check if extensions enabled in config
+    cnet_enabled = config.get('sd', {}).get('extensions', {}).get('controlnet_enabled', False)
+    reactor_enabled = config.get('sd', {}).get('extensions', {}).get('reactor_enabled', False)
+
+    if cnet_enabled and reactor_enabled:
         @client.hybrid_command(name="image", description=f'Generate an image using {SD_CLIENT}')
         @app_commands.describe(style='Applies a positive/negative prompt preset')
         @app_commands.describe(img2img='Diffuses from an input image instead of pure latent noise.')
@@ -3336,7 +3328,7 @@ if sd_enabled:
             user_selections = {"prompt": prompt, "size": size.value if size else None, "style": style.value if style else None, "neg_prompt": neg_prompt, "img2img": img2img if img2img else None, "img2img_mask": img2img_mask if img2img_mask else None,
             "face_swap": face_swap if face_swap else None, "cnet": controlnet if controlnet else None}
             await process_image(ctx, user_selections)
-    elif cnet_data and not reactor_online:
+    elif cnet_enabled and not reactor_enabled:
         @client.hybrid_command(name="image", description=f'Generate an image using {SD_CLIENT}')
         @app_commands.describe(style='Applies a positive/negative prompt preset')
         @app_commands.describe(img2img='Diffuses from an input image instead of pure latent noise.')
@@ -3349,7 +3341,7 @@ if sd_enabled:
             user_selections = {"prompt": prompt, "size": size.value if size else None, "style": style.value if style else None, "neg_prompt": neg_prompt, "img2img": img2img if img2img else None, "img2img_mask": img2img_mask if img2img_mask else None,
             "cnet": controlnet if controlnet else None}
             await process_image(ctx, user_selections)
-    elif reactor_online and not cnet_data:
+    elif reactor_enabled and not cnet_enabled:
         @client.hybrid_command(name="image", description=f'Generate an image using {SD_CLIENT}')
         @app_commands.describe(style='Applies a positive/negative prompt preset')
         @app_commands.describe(img2img='Diffuses from an input image instead of pure latent noise.')
@@ -3455,6 +3447,8 @@ if sd_enabled:
                 faceswapimg = base64.b64encode(attached_face_img).decode('utf-8')
                 message += f" | **Face Swap:** Image Provided"
             if cnet:
+                # Get filtered ControlNet data
+                cnet_data = await get_cnet_data()
                 async def process_image_controlnet(cnet, cnet_dict, message):
                     try:
                         # Convert attached image to base64
@@ -3832,21 +3826,21 @@ async def character_loader(char_name, channel=None, source=None):
         char_llmstate = merge_base(char_llmstate, 'llmstate,state')
         char_llmstate['character_menu'] = char_name
         # Commit the character data to bot_settings.settings
-        settings_dict = bot_settings.get_settings_dict()
-        settings_dict['llmcontext'] = dict(char_llmcontext) # Replace the entire dictionary key
-        update_dict(settings_dict['llmstate']['state'], dict(char_llmstate))
+        bot_settings.settings['llmcontext'] = dict(char_llmcontext) # Replace the entire dictionary key
+        state_dict = bot_settings.settings['llmstate']['state']
+        update_dict(state_dict, dict(char_llmstate))
         bot_behavior.update_behavior(dict(char_behavior))
         # Print mode in cmd
-        logging.info(f"Initializing in {bot_settings.settings['llmstate']['state']['mode']} mode")
+        logging.info(f"Initializing in {state_dict['mode']} mode")
         # Check for any char defined or model defined instruct_template
         update_instruct = char_instruct or instruction_template_str or None # 'instruction_template_str' is global variable
         if update_instruct:
-            settings_dict['llmstate']['state']['instruction_template_str'] = update_instruct
+            state_dict['instruction_template_str'] = update_instruct
         # Update stored database value for character
         bot_database.set('last_character', char_name)
         # Update discord username / avatar
         await update_client_profile(char_name, channel)
-        # Save the updated bot_active_settings
+        # Mirror the changes in bot_active_settings
         bot_active_settings['llmcontext'] = char_llmcontext
         bot_active_settings['behavior'] = char_behavior
         bot_active_settings['llmstate']['state'] = char_llmstate
@@ -4047,7 +4041,7 @@ async def update_imgmodel(channel, selected_imgmodel, selected_imgmodel_tags):
         _ = await sd_api(endpoint='/sdapi/v1/options', method='post', json=model_data, retry=True)
         # Update size options for /image command if old/new averages are different
         if current_avg != new_avg:
-            await bg_task_queue.put(update_image_cmd_menus(new_avg))
+            await bg_task_queue.put(update_size_options(new_avg))
     except Exception as e:
         logging.error(f"Error updating settings with the selected imgmodel data: {e}")
 
@@ -4493,13 +4487,13 @@ class Behavior:
         # New Behaviors
         self.maximum_typing_speed = -1
         self.responsiveness = 1.0
-        self.max_reply_delay: 30.0
-        self.msg_size_affects_delay: False
-        self.spontaneous_msg_chance: 0.0
-        self.spontaneous_msg_max_consecutive: -1
-        self.spontaneous_msg_min_wait: 10.0
-        self.spontaneous_msg_max_wait: 60.0
-        self.spontaneous_msg_prompts: {}
+        self.max_reply_delay = 30.0
+        self.msg_size_affects_delay = False
+        self.spontaneous_msg_chance = 0.0
+        self.spontaneous_msg_max_consecutive = -1
+        self.spontaneous_msg_min_wait = 10.0
+        self.spontaneous_msg_max_wait = 60.0
+        self.spontaneous_msg_prompts = {}
 
     def update_behavior(self, behavior):
         for key, value in behavior.items():
@@ -4557,6 +4551,12 @@ class ImgModel:
         self.img_payload = {'alwayson_scripts': {}}
         self.init_sd_extensions()
 
+    def refresh_enabled_extensions(self):
+        self.init_sd_extensions()
+        new_payload = merge_base(self.img_payload, 'imgmodel,payload')
+        update_dict(bot_active_settings['imgmodel']['payload'], new_payload)
+        bot_active_settings.save()
+
     def init_sd_extensions(self):
         extensions = config.get('sd', {}).get('extensions', {})
         # Initialize ControlNet defaults
@@ -4564,25 +4564,27 @@ class ImgModel:
             self.img_payload['alwayson_scripts']['controlnet'] = {'args': [{
                 'enabled': False, 'image': None, 'mask_image': None, 'model': 'None', 'module': 'None', 'weight': 1.0, 'processor_res': 64, 'pixel_perfect': True,
                 'guidance_start': 0.0, 'guidance_end': 1.0, 'threshold_a': 64, 'threshold_b': 64, 'control_mode': 0, 'resize_mode': 1, 'lowvram': False, 'save_detected_map': False}]}
+            if SD_CLIENT:
+                logging.info(f'"ControlNet" extension support is enabled and active.')
         # Initialize Forge Couple defaults
         if extensions.get('forgecouple_enabled'):
-            if SD_CLIENT == 'SD WebUI Forge':
-                self.img_payload['alwayson_scripts']['forge_couple'] = {'args': {
-                    'enable': False, 'mode': 'Basic', 'sep': 'SEP', 'direction': 'Horizontal', 'global_effect': 'First Line',
-                    'global_weight': 0.5, 'maps': [['0:0.5', '0.0:1.0', '1.0'],['0.5:1.0', '0.0:1.0', '1.0']]}}
+            self.img_payload['alwayson_scripts']['forge_couple'] = {'args': {
+                'enable': False, 'mode': 'Basic', 'sep': 'SEP', 'direction': 'Horizontal', 'global_effect': 'First Line',
+                'global_weight': 0.5, 'maps': [['0:0.5', '0.0:1.0', '1.0'],['0.5:1.0', '0.0:1.0', '1.0']]}}
+            if SD_CLIENT:
+                logging.info(f'"Forge Couple" extension support is enabled and active.')
             # Warn Non-Forge:
-            else:
-                extensions['forgecouple_enabled'] = False
-                logging.warning(f'Forge Couple is not known to be compatible with "{SD_CLIENT}". Extension disabled.')
+            if SD_CLIENT and SD_CLIENT != 'SD WebUI Forge':
+                logging.warning(f'"Forge Couple" is not known to be compatible with "{SD_CLIENT}". If you experience errors, disable this extension in config.yaml')
         # Initialize layerdiffuse defaults
         if extensions.get('layerdiffuse_enabled'):
-            if SD_CLIENT == 'SD WebUI Forge':
-                self.img_payload['alwayson_scripts']['layerdiffuse'] = {'args': {
-                    'enabled': False, 'method': '(SDXL) Only Generate Transparent Image (Attention Injection)', 'weight': 1.0, 'stop_at': 1.0, 'foreground': None, 'background': None,
-                    'blending': None, 'resize_mode': 'Crop and Resize', 'output_mat_for_i2i': False, 'fg_prompt': '', 'bg_prompt': '', 'blended_prompt': ''}}
-            else:
-                extensions['layerdiffuse_enabled'] = False
-                logging.warning(f'layerdiffuse is not known to be compatible with "{SD_CLIENT}". Extension disabled.')
+            self.img_payload['alwayson_scripts']['layerdiffuse'] = {'args': {
+                'enabled': False, 'method': '(SDXL) Only Generate Transparent Image (Attention Injection)', 'weight': 1.0, 'stop_at': 1.0, 'foreground': None, 'background': None,
+                'blending': None, 'resize_mode': 'Crop and Resize', 'output_mat_for_i2i': False, 'fg_prompt': '', 'bg_prompt': '', 'blended_prompt': ''}}
+            if SD_CLIENT:
+                logging.info(f'"layerdiffuse" extension support is enabled and active.')
+            if SD_CLIENT and SD_CLIENT != 'SD WebUI Forge':
+                logging.warning(f'"layerdiffuse" is not known to be compatible with "{SD_CLIENT}". If you experience errors, disable this extension in config.yaml')
         # Initialize ReActor defaults
         if extensions.get('reactor_enabled'):
             self.img_payload['alwayson_scripts']['reactor'] = {'args': {
@@ -4590,7 +4592,9 @@ class ImgModel:
                 'restore_upscale': True, 'upscaler': '4x_NMKD-Superscale-SP_178000_G', 'scale': 1.5, 'upscaler_visibility': 1, 'swap_in_source_img': False, 'swap_in_gen_img': True, 'log_level': 1,
                 'gender_detect_source': 0, 'gender_detect_target': 0, 'save_original': False, 'codeformer_weight': 0.8, 'source_img_hash_check': False, 'target_img_hash_check': False, 'system': 'CUDA',
                 'face_mask_correction': True, 'source_type': 0, 'face_model': '', 'source_folder': '', 'multiple_source_images': None, 'random_img': True, 'force_upscale': True, 'threshold': 0.6, 'max_faces': 2}}
-
+            if SD_CLIENT:
+                logging.info(f'"ReActor" extension support is enabled and active.')
+            
 class LLMContext:
     def __init__(self):
         self.context = 'The following is a conversation with an AI Large Language Model. The AI has been trained to answer questions, provide recommendations, and help with decision making. The AI follows user requests. The AI thinks outside the box.'
@@ -4710,9 +4714,6 @@ class Settings:
         # Add any missing required settings
         self.settings = fix_dict(active_settings, defaults)
         self.bot_behavior.update_behavior(behavior)
-
-    def get_settings_dict(self):
-        return self.settings
 
     # Allows printing default values of Settings
     def __str__(self):
