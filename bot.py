@@ -557,8 +557,7 @@ async def auto_update_imgmodel_task(mode, duration):
 
             async with task_semaphore:
                 # offload to ai_gen queue
-                params = {}
-                params['imgmodel'] = get_selected_imgmodel_data(selected_imgmodel) # {sd_model_checkpoint, imgmodel_name, filename}
+                params = {'imgmodel': selected_imgmodel}
                 await change_imgmodel_task('Automatically', channel, params, i=None)
                 logging.info("Automatically updated imgmodel settings")
 
@@ -2000,7 +1999,7 @@ async def change_imgmodel_task(user_name:str, channel, params:dict, i=None):
         verb = imgmodel_params.get('verb', 'Changing')  # default to 'Changing'
 
         # Was not 'None' and did not match any known model names/checkpoints
-        if len(imgmodel) < 3:
+        if len(imgmodel_params) < 3:
             if channel and change_embed_info:
                 change_embed_info.title = 'Failed to change Img model:'
                 change_embed_info.description = f'Img model not found: {imgmodel_name}'
@@ -2011,17 +2010,19 @@ async def change_imgmodel_task(user_name:str, channel, params:dict, i=None):
             change_embed_info.title = f'{verb} Img model ... '
             change_embed_info.description = f'{verb} to {imgmodel_name}'
             change_embed = await channel.send(embed=change_embed_info)
-        # Merge selected imgmodel/tag data with base settings
-        imgmodel, imgmodel_name, imgmodel_tags = await merge_imgmodel_data(imgmodel)
-        # Soft Img model update if swapping
+
+        # Swap Image model
         if mode == 'swap' or mode == 'swap_back':
-            model_data = imgmodel.get('override_settings') or imgmodel['payload'].get('override_settings')
-            _ = await sd_api(endpoint='/sdapi/v1/options', method='post', json=model_data, retry=True)
+            current_model_settings = bot_settings.settings['imgmodel'].get('override_settings') or bot_settings.settings['imgmodel']['payload'].get('override_settings')
+            new_model_settings = copy.deepcopy(current_model_settings)
+            new_model_settings['sd_model_checkpoint'] = imgmodel_params['sd_model_checkpoint']
+            _ = await sd_api(endpoint='/sdapi/v1/options', method='post', json=new_model_settings, retry=True)
             if change_embed:
                 await change_embed.delete()
             return True
-        # Change Img model settings
-        await update_imgmodel(channel, imgmodel, imgmodel_tags)
+
+        # Change Image model
+        await change_imgmodel(imgmodel_params)
         # if imgmodel_name != 'None': ### IF API IMG MODEL UNLOADING GETS EVER DEBUGGED
         if channel and change_embed_info:
             if change_embed:
@@ -2824,7 +2825,6 @@ def get_image_tag_args(extension, value, key=None, set_dir=None):
 
 async def process_img_payload_tags(img_payload:dict, mods:dict, params:dict):
     try:
-        imgmodel_params = None
         params['sd_output_dir'] = mods.pop('sd_output_dir', 'ad_discordbot/sd_outputs/')
         flow = mods.pop('flow', None)
         img_censoring = mods.pop('img_censoring', None)
@@ -2855,18 +2855,18 @@ async def process_img_payload_tags(img_payload:dict, mods:dict, params:dict):
                     ## IF API IMG MODEL UNLOADING GETS EVER DEBUGGED
                     ## if not change_imgmodel and swap_imgmodel and swap_imgmodel == 'None':
                         # _ = await sd_api(endpoint='/sdapi/v1/unload-checkpoint', method='post', json=None, retry=True)
-                params['imgmodel'] = get_selected_imgmodel_data(new_imgmodel) # {sd_model_checkpoint, imgmodel_name, filename}
+                params['imgmodel'] = await get_selected_imgmodel_data(new_imgmodel) # {sd_model_checkpoint, imgmodel_name, filename}
                 current_sd_model_checkpoint = bot_settings.settings['imgmodel'].get('override_settings', {}).get('sd_model_checkpoint') or bot_settings.settings['imgmodel']['payload'].get('override_settings', {}).get('sd_model_checkpoint') or ''
                 current_imgmodel_name = bot_settings.settings['imgmodel'].get('imgmodel_name')
                 # Check if new model same as current model
                 if current_imgmodel_name == params['imgmodel'].get('imgmodel_name', ''):
                     logging.info(f'[TAGS] Img model was triggered to change, but it is the same as current ("{current_imgmodel_name}").')
                 else:
-                    params['current_imgmodel__name'] = current_imgmodel_name
-                    params['current_sd_model_checkpoint'] = current_sd_model_checkpoint
-                    params['mode'] = 'change' if new_imgmodel == change_imgmodel else 'swap'
-                    params['verb'] = 'Changing' if params['mode'] == 'change' else 'Swapping'
-                    logging.info(f'[TAGS] {params['verb']} Img model: "{params['imgmodel'].get('imgmodel_name', '')}"')
+                    params['imgmodel']['current_imgmodel_name'] = current_imgmodel_name
+                    params['imgmodel']['current_sd_model_checkpoint'] = current_sd_model_checkpoint
+                    params['imgmodel']['mode'] = 'change' if new_imgmodel == change_imgmodel else 'swap'
+                    params['imgmodel']['verb'] = 'Changing' if params['imgmodel']['mode'] == 'change' else 'Swapping'
+                    logging.info(f'[TAGS] {params["imgmodel"]["verb"]} Img model: "{params["imgmodel"].get("imgmodel_name", "")}"')
             # Payload handling
             if payload:
                 if isinstance(payload, dict):
@@ -4009,34 +4009,6 @@ async def fetch_imgmodels() -> list:
         logging.error(f"Error fetching image models: {e}")
         return []
 
-async def update_imgmodel(channel, selected_imgmodel, selected_imgmodel_tags):
-    try:
-        # get current/new average width/height for '/image' cmd size options
-        current_avg = get_current_avg_from_dims()
-        new_avg = avg_from_dims(selected_imgmodel.get('payload', {}).get('width', 512), selected_imgmodel.get('payload', {}).get('height', 512))
-        bot_active_settings['imgmodel'] = selected_imgmodel
-        bot_active_settings['imgmodel']['tags'] = selected_imgmodel_tags
-        bot_active_settings.save()
-        # Update all settings
-        bot_settings.update_settings()
-        await bot_settings.update_base_tags()
-
-        ### IF API IMG MODEL UNLOADING GETS EVER DEBUGGED
-        # if selected_imgmodel['imgmodel_name'] == 'None':
-        # _ = await sd_api(endpoint='/sdapi/v1/unload-checkpoint', method='post', json=None)
-        #     change_embed.title = 'Unloaded Img model'
-        #     change_embed.description = ''
-        #     await channel.send(embed=change_embed)
-        #     return
-        # Load the imgmodel and VAE via API
-        model_data = bot_settings.settings['imgmodel'].get('override_settings') or bot_settings.settings['imgmodel']['payload'].get('override_settings')
-        _ = await sd_api(endpoint='/sdapi/v1/options', method='post', json=model_data, retry=True)
-        # Update size options for /image command if old/new averages are different
-        if current_avg != new_avg:
-            await bg_task_queue.put(update_size_options(new_avg))
-    except Exception as e:
-        logging.error(f"Error updating settings with the selected imgmodel data: {e}")
-
 # Check filesize/filters with selected imgmodel to assume resolution / tags
 async def guess_model_data(selected_imgmodel, presets):
     try:
@@ -4077,36 +4049,70 @@ async def guess_model_data(selected_imgmodel, presets):
     except Exception as e:
         logging.error(f"Error guessing selected imgmodel data: {e}")
 
-async def merge_imgmodel_data(selected_imgmodel:dict):
-    try:
-        selected_imgmodel_name = selected_imgmodel.get('imgmodel_name')
-        ### IF API IMG MODEL UNLOADING GETS EVER DEBUGGED
-        # if selected_imgmodel_name == 'None': # Unloading model
-        #     selected_imgmodel_tags = []
-        #     return selected_imgmodel, selected_imgmodel_name, selected_imgmodel_tags
-        # Get tags if defined
-        selected_imgmodel_tags = None
-        imgmodel_settings = {'payload': {}, 'override_settings': {}}
-        imgmodels_data = load_file(shared_path.img_models, {})
-        if imgmodels_data.get('settings', {}).get('auto_change_imgmodels', {}).get('guess_model_params', True):
-            imgmodel_presets = copy.deepcopy(imgmodels_data.get('presets', []))
-            matched_preset = await guess_model_data(selected_imgmodel, imgmodel_presets)
-            if matched_preset:
-                selected_imgmodel_tags = matched_preset.pop('tags', None)
-                imgmodel_settings['payload'] = matched_preset.get('payload', {})
-        imgmodel_settings['override_settings']['sd_model_checkpoint'] = selected_imgmodel['sd_model_checkpoint']
-        imgmodel_settings['imgmodel_name'] = selected_imgmodel_name
+async def change_imgmodel(selected_imgmodel:dict):
+    # Merge selected imgmodel/tag data with base settings
+    async def merge_new_imgmodel_data(selected_imgmodel:dict):
+        try:
+            selected_imgmodel_name = selected_imgmodel.get('imgmodel_name')
+            ### IF API IMG MODEL UNLOADING GETS EVER DEBUGGED
+            # if selected_imgmodel_name == 'None': # Unloading model
+            #     selected_imgmodel_tags = []
+            #     return selected_imgmodel, selected_imgmodel_name, selected_imgmodel_tags
+            # Get tags if defined
+            selected_imgmodel_tags = None
+            imgmodel_settings = {'payload': {}, 'override_settings': {}}
+            imgmodels_data = load_file(shared_path.img_models, {})
+            if imgmodels_data.get('settings', {}).get('auto_change_imgmodels', {}).get('guess_model_params', True):
+                imgmodel_presets = copy.deepcopy(imgmodels_data.get('presets', []))
+                matched_preset = await guess_model_data(selected_imgmodel, imgmodel_presets)
+                if matched_preset:
+                    selected_imgmodel_tags = matched_preset.pop('tags', None)
+                    imgmodel_settings['payload'] = matched_preset.get('payload', {})
+            imgmodel_settings['override_settings']['sd_model_checkpoint'] = selected_imgmodel['sd_model_checkpoint']
+            imgmodel_settings['imgmodel_name'] = selected_imgmodel_name
 
-        # Replace input dictionary
-        selected_imgmodel = imgmodel_settings
-        # Merge the selected imgmodel data with base imgmodel data
-        selected_imgmodel = merge_base(selected_imgmodel, 'imgmodel')
-        # Unpack any tag presets
-        selected_imgmodel_tags = await update_tags(selected_imgmodel_tags)
-        return selected_imgmodel, selected_imgmodel_name, selected_imgmodel_tags
+            # Replace input dictionary
+            selected_imgmodel = imgmodel_settings
+            # Merge the selected imgmodel data with base imgmodel data
+            selected_imgmodel = merge_base(selected_imgmodel, 'imgmodel')
+            # Unpack any tag presets
+            selected_imgmodel_tags = await update_tags(selected_imgmodel_tags)
+            return selected_imgmodel, selected_imgmodel_name, selected_imgmodel_tags
+        except Exception as e:
+            logging.error(f"Error merging selected imgmodel data with base imgmodel data: {e}")
+            return {}
 
-    except Exception as e:
-        logging.error(f"Error merging selected imgmodel data with base imgmodel data: {e}")
+    # Save new Img model data
+    async def save_new_imgmodel_settings(selected_imgmodel, selected_imgmodel_tags):
+        try:
+            # get current/new average width/height for '/image' cmd size options
+            current_avg = get_current_avg_from_dims()
+            new_avg = avg_from_dims(selected_imgmodel.get('payload', {}).get('width', 512), selected_imgmodel.get('payload', {}).get('height', 512))
+            bot_active_settings['imgmodel'] = selected_imgmodel
+            bot_active_settings['imgmodel']['tags'] = selected_imgmodel_tags
+            bot_active_settings.save()
+            # Update all settings
+            bot_settings.update_settings()
+            await bot_settings.update_base_tags()
+
+            ### IF API IMG MODEL UNLOADING GETS EVER DEBUGGED
+            # if selected_imgmodel['imgmodel_name'] == 'None':
+            # _ = await sd_api(endpoint='/sdapi/v1/unload-checkpoint', method='post', json=None)
+            #     change_embed.title = 'Unloaded Img model'
+            #     change_embed.description = ''
+            #     await channel.send(embed=change_embed)
+            #     return
+            # Load the imgmodel and VAE via API
+            model_data = bot_settings.settings['imgmodel'].get('override_settings') or bot_settings.settings['imgmodel']['payload'].get('override_settings')
+            _ = await sd_api(endpoint='/sdapi/v1/options', method='post', json=model_data, retry=True)
+            # Update size options for /image command if old/new averages are different
+            if current_avg != new_avg:
+                await bg_task_queue.put(update_size_options(new_avg))
+        except Exception as e:
+            logging.error(f"Error updating settings with the selected imgmodel data: {e}")
+
+    selected_imgmodel, selected_imgmodel_name, selected_imgmodel_tags = await merge_new_imgmodel_data(selected_imgmodel)
+    await save_new_imgmodel_settings(selected_imgmodel, selected_imgmodel_tags)
 
 async def get_selected_imgmodel_data(selected_imgmodel_value:str) -> dict:
     try:
@@ -4148,7 +4154,7 @@ async def process_imgmodel(ctx, selected_imgmodel_value):
             # offload to ai_gen queue
             logging.info(f'{ctx.author.display_name} used "/imgmodel": "{selected_imgmodel_value}"')
             params = {}
-            params['imgmodel'] = get_selected_imgmodel_data(selected_imgmodel_value) # {sd_model_checkpoint, imgmodel_name, filename}
+            params['imgmodel'] = await get_selected_imgmodel_data(selected_imgmodel_value) # {sd_model_checkpoint, imgmodel_name, filename}
             await change_imgmodel_task(ctx.author.display_name, ctx.channel, params, ctx)
 
     except Exception as e:
