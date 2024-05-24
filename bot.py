@@ -2456,10 +2456,11 @@ async def sd_img_gen(channel, temp_dir:str, img_payload:dict, endpoint:str):
         logging.error(f'Error processing images in {SD_CLIENT} API module: {e}')
         return []
 
-async def process_image_gen(img_payload:dict, channel, params:dict, endpoint:str, sd_output_dir='ad_discordbot/sd_outputs/'):
+async def process_image_gen(img_payload:dict, channel, params:dict, sd_output_dir='ad_discordbot/sd_outputs/'):
     try:
         bot_will_do = params.get('bot_will_do', {})
         censor_mode = params.get('censor_mode', 0)
+        endpoint = params.get('endpoint', '/sdapi/v1/txt2img')
         # Ensure the necessary directories exist
         os.makedirs(sd_output_dir, exist_ok=True)
         temp_dir = 'ad_discordbot/user_images/__temp/'
@@ -3182,8 +3183,8 @@ async def img_gen_task(source:str, img_prompt:str, params:dict, i=None, tags={})
             current_imgmodel = imgmodel_params['imgmodel'].get('current_imgmodel', '')
             should_swap = await change_imgmodel_task(user_name, channel, imgmodel_params, i)
         # Generate and send images
-        endpoint = params.get('endpoint', '/sdapi/v1/txt2img')
-        await process_image_gen(img_payload, channel, params, endpoint, sd_output_dir)
+        params['bot_will_do'] = bot_will_do
+        await process_image_gen(img_payload, channel, params, sd_output_dir)
         if (source == 'image' or (bot_will_do['should_send_text'] and not bot_will_do['should_gen_text'])) and img_send_embed_info:
             img_send_embed_info.title = f"{user_name} requested an image:"
             img_send_embed_info.description = params.get('message', img_prompt)
