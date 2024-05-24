@@ -1993,10 +1993,10 @@ async def change_imgmodel_task(user_name:str, channel, params:dict, i=None):
         imgmodel_name = imgmodel_params.get('imgmodel_name', '')
         mode = imgmodel_params.get('mode', 'change')    # default to 'change
         verb = imgmodel_params.get('verb', 'Changing')  # default to 'Changing'
-        imgmodel = await get_selected_imgmodel_data(imgmodel_name) # params will be checkpoint name
-        imgmodel_name = imgmodel.get('imgmodel_name', '')
+        imgmodel_data = await get_selected_imgmodel_data(imgmodel_name) # params will be checkpoint name
+        imgmodel_name = imgmodel_data.get('imgmodel_name', '')
         # Was not 'None' and did not match any known model names/checkpoints
-        if len(imgmodel) < 3:
+        if len(imgmodel_data) < 3:
             if channel and change_embed_info:
                 change_embed_info.title = 'Failed to change Img model:'
                 change_embed_info.description = f'Img model not found: {imgmodel_name}'
@@ -2008,18 +2008,21 @@ async def change_imgmodel_task(user_name:str, channel, params:dict, i=None):
             change_embed_info.description = f'{verb} to {imgmodel_name}'
             change_embed = await channel.send(embed=change_embed_info)
         # Merge selected imgmodel/tag data with base settings
-        imgmodel, imgmodel_name, imgmodel_tags = await merge_imgmodel_data(imgmodel)
+        imgmodel_data, imgmodel_name, imgmodel_tags = await merge_imgmodel_data(imgmodel_data)
         # Soft Img model update if swapping
         if mode == 'swap' or mode == 'swap_back':
-            model_data = imgmodel.get('override_settings') or imgmodel['payload'].get('override_settings')
-            _ = await sd_api(endpoint='/sdapi/v1/options', method='post', json=model_data, retry=True)
-            if change_embed: await change_embed.delete()
-            return True
+            override_settings = imgmodel_data.get('override_settings') or imgmodel_data['payload'].get('override_settings')
+            _ = await sd_api(endpoint='/sdapi/v1/options', method='post', json=override_settings, retry=True)
+            if change_embed:
+                await change_embed.delete()
+            return True # Yes swap back
+
         # Change Img model settings
-        await update_imgmodel(channel, imgmodel, imgmodel_tags)
+        await update_imgmodel(channel, imgmodel_data, imgmodel_tags)
         # if imgmodel_name != 'None': ### IF API IMG MODEL UNLOADING GETS EVER DEBUGGED
         if channel and change_embed_info:
-            if change_embed: await change_embed.delete()
+            if change_embed:
+                await change_embed.delete()
             change_embed_info.title = f"{user_name} changed Img model:"
             change_embed_info.description = f'**{imgmodel_name}**'
             change_embed = await channel.send(embed=change_embed_info)
@@ -2032,9 +2035,11 @@ async def change_imgmodel_task(user_name:str, channel, params:dict, i=None):
         if change_embed_info:
             change_embed_info.title = "An error occurred while changing Img model"
             change_embed_info.description = e
-            if change_embed: await change_embed.edit(embed=change_embed_info)
+            if change_embed:
+                await change_embed.edit(embed=change_embed_info)
             else:
-                if channel: await channel.send(embed=change_embed_info)
+                if channel:
+                    await channel.send(embed=change_embed_info)
         return False
 
 # Process selected LLM model
@@ -2456,11 +2461,12 @@ async def sd_img_gen(channel, temp_dir:str, img_payload:dict, endpoint:str):
         logging.error(f'Error processing images in {SD_CLIENT} API module: {e}')
         return []
 
-async def process_image_gen(img_payload:dict, channel, params:dict, sd_output_dir='ad_discordbot/sd_outputs/'):
+async def process_image_gen(img_payload:dict, channel, params:dict):
     try:
-        bot_will_do = params.get('bot_will_do', {})
-        censor_mode = params.get('censor_mode', 0)
-        endpoint = params.get('endpoint', '/sdapi/v1/txt2img')
+        bot_will_do = params.pop('bot_will_do', {})
+        censor_mode = params.pop('censor_mode', 0)
+        endpoint = params.pop('endpoint', '/sdapi/v1/txt2img')
+        sd_output_dir = params.pop('sd_output_dir', 'ad_discordbot/sd_outputs/')
         # Ensure the necessary directories exist
         os.makedirs(sd_output_dir, exist_ok=True)
         temp_dir = 'ad_discordbot/user_images/__temp/'
@@ -2814,9 +2820,8 @@ def get_image_tag_args(extension, value, key=None, set_dir=None):
         logging.error(f"[TAGS] Error processing {extension} tag: {e}")
         return {}
 
-async def process_img_payload_tags(img_payload, mods, params):
+async def process_img_payload_tags(img_payload:dict, mods:dict, params:dict):
     try:
-        imgmodel_params = None
         flow = mods.get('flow', None)
         img_censoring = mods.get('img_censoring', None)
         change_imgmodel = mods.get('change_imgmodel', None)
@@ -2841,21 +2846,20 @@ async def process_img_payload_tags(img_payload, mods, params):
                 params['censor_mode'] = img_censoring
                 logging.info(f"[TAGS] Censoring: {'Image Blurred' if img_censoring == 1 else 'Generation Blocked'}")
             # Imgmodel handling
-            imgmodel_params = change_imgmodel or swap_imgmodel or None
-            if imgmodel_params:
+            change_model = change_imgmodel or swap_imgmodel or None
+            if change_model:
                     ## IF API IMG MODEL UNLOADING GETS EVER DEBUGGED
                     ## if not change_imgmodel and swap_imgmodel and swap_imgmodel == 'None':
                         # _ = await sd_api(endpoint='/sdapi/v1/unload-checkpoint', method='post', json=None, retry=True)
                 # 'change_imgmodel' will trump 'swap_imgmodel'
                 current_imgmodel = bot_settings.settings['imgmodel'].get('override_settings', {}).get('sd_model_checkpoint') or bot_settings.settings['imgmodel']['payload'].get('override_settings', {}).get('sd_model_checkpoint') or ''
-                if imgmodel_params == current_imgmodel:
+                if change_model == current_imgmodel:
                     logging.info(f'[TAGS] Img model was triggered to change, but it is the same as current ("{current_imgmodel}").')
-                    imgmodel_params = None # return None
                 else:
-                    mode = 'change' if imgmodel_params == change_imgmodel else 'swap'
+                    mode = 'change' if change_model == change_imgmodel else 'swap'
                     verb = 'Changing' if mode == 'change' else 'Swapping'
-                    logging.info(f"[TAGS] {verb} Img model: '{imgmodel_params}'")
-                    imgmodel_params = {'imgmodel': {'imgmodel_name': imgmodel_params, 'mode': mode, 'verb': verb, 'current_imgmodel': current_imgmodel}} # return dict
+                    logging.info(f"[TAGS] {verb} Img model: '{change_model}'")
+                    params['imgmodel'] = {'imgmodel_name': change_model, 'mode': mode, 'verb': verb, 'current_imgmodel': current_imgmodel} # return dict
             # Payload handling
             if payload:
                 if isinstance(payload, dict):
@@ -2906,14 +2910,13 @@ async def process_img_payload_tags(img_payload, mods, params):
             # Send User Image handling
             if send_user_image:
                 logging.info(f"[TAGS] Sending user image{'s' if len(send_user_image) > 1 else ''}")
-        return img_payload, imgmodel_params, params
     except Exception as e:
         logging.error(f"Error processing Img tags: {e}")
-        return img_payload, None
+    return img_payload, params
 
 # The methods of this function allow multiple extensions with an identical "select image from random folder" value to share the first selected folder.
 # The function will first try to find a specific image file based on the extension's key name (ex: 'canny.png' or 'img2img_mask.jpg')
-def collect_img_extension_mods(mods):
+def collect_img_extension_mods(mods:dict) -> dict:
     controlnet = mods.get('controlnet', [])
     reactor = mods.get('reactor', None)
     img2img = mods.get('img2img', None)
@@ -2984,8 +2987,7 @@ def collect_img_extension_mods(mods):
             logging.error(f"Error collecting ReActor tag values: {e}")
     return mods
 
-def collect_img_tag_values(tags):
-    sd_output_dir = 'ad_discordbot/sd_outputs/'
+def collect_img_tag_values(tags:dict, params:dict):
     img_payload_mods = {}
     payload_order_hack = {}
     controlnet_args = {}
@@ -2999,7 +3001,7 @@ def collect_img_tag_values(tags):
                 tag = tag[0] # For tags with prompt insertion indexes
             for key, value in tag.items():
                 if key == 'sd_output_dir':
-                    sd_output_dir = str(value)
+                    params['sd_output_dir'] = str(value)
                 elif key == 'flow' and img_payload_mods.get('flow') is None:
                     img_payload_mods['flow'] = dict(value)
                 elif key == 'img_censoring' and img_payload_mods.get('img_censoring') is None:
@@ -3087,11 +3089,10 @@ def collect_img_tag_values(tags):
             img_payload_mods.setdefault('reactor', {})
             img_payload_mods['reactor'].update(reactor_args)
 
-        img_payload_mods = collect_img_extension_mods(img_payload_mods)
-        return sd_output_dir, img_payload_mods
+        return img_payload_mods, params
     except Exception as e:
         logging.error(f"Error collecting Img tag values: {e}")
-        return sd_output_dir, tags
+        return tags, params
 
 def init_img_payload(img_prompt:str, neg_prompt:str) -> dict:
     try:
@@ -3155,11 +3156,13 @@ async def img_gen_task(source:str, img_prompt:str, params:dict, i=None, tags={})
         # Initialize img_payload
         neg_prompt = params.get('neg_prompt', '')
         img_payload = init_img_payload(img_prompt, neg_prompt)
+
         # collect matched tag values
-        sd_output_dir, img_payload_mods = collect_img_tag_values(tags)
+        img_payload_mods, params = collect_img_tag_values(tags, params)
+        img_payload_mods = collect_img_extension_mods(img_payload_mods)
         send_user_image = img_payload_mods.get('send_user_image', [])
         # Apply tags relevant to Img gen
-        img_payload, imgmodel_params, params = await process_img_payload_tags(img_payload, img_payload_mods, params)
+        img_payload, params = await process_img_payload_tags(img_payload, img_payload_mods, params)
         # Check censoring
         if censor_mode == 2:
             if img_send_embed_info:
@@ -3176,27 +3179,37 @@ async def img_gen_task(source:str, img_prompt:str, params:dict, i=None, tags={})
         img_payload = apply_imgcmd_params(img_payload, params)
         # Clean anything up that gets messy
         img_payload = clean_img_payload(img_payload)
+
         # Change imgmodel if triggered by tags
         should_swap = False
+        imgmodel_params = params.get('imgmodel', {})
         if imgmodel_params:
-            img_payload['override_settings']['sd_model_checkpoint'] = imgmodel_params['imgmodel'].get('imgmodel_name')
-            current_imgmodel = imgmodel_params['imgmodel'].get('current_imgmodel', '')
-            should_swap = await change_imgmodel_task(user_name, channel, imgmodel_params, i)
+            # Img model is swapping/changing - set model, retain current model name for if swapping back
+            img_payload['override_settings']['sd_model_checkpoint'] = imgmodel_params['imgmodel_name']
+            current_imgmodel = imgmodel_params.pop('current_imgmodel', '')
+            should_swap = await change_imgmodel_task(user_name, channel, params, i)
+
         # Generate and send images
         params['bot_will_do'] = bot_will_do
-        await process_image_gen(img_payload, channel, params, sd_output_dir)
+        await process_image_gen(img_payload, channel, params)
         if (source == 'image' or (bot_will_do['should_send_text'] and not bot_will_do['should_gen_text'])) and img_send_embed_info:
             img_send_embed_info.title = f"{user_name} requested an image:"
             img_send_embed_info.description = params.get('message', img_prompt)
             if i:
-                if hasattr(i, 'followup'): await i.followup.reply(embed=img_send_embed_info)
-                else: await i.reply(embed=img_send_embed_info)
+                if hasattr(i, 'followup'):
+                    await i.followup.reply(embed=img_send_embed_info)
+                else:
+                    await i.reply(embed=img_send_embed_info)
             else: await channel.send(embed=img_send_embed_info)
+
+        # Send any user images
         if send_user_image:
             await channel.send(file=send_user_image) if len(send_user_image) == 1 else await channel.send(files=send_user_image)
+
         # If switching back to original Img model
         if should_swap:
-            await change_imgmodel_task(user_name, channel, params={'imgmodel': {'imgmodel_name': current_imgmodel, 'mode': 'swap_back', 'verb': 'Swapping back to'}})
+            params['imgmodel'] = {'imgmodel_name': current_imgmodel, 'mode': 'swap_back', 'verb': 'Swapping back to'}
+            await change_imgmodel_task(user_name, channel, params, i)
         return
     except Exception as e:
         logging.error(f"An error occurred in img_gen_task(): {e}")
