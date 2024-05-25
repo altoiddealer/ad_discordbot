@@ -43,6 +43,14 @@ textgenwebui:
     autoload_history: false             # Set to true if you want the character to load with the most recently saved chat history.
     change_char_history_method: new     # 'new' - start new history; 'keep' - retain history for next character (only applicable if 'autoload_history: true')
     greeting_or_history: history        # 'history' - Sends copy of most recent message exchange whenever history is loaded; 'greeting' - Only send character's greeting
+    # Manage history separately per channel
+    per_channel_history:
+      enabled: true                     # If true, each channel the bot has 'join' and/or 'send message' permissions will have its own chat history.
+      history_channels: []              # If [] (empty list) - dynamically apply to all available channels; if any channels are listed, only manage chat history for them.
+      excluded_channels:                # Applicable if 'history_channels' is empty.  Specifically exclude certain channels.
+        - 11111111111111111111
+        - 11111111111111111112
+
   # Supported TTS Clients: 'alltalk_tts', 'coqui_tts', 'silero_tts', and 'elevenlabs_tts' have been tested. Other tts extensions may work.
   # REQUIRES: 'pip install pynacl' in textgen-webui venv for bot to join a voice channel
   tts_settings:
