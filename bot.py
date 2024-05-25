@@ -827,28 +827,18 @@ async def play_in_voice_channel(file):
         source = discord.FFmpegPCMAudio(file)
         voice_client.play(source, after=lambda e: after_playback(file, e))
 
+
 async def upload_tts_file(channel, tts_resp):
     filename = os.path.basename(tts_resp)
-    directory = os.path.dirname(tts_resp)
-    wav_size = os.path.getsize(tts_resp)
-    if wav_size <= 8388608:  # Discord's maximum file size for audio (8 MB)
-        with open(tts_resp, "rb") as file:
-            tts_file = File(file, filename=filename)
-        await channel.send(file=tts_file) # lossless .wav output
-    else: # convert to mp3
-        bit_rate = int(tts_settings.get('mp3_bit_rate', 128))
-        mp3_filename = os.path.splitext(filename)[0] + '.mp3'
-        mp3_path = os.path.join(directory, mp3_filename)
+    mp3_filename = os.path.splitext(filename)[0] + '.mp3'
+    
+    bit_rate = int(tts_settings.get('mp3_bit_rate', 128))
+    with io.BytesIO() as buffer:
         audio = AudioSegment.from_wav(tts_resp)
-        audio.export(mp3_path, format="mp3", bitrate=f"{bit_rate}k")
-        mp3_size = os.path.getsize(mp3_path) # Check the size of the MP3 file
-        if mp3_size <= 8388608:  # Discord's maximum file size for audio (8 MB)
-            with open(mp3_path, "rb") as file:
-                mp3_file = File(file, filename=mp3_filename)
-            await channel.send(file=mp3_file)
-        else:
-            await channel.send("The audio file exceeds Discord limitation even after conversion.")
-        # if save_mode > 0: os.remove(mp3_path) # currently broken
+        audio.export(buffer, format="mp3", bitrate=f"{bit_rate}k")
+        mp3_file = File(buffer, filename=mp3_filename)
+        await channel.send(file=mp3_file)
+    
 
 async def process_tts_resp(channel, tts_resp, i=None):
     play_mode = int(tts_settings.get('play_mode', 0))
