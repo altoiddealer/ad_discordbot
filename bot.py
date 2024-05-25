@@ -3811,7 +3811,7 @@ async def character_loader(char_name, channel=None, source=None):
         bot_active_settings.save()
         # Set history
         if bot_history.autoload_history and (bot_history.change_char_history_method == 'keep' and source != 'reset'):
-            bot_history.load_history(bot_settings.settings['llmstate']['state'])
+            bot_history.load_history()
         else:
             bot_history.reset_session_history()
     except Exception as e:
@@ -4699,32 +4699,50 @@ class History:
         self.autoload_history = chat_history.get('autoload_history', False)
         self.change_char_history_method = chat_history.get('change_char_history_method', 'new')
         self.greeting_or_history = chat_history.get('greeting_or_history', 'history')
-        self.unique_id = None
+        self.unique_ids = {}
+        self.bot_channels = []
         self.session_history = {'internal': [], 'visible': []}
         self.recent_messages = {'user': [], 'llm': []}
-        self.collected_prompt = ''
+        self.collected_prompts = {}
+        self.collect_all_bot_channels()
+    
+    def collect_all_bot_channels(self):
+        for guild in client.guilds:
+            for channel in guild.text_channels:  # Only consider text channels
+                # Check if the bot has read permissions for the channel
+                if channel.permissions_for(guild.me).send_messages:
+                    self.bot_channels.append(channel.id)
 
     # Loads most recent history for current character
-    def load_history(self, state):
-        self.session_history = load_latest_history(state)
-        last_exchange = self.session_history['visible'][-1] if self.session_history['visible'] else None
-        if last_exchange:
-            last_user_message = last_exchange[0]
-            last_assistant_message = last_exchange[1]
-            logging.info(f'Loaded most recent chat history. Last message exchange:\n User: "{last_user_message}"\n {bot_database.last_character}: "{last_assistant_message}"')
-        else:
-            logging.info("Starting new conversation.")
-        all_histories = find_all_histories(state)
-        if len(all_histories) > 0:
-            self.unique_id = all_histories[0]
+    def load_history(self):
+        current_state = bot_settings.settings['llmstate']['state']
+        values_for_history = {'character_menu': current_state['character_menu'],
+                              'mode': current_state['mode']}
+        for channel_id in self.bot_channels:
+            chan_state_values = copy.copy(values_for_history)
+            chan_state_values['character_menu'] = f'({channel_id}_{chan_state_values["character_menu"]})'
+            channel_history = load_latest_history(chan_state_values)
+            self.session_history[channel_id] = channel_history
+            # We'll collect a list of channels with history, and a list of new conversations, and just print 2 lines.
+            #---------------------------------------------------------------------------------------------------------
+            # last_exchange = self.session_history[channel_id]['visible'][-1] if self.session_history[channel_id]['visible'] else None
+            # if last_exchange:
+            #     last_user_message = last_exchange[0]
+            #     last_assistant_message = last_exchange[1]
+            #     logging.info(f'Loaded most recent chat history. Last message exchange:\n User: "{last_user_message}"\n {bot_database.last_character}: "{last_assistant_message}"')
+            # else:
+            #     logging.info("Starting new conversation.")
+            all_histories = find_all_histories(chan_state_values)
+            if len(all_histories) > 0:
+                self.unique_ids[channel_id] = all_histories[0]
 
     # Save history to a new file
     def save_history(self, auto_id=None):
         state = bot_settings.settings['llmstate']['state']
         if not auto_id:
-            self.unique_id = datetime.now().strftime('%Y%m%d-%H-%M-%S')
-            logging.info(f'''Chat history was saved to "/logs/{state['mode']}/{bot_database.last_character}/{self.unique_id}.json"''')
-        save_history(self.session_history, self.unique_id, state['character_menu'], state['mode'])
+            self.unique_ids = datetime.now().strftime('%Y%m%d-%H-%M-%S')
+            logging.info(f'''Chat history was saved to "/logs/{state['mode']}/{bot_database.last_character}/{self.unique_ids}.json"''')
+        save_history(self.session_history, self.unique_ids, state['character_menu'], state['mode'])
 
     # Retain most recent 10 elements or 10,000 characters from user prompts and bot replies
     def manage_recent_messages(self, prompt, reply=None):
@@ -4740,14 +4758,14 @@ class History:
     # Manage the session history for textgen-webui
     def manage_prompt_history(self, prompt, reply=None, save_to_history=True):
         if reply is None:                       # Only prompt is received
-            if self.collected_prompt:           # If there are previously collected prompts
-                self.collected_prompt += '\n\n' + prompt
+            if self.collected_prompts:           # If there are previously collected prompts
+                self.collected_prompts += '\n\n' + prompt
             else:
-                self.collected_prompt = prompt
+                self.collected_prompts = prompt
         else:                                   # Both prompt and reply are received
-            if self.collected_prompt:           # If there are previously collected prompts
-                prompt = self.collected_prompt + '\n\n' + prompt
-                self.collected_prompt = ''      # Reset collected prompts
+            if self.collected_prompts:           # If there are previously collected prompts
+                prompt = self.collected_prompts + '\n\n' + prompt
+                self.collected_prompts = ''      # Reset collected prompts
             if save_to_history:
                 self.session_history['internal'].append([prompt, reply])
                 self.session_history['visible'].append([prompt, reply])
@@ -4758,7 +4776,7 @@ class History:
             while sum(len(message) for exchange in self.session_history['visible'] for message in exchange) > truncation:
                 oldest_exchange = self.session_history['visible'].pop(0)
         if self.autosave_history:
-            self.save_history(auto_id=self.unique_id)
+            self.save_history(auto_id=self.unique_ids)
 
     def manage_history(self, prompt, reply=None, save_to_history=True):
         self.manage_recent_messages(prompt, reply)
