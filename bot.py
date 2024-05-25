@@ -1074,14 +1074,19 @@ def collect_llm_tag_values(tags):
                 llm_payload_mods['save_to_history'] = bool(tag.pop('save_history'))
             if 'load_history' in tag and not llm_payload_mods.get('load_history'):
                 llm_payload_mods['load_history'] = int(tag.pop('load_history'))
+                
+            # change_character is higher priority, if added ignore swap_character
             if 'change_character' in tag and not (llm_payload_mods.get('change_character') or llm_payload_mods.get('swap_character')):
                 llm_payload_mods['change_character'] = str(tag.pop('change_character'))
             if 'swap_character' in tag and not (llm_payload_mods.get('change_character') or llm_payload_mods.get('swap_character')):
                 llm_payload_mods['swap_character'] = str(tag.pop('swap_character'))
+                
+            # change_llmmodel is higher priority, if added ignore swap_llmmodel
             if 'change_llmmodel' in tag and not (llm_payload_mods.get('change_llmmodel') or llm_payload_mods.get('swap_llmmodel')):
                 llm_payload_mods['change_llmmodel'] = str(tag.pop('change_llmmodel'))
             if 'swap_llmmodel' in tag and not (llm_payload_mods.get('change_llmmodel') or llm_payload_mods.get('swap_llmmodel')):
                 llm_payload_mods['swap_llmmodel'] = str(tag.pop('swap_llmmodel'))
+                
             # Values that may apply repeatedly
             if 'send_user_image' in tag:
                 user_image_file = tag.pop('send_user_image')
