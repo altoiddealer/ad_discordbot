@@ -34,7 +34,7 @@ from typing import Union
 
 sys.path.append("ad_discordbot")
 
-from ad_discordbot.modules.database import Database, ActiveSettings, StarBoard, Statistics
+from ad_discordbot.modules.database import Database, ActiveSettings, Config, StarBoard, Statistics
 from ad_discordbot.modules.utils_shared import task_semaphore, shared_path, patterns
 from ad_discordbot.modules.utils_misc import fix_dict, update_dict, sum_update_dict, update_dict_matched_keys, format_time
 from ad_discordbot.modules.utils_discord import ireply, send_long_message, SelectedListItem, SelectOptionsView
@@ -46,60 +46,11 @@ bot_active_settings = ActiveSettings()
 starboard = StarBoard()
 bot_database = Database()
 bot_statistics = Statistics()
+config = Config()
 
 #################################################################
 #################### DISCORD / BOT STARTUP ######################
 #################################################################
-
-
-# Resolve legacy config method
-class Config:
-    def __init__(self):
-        self.config = {}
-
-    def legacy_required_values(self):
-        from ad_discordbot import config
-        required_configs = ['discord', 'sd', 'textgenwebui']
-        for config_name in required_configs:
-            try:
-                config_value = getattr(config, config_name)
-                self.config[config_name] = config_value
-            except AttributeError:
-                logging.warning(f"'config.yaml' is missing the '{config_name}' configuration.")
-            else:
-                if not config_value:
-                    logging.warning(f"'config.yaml' has an empty value for '{config_name}' configuration.")
-        try:
-            self.config['dynamic_prompting'] = config.dynamic_prompting_enabled
-        except:
-            logging.warning("'config.yaml' is missing a new parameter 'dynamic_prompting_enabled'. Defaulting to 'True' (enabled) ")
-            self.config['dynamic_prompting'] = True
-
-    def init_config(self):
-        try:
-            with open(shared_path.config, 'r', encoding='utf-8') as file:
-                self.config = yaml.safe_load(file)
-        except FileNotFoundError:
-            logging.error(f"Main bot config file '{shared_path.config}' not found.")
-            try:
-                self.legacy_required_values()
-                logging.info("Found legacy 'config.py'. Please migrate your settings from 'config.py' as it will soon be unsupported.")
-            except FileNotFoundError:
-                logging.error("Legacy config file 'config.py' not found.")
-                sys.exit(2)
-        except yaml.YAMLError as e:
-            logging.error(f"Error loading '{shared_path.config}': {e}")
-            sys.exit(2)
-
-    def get_config_dict(self):
-        return self.config
-
-config = Config()
-config.init_config()
-config = config.get_config_dict()
-
-# Discord bot token
-TOKEN = config['discord'].get('TOKEN', None)
 
 # Intercept custom bot arguments
 def parse_bot_args():
@@ -124,11 +75,28 @@ def parse_bot_args():
 
 bot_args = parse_bot_args()
 
-# Check bot token
+# Set Discord bot token from config, or args, or prompt for it, or exit
+TOKEN = config['discord'].get('TOKEN', None)
+
 bot_token = bot_args.token if bot_args.token else TOKEN
 if not bot_token:
-    logging.error("Discord bot token is required. Please refer to install instructions (https://github.com/altoiddealer/ad_discordbot).")
-    sys.exit(2)
+    print('\nA Discord bot token is required. Please enter it below.\n \
+          For help, refer to Install instructions on the project page\n \
+          (https://github.com/altoiddealer/ad_discordbot)')
+
+    print('\nDiscord bot token (enter "0" to exit):\n')
+    bot_token = (input().strip())
+    print()
+    if bot_token == '0':
+        logging.error("Discord bot token is required. Exiting.")
+        sys.exit(2)
+    elif bot_token:
+        config['discord']['TOKEN'] = bot_token
+        config.save()
+        logging.info("Discord bot token saved to 'config.yaml'")
+    else:
+        logging.error("Discord bot token is required. Exiting.")
+        sys.exit(2)
 
 os.environ['GRADIO_ANALYTICS_ENABLED'] = 'False'
 os.environ["BITSANDBYTES_NOWELCOME"] = "1"
@@ -362,7 +330,7 @@ tts_settings = {}
 try:
     tts_settings = config.get('textgenwebui', {}).get('tts_settings', {})
 except:
-    tts_settings = config['discord'].get('tts_settings', {})
+    tts_settings = config.get('discord', {}).get('tts_settings', {})
 
 supported_tts_clients = ['alltalk_tts', 'coqui_tts', 'silero_tts', 'elevenlabs_tts']
 
@@ -1458,7 +1426,8 @@ async def init_llm_payload(user_name:str, text:str) -> dict:
     llm_payload['state']['history'] = bot_history.session_history
     return llm_payload
 
-def get_wildcard_value(matched_text, dir_path='ad_discordbot/wildcards'):
+def get_wildcard_value(matched_text, dir_path=None):
+    dir_path = dir_path or os.path.join('ad_discordbot', 'wildcards')
     selected_option = None
     search_phrase = matched_text[2:] if matched_text.startswith('##') else matched_text
     search_path = f"{search_phrase}.txt"
@@ -1496,7 +1465,7 @@ def get_wildcard_value(matched_text, dir_path='ad_discordbot/wildcards'):
             # Get the last component of the nested directory path
             search_phrase = os.path.split(nested_dir)[-1]
             # Remove the last component from the nested directory path
-            nested_dir = os.path.join('ad_discordbot/wildcards', os.path.dirname(nested_dir))
+            nested_dir = os.path.join('ad_discordbot', 'wildcards', os.path.dirname(nested_dir))
             # Recursively check filenames in the nested directory
             selected_option = get_wildcard_value(search_phrase, nested_dir)
     return selected_option
@@ -1549,7 +1518,8 @@ def get_braces_value(matched_text):
         wildcard_match = patterns.wildcard.search(option)
         if wildcard_match:
             wildcard_phrase = wildcard_match.group()
-            wildcard_value = get_wildcard_value(matched_text=wildcard_phrase, dir_path='ad_discordbot/wildcards')
+            dir_path = os.path.join('ad_discordbot', 'wildcards')
+            wildcard_value = get_wildcard_value(matched_text=wildcard_phrase, dir_path=dir_path)
             if wildcard_value:
                 chosen_options[index] = wildcard_value
     chosen_options = [option for option in chosen_options if option is not None]
@@ -2470,10 +2440,11 @@ async def process_image_gen(img_payload:dict, channel, params:dict):
         bot_will_do = params.pop('bot_will_do', {})
         censor_mode = params.pop('censor_mode', 0)
         endpoint = params.pop('endpoint', '/sdapi/v1/txt2img')
-        sd_output_dir = params.pop('sd_output_dir', 'ad_discordbot/sd_outputs/')
+        default_save_path = os.path.join('ad_discordbot', 'sd_outputs')
+        sd_output_dir = params.pop('sd_output_dir', default_save_path)
         # Ensure the necessary directories exist
         os.makedirs(sd_output_dir, exist_ok=True)
-        temp_dir = 'ad_discordbot/user_images/__temp/'
+        temp_dir = os.path.join('ad_discordbot', 'user_images', '__temp')
         os.makedirs(temp_dir, exist_ok=True)
         # Generate images, save locally
         images = await sd_img_gen(channel, temp_dir, img_payload, endpoint)
@@ -2825,7 +2796,8 @@ def get_image_tag_args(extension, value, key=None, set_dir=None):
 
 async def process_img_payload_tags(img_payload:dict, mods:dict, params:dict):
     try:
-        params['sd_output_dir'] = mods.pop('sd_output_dir', 'ad_discordbot/sd_outputs/')
+        default_save_path = os.path.join('ad_discordbot', 'sd_outputs')
+        params['sd_output_dir'] = mods.pop('sd_output_dir', default_save_path)
         flow = mods.pop('flow', None)
         img_censoring = mods.pop('img_censoring', None)
         change_imgmodel = mods.pop('change_imgmodel', None)
@@ -3144,8 +3116,8 @@ async def img_gen_task(source:str, img_prompt:str, params:dict, i=None, tags={})
     bot_will_do = params.get('bot_will_do', {})
     censor_mode = params.get('censor_mode', 0)
     try:
-        check_key = bot_settings.settings['imgmodel'].get('override_settings') or bot_settings.settings['imgmodel']['payload'].get('override_settings')
-        if check_key.get('sd_model_checkpoint') == 'None': # Model currently unloaded
+        check_key = bot_settings.settings['imgmodel'].get('override_settings', {}) or bot_settings.settings['imgmodel'].get('payload', {}).get('override_settings', {})
+        if check_key.get('sd_model_checkpoint', '') == 'None': # Model currently unloaded
             await channel.send("**Cannot process image request:** No Img model is currently loaded")
             logging.warning(f'Bot tried to generate image for {user_name}, but no Img model was loaded')
         if not tags:
@@ -4547,12 +4519,12 @@ class ImgModel:
         self.tags = []
         self.imgmodel_name = '' # label used for /imgmodel command
         self.override_settings = {}
-        self.img_payload = {'alwayson_scripts': {}}
+        self.payload = {'alwayson_scripts': {}}
         self.init_sd_extensions()
 
     def refresh_enabled_extensions(self):
         self.init_sd_extensions()
-        new_payload = merge_base(self.img_payload, 'imgmodel,payload')
+        new_payload = merge_base(self.payload, 'imgmodel,payload')
         update_dict(bot_active_settings['imgmodel']['payload'], new_payload)
         bot_active_settings.save()
 
@@ -4560,14 +4532,14 @@ class ImgModel:
         extensions = config.get('sd', {}).get('extensions', {})
         # Initialize ControlNet defaults
         if extensions.get('controlnet_enabled'):
-            self.img_payload['alwayson_scripts']['controlnet'] = {'args': [{
+            self.payload['alwayson_scripts']['controlnet'] = {'args': [{
                 'enabled': False, 'image': None, 'mask_image': None, 'model': 'None', 'module': 'None', 'weight': 1.0, 'processor_res': 64, 'pixel_perfect': True,
                 'guidance_start': 0.0, 'guidance_end': 1.0, 'threshold_a': 64, 'threshold_b': 64, 'control_mode': 0, 'resize_mode': 1, 'lowvram': False, 'save_detected_map': False}]}
             if SD_CLIENT:
                 logging.info(f'"ControlNet" extension support is enabled and active.')
         # Initialize Forge Couple defaults
         if extensions.get('forgecouple_enabled'):
-            self.img_payload['alwayson_scripts']['forge_couple'] = {'args': {
+            self.payload['alwayson_scripts']['forge_couple'] = {'args': {
                 'enable': False, 'mode': 'Basic', 'sep': 'SEP', 'direction': 'Horizontal', 'global_effect': 'First Line',
                 'global_weight': 0.5, 'maps': [['0:0.5', '0.0:1.0', '1.0'],['0.5:1.0', '0.0:1.0', '1.0']]}}
             if SD_CLIENT:
@@ -4577,7 +4549,7 @@ class ImgModel:
                 logging.warning(f'"Forge Couple" is not known to be compatible with "{SD_CLIENT}". If you experience errors, disable this extension in config.yaml')
         # Initialize layerdiffuse defaults
         if extensions.get('layerdiffuse_enabled'):
-            self.img_payload['alwayson_scripts']['layerdiffuse'] = {'args': {
+            self.payload['alwayson_scripts']['layerdiffuse'] = {'args': {
                 'enabled': False, 'method': '(SDXL) Only Generate Transparent Image (Attention Injection)', 'weight': 1.0, 'stop_at': 1.0, 'foreground': None, 'background': None,
                 'blending': None, 'resize_mode': 'Crop and Resize', 'output_mat_for_i2i': False, 'fg_prompt': '', 'bg_prompt': '', 'blended_prompt': ''}}
             if SD_CLIENT:
@@ -4586,7 +4558,7 @@ class ImgModel:
                 logging.warning(f'"layerdiffuse" is not known to be compatible with "{SD_CLIENT}". If you experience errors, disable this extension in config.yaml')
         # Initialize ReActor defaults
         if extensions.get('reactor_enabled'):
-            self.img_payload['alwayson_scripts']['reactor'] = {'args': {
+            self.payload['alwayson_scripts']['reactor'] = {'args': {
                 'image': '', 'enabled': False, 'source_faces': '0', 'target_faces': '0', 'model': 'inswapper_128.onnx', 'restore_face': 'CodeFormer', 'restore_visibility': 1,
                 'restore_upscale': True, 'upscaler': '4x_NMKD-Superscale-SP_178000_G', 'scale': 1.5, 'upscaler_visibility': 1, 'swap_in_source_img': False, 'swap_in_gen_img': True, 'log_level': 1,
                 'gender_detect_source': 0, 'gender_detect_target': 0, 'save_original': False, 'codeformer_weight': 0.8, 'source_img_hash_check': False, 'target_img_hash_check': False, 'system': 'CUDA',
@@ -4712,7 +4684,7 @@ class Settings:
         behavior = active_settings.pop('behavior', {})
         # Add any missing required settings
         self.settings = fix_dict(active_settings, defaults)
-        self.bot_behavior.update_behavior(behavior)
+        bot_behavior.update_behavior(behavior)
 
     # Allows printing default values of Settings
     def __str__(self):

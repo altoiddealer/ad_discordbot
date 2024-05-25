@@ -204,6 +204,20 @@ class Database(BaseFileMemory):
         if save_now:
             self.save()
 
+
+class Config(BaseFileMemory):
+    def __init__(self) -> None:
+        self.discord: dict
+        self.dynamic_prompting_enabled: bool
+        self.textgenwebui: dict
+        self.sd: dict
+        super().__init__(shared_path.config, version=2, missing_okay=True)
+
+    def run_migration(self):
+        _old_active = os.path.join(shared_path.dir_root, 'config.py')
+        self._migrate_from_file(_old_active, load=True)
+
+
 class ActiveSettings(BaseFileMemory):
     def __init__(self) -> None:
         self.behavior: dict
@@ -221,6 +235,7 @@ class ActiveSettings(BaseFileMemory):
     def run_migration(self):
         _old_active = os.path.join(shared_path.dir_root, 'activesettings.yaml')
         self._migrate_from_file(_old_active, load=True)
+
 
 class StarBoard(BaseFileMemory):
     def __init__(self) -> None:
