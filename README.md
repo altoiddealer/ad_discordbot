@@ -237,7 +237,7 @@
 - **Continue and Regenerate text replies via Context Menu (right click on the reply)**
 
 - **All tasks queue up and process elagently - go ahead, spam it with requests!**
--
+
 - **Built in Starboard feature**
 
 - **Feature to post current settings in a dedicated channel**
@@ -260,24 +260,30 @@
    ```
    git clone https://github.com/altoiddealer/ad_discordbot
    ```
+
 4. Move **bot.py** out of **/ad_discordbot/** -> into **/text-generation-webui/**
 
    `/text-generation-webui/bot.py`
 
    `/text-generation-webui/ad_discordbot/(remaining files)`
-   
-5. Copy all settings template files from **/ad_discordbot/settings_templates/** -> into **/ad_discordbot/**
 
-   `config.yaml` , `dict_base_settings.yaml` , `dict_cmdoptions.yaml` , `dict_imgmodels.yaml` , `dict_tags.yaml`
-   
-   This allows the bot to be more easily updated.  These files will copy automatically if not done manually.
-
-6. **Add the bot token (from Step 2) into **/ad_discordbot/config.yaml**
-
-7. **Run the .cmd file** in text-generation-webui directory (**ex: cmd_windows.bat**), and performing the following commands:
+5. **Run the .cmd file** in text-generation-webui directory (**ex: cmd_windows.bat**), and performing the following commands:
    ```
    pip install -r ad_discordbot\requirements.txt
    ```
+
+6. **Enter your bot token (from Step 2) into the CMD window**
+
+   <img width="559" alt="Screenshot 2024-05-25 100216" src="https://github.com/altoiddealer/ad_discordbot/assets/1613484/ff5207ec-954e-4e71-975d-ce171c1c42c8">
+
+8. **The bot should now be up and running!**
+  
+   If a Welcome message does not appear in your main channel, you can use `/helpmenu` to see it.
+
+   A number of user settings files will appear (copied in from **`/user_settings/`**) where you can customize the bot.
+
+   `config.yaml` , `dict_base_settings.yaml` , `dict_cmdoptions.yaml` , `dict_imgmodels.yaml` , `dict_tags.yaml`
+
 ---
 
 ### Running the bot
