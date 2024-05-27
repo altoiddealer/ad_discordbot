@@ -1415,7 +1415,7 @@ async def get_tags(text):
         logging.error(f"Error getting tags: {e}")
         return text, []
 
-async def init_llm_payload(user_name:str, text:str) -> dict:
+async def init_llm_payload(i, user_name:str, text:str) -> dict:
     llm_payload = copy.deepcopy(bot_settings.settings['llmstate'])
     llm_payload['text'] = text
     name1 = user_name
@@ -1428,7 +1428,11 @@ async def init_llm_payload(user_name:str, text:str) -> dict:
     llm_payload['state']['character_menu'] = name2
     llm_payload['state']['context'] = context
     llm_payload['save_to_history'] = True
-    llm_payload['state']['history'] = bot_history.session_history
+    if bot_history.load_per_channel_histories:
+        channel_history = bot_history.get_channel_history(i.channel.id)
+        llm_payload['state']['history'] = channel_history
+    else:
+        llm_payload['state']['history'] = bot_history.session_history
     return llm_payload
 
 def get_wildcard_value(matched_text, dir_path=None):
@@ -1618,7 +1622,7 @@ async def on_message_task(i: discord.Interaction, source:str, text:str):
         # do what bot should do
         if bot_will_do['should_gen_text']:
             # build llm_payload with defaults
-            llm_payload = await init_llm_payload(user_name, text)
+            llm_payload = await init_llm_payload(i, user_name, text)
 
             # make working copy of user's request (without @ mention)
             llm_prompt = text
@@ -1864,7 +1868,7 @@ async def cont_regen_task(i:discord.Interaction, source:str, text:str, message:d
         channel = i.channel
         cmd = ''
         system_embed = None
-        llm_payload = await init_llm_payload(user_name, text)
+        llm_payload = await init_llm_payload(i, user_name, text)
         llm_payload['save_to_history'] = False
         if source == 'cont':
             cmd = 'Continuing'
@@ -1925,7 +1929,7 @@ async def speak_task(ctx, text:str, params:dict):
             system_embed_info.title = f'{user_name} requested tts ... '
             system_embed_info.description = ''
             system_embed = await channel.send(embed=system_embed_info)
-        llm_payload = await init_llm_payload(user_name, text)
+        llm_payload = await init_llm_payload(ctx, user_name, text)
         llm_payload['_continue'] = True
         llm_payload['state']['max_new_tokens'] = 1
         llm_payload['state']['history'] = {'internal': [[text, text]], 'visible': [[text, text]]}
@@ -2114,21 +2118,21 @@ async def announce_changes(i, change_label:str, change_name:str):
         # adjust delay depending on how many channels there are to prevent being rate limited
         delay = math.floor(len(bot_database.announce_channels)/2)
         for channel_id in bot_database.announce_channels:
-            asyncio.sleep(delay)
+            await asyncio.sleep(delay)
+            channel = await client.fetch_channel(channel_id)
             # if Automatic imgmodel change (no interaction object)
             if i is None:
-                await channel_id.send(embed=change_embed_info)
+                await channel.send(embed=change_embed_info)
             # Channel is interaction channel
-            elif channel_id == i.channel_id:
+            elif channel_id == i.channel.id:
                 continue # already sent
             # Channel in interaction server
-            elif channel_id in i.guild.channels:
-                change_embed_info.title = f"{user_name} changed {change_label} in another channel:"
-                await channel_id.send(embed=change_embed_info)
+            elif channel_id in [channel.id for channel in i.guild.channels]:
+                await channel.send(embed=change_embed_info)
             # Channel is in another server
             else:
                 change_embed_info.title = f"A user changed {change_label} in another bot server:"
-                await channel_id.send(embed=change_embed_info)
+                await channel.send(embed=change_embed_info)
     except Exception as e:
         logging.error(f'An error occurred while announcing changes to announce channels: {e}')
 
@@ -4775,8 +4779,8 @@ class History:
         self.excluded_channels = per_channel_history.get('excluded_channels', [])   # list of channels to ignore
         # History management
         self.unique_id = {}
-        self.session_history = {'internal': [], 'visible': []}
-        self.recent_messages = {'user': [], 'llm': []}
+        self.session_history = {}
+        self.recent_messages = {}
         self.collected_prompts = {}
 
     def init_history(self):
@@ -4858,14 +4862,68 @@ class History:
                 logging.info(f'''Chat history was saved to "/logs/{mode}/{character_menu}/{self.unique_id}.json"''')
             save_history(self.session_history, self.unique_id, character_menu, mode)
 
+    def limit_prompt_history(self, i_list, v_list, channel_id=None):
+        truncation = int(bot_settings.settings['llmstate']['state']['truncation_length'] * 4)
+        while sum(len(message) for exchange in i_list for message in exchange) > truncation:
+            oldest_exchange = i_list.pop(0)
+        while sum(len(message) for exchange in v_list for message in exchange) > truncation:
+            oldest_exchange = v_list.pop(0)
+
+    # Manage the session history for textgen-webui
+    def manage_prompt_history(self, i_list, v_list, prompt, reply=None, save_to_history=True):
+        # Only prompt is received (no 'reply)
+        if reply is None:
+            # If there are previously collected prompts
+            if self.collected_prompts:
+                self.collected_prompts += '\n\n' + prompt
+            else:
+                self.collected_prompts = prompt
+        # Both prompt and reply are received
+        else:                                   
+            if self.collected_prompts:           # If there are previously collected prompts
+                prompt = self.collected_prompts + '\n\n' + prompt
+                self.collected_prompts = ''      # Reset collected prompts
+            if save_to_history:
+                v_list.append([prompt, reply])
+                v_list.append([prompt, reply])
+
+    def manage_per_channel_prompt_history(self, i_list, v_list, prompt, reply=None, save_to_history=True, channel_id=None):
+        # Only prompt is received (no 'reply)
+        if reply is None:
+            # If there are previously collected prompts
+            if self.collected_prompts.get(channel_id):
+                self.collected_prompts[channel_id] += '\n\n' + prompt
+            else:
+                self.collected_prompts[channel_id] = prompt
+        # Both prompt and reply are received
+        else:                                   
+            # If there are previously collected prompts
+            if self.collected_prompts.get(channel_id):
+                prompt = self.collected_prompts[channel_id] + '\n\n' + prompt
+                self.collected_prompts[channel_id] = {}      # Reset collected prompts
+            if save_to_history:
+                i_list.append([prompt, reply])
+                v_list.append([prompt, reply])
+
+    def get_history_lists_keys(self, channel_id=None):
+        # If per-channel history
+        if self.per_channel_history_enabled:
+            i_list = self.session_history.setdefault(channel_id, {}).setdefault('internal', [])
+            v_list = self.session_history[channel_id].setdefault('visible', [])
+        # If only one history
+        else:
+            i_list = self.session_history.setdefault('internal', [])
+            v_list = self.session_history.setdefault('visible', [])
+        return i_list, v_list
+
     # Retain most recent 10 elements or 10,000 characters from user prompts and bot replies
     def manage_recent_messages(self, prompt, reply=None, channel_id=None):
         if self.per_channel_history_enabled:
             user_msg_list = self.recent_messages.setdefault(channel_id, {}).setdefault('user', [])
             llm_msg_list = self.recent_messages[channel_id].setdefault('llm', [])
         else:
-            user_msg_list = self.recent_messages['user']
-            llm_msg_list = self.recent_messages['llm']
+            user_msg_list = self.recent_messages.setdefault('user', [])
+            llm_msg_list = self.recent_messages.setdefault('llm', [])
         if prompt:
             user_msg_list.insert(0, prompt)
             while len(user_msg_list) > 10 or sum(len(message) for message in user_msg_list) > 5000:
@@ -4875,32 +4933,24 @@ class History:
             while len(llm_msg_list) > 10 or sum(len(message) for message in llm_msg_list) > 5000:
                 oldest_message = llm_msg_list.pop()
 
-    # Manage the session history for textgen-webui
-    def manage_prompt_history(self, prompt, reply=None, save_to_history=True, channel_id=None):
-        if reply is None:                       # Only prompt is received
-            if self.collected_prompts:           # If there are previously collected prompts
-                self.collected_prompts += '\n\n' + prompt
-            else:
-                self.collected_prompts = prompt
-        else:                                   # Both prompt and reply are received
-            if self.collected_prompts:           # If there are previously collected prompts
-                prompt = self.collected_prompts + '\n\n' + prompt
-                self.collected_prompts = ''      # Reset collected prompts
-            if save_to_history:
-                self.session_history['internal'].append([prompt, reply])
-                self.session_history['visible'].append([prompt, reply])
-        if self.limit_history:
-            truncation = int(bot_settings.settings['llmstate']['state']['truncation_length'] * 4)
-            while sum(len(message) for exchange in self.session_history['internal'] for message in exchange) > truncation:
-                oldest_exchange = self.session_history['internal'].pop(0)
-            while sum(len(message) for exchange in self.session_history['visible'] for message in exchange) > truncation:
-                oldest_exchange = self.session_history['visible'].pop(0)
-        if self.autosave_history:
-            self.save_history(channel_id)
-
     def manage_history(self, prompt, reply=None, save_to_history=True, channel_id=None):
         self.manage_recent_messages(prompt, reply, channel_id)
-        self.manage_prompt_history(prompt, reply, save_to_history, channel_id)
+        i_list, v_list = self.get_history_lists_keys(channel_id)
+
+        if self.per_channel_history_enabled:
+            self.manage_per_channel_prompt_history(i_list, v_list, prompt, reply, save_to_history, channel_id)
+        else:
+            self.manage_prompt_history(i_list, v_list, prompt, reply, save_to_history)
+
+        if self.limit_history:
+            self.limit_prompt_history(i_list, v_list, channel_id)
+        if self.autosave_history:
+            self.save_history(channel_id)
+    
+    def get_channel_history(self, channel_id):
+        if not self.session_history.get(channel_id):
+            self.session_history[channel_id] = {'internal': [], 'visible': []}
+        return self.session_history[channel_id]
 
     def reset_session_history(self, channel_id=None):
         # If per-channel history
