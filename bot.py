@@ -2002,9 +2002,13 @@ async def change_imgmodel_task(user_name:str, channel, params:dict, i=None):
         if channel and change_embed_info:
             if change_embed:
                 await change_embed.delete()
+            # Send change embed to interaction channel
             change_embed_info.title = f"{user_name} changed Img model:"
             change_embed_info.description = f'**{imgmodel_name}**'
             change_embed = await channel.send(embed=change_embed_info)
+        if change_embed_info and bot_database.announce_channels:
+            # Send embeds to announcement channels
+            await bg_task_queue.put(announce_changes(i, 'Img model', imgmodel_name))
         logging.info(f"Image model changed to: {imgmodel_name}")
         if config['discord']['post_active_settings']['enabled']:
             await bg_task_queue.put(post_active_settings())
@@ -2023,10 +2027,10 @@ async def change_imgmodel_task(user_name:str, channel, params:dict, i=None):
 
 # Process selected LLM model
 async def change_llmmodel_task(i, params:dict):
+    user_name = i.author.display_name
+    channel = i.channel
+    change_embed = None
     try:
-        user_name = i.author.display_name
-        channel = i.channel
-        change_embed = None
         llmmodel_params = params.get('llmmodel', {})
         llmmodel_name = llmmodel_params.get('llmmodel_name')
         mode = llmmodel_params.get('mode', 'change')
@@ -2054,14 +2058,19 @@ async def change_llmmodel_task(i, params:dict):
             if mode == 'swap':
                 return change_embed             # return the embed so it can be deleted by the caller
             if change_embed_info:
+                if change_embed:
+                    await change_embed.delete()
+                # Send change embed to interaction channel
                 if llmmodel_name == 'None':
                     change_embed_info.title = f"{user_name} unloaded the LLM model"
                     change_embed_info.description = 'Use "/llmmodel" to load a new one'
                 else:
                     change_embed_info.title = f"{user_name} changed LLM model:"
                     change_embed_info.description = f'**{llmmodel_name}**'
-                if change_embed: await change_embed.delete()
                 await channel.send(embed=change_embed_info)
+                # Send embeds to announcement channels
+                if bot_database.announce_channels:
+                    await bg_task_queue.put(announce_changes(i, 'LLM model', llmmodel_name))
             logging.info(f"LLM model changed to: {llmmodel_name}")
     except Exception as e:
         logging.error(f"An error occurred while changing LLM Model from '/llmmodel': {e}")
@@ -2075,31 +2084,9 @@ async def change_llmmodel_task(i, params:dict):
 #################################################################
 #################### QUEUED CHARACTER CHANGE ####################
 #################################################################
-async def change_char_task(i, source:str, params:dict):
+async def send_char_greeting_or_history(i, char_name):
+    channel = i.channel
     try:
-        user_name = i.author.display_name
-        channel = i.channel
-        change_embed = None
-        char_params = params.get('character', {})
-        char_name = char_params.get('char_name', {})
-        verb = char_params.get('verb', 'Changing')
-        mode = char_params.get('mode', 'change')
-        if change_embed_info:
-            change_embed_info.title = f'{verb} character ... '
-            change_embed_info.description = f'{user_name} requested character {mode}: "{char_name}"'
-            change_embed = await channel.send(embed=change_embed_info)
-        # Change character
-        await change_character(char_name, channel, source)
-        # Set history
-        if bot_history.autoload_history and (bot_history.change_char_history_method == 'keep' and source != 'reset'):
-            bot_history.init_history()
-        else:
-            bot_history.reset_session_history(channel_id=i.channel.id)
-        if change_embed: await change_embed.delete()
-        if change_embed_info:
-            change_embed_info.title = f"{user_name} changed character:"
-            change_embed_info.description = f'**{char_name}**'
-            await channel.send(embed=change_embed_info)
         # Send message to channel
         message = ''
         if bot_history.greeting_or_history == 'history':
@@ -2116,13 +2103,73 @@ async def change_char_task(i, source:str, params:dict):
             else:
                 message = f'**{char_name}** has entered the chat"'
         await send_long_message(channel, message)
+    except Exception as e:
+        logging.error(f'An error occurred while sending greeting or history for "{char_name}": {e}')
+
+async def announce_changes(i, change_label:str, change_name:str):
+    user_name = i.author.display_name if i else 'Automatically'
+    change_embed_info.title = f"{user_name} changed {change_label}:"
+    change_embed_info.description = f'**{change_name}**'
+    try:
+        # adjust delay depending on how many channels there are to prevent being rate limited
+        delay = math.floor(len(bot_database.announce_channels)/2)
+        for channel_id in bot_database.announce_channels:
+            asyncio.sleep(delay)
+            # if Automatic imgmodel change (no interaction object)
+            if i is None:
+                await channel_id.send(embed=change_embed_info)
+            # Channel is interaction channel
+            elif channel_id == i.channel_id:
+                continue # already sent
+            # Channel in interaction server
+            elif channel_id in i.guild.channels:
+                change_embed_info.title = f"{user_name} changed {change_label} in another channel:"
+                await channel_id.send(embed=change_embed_info)
+            # Channel is in another server
+            else:
+                change_embed_info.title = f"A user changed {change_label} in another bot server:"
+                await channel_id.send(embed=change_embed_info)
+    except Exception as e:
+        logging.error(f'An error occurred while announcing changes to announce channels: {e}')
+
+async def change_char_task(i, source:str, params:dict):
+    user_name = i.author.display_name
+    channel = i.channel
+    change_embed = None
+    try:
+        char_params = params.get('character', {})
+        char_name = char_params.get('char_name', {})
+        verb = char_params.get('verb', 'Changing')
+        mode = char_params.get('mode', 'change')
+        if change_embed_info:
+            change_embed_info.title = f'{verb} character ... '
+            change_embed_info.description = f'{user_name} requested character {mode}: "{char_name}"'
+            change_embed = await channel.send(embed=change_embed_info)
+        # Change character
+        await change_character(char_name, channel, source)
+        # Set history
+        if bot_history.autoload_history and (bot_history.change_char_history_method == 'keep' and source != 'reset'):
+            bot_history.init_history()
+        else:
+            bot_history.reset_session_history(channel_id=i.channel.id)
+        if change_embed:
+            await change_embed.delete()
+            # Send change embed to interaction channel
+            change_embed_info.title = f"{user_name} changed character:"
+            change_embed_info.description = f'**{char_name}**'
+            await channel.send(embed=change_embed_info)
+            # Send embeds to announcement channels
+            if bot_database.announce_channels:
+                await bg_task_queue.put(announce_changes(i, 'character', char_name))
+        await send_char_greeting_or_history(i, char_name)
         logging.info(f"Character loaded: {char_name}")
     except Exception as e:
         logging.error(f'An error occurred while loading character for "{source}": {e}')
         if change_embed_info:
             change_embed_info.title = "An error occurred while loading character"
             change_embed_info.description = e
-            if change_embed: await change_embed.edit(embed=change_embed_info)
+            if change_embed:
+                await change_embed.edit(embed=change_embed_info)
 
 #################################################################
 ######################## MAIN TASK QUEUE ########################
@@ -3664,6 +3711,22 @@ if system_embed_info:
         system_embed_info.title = "Bot LLM Gen Statistics:"
         system_embed_info.description = f">>> {formatted_description}"
         await ctx.send(embed=system_embed_info)
+
+@client.hybrid_command(description="Toggle current channel as an announcement channel for the bot (model changes)")
+async def announce(i):
+    try:
+        if i.channel.id in bot_database.announce_channels:
+            bot_database.announce_channels.remove(i.channel.id) # If the channel is already in the announce channels, remove it
+            action_message = f'Removed {i.channel.mention} from announce channels. Use "/announce" again if you want to add it back.'
+        else:
+            # If the channel is not in the announce channels, add it
+            bot_database.announce_channels.append(i.channel.id)
+            action_message = f'Added {i.channel.mention} to announce channels. Use "/announce" again to remove it.'
+
+        bot_database.save()
+        await i.reply(action_message)
+    except Exception as e:
+        logging.error(f"Error toggling announce channel setting: {e}")
 
 @client.hybrid_command(description="Toggle current channel as main channel for bot to auto-reply without needing to be called")
 async def main(i):
