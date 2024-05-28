@@ -1403,7 +1403,7 @@ async def get_tags(text):
         logging.error(f"Error getting tags: {e}")
         return text, []
 
-async def init_llm_payload(i, user_name:str, text:str) -> dict:
+async def init_llm_payload(inter, user_name:str, text:str) -> dict:
     llm_payload = copy.deepcopy(bot_settings.settings['llmstate'])
     llm_payload['text'] = text
     name1 = user_name
@@ -1416,7 +1416,7 @@ async def init_llm_payload(i, user_name:str, text:str) -> dict:
     llm_payload['state']['character_menu'] = name2
     llm_payload['state']['context'] = context
     llm_payload['save_to_history'] = True
-    inter_history = await bot_history.get_channel_history(i)
+    inter_history = await bot_history.get_channel_history(inter)
     llm_payload['state']['history'] = inter_history
     return llm_payload
 
@@ -1608,8 +1608,7 @@ async def on_message_task(ictx: CtxInteraction, source:str, text:str):
         # do what bot should do
         if bot_will_do['should_gen_text']:
             # build llm_payload with defaults
-            llm_payload = await init_llm_payload(i, user_name, text)
-
+            llm_payload = await init_llm_payload(ictx, user_name, text)
             # make working copy of user's request (without @ mention)
             llm_prompt = text
             # apply tags to prompt
@@ -1624,7 +1623,6 @@ async def on_message_task(ictx: CtxInteraction, source:str, text:str):
             llm_payload['text'] = llm_prompt
 
             await hybrid_llm_img_gen(ictx, source, text, tags, llm_payload, params)
-
         elif bot_will_do['should_gen_image']:
             if await sd_online(channel):
                 await channel.send(f'Bot was triggered by Tags to not respond with text.\n**Processing image generation using your input as the prompt ...**', delete_after=5) # msg for if LLM model is unloaded
@@ -1676,7 +1674,7 @@ async def hybrid_llm_img_gen(ictx: CtxInteraction, source:str, text:str, tags:di
             if (not bot_will_do['should_send_text']) or (voice_client and (voice_client != ictx.guild.voice_client) and int(tts_settings.get('play_mode', 0)) == 0):
                 tts_sw = await toggle_tts(toggle='off')
             # generate text with text-gen-webui
-            last_resp, tts_resp = await llm_gen(llm_payload, i, tts_sw)
+            last_resp, tts_resp = await llm_gen(llm_payload, ictx, tts_sw)
             # If no text was generated, treat user input at the response
             if last_resp is not None:
                 logging.info("reply sent: \"" + user_name + ": {'text': '" + llm_payload["text"] + "', 'response': '" + last_resp + "'}\"")
@@ -1854,7 +1852,7 @@ async def cont_regen_task(inter:discord.Interaction, source:str, text:str, messa
         user_name = get_user_ctx_inter(inter).display_name # just incase this function is used elsewhere later
         channel = inter.channel
         system_embed = None
-        llm_payload = await init_llm_payload(i, user_name, text)
+        llm_payload = await init_llm_payload(inter, user_name, text)
         llm_payload['save_to_history'] = False
         if source == 'cont':
             cmd = 'Continuing'
@@ -1877,7 +1875,7 @@ async def cont_regen_task(inter:discord.Interaction, source:str, text:str, messa
         if voice_client and (voice_client != inter.guild.voice_client) and int(tts_settings.get('play_mode', 0)) == 0:
             tts_sw = await toggle_tts(toggle='off')
         # generate text with text-gen-webui
-        last_resp, tts_resp = await llm_gen(llm_payload, i, tts_sw)
+        last_resp, tts_resp = await llm_gen(llm_payload, inter, tts_sw)
         if system_embed:
             await system_embed.delete()
         if last_resp is None:
@@ -1950,11 +1948,11 @@ async def speak_task(ctx: commands.Context, text:str, params:dict):
 ###################### QUEUED MODEL CHANGE ######################
 #################################################################
 # Process selected Img model
-async def change_imgmodel_task(user_name:str, channel, params:dict, i=None):
+async def change_imgmodel_task(user_name:str, channel, params:dict, inter=None):
     try:
-        if i:
-            user_name = i.author.display_name
-            channel = i.channel
+        if imter:
+            user_name = inter.author.display_name
+            channel = inter.channel
         change_embed = None
         await sd_online(channel) # Can't change Img model if not online!
 
@@ -1993,7 +1991,7 @@ async def change_imgmodel_task(user_name:str, channel, params:dict, i=None):
             await change_embed.delete()
             if bot_database.announce_channels:
                 # Send embeds to announcement channels
-                await bg_task_queue.put(announce_changes(i, 'Img model', imgmodel_name))
+                await bg_task_queue.put(announce_changes(inter, 'Img model', imgmodel_name))
             else:
                 # Send change embed to interaction channel
                 change_embed_info.title = f"{user_name} changed Img model:"
@@ -2051,7 +2049,7 @@ async def change_llmmodel_task(ictx, params:dict):
                 await change_embed.delete()
                 # Send embeds to announcement channels
                 if bot_database.announce_channels:
-                    await bg_task_queue.put(announce_changes(i, 'LLM model', llmmodel_name))
+                    await bg_task_queue.put(announce_changes(ictx, 'LLM model', llmmodel_name))
                 else:
                     # Send change embed to interaction channel
                     if llmmodel_name == 'None':
@@ -2074,8 +2072,8 @@ async def change_llmmodel_task(ictx, params:dict):
 #################################################################
 #################### QUEUED CHARACTER CHANGE ####################
 #################################################################
-async def send_char_greeting_or_history(i, char_name):
-    channel = i.channel
+async def send_char_greeting_or_history(inter, char_name):
+    channel = inter.channel
     try:
         # Send message to channel
         message = ''
@@ -2096,8 +2094,8 @@ async def send_char_greeting_or_history(i, char_name):
     except Exception as e:
         logging.error(f'An error occurred while sending greeting or history for "{char_name}": {e}')
 
-async def announce_changes(i, change_label:str, change_name:str):
-    user_name = i.author.display_name if i else 'Automatically'
+async def announce_changes(inter, change_label:str, change_name:str):
+    user_name = inter.author.display_name if inter else 'Automatically'
     change_embed_info.title = f"{user_name} changed {change_label}:"
     change_embed_info.description = f'**{change_name}**'
     try:
@@ -2107,13 +2105,13 @@ async def announce_changes(i, change_label:str, change_name:str):
             await asyncio.sleep(delay)
             channel = await client.fetch_channel(channel_id)
             # if Automatic imgmodel change (no interaction object)
-            if i is None:
+            if inter is None:
                 await channel.send(embed=change_embed_info)
             # Channel is interaction channel
-            elif channel_id == i.channel.id:
+            elif channel_id == inter.channel.id:
                 continue # already sent
             # Channel in interaction server
-            elif channel_id in [channel.id for channel in i.guild.channels]:
+            elif channel_id in [channel.id for channel in inter.guild.channels]:
                 await channel.send(embed=change_embed_info)
             # Channel is in another server
             else:
@@ -2123,74 +2121,8 @@ async def announce_changes(i, change_label:str, change_name:str):
         logging.error(f'An error occurred while announcing changes to announce channels: {e}')
 
 async def change_char_task(ictx: CtxInteraction, source:str, params:dict):
-    try:
-        user_name = get_user_ctx_inter(ictx).display_name
-        channel = ictx.channel
-        change_embed = None
-        char_params = params.get('character', {})
-        char_name = char_params.get('char_name', {})
-        verb = char_params.get('verb', 'Changing')
-        mode = char_params.get('mode', 'change')
-        if change_embed_info:
-            change_embed_info.title = f'{verb} character ... '
-            change_embed_info.description = f'{user_name} requested character {mode}: "{char_name}"'
-            change_embed = await channel.send(embed=change_embed_info)
-        # Change character
-        await change_character(char_name, channel, source)
-        if change_embed: await change_embed.delete()
-        if change_embed_info:
-            change_embed_info.title = f"{user_name} changed character:"
-            change_embed_info.description = f'**{char_name}**'
-            await channel.send(embed=change_embed_info)
-
-        # Send message to channel
-        message = ''
-        if bot_history.greeting_or_history == 'history':
-            last_exchange = bot_history.session_history['visible'][-1] if bot_history.session_history.get('visible') else None
-            if last_exchange:
-                last_user_message = last_exchange[0]
-                last_assistant_message = last_exchange[1]
-                message = f'__**Last message exchange**__:\n>>> **User**: "{last_user_message}"\n **{bot_database.last_character}**: "{last_assistant_message}"'
-        if not message:
-            greeting = bot_settings.settings['llmcontext']['greeting']
-            if greeting:
-                message = greeting.replace('{{user}}', 'user')
-                message = message.replace('{{char}}', char_name)
-            else:
-                message = f'**{char_name}** has entered the chat"'
-        await send_long_message(channel, message)
-    except Exception as e:
-        logging.error(f'An error occurred while sending greeting or history for "{char_name}": {e}')
-
-async def announce_changes(i, change_label:str, change_name:str):
-    user_name = i.author.display_name if i else 'Automatically'
-    change_embed_info.title = f"{user_name} changed {change_label}:"
-    change_embed_info.description = f'**{change_name}**'
-    try:
-        # adjust delay depending on how many channels there are to prevent being rate limited
-        delay = math.floor(len(bot_database.announce_channels)/2)
-        for channel_id in bot_database.announce_channels:
-            await asyncio.sleep(delay)
-            channel = await client.fetch_channel(channel_id)
-            # if Automatic imgmodel change (no interaction object)
-            if i is None:
-                await channel.send(embed=change_embed_info)
-            # Channel is interaction channel
-            elif channel_id == i.channel.id:
-                continue # already sent
-            # Channel in interaction server
-            elif channel_id in [channel.id for channel in i.guild.channels]:
-                await channel.send(embed=change_embed_info)
-            # Channel is in another server
-            else:
-                change_embed_info.title = f"A user changed {change_label} in another bot server:"
-                await channel.send(embed=change_embed_info)
-    except Exception as e:
-        logging.error(f'An error occurred while announcing changes to announce channels: {e}')
-
-async def change_char_task(i, source:str, params:dict):
-    user_name = i.author.display_name
-    channel = i.channel
+    user_name = get_user_ctx_inter(ictx).display_name
+    channel = ictx.channel
     change_embed = None
     try:
         char_params = params.get('character', {})
@@ -2212,14 +2144,14 @@ async def change_char_task(i, source:str, params:dict):
             await change_embed.delete()
             # Send embeds to announcement channels
             if bot_database.announce_channels:
-                await bg_task_queue.put(announce_changes(i, 'character', char_name))
+                await bg_task_queue.put(announce_changes(ictx, 'character', char_name))
             else:
                 # Send change embed to interaction channel
                 change_embed_info.title = f"{user_name} changed character:"
                 change_embed_info.description = f'**{char_name}**'
                 await channel.send(embed=change_embed_info)
         if not bot_history.per_channel_history_enabled:
-            await send_char_greeting_or_history(i, char_name)
+            await send_char_greeting_or_history(ictx, char_name)
         logging.info(f"Character loaded: {char_name}")
     except Exception as e:
         logging.error(f'An error occurred while loading character for "{source}": {e}')
