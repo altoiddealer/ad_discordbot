@@ -1849,7 +1849,7 @@ async def llm_gen(llm_payload:dict, tts_sw=None):
         traceback.print_exc()
         return None, None
 
-async def cont_regen_task(i:discord.Interaction, source:str, text:str, message:discord.message):
+async def cont_regen_task(i:discord.Interaction, source:str, text:str, message:discord.Message):
     try:
         user_name = i.user.display_name
         channel = i.channel
