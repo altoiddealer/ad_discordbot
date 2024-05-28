@@ -652,7 +652,7 @@ async def on_ready():
                 await character_loader(char_name)
             # Load history or set empty history
             if bot_history.autoload_history and (bot_history.change_char_history_method == 'keep'):
-                await bot_history.load_bot_history()
+                bot_history.load_bot_history()
             else:
                 await bot_history.reset_session_history()
         # Create background task processing queue
@@ -667,6 +667,7 @@ async def on_ready():
         logging.info("Bot is ready")
     except Exception as e:
         logging.error(f"Error with on_ready: {e}")
+        traceback.print_exc()
 
 #################################################################
 ####################### DISCORD FEATURES ########################
@@ -2142,7 +2143,7 @@ async def change_char_task(i, source:str, params:dict):
         await change_character(char_name, channel, source)
         # Set history
         if bot_history.autoload_history and (bot_history.change_char_history_method == 'keep' and source != 'reset'):
-            await bot_history.load_bot_history()
+            bot_history.load_bot_history()
         else:
             await bot_history.reset_session_history(i)
         if change_embed:
@@ -4789,17 +4790,18 @@ class History:
     # Modified version of TGQUI function
     def load_latest_history(self, state):
         type = 'single'
-        if shared.args.multi_user:
-            return start_new_chat(state), type
+        # if shared.args.multi_user:
+        #     return start_new_chat(state), type
         histories = find_all_histories(state)
         if len(histories) > 0:
             history, type = self.load_history(histories[0], state['character_menu'], state['mode'])
         else:
-            history = start_new_chat(state)
+            history = {}
+           # history = start_new_chat(state)
         return history, type
 
     # Loads most recent history for current character (not "per-channel")
-    async def load_bot_history(self):
+    def load_bot_history(self):
         state_dict = bot_settings.settings['llmstate']['state']
         values_to_load_history = {'character_menu': state_dict['character_menu'],
                                 'mode': state_dict['mode']}
@@ -4816,7 +4818,7 @@ class History:
             self.session_history = dict(latest_history)
             # print recent exchange if per-channel history
             if matched == 'single':
-                last_exchange = self.session_history['visible'][-1] if self.session_history['visible'] else None
+                last_exchange = self.session_history['visible'][-1] if self.session_history.get('visible') else None
                 if last_exchange:
                     last_user_message = last_exchange[0]
                     last_assistant_message = last_exchange[1]
@@ -4914,6 +4916,8 @@ class History:
                 oldest_message = l_list.pop()
 
     def manage_history(self, prompt:str, reply:str=None, save_to_history:bool=True, channel_id:int=None):
+        if channel_id:
+            channel_id = str(channel_id)
         # Get list keys to simplify next steps
         i_list, v_list, u_list, l_list, cp_list = self.get_history_lists_keys(channel_id)
         # Update recent user/LLM messages (separate from chat history)
@@ -4930,14 +4934,15 @@ class History:
     async def get_channel_history(self, i=None):
         # If per-channel history
         if self.per_channel_history_enabled:
-            if not self.session_history.get(i.channel.id):
-                self.session_history[i.channel.id] = {
+            chkey = str(i.channel.id)
+            if not self.session_history.get(chkey):
+                self.session_history[chkey] = {
                     'guild_name': str(i.guild),
                     'channel_name': str(i.channel),
                     'internal': [],
                     'visible': []
                     }
-            return self.session_history[i.channel.id]
+            return self.session_history[chkey]
         # If only one history
         else:
             if not self.session_history:
