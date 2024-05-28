@@ -1849,10 +1849,10 @@ async def llm_gen(llm_payload:dict, tts_sw=None):
         return None, None
 
 async def cont_regen_task(inter:discord.Interaction, source:str, text:str, message:discord.Message):
+    cmd = ''
     try:
         user_name = get_user_ctx_inter(inter).display_name # just incase this function is used elsewhere later
         channel = inter.channel
-        cmd = ''
         system_embed = None
         llm_payload = await init_llm_payload(user_name, text)
         llm_payload['save_to_history'] = False
