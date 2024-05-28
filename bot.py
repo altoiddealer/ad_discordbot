@@ -1950,7 +1950,7 @@ async def speak_task(ctx: commands.Context, text:str, params:dict):
 # Process selected Img model
 async def change_imgmodel_task(user_name:str, channel, params:dict, inter=None):
     try:
-        if imter:
+        if inter:
             user_name = inter.author.display_name
             channel = inter.channel
         change_embed = None
