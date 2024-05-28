@@ -652,9 +652,9 @@ async def on_ready():
                 await character_loader(char_name)
             # Load history or set empty history
             if bot_history.autoload_history and (bot_history.change_char_history_method == 'keep'):
-                bot_history.load_bot_history()
+                await bot_history.load_bot_history()
             else:
-                bot_history.reset_session_history()
+                await bot_history.reset_session_history()
         # Create background task processing queue
         client.loop.create_task(process_tasks_in_background())
         # Start background task to sync the discord client tree
@@ -2142,9 +2142,9 @@ async def change_char_task(i, source:str, params:dict):
         await change_character(char_name, channel, source)
         # Set history
         if bot_history.autoload_history and (bot_history.change_char_history_method == 'keep' and source != 'reset'):
-            bot_history.load_bot_history()
+            await bot_history.load_bot_history()
         else:
-            bot_history.reset_session_history(i)
+            await bot_history.reset_session_history(i)
         if change_embed:
             await change_embed.delete()
             # Send embeds to announcement channels
@@ -3757,7 +3757,7 @@ if textgenwebui_enabled:
         try:
             shared.stop_everything = True
             await ireply(ctx, 'character reset') # send a response msg to the user
-            bot_history.reset_session_history(ctx)
+            await bot_history.reset_session_history(ctx)
 
             async with task_semaphore:
                 # offload to ai_gen queue
@@ -4799,7 +4799,7 @@ class History:
         return history, type
 
     # Loads most recent history for current character (not "per-channel")
-    def load_bot_history(self):
+    async def load_bot_history(self):
         state_dict = bot_settings.settings['llmstate']['state']
         values_to_load_history = {'character_menu': state_dict['character_menu'],
                                 'mode': state_dict['mode']}
