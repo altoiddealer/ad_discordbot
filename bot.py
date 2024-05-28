@@ -542,11 +542,12 @@ if sd_enabled:
         global imgmodel_update_task
         if imgmodel_update_task and not imgmodel_update_task.done():
             imgmodel_update_task.cancel()
-            if ctx: await ctx.send("Auto-change Imgmodels task was cancelled.", ephemeral=True, delete_after=5)
+            await ctx.send("Auto-change Imgmodels task was cancelled.", ephemeral=True, delete_after=5)
             logging.info("Auto-change Imgmodels task was cancelled via '/toggle_auto_change_imgmodels_task'")
+            
         else:
             await bg_task_queue.put(start_auto_change_imgmodels())
-            if ctx: await ctx.send(f"Auto-change Img models task was started.", ephemeral=True, delete_after=5)
+            await ctx.send(f"Auto-change Img models task was started.", ephemeral=True, delete_after=5)
 
 # helper function to begin auto-select imgmodel task
 async def start_auto_change_imgmodels():
@@ -1572,7 +1573,8 @@ async def dynamic_prompting(user_name:str, text:str, i=None):
 async def on_message(message: discord.Message):
     try:
         text = message.clean_content # primarly converts @mentions to actual user names
-        if textgenwebui_enabled and not bot_behavior.bot_should_reply(message, text): return # Check that bot should reply or not
+        if textgenwebui_enabled and not bot_behavior.bot_should_reply(message, text): 
+            return # Check that bot should reply or not
         # Store the current time. The value will save locally to database.yaml at another time
         bot_database.update_last_user_msg(message.channel.id, save_now=False)
         # if @ mentioning bot, remove the @ mention from user prompt

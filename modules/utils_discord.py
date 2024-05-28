@@ -9,11 +9,10 @@ from typing import Union
 async def ireply(ictx: 'CtxInteraction', process):
     try:
         if task_semaphore.locked(): # If a queued item is currently being processed
-            ireply = await ictx.reply(f'Your {process} request was added to the task queue', ephemeral=True, delete_after=5)
-            # del_time = 5
+            await ictx.reply(f'Your {process} request was added to the task queue', ephemeral=True, delete_after=5)
         else:
-            ireply = await ictx.reply(f'Processing your {process} request', ephemeral=True, delete_after=3)
-        #     del_time = 1
+            await ictx.reply(f'Processing your {process} request', ephemeral=True, delete_after=3)
+
     except Exception as e:
         logging.error(f"Error sending message response to user's interaction command: {e}")
 
