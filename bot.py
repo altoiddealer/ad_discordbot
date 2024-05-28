@@ -2433,11 +2433,11 @@ async def sd_img_gen(channel, temp_dir:str, img_payload:dict, endpoint:str):
 
 async def process_image_gen(img_payload:dict, channel, params:dict):
     try:
-        bot_will_do = params.pop('bot_will_do', {})
-        censor_mode = params.pop('censor_mode', 0)
-        endpoint = params.pop('endpoint', '/sdapi/v1/txt2img')
+        bot_will_do = params.get('bot_will_do', {})
+        censor_mode = params.get('censor_mode', 0)
+        endpoint = params.get('endpoint', '/sdapi/v1/txt2img')
         default_save_path = os.path.join('ad_discordbot', 'sd_outputs')
-        sd_output_dir = params.pop('sd_output_dir', default_save_path)
+        sd_output_dir = params.get('sd_output_dir', default_save_path)
         # Ensure the necessary directories exist
         os.makedirs(sd_output_dir, exist_ok=True)
         temp_dir = os.path.join('ad_discordbot', 'user_images', '__temp')
