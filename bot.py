@@ -2084,7 +2084,7 @@ async def send_char_greeting_or_history(i, char_name):
         # Send message to channel
         message = ''
         if bot_history.greeting_or_history == 'history':
-            last_exchange = bot_history.session_history['visible'][-1] if bot_history.session_history['visible'] else None
+            last_exchange = bot_history.session_history['visible'][-1] if bot_history.session_history.get('visible') else None
             if last_exchange:
                 last_user_message = last_exchange[0]
                 last_assistant_message = last_exchange[1]
@@ -2156,7 +2156,8 @@ async def change_char_task(i, source:str, params:dict):
                 change_embed_info.title = f"{user_name} changed character:"
                 change_embed_info.description = f'**{char_name}**'
                 await channel.send(embed=change_embed_info)
-        await send_char_greeting_or_history(i, char_name)
+        if not bot_history.per_channel_history_enabled:
+            await send_char_greeting_or_history(i, char_name)
         logging.info(f"Character loaded: {char_name}")
     except Exception as e:
         logging.error(f'An error occurred while loading character for "{source}": {e}')
