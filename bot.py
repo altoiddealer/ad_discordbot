@@ -12,7 +12,6 @@ import warnings
 import discord
 from discord.ext import commands
 from discord import app_commands, File
-from discord.ext.commands.context import Context
 import typing
 import io
 import base64
@@ -37,7 +36,7 @@ sys.path.append("ad_discordbot")
 from ad_discordbot.modules.database import Database, ActiveSettings, Config, StarBoard, Statistics
 from ad_discordbot.modules.utils_shared import task_semaphore, shared_path, patterns
 from ad_discordbot.modules.utils_misc import fix_dict, update_dict, sum_update_dict, update_dict_matched_keys, format_time
-from ad_discordbot.modules.utils_discord import ireply, send_long_message, SelectedListItem, SelectOptionsView
+from ad_discordbot.modules.utils_discord import ireply, send_long_message, SelectedListItem, SelectOptionsView, CtxInteraction, get_user_ctx_inter
 from ad_discordbot.modules.utils_files import load_file, merge_base, save_yaml_file
 from ad_discordbot.modules.utils_aspect_ratios import round_to_precision, res_to_model_fit, dims_from_ar, avg_from_dims, get_aspect_ratio_parts, calculate_aspect_ratio_sizes
 
@@ -218,7 +217,7 @@ if sd_enabled:
 
     # Function to attempt restarting the SD WebUI Client in the event it gets stuck
     @client.hybrid_command(description=f"Immediately Restarts the {SD_CLIENT} server. Requires '--api-server-stop' SD WebUI launch flag.")
-    async def restart_sd_client(ctx: discord.ext.commands.Context):
+    async def restart_sd_client(ctx: commands.Context):
         try:
             system_embed = None
             await ctx.send(f"**`/restart_sd_client` __will not work__ unless {SD_CLIENT} was launched with flag: `--api-server-stop`**", delete_after=10)
@@ -539,7 +538,7 @@ imgmodel_update_task = None # Global variable allows process to be cancelled and
 if sd_enabled:
     # Register command for helper function to toggle auto-select imgmodel
     @client.hybrid_command(description='Toggles the automatic Img model changing task')
-    async def toggle_auto_change_imgmodels(ctx):
+    async def toggle_auto_change_imgmodels(ctx: commands.Context):
         global imgmodel_update_task
         if imgmodel_update_task and not imgmodel_update_task.done():
             imgmodel_update_task.cancel()
@@ -975,9 +974,9 @@ async def build_flow_queue(input_flow):
     except Exception as e:
         logging.error(f"Error building Flow: {e}")
 
-async def process_llm_payload_tags(i, llm_payload:dict, llm_prompt:str, mods:dict, params={}):
+async def process_llm_payload_tags(ictx: CtxInteraction, llm_payload:dict, llm_prompt:str, mods:dict, params={}):
     try:
-        user_name = i.author.display_name
+        user_name = get_user_ctx_inter(ictx).display_name
         char_params = {}
         flow = mods.get('flow', None)
         save_to_history = mods.get('save_to_history', None)
@@ -1023,7 +1022,7 @@ async def process_llm_payload_tags(i, llm_payload:dict, llm_prompt:str, mods:dic
                 if char_params == change_character:
                     verb = 'Changing'
                     char_params = {'character': {'char_name': char_params, 'mode': 'change', 'verb': verb}}
-                    await change_char_task(i, 'Tags', char_params)
+                    await change_char_task(ictx, 'Tags', char_params)
                 else:
                     verb = 'Swapping'
                     llm_payload = await swap_llm_character(swap_character, user_name, llm_payload)
@@ -1570,23 +1569,23 @@ async def dynamic_prompting(user_name:str, text:str, i=None):
     return text
 
 @client.event
-async def on_message(i: discord.Interaction):
+async def on_message(message: discord.Message):
     try:
-        text = i.clean_content # primarly converts @mentions to actual user names
-        if textgenwebui_enabled and not bot_behavior.bot_should_reply(i, text): return # Check that bot should reply or not
+        text = message.clean_content # primarly converts @mentions to actual user names
+        if textgenwebui_enabled and not bot_behavior.bot_should_reply(message, text): return # Check that bot should reply or not
         # Store the current time. The value will save locally to database.yaml at another time
-        bot_database.update_last_user_msg(i.channel.id, save_now=False)
+        bot_database.update_last_user_msg(message.channel.id, save_now=False)
         # if @ mentioning bot, remove the @ mention from user prompt
         if text.startswith(f"@{bot_database.last_character} "):
             text = text.replace(f"@{bot_database.last_character} ", "", 1)
         # apply wildcards
-        text = await dynamic_prompting(i.author.display_name, text, i)
+        text = await dynamic_prompting(message.author.display_name, text, message)
 
         async with task_semaphore:
-            async with i.channel.typing():
-                logging.info(f'reply requested: {i.author.display_name} said: "{text}"')
-                await on_message_task(i, 'on_message', text)
-                await run_flow_if_any(i, 'on_message', text)
+            async with message.channel.typing():
+                logging.info(f'reply requested: {message.author.display_name} said: "{text}"')
+                await on_message_task(message, 'on_message', text)
+                await run_flow_if_any(message, 'on_message', text)
 
     except Exception as e:
         logging.error(f"An error occurred in on_message: {e}")
@@ -1594,10 +1593,10 @@ async def on_message(i: discord.Interaction):
 #################################################################
 #################### QUEUED FROM ON MESSAGE #####################
 #################################################################
-async def on_message_task(i: discord.Interaction, source:str, text:str):
+async def on_message_task(ictx: CtxInteraction, source:str, text:str):
     try:
-        user_name = i.author.display_name
-        channel = i.channel
+        user_name = get_user_ctx_inter(ictx).display_name
+        channel = ictx.channel
         params = {} # dictionary to pass parameters through the event
         # collects all tags, sorted into sub-lists by phase (user / llm / userllm)
         text, tags = await get_tags(text)
@@ -1618,26 +1617,26 @@ async def on_message_task(i: discord.Interaction, source:str, text:str):
             # collect matched tag values
             llm_payload_mods, formatting = collect_llm_tag_values(tags)
             # apply tags relevant to LLM payload
-            llm_payload, llm_prompt, params = await process_llm_payload_tags(i, llm_payload, llm_prompt, llm_payload_mods, params)
+            llm_payload, llm_prompt, params = await process_llm_payload_tags(ictx, llm_payload, llm_prompt, llm_payload_mods, params)
             # apply formatting tags to LLM prompt
             llm_prompt = process_tag_formatting(user_name, llm_prompt, formatting)
             # offload to ai_gen queue
             llm_payload['text'] = llm_prompt
 
-            await hybrid_llm_img_gen(i, source, text, tags, llm_payload, params)
+            await hybrid_llm_img_gen(ictx, source, text, tags, llm_payload, params)
 
         elif bot_will_do['should_gen_image']:
             if await sd_online(channel):
                 await channel.send(f'Bot was triggered by Tags to not respond with text.\n**Processing image generation using your input as the prompt ...**', delete_after=5) # msg for if LLM model is unloaded
-            await img_gen_task(source, text, params, i, tags)
+            await img_gen_task(source, text, params, ictx, tags)
 
     except Exception as e:
         logging.error(f"An error occurred processing on_message request: {e}")
 
-async def hybrid_llm_img_gen(i: discord.Interaction, source:str, text:str, tags:dict, llm_payload:dict, params:dict):
+async def hybrid_llm_img_gen(ictx: CtxInteraction, source:str, text:str, tags:dict, llm_payload:dict, params:dict):
     try:
-        user_name = i.author.display_name
-        channel = i.channel
+        user_name = get_user_ctx_inter(ictx).display_name
+        channel = ictx.channel
         bot_will_do = params['bot_will_do']
         change_embed = None
         img_gen_embed = None
@@ -1649,7 +1648,7 @@ async def hybrid_llm_img_gen(i: discord.Interaction, source:str, text:str, tags:
         mode = llmmodel_params.get('mode', 'change') # default to 'change' unless a tag was triggered with 'swap'
         if llmmodel_params:
             orig_llmmodel = shared.model_name                       # copy current LLM model name
-            change_embed = await change_llmmodel_task(i, params)    # Change LLM model
+            change_embed = await change_llmmodel_task(ictx, params)    # Change LLM model
             if mode == 'swap' and change_embed:                     # Delete embed before the second call
                 await change_embed.delete()
 
@@ -1671,10 +1670,10 @@ async def hybrid_llm_img_gen(i: discord.Interaction, source:str, text:str, tags:
                     await channel.send(f'(Cannot process text request: No LLM model is currently loaded. Use "/llmmodel" to load a model.)', delete_after=10)
                     logging.warning(f'Bot tried to generate text for {user_name}, but no LLM model was loaded')
             # Check to apply Server Mode
-            llm_payload = apply_server_mode(llm_payload, i)
+            llm_payload = apply_server_mode(llm_payload, ictx)
             # Only generate TTS for the server conntected to Voice Channel
             tts_sw = None
-            if (not bot_will_do['should_send_text']) or (voice_client and (voice_client != i.guild.voice_client) and int(tts_settings.get('play_mode', 0)) == 0):
+            if (not bot_will_do['should_send_text']) or (voice_client and (voice_client != ictx.guild.voice_client) and int(tts_settings.get('play_mode', 0)) == 0):
                 tts_sw = await toggle_tts(toggle='off')
             # generate text with text-gen-webui
             last_resp, tts_resp = await llm_gen(llm_payload, tts_sw)
@@ -1690,7 +1689,7 @@ async def hybrid_llm_img_gen(i: discord.Interaction, source:str, text:str, tags:
             # if LLM model swapping was triggered
             if mode == 'swap':
                 params['llmmodel']['llmmodel_name'] = orig_llmmodel
-                change_embed = await change_llmmodel_task(i, params)    # Swap LLM Model back
+                change_embed = await change_llmmodel_task(ictx, params)    # Swap LLM Model back
                 if change_embed:
                     await change_embed.delete()                         # Delete embed again after the second call
 
@@ -1702,10 +1701,10 @@ async def hybrid_llm_img_gen(i: discord.Interaction, source:str, text:str, tags:
                 if img_gen_embed:
                     await img_gen_embed.delete()
                 params['bot_will_do'] = bot_will_do
-                await img_gen_task(source, last_resp, params, i, tags)
+                await img_gen_task(source, last_resp, params, ictx, tags)
         if tts_resp:
-            await process_tts_resp(channel, tts_resp, i)
-        mention_resp = update_mention(i.author.mention, last_resp) # @mention non-consecutive users
+            await process_tts_resp(channel, tts_resp, ictx)
+        mention_resp = update_mention(get_user_ctx_inter(ictx).mention, last_resp) # @mention non-consecutive users
         if bot_will_do['should_send_text']:
             await send_long_message(channel, mention_resp)
         if send_user_image:
@@ -1849,10 +1848,10 @@ async def llm_gen(llm_payload:dict, tts_sw=None):
         traceback.print_exc()
         return None, None
 
-async def cont_regen_task(i:discord.Interaction, source:str, text:str, message:discord.Message):
+async def cont_regen_task(inter:discord.Interaction, source:str, text:str, message:discord.Message):
     try:
-        user_name = i.user.display_name
-        channel = i.channel
+        user_name = get_user_ctx_inter(inter).display_name # just incase this function is used elsewhere later
+        channel = inter.channel
         cmd = ''
         system_embed = None
         llm_payload = await init_llm_payload(user_name, text)
@@ -1872,10 +1871,10 @@ async def cont_regen_task(i:discord.Interaction, source:str, text:str, message:d
             system_embed_info.description = f'{cmd} text for {user_name}'
             system_embed = await channel.send(embed=system_embed_info)
         # Check to apply Server Mode
-        llm_payload = apply_server_mode(llm_payload, i)
+        llm_payload = apply_server_mode(llm_payload, inter)
         # Only generate TTS for the server conntected to Voice Channel
         tts_sw = None
-        if voice_client and (voice_client != i.guild.voice_client) and int(tts_settings.get('play_mode', 0)) == 0:
+        if voice_client and (voice_client != inter.guild.voice_client) and int(tts_settings.get('play_mode', 0)) == 0:
             tts_sw = await toggle_tts(toggle='off')
         # generate text with text-gen-webui
         last_resp, tts_resp = await llm_gen(llm_payload, tts_sw)
@@ -1887,9 +1886,9 @@ async def cont_regen_task(i:discord.Interaction, source:str, text:str, message:d
         fetched_message = await channel.fetch_message(message)
         await fetched_message.delete()
         if tts_resp:
-            await process_tts_resp(channel, tts_resp, i)
+            await process_tts_resp(channel, tts_resp, inter)
         if source == 'regen':
-            await i.followup.send('__Regenerated text:__', silent=True)
+            await inter.followup.send('__Regenerated text:__', silent=True)
         await send_long_message(channel, last_resp)
     except Exception as e:
         e_msg = f'An error occurred while processing "{cmd}"'
@@ -1897,13 +1896,13 @@ async def cont_regen_task(i:discord.Interaction, source:str, text:str, message:d
         if str(e).startswith('cannot unpack non-iterable NoneType object'):
             none_msg = f'Error: {cmd} only works on messages sent from the bot during current session.'
             logging.error(none_msg)
-            await i.followup.send(none_msg, silent=True)
+            await inter.followup.send(none_msg, silent=True)
         else:
-            await i.followup.send(e_msg, silent=True)
+            await inter.followup.send(e_msg, silent=True)
         if system_embed:
             await system_embed.delete()
 
-async def speak_task(ctx, text:str, params:dict):
+async def speak_task(ctx: commands.Context, text:str, params:dict):
     user_name = ctx.author.display_name
     channel = ctx.channel
     try:
@@ -2013,10 +2012,10 @@ async def change_imgmodel_task(user_name:str, channel, params:dict, i=None):
         return False
 
 # Process selected LLM model
-async def change_llmmodel_task(i, params:dict):
+async def change_llmmodel_task(ictx, params:dict):
     try:
-        user_name = i.author.display_name
-        channel = i.channel
+        user_name = get_user_ctx_inter(ictx).display_name
+        channel = ictx.channel
         change_embed = None
         llmmodel_params = params.get('llmmodel', {})
         llmmodel_name = llmmodel_params.get('llmmodel_name')
@@ -2066,10 +2065,10 @@ async def change_llmmodel_task(i, params:dict):
 #################################################################
 #################### QUEUED CHARACTER CHANGE ####################
 #################################################################
-async def change_char_task(i, source:str, params:dict):
+async def change_char_task(ictx: CtxInteraction, source:str, params:dict):
     try:
-        user_name = i.author.display_name
-        channel = i.channel
+        user_name = get_user_ctx_inter(ictx).display_name
+        channel = ictx.channel
         change_embed = None
         char_params = params.get('character', {})
         char_name = char_params.get('char_name', {})
@@ -2202,9 +2201,9 @@ async def peek_flow_queue(queue, user_name:str, text:str):
         await queue.put(item_to_put_back)
     return flow_name, formatted_text
 
-async def flow_task(i, source:str, text:str):
-    user_name = i.author.display_name
-    channel = i.channel
+async def flow_task(ictx: CtxInteraction, source:str, text:str):
+    user_name = get_user_ctx_inter(ictx).display_name
+    channel = ictx.channel
     try:
         global flow_event
         flow_embed = None
@@ -2220,7 +2219,7 @@ async def flow_task(i, source:str, text:str):
                 flow_embed_info.description = flow_embed_info.description.replace("**Processing", ":white_check_mark: **")
                 flow_embed_info.description += f'**Processing Step {total_flow_steps + 1 - remaining_flow_steps}/{total_flow_steps}**{flow_name}\n'
                 if flow_embed: await flow_embed.edit(embed=flow_embed_info)
-            await on_message_task(i, source, text)
+            await on_message_task(ictx, source, text)
         if flow_embed_info:
             flow_embed_info.title = f"Flow completed for {user_name}"
             flow_embed_info.description = flow_embed_info.description.replace("**Processing", ":white_check_mark: **")
@@ -2238,15 +2237,15 @@ async def flow_task(i, source:str, text:str):
         flow_queue.task_done()
 
 
-async def run_flow_if_any(i, source:str, text:str):
+async def run_flow_if_any(ictx: CtxInteraction, source:str, text:str):
     if flow_queue.qsize() > 0:
         # flows are activated in process_llm_payload_tags(), and is where the flow queue is populated
-        await flow_task(i, source, text)
+        await flow_task(ictx, source, text)
 
 #################################################################
 #################### QUEUED IMAGE GENERATION ####################
 #################################################################
-async def sd_online(channel):
+async def sd_online(channel: discord.TextChannel):
     try:
         r = requests.get(f'{SD_URL}/')
         status = r.raise_for_status()
@@ -3106,9 +3105,9 @@ def match_img_tags(img_prompt:str, tags:dict) -> dict:
 
     return tags
 
-async def img_gen_task(source:str, img_prompt:str, params:dict, i=None, tags={}):
-    user_name = i.author.display_name or None
-    channel = i.channel
+async def img_gen_task(source:str, img_prompt:str, params:dict, ictx:CtxInteraction, tags={}):
+    user_name = get_user_ctx_inter(ictx).display_name or None
+    channel = ictx.channel
     bot_will_do = params.get('bot_will_do', {})
     censor_mode = params.get('censor_mode', 0)
     try:
@@ -3153,16 +3152,16 @@ async def img_gen_task(source:str, img_prompt:str, params:dict, i=None, tags={})
             swap_params = {'imgmodel': {}}
             swap_params['imgmodel']['imgmodel_name'] = imgmodel_params.pop('current_imgmodel_name', '')
             swap_params['imgmodel']['sd_model_checkpoint'] = imgmodel_params.pop('current_sd_model_checkpoint', '')
-            should_swap = await change_imgmodel_task(user_name, channel, params, i)
+            should_swap = await change_imgmodel_task(user_name, channel, params, ictx)
         # Generate and send images
         params['bot_will_do'] = bot_will_do
         await process_image_gen(img_payload, channel, params)
         if (source == 'image' or (bot_will_do['should_send_text'] and not bot_will_do['should_gen_text'])) and img_send_embed_info:
             img_send_embed_info.title = f"{user_name} requested an image:"
             img_send_embed_info.description = params.get('message', img_prompt)
-            if i:
-                if hasattr(i, 'followup'): await i.followup.reply(embed=img_send_embed_info)
-                else: await i.reply(embed=img_send_embed_info)
+            if ictx:
+                if hasattr(ictx, 'followup'): await ictx.followup.reply(embed=img_send_embed_info)
+                else: await ictx.reply(embed=img_send_embed_info)
             else: await channel.send(embed=img_send_embed_info)
         if send_user_image:
             await channel.send(file=send_user_image) if len(send_user_image) == 1 else await channel.send(files=send_user_image)
@@ -3170,7 +3169,7 @@ async def img_gen_task(source:str, img_prompt:str, params:dict, i=None, tags={})
         if should_swap:
             swap_params['imgmodel']['mode'] = 'swap_back'
             swap_params['imgmodel']['verb'] = 'Swapping back to'
-            await change_imgmodel_task(user_name, channel, swap_params, i)
+            await change_imgmodel_task(user_name, channel, swap_params, ictx)
         return
     except Exception as e:
         logging.error(f"An error occurred in img_gen_task(): {e}")
@@ -3283,7 +3282,7 @@ if sd_enabled:
         @app_commands.describe(controlnet='Guides image diffusion using an input image or map.')
         @app_commands.choices(size=size_choices)
         @app_commands.choices(style=style_choices)
-        async def image(ctx: discord.ext.commands.Context, prompt: str, size: typing.Optional[app_commands.Choice[str]], style: typing.Optional[app_commands.Choice[str]], neg_prompt: typing.Optional[str], img2img: typing.Optional[discord.Attachment], img2img_mask: typing.Optional[discord.Attachment],
+        async def image(ctx: commands.Context, prompt: str, size: typing.Optional[app_commands.Choice[str]], style: typing.Optional[app_commands.Choice[str]], neg_prompt: typing.Optional[str], img2img: typing.Optional[discord.Attachment], img2img_mask: typing.Optional[discord.Attachment],
             face_swap: typing.Optional[discord.Attachment], controlnet: typing.Optional[discord.Attachment]):
             user_selections = {"prompt": prompt, "size": size.value if size else None, "style": style.value if style else None, "neg_prompt": neg_prompt, "img2img": img2img if img2img else None, "img2img_mask": img2img_mask if img2img_mask else None,
             "face_swap": face_swap if face_swap else None, "cnet": controlnet if controlnet else None}
@@ -3296,7 +3295,7 @@ if sd_enabled:
         @app_commands.describe(controlnet='Guides image diffusion using an input image or map.')
         @app_commands.choices(size=size_choices)
         @app_commands.choices(style=style_choices)
-        async def image(ctx: discord.ext.commands.Context, prompt: str, size: typing.Optional[app_commands.Choice[str]], style: typing.Optional[app_commands.Choice[str]], neg_prompt: typing.Optional[str], img2img: typing.Optional[discord.Attachment], img2img_mask: typing.Optional[discord.Attachment],
+        async def image(ctx: commands.Context, prompt: str, size: typing.Optional[app_commands.Choice[str]], style: typing.Optional[app_commands.Choice[str]], neg_prompt: typing.Optional[str], img2img: typing.Optional[discord.Attachment], img2img_mask: typing.Optional[discord.Attachment],
             controlnet: typing.Optional[discord.Attachment]):
             user_selections = {"prompt": prompt, "size": size.value if size else None, "style": style.value if style else None, "neg_prompt": neg_prompt, "img2img": img2img if img2img else None, "img2img_mask": img2img_mask if img2img_mask else None,
             "cnet": controlnet if controlnet else None}
@@ -3309,7 +3308,7 @@ if sd_enabled:
         @app_commands.describe(face_swap='For best results, attach a square (1:1) cropped image of a face, to swap into the output.')
         @app_commands.choices(size=size_choices)
         @app_commands.choices(style=style_choices)
-        async def image(ctx: discord.ext.commands.Context, prompt: str, size: typing.Optional[app_commands.Choice[str]], style: typing.Optional[app_commands.Choice[str]], neg_prompt: typing.Optional[str], img2img: typing.Optional[discord.Attachment], img2img_mask: typing.Optional[discord.Attachment],
+        async def image(ctx: commands.Context, prompt: str, size: typing.Optional[app_commands.Choice[str]], style: typing.Optional[app_commands.Choice[str]], neg_prompt: typing.Optional[str], img2img: typing.Optional[discord.Attachment], img2img_mask: typing.Optional[discord.Attachment],
             face_swap: typing.Optional[discord.Attachment]):
             user_selections = {"prompt": prompt, "size": size.value if size else None, "style": style.value if style else None, "neg_prompt": neg_prompt, "img2img": img2img if img2img else None, "img2img_mask": img2img_mask if img2img_mask else None,
             "face_swap": face_swap if face_swap else None}
@@ -3321,11 +3320,11 @@ if sd_enabled:
         @app_commands.describe(img2img_mask='Masks the diffusion strength for the img2img input. Requires img2img.')
         @app_commands.choices(size=size_choices)
         @app_commands.choices(style=style_choices)
-        async def image(ctx: discord.ext.commands.Context, prompt: str,  size: typing.Optional[app_commands.Choice[str]], style: typing.Optional[app_commands.Choice[str]], neg_prompt: typing.Optional[str], img2img: typing.Optional[discord.Attachment], img2img_mask: typing.Optional[discord.Attachment]):
+        async def image(ctx: commands.Context, prompt: str,  size: typing.Optional[app_commands.Choice[str]], style: typing.Optional[app_commands.Choice[str]], neg_prompt: typing.Optional[str], img2img: typing.Optional[discord.Attachment], img2img_mask: typing.Optional[discord.Attachment]):
             user_selections = {"prompt": prompt, "size": size.value if size else None, "style": style.value if style else None, "neg_prompt": neg_prompt, "img2img": img2img if img2img else None, "img2img_mask": img2img_mask if img2img_mask else None}
             await process_image(ctx, user_selections)
 
-    async def process_image(ctx, selections):
+    async def process_image(ctx: commands.Context, selections):
         # Do not process if SD WebUI is offline
         if not await sd_online(ctx.channel):
             await ctx.defer()
@@ -3652,23 +3651,23 @@ if system_embed_info:
         await ctx.send(embed=system_embed_info)
 
 @client.hybrid_command(description="Toggle current channel as main channel for bot to auto-reply without needing to be called")
-async def main(i):
+async def main(ctx: commands.Context):
     try:
-        if i.channel.id in bot_database.main_channels:
-            bot_database.main_channels.remove(i.channel.id) # If the channel is already in the main channels, remove it
-            action_message = f'Removed {i.channel.mention} from main channels. Use "/main" again if you want to add it back.'
+        if ctx.channel.id in bot_database.main_channels:
+            bot_database.main_channels.remove(ctx.channel.id) # If the channel is already in the main channels, remove it
+            action_message = f'Removed {ctx.channel.mention} from main channels. Use "/main" again if you want to add it back.'
         else:
             # If the channel is not in the main channels, add it
-            bot_database.main_channels.append(i.channel.id)
-            action_message = f'Added {i.channel.mention} to main channels. Use "/main" again to remove it.'
+            bot_database.main_channels.append(ctx.channel.id)
+            action_message = f'Added {ctx.channel.mention} to main channels. Use "/main" again to remove it.'
 
         bot_database.save()
-        await i.reply(action_message)
+        await ctx.reply(action_message)
     except Exception as e:
         logging.error(f"Error toggling main channel setting: {e}")
 
 @client.hybrid_command(description="Update dropdown menus without restarting bot script.")
-async def sync(ctx: discord.ext.commands.Context):
+async def sync(ctx: commands.Context):
     try:
         await ctx.reply('Syncing client tree. Note: Menus may not update instantly.', ephemeral=True, delete_after=10)
         logging.info(f"{ctx.author.display_name} used '/sync' to sync the client.tree (refresh commands).")
@@ -3682,7 +3681,7 @@ async def sync(ctx: discord.ext.commands.Context):
 if textgenwebui_enabled:
     # /reset command - Resets current character
     @client.hybrid_command(description="Reset the conversation with current character")
-    async def reset_conversation(ctx: discord.ext.commands.Context):
+    async def reset_conversation(ctx: commands.Context):
         try:
             shared.stop_everything = True
             await ireply(ctx, 'character reset') # send a response msg to the user
@@ -3698,7 +3697,7 @@ if textgenwebui_enabled:
 
     # /reset command - Resets current character
     @client.hybrid_command(description="Saves the current conversation to a new file in text-generation-webui/logs/")
-    async def save_conversation(ctx: discord.ext.commands.Context):
+    async def save_conversation(ctx: commands.Context):
         try:
             await ctx.reply('Saved current conversation history', ephemeral=True)
             bot_history.save_history()
@@ -3707,29 +3706,29 @@ if textgenwebui_enabled:
 
     # Context menu command to Regenerate last reply
     @client.tree.context_menu(name="regenerate")
-    async def regen_llm_gen(i: discord.Interaction, message:discord.Message):
+    async def regen_llm_gen(inter: discord.Interaction, message:discord.Message):
         text = message.content
-        await i.response.defer(thinking=False)
+        await inter.response.defer(thinking=False)
 
         async with task_semaphore:
-            async with i.channel.typing():
+            async with inter.channel.typing():
                 # offload to ai_gen queue
-                logging.info(f'{i.user.display_name} used "Regenerate"')
-                await cont_regen_task(i, 'regen', text, message.id)
-                await run_flow_if_any(i, 'regen', text)
+                logging.info(f'{inter.user.display_name} used "Regenerate"')
+                await cont_regen_task(inter, 'regen', text, message.id)
+                await run_flow_if_any(inter, 'regen', text)
 
     # Context menu command to Continue last reply
     @client.tree.context_menu(name="continue")
-    async def continue_llm_gen(i: discord.Interaction, message:discord.Message):
+    async def continue_llm_gen(inter: discord.Interaction, message:discord.Message):
         text = message.content
-        await i.response.defer(thinking=False)
+        await inter.response.defer(thinking=False)
 
         async with task_semaphore:
-            async with i.channel.typing():
+            async with inter.channel.typing():
                 # offload to ai_gen queue
-                logging.info(f'{i.user.display_name} used "Continue"')
-                await cont_regen_task(i, 'cont', text, message.id)
-                await run_flow_if_any(i, 'cont', text)
+                logging.info(f'{inter.user.display_name} used "Continue"')
+                await cont_regen_task(inter, 'cont', text, message.id)
+                await run_flow_if_any(inter, 'cont', text)
 
 async def load_character_data(char_name):
     char_data = None
@@ -3916,7 +3915,7 @@ def get_all_characters():
 if textgenwebui_enabled:
     # Command to change characters
     @client.hybrid_command(description="Choose a character")
-    async def character(ctx: discord.ext.commands.Context):
+    async def character(ctx: commands.Context):
         try:
             _, filtered_characters = get_all_characters()
             if filtered_characters:
@@ -4131,7 +4130,7 @@ async def process_imgmodel(ctx, selected_imgmodel_value):
 if sd_enabled:
 
     @client.hybrid_command(description="Choose an Img Model")
-    async def imgmodel(ctx: discord.ext.commands.Context):
+    async def imgmodel(ctx: commands.Context):
         try:
             all_imgmodels = await fetch_imgmodels()
             if all_imgmodels:
@@ -4178,7 +4177,7 @@ async def process_llmmodel(ctx, selected_llmmodel):
 if textgenwebui_enabled:
 
     @client.hybrid_command(description="Choose an LLM Model")
-    async def llmmodel(ctx: discord.ext.commands.Context):
+    async def llmmodel(ctx: commands.Context):
         try:
             all_llmmodels = utils.get_available_models()
             if all_llmmodels:
@@ -4203,7 +4202,7 @@ if textgenwebui_enabled:
 #################################################################
 ####################### /SPEAK COMMAND #######################
 #################################################################
-async def process_speak_silero_non_eng(ctx, lang):
+async def process_speak_silero_non_eng(ctx: commands.Context, lang):
     non_eng_speaker = None
     non_eng_model = None
     try:
@@ -4223,7 +4222,7 @@ async def process_speak_silero_non_eng(ctx, lang):
         await ctx.send(f"Error processing non-English voice for silero_tts: {e}", ephemeral=True)
     return tts_args
 
-async def process_speak_args(ctx, selected_voice=None, lang=None, user_voice=None):
+async def process_speak_args(ctx: commands.Context, selected_voice=None, lang=None, user_voice=None):
     try:
         tts_args = {}
         if lang:
@@ -4270,7 +4269,7 @@ async def convert_and_resample_mp3(ctx, mp3_file, output_directory=None):
     finally:
         if mp3_file: os.remove(mp3_file)
 
-async def process_user_voice(ctx, voice_input=None):
+async def process_user_voice(ctx: commands.Context, voice_input=None):
     try:
         if not (voice_input and getattr(voice_input, 'content_type', '').startswith("audio/")):
             return ''
@@ -4303,7 +4302,7 @@ async def process_user_voice(ctx, voice_input=None):
         logging.error(f"Error processing user provided voice file: {e}")
         await ctx.send("An error occurred while processing the voice file.", ephemeral=True)
 
-async def process_speak(ctx, input_text, selected_voice=None, lang=None, voice_input=None):
+async def process_speak(ctx: commands.Context, input_text, selected_voice=None, lang=None, voice_input=None):
     try:
         user_voice = await process_user_voice(ctx, voice_input)
         tts_args = await process_speak_args(ctx, selected_voice, lang, user_voice)
@@ -4377,7 +4376,7 @@ if textgenwebui_enabled and tts_client and tts_client in supported_tts_clients:
         @app_commands.describe(voice=f'Voices {voice_options_label.upper()}')
         @app_commands.choices(voice=voice_options)
         @app_commands.choices(lang=lang_options)
-        async def speak(ctx: discord.ext.commands.Context, input_text: str, voice: typing.Optional[app_commands.Choice[str]], lang: typing.Optional[app_commands.Choice[str]], voice_input: typing.Optional[discord.Attachment]):
+        async def speak(ctx: commands.Context, input_text: str, voice: typing.Optional[app_commands.Choice[str]], lang: typing.Optional[app_commands.Choice[str]], voice_input: typing.Optional[discord.Attachment]):
             # Only generate TTS for the server conntected to Voice Channel
             if voice_client and (voice_client != ctx.guild.voice_client) and int(tts_settings.get('play_mode', 0)) == 0:
                 await ctx.send('Voice Channel is not enabled on this server', ephemeral=True, delete_after=5)
@@ -4398,7 +4397,7 @@ if textgenwebui_enabled and tts_client and tts_client in supported_tts_clients:
         @app_commands.describe(voice_2=f'Voices {voice_options1_label.upper()}')
         @app_commands.choices(voice_2=voice_options1)
         @app_commands.choices(lang=lang_options)
-        async def speak(ctx: discord.ext.commands.Context, input_text: str, voice_1: typing.Optional[app_commands.Choice[str]], voice_2: typing.Optional[app_commands.Choice[str]], lang: typing.Optional[app_commands.Choice[str]], voice_input: typing.Optional[discord.Attachment]):
+        async def speak(ctx: commands.Context, input_text: str, voice_1: typing.Optional[app_commands.Choice[str]], voice_2: typing.Optional[app_commands.Choice[str]], lang: typing.Optional[app_commands.Choice[str]], voice_input: typing.Optional[discord.Attachment]):
             # Only generate TTS for the server conntected to Voice Channel
             if voice_client and (voice_client != ctx.guild.voice_client) and int(tts_settings.get('play_mode', 0)) == 0:
                 await ctx.send('Voice Channel is not enabled on this server', ephemeral=True, delete_after=5)
@@ -4424,7 +4423,7 @@ if textgenwebui_enabled and tts_client and tts_client in supported_tts_clients:
         @app_commands.describe(voice_3=f'Voices {voice_options2_label.upper()}')
         @app_commands.choices(voice_3=voice_options2)
         @app_commands.choices(lang=lang_options)
-        async def speak(ctx: discord.ext.commands.Context, input_text: str, voice_1: typing.Optional[app_commands.Choice[str]], voice_2: typing.Optional[app_commands.Choice[str]], voice_3: typing.Optional[app_commands.Choice[str]], lang: typing.Optional[app_commands.Choice[str]], voice_input: typing.Optional[discord.Attachment]):
+        async def speak(ctx: commands.Context, input_text: str, voice_1: typing.Optional[app_commands.Choice[str]], voice_2: typing.Optional[app_commands.Choice[str]], voice_3: typing.Optional[app_commands.Choice[str]], lang: typing.Optional[app_commands.Choice[str]], voice_input: typing.Optional[discord.Attachment]):
             # Only generate TTS for the server conntected to Voice Channel
             if voice_client and (voice_client != ctx.guild.voice_client) and int(tts_settings.get('play_mode', 0)) == 0:
                 await ctx.send('Voice Channel is not enabled on this server', ephemeral=True, delete_after=5)
@@ -4479,30 +4478,30 @@ class Behavior:
             return time_since_last_conversation.total_seconds() < self.conversation_recency
         return False
 
-    def bot_should_reply(self, i, text):
+    def bot_should_reply(self, message:discord.Message, text:str) -> bool:
         # Don't reply to @everyone or to itself
-        if i.mention_everyone or (i.author == client.user and not self.probability_to_reply(self.reply_to_itself)):
+        if message.mention_everyone or (message.author == client.user and not self.probability_to_reply(self.reply_to_itself)):
             return False
         # Whether to reply to other bots
-        if i.author.bot and bot_database.last_character.lower() in text.lower() and i.channel.id in bot_database.main_channels:
+        if message.author.bot and bot_database.last_character.lower() in text.lower() and message.channel.id in bot_database.main_channels:
             if 'bye' in text.lower(): # don't reply if another bot is saying goodbye
                 return False
             return self.probability_to_reply(self.reply_to_bots_when_addressed)
         # Whether to reply when text is nested in parentheses
-        if self.ignore_parentheses and (i.content.startswith('(') and i.content.endswith(')')) or (i.content.startswith('<:') and i.content.endswith(':>')):
+        if self.ignore_parentheses and (message.content.startswith('(') and message.content.endswith(')')) or (message.content.startswith('<:') and message.content.endswith(':>')):
             return False
         # Whether to reply if only speak when spoken to
-        if (self.only_speak_when_spoken_to and (client.user.mentioned_in(i) or any(word in i.content.lower() for word in bot_database.last_character.lower().split()))) \
-            or (self.in_active_conversation(i.author.id) and i.channel.id in bot_database.main_channels):
+        if (self.only_speak_when_spoken_to and (client.user.mentioned_in(message) or any(word in message.content.lower() for word in bot_database.last_character.lower().split()))) \
+            or (self.in_active_conversation(message.author.id) and message.channel.id in bot_database.main_channels):
             return True
         reply = False
         # few more conditions
-        if i.author.bot and i.channel.id in bot_database.main_channels:
+        if message.author.bot and message.channel.id in bot_database.main_channels:
             reply = self.probability_to_reply(self.chance_to_reply_to_other_bots)
-        if self.go_wild_in_channel and i.channel.id in bot_database.main_channels:
+        if self.go_wild_in_channel and message.channel.id in bot_database.main_channels:
             reply = True
         if reply:
-            self.update_user_dict(i.author.id)
+            self.update_user_dict(message.author.id)
         return reply
 
     def probability_to_reply(self, probability):

@@ -2,16 +2,17 @@ from ad_discordbot.modules.logs import import_track, log, get_logger; import_tra
 logging = get_logger(__name__)
 from ad_discordbot.modules.utils_shared import task_semaphore
 import discord
-
+from discord.ext import commands
+from typing import Union
 
 # Send message response to user's interaction command
-async def ireply(i, process):
+async def ireply(ictx: 'CtxInteraction', process):
     try:
         if task_semaphore.locked(): # If a queued item is currently being processed
-            ireply = await i.reply(f'Your {process} request was added to the task queue', ephemeral=True, delete_after=5)
+            ireply = await ictx.reply(f'Your {process} request was added to the task queue', ephemeral=True, delete_after=5)
             # del_time = 5
         else:
-            ireply = await i.reply(f'Processing your {process} request', ephemeral=True, delete_after=3)
+            ireply = await ictx.reply(f'Processing your {process} request', ephemeral=True, delete_after=3)
         #     del_time = 1
     except Exception as e:
         logging.error(f"Error sending message response to user's interaction command: {e}")
@@ -164,3 +165,14 @@ class SelectOptionsView(discord.ui.View):
         self.selected_item = self.unload_item
         await interaction.response.defer()
         self.stop()
+        
+
+CtxInteraction = Union[commands.Context, discord.Interaction, discord.Message]
+
+def get_user_ctx_inter(ictx: CtxInteraction) -> Union[discord.User, discord.Member]:
+    # Found instances of "i" with \((self, )?i[^a-z_\)]
+    if isinstance(ictx, discord.Interaction):
+        log.warning(f'This is an interaction: {ictx.author}')
+        return ictx.user
+    
+    return ictx.author
