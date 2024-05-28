@@ -2147,7 +2147,7 @@ def bot_should_do(tags={}, prior_set={}):
 # For @ mentioning users who were not last replied to
 previous_user_mention = ''
 
-def update_mention(user_mention:discord.User.mention, last_resp:str=''):
+def update_mention(user_mention: str, last_resp:str=''):
     global previous_user_mention
     mention_resp = last_resp
 
