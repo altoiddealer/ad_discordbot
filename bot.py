@@ -2139,7 +2139,7 @@ async def change_char_task(ictx: CtxInteraction, source:str, params:dict):
         if bot_history.autoload_history and (bot_history.change_char_history_method == 'keep' and source != 'reset'):
             bot_history.load_bot_history()
         else:
-            await bot_history.reset_session_history(i)
+            await bot_history.reset_session_history(ictx)
         if change_embed:
             await change_embed.delete()
             # Send embeds to announcement channels
@@ -3703,18 +3703,18 @@ if system_embed_info:
         await ctx.send(embed=system_embed_info)
 
 @client.hybrid_command(description="Toggle current channel as an announcement channel for the bot (model changes)")
-async def announce(i):
+async def announce(inter):
     try:
-        if i.channel.id in bot_database.announce_channels:
-            bot_database.announce_channels.remove(i.channel.id) # If the channel is already in the announce channels, remove it
-            action_message = f'Removed {i.channel.mention} from announce channels. Use "/announce" again if you want to add it back.'
+        if inter.channel.id in bot_database.announce_channels:
+            bot_database.announce_channels.remove(inter.channel.id) # If the channel is already in the announce channels, remove it
+            action_message = f'Removed {inter.channel.mention} from announce channels. Use "/announce" again if you want to add it back.'
         else:
             # If the channel is not in the announce channels, add it
-            bot_database.announce_channels.append(i.channel.id)
-            action_message = f'Added {i.channel.mention} to announce channels. Use "/announce" again to remove it.'
+            bot_database.announce_channels.append(inter.channel.id)
+            action_message = f'Added {inter.channel.mention} to announce channels. Use "/announce" again to remove it.'
 
         bot_database.save()
-        await i.reply(action_message)
+        await inter.reply(action_message)
     except Exception as e:
         logging.error(f"Error toggling announce channel setting: {e}")
 
@@ -4862,8 +4862,8 @@ class History:
             if save_to_history:
                 i_list.append([prompt, reply])
                 # Do not append Visible list for per-channel history
-                if not self.per_channel_history_enabled:
-                    v_list.append([prompt, reply])
+               # if not self.per_channel_history_enabled:
+                v_list.append([prompt, reply])
         #TODO return prompt
 
     def get_history_lists_keys(self, chankey:str=None):
@@ -4939,17 +4939,17 @@ class History:
                 self.session_history = {'internal': [], 'visible': []}
             return self.session_history
 
-    async def reset_session_history(self, i=None):
+    async def reset_session_history(self, inter=None):
         # If per-channel history
         if self.per_channel_history_enabled:
             # if no interaction, all history will be reset
-            if i:
-                guild_chan = f'{i.guild} - {i.channel}'
+            if inter:
+                guild_chan = f'{inter.guild} - {inter.channel}'
                 logging.info(f"Starting new conversation in: {guild_chan}.")
                 # If channel has history
-                if self.session_history.get(i.channel.id):
-                    self.session_history[i.channel.id]['internal'] = []
-                    self.session_history[i.channel.id]['visible'] = [[], []]
+                if self.session_history.get(inter.channel.id):
+                    self.session_history[inter.channel.id]['internal'] = []
+                    self.session_history[inter.channel.id]['visible'] = [[], []]
                 # if channel does not have history
                 else:
                     await self.get_channel_history(i) # will initialize a fresh channel key
