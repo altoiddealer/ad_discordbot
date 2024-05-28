@@ -4936,7 +4936,7 @@ class History:
                     'guild_name': str(i.guild),
                     'channel_name': str(i.channel),
                     'internal': [],
-                    'visible': []
+                    'visible': [[], []]
                     }
             return self.session_history[chkey]
         # If only one history
@@ -4950,11 +4950,12 @@ class History:
         if self.per_channel_history_enabled:
             # if no interaction, all history will be reset
             if i:
-                logging.info(f"Starting new conversation in: {i.channel.id}.")
+                guild_chan = f'{i.guild} - {i.channel}'
+                logging.info(f"Starting new conversation in: {guild_chan}.")
                 # If channel has history
                 if self.session_history.get(i.channel.id):
                     self.session_history[i.channel.id]['internal'] = []
-                    self.session_history[i.channel.id]['visible'] = []
+                    self.session_history[i.channel.id]['visible'] = [[], []]
                 # if channel does not have history
                 else:
                     await self.get_channel_history(i) # will initialize a fresh channel key
