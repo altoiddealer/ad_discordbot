@@ -168,8 +168,7 @@ if sd_enabled:
     async def sd_api(endpoint:str, method='get', json=None, retry=True):
         try:
             async with aiohttp.ClientSession() as session:
-                request_method = getattr(session, method.lower())
-                async with request_method(url=f'{SD_URL}{endpoint}', json=json) as response:
+                async with session.request(method.lower(), url=f'{SD_URL}{endpoint}', json=json) as response:
                     if response.status == 200:
                         r = await response.json()
                         if SD_CLIENT is None and endpoint != '/sdapi/v1/cmd-flags':
