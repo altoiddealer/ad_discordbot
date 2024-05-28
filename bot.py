@@ -271,7 +271,7 @@ else:
 
 if textgenwebui_enabled:
     import modules.extensions as extensions_module
-    from modules.chat import chatbot_wrapper, load_character, save_history, get_history_file_path, find_all_histories, start_new_chat
+    from modules.chat import chatbot_wrapper, load_character, save_history, get_history_file_path, find_all_histories
     from modules import shared
     from modules import chat, utils
     from modules.LoRA import add_lora_to_model
@@ -1839,7 +1839,7 @@ async def llm_gen(llm_payload:dict, i=None, tts_sw=None):
         if last_resp:
             update_llm_gen_statistics(last_resp) # Update statistics
             save_to_history = llm_payload.get('save_to_history', True)
-            bot_history.manage_history(prompt=llm_payload['text'], reply=last_resp, save_to_history=save_to_history, channel_id=i.channel.id)
+            bot_history.manage_history(prompt=llm_payload['text'], reply=last_resp, save_to_history=save_to_history, chankey=str(i.channel.id))
 
         # Toggle TTS back on if it was toggled off
         await toggle_tts(toggle='on', tts_sw=tts_sw)
@@ -4790,14 +4790,11 @@ class History:
     # Modified version of TGQUI function
     def load_latest_history(self, state):
         type = 'single'
-        # if shared.args.multi_user:
-        #     return start_new_chat(state), type
         histories = find_all_histories(state)
         if len(histories) > 0:
             history, type = self.load_history(histories[0], state['character_menu'], state['mode'])
         else:
             history = {}
-           # history = start_new_chat(state)
         return history, type
 
     # Loads most recent history for current character (not "per-channel")
@@ -4874,17 +4871,17 @@ class History:
                     v_list.append([prompt, reply])
         #TODO return prompt
 
-    def get_history_lists_keys(self, channel_id:int=None):
+    def get_history_lists_keys(self, chankey:str=None):
         # If per-channel history
         if self.per_channel_history_enabled:
             # internal and visible lists
-            i_list = self.session_history.setdefault(channel_id, {}).setdefault('internal', [])
-            v_list = self.session_history[channel_id].setdefault('visible', [])
+            i_list = self.session_history.setdefault(chankey, {}).setdefault('internal', [])
+            v_list = self.session_history[chankey].setdefault('visible', [])
             # user and llm lists
-            u_list = self.recent_messages.setdefault(channel_id, {}).setdefault('user', [])
-            l_list = self.recent_messages[channel_id].setdefault('llm', [])
+            u_list = self.recent_messages.setdefault(chankey, {}).setdefault('user', [])
+            l_list = self.recent_messages[chankey].setdefault('llm', [])
             # collected prompts lists
-            cp_list = self.collected_prompts.setdefault(channel_id, [])
+            cp_list = self.collected_prompts.setdefault(chankey, [])
         # If only one history
         else:
             # internal and visible lists
@@ -4915,11 +4912,9 @@ class History:
             while len(l_list) > elem_limit or sum(len(message) for message in l_list) > character_limit:
                 oldest_message = l_list.pop()
 
-    def manage_history(self, prompt:str, reply:str=None, save_to_history:bool=True, channel_id:int=None):
-        if channel_id:
-            channel_id = str(channel_id)
+    def manage_history(self, prompt:str, reply:str=None, save_to_history:bool=True, chankey:str=None):
         # Get list keys to simplify next steps
-        i_list, v_list, u_list, l_list, cp_list = self.get_history_lists_keys(channel_id)
+        i_list, v_list, u_list, l_list, cp_list = self.get_history_lists_keys(chankey)
         # Update recent user/LLM messages (separate from chat history)
         self.manage_recent_messages(u_list, l_list, prompt, reply)
         # Update history
