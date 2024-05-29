@@ -989,14 +989,17 @@ async def process_llm_payload_tags(ictx: CtxInteraction, llm_payload:dict, llm_p
             await build_flow_queue(flow)
         # History handling
         if load_history is not None:
+            chankey = str(ictx.channel.id)
             if load_history < 0:
-                llm_payload['state']['history'] = {'internal': [], 'visible': []} # No history
+                llm_payload['state']['history']['internal'] = []
+                llm_payload['state']['history']['visible'] = []
                 logging.info("[TAGS] History is being ignored")
             elif load_history > 0:
+                i_list, v_list = bot_history.get_history_iv_lists_keys(chankey)
                 # Calculate the number of items to retain (up to the length of session_history)
-                num_to_retain = min(load_history, len(bot_history.session_history["internal"]))
-                llm_payload['state']['history']['internal'] = bot_history.session_history['internal'][-num_to_retain:]
-                llm_payload['state']['history']['visible'] = bot_history.session_history['visible'][-num_to_retain:]
+                num_to_retain = min(load_history, len(i_list))
+                llm_payload['state']['history']['internal'] = i_list[-num_to_retain:]
+                llm_payload['state']['history']['visible'] = v_list[-num_to_retain:]
                 logging.info(f'[TAGS] History is being limited to previous {load_history} exchanges')
         if param_variances:
             processed_params = process_param_variances(param_variances)
@@ -2914,7 +2917,7 @@ async def process_img_payload_tags(img_payload:dict, mods:dict, params:dict):
                     img_payload['alwayson_scripts']['reactor']['args']['save_original'] = True
             # Img2Img handling
             if img2img:
-                img_payload['init_images'] = [img2img]
+                img_payload['init_images'] = [str(img2img)]
                 params['endpoint'] = '/sdapi/v1/img2img'
             # Inpaint Mask handling
             if img2img_mask:
@@ -4858,28 +4861,42 @@ class History:
                     v_list.append([prompt, reply])
         #TODO return prompt
 
-    # Gets list keys to simplify code in further steps
-    def get_history_lists_keys(self, chankey:str=None):
-        # If per-channel history
+    def get_history_iv_lists_keys(self, chankey:str = None):
         if self.per_channel_history_enabled:
             # internal and visible lists
             i_list = self.session_history.setdefault(chankey, {}).setdefault('internal', [])
             v_list = self.session_history[chankey].setdefault('visible', [])
-            # user and llm lists
-            u_list = self.recent_messages.setdefault(chankey, {}).setdefault('user', [])
-            l_list = self.recent_messages[chankey].setdefault('llm', [])
-            # collected prompts lists
-            cp_list = self.collected_prompts.setdefault(chankey, [])
-        # If only one history
         else:
             # internal and visible lists
             i_list = self.session_history.setdefault('internal', [])
             v_list = self.session_history.setdefault('visible', [])
+        return i_list, v_list
+
+    def get_history_ul_lists_keys(self, chankey:str = None):
+        if self.per_channel_history_enabled:
+            # user and llm lists
+            u_list = self.recent_messages.setdefault(chankey, {}).setdefault('user', [])
+            l_list = self.recent_messages[chankey].setdefault('llm', [])
+        else:
             # user and llm lists
             u_list = self.recent_messages.setdefault('user', [])
             l_list = self.recent_messages.setdefault('llm', [])
+        return u_list, l_list
+
+    def get_history_cp_list_key(self, chankey:str = None):
+        if self.per_channel_history_enabled:
+            # collected prompts lists
+            cp_list = self.collected_prompts.setdefault(chankey, [])
+        else:
             # collected prompts lists
             cp_list = self.collected_prompts
+        return cp_list
+
+    def get_history_lists_keys(self, chankey:str = None):
+        i_list, v_list = self.get_history_iv_lists_keys(chankey)
+        u_list, l_list = self.get_history_ul_lists_keys(chankey)
+        cp_list = self.get_history_cp_list_key(chankey)
+
         return i_list, v_list, u_list, l_list, cp_list
 
     # Retain most recent elements or characters from user prompts and bot replies (mainly for Flows feature)
