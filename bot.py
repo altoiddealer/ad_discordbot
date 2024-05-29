@@ -1403,7 +1403,7 @@ async def get_tags(text):
         logging.error(f"Error getting tags: {e}")
         return text, []
 
-async def init_llm_payload(inter, user_name:str, text:str) -> dict:
+async def init_llm_payload(ictx: CtxInteraction, user_name:str, text:str) -> dict:
     llm_payload = copy.deepcopy(bot_settings.settings['llmstate'])
     llm_payload['text'] = text
     name1 = user_name
@@ -1416,8 +1416,8 @@ async def init_llm_payload(inter, user_name:str, text:str) -> dict:
     llm_payload['state']['character_menu'] = name2
     llm_payload['state']['context'] = context
     llm_payload['save_to_history'] = True
-    inter_history = await bot_history.get_channel_history(inter)
-    llm_payload['state']['history'] = inter_history
+    ictx_history = await bot_history.get_channel_history(ictx)
+    llm_payload['state']['history'] = ictx_history
     return llm_payload
 
 def get_wildcard_value(matched_text, dir_path=None):
@@ -1948,11 +1948,11 @@ async def speak_task(ctx: commands.Context, text:str, params:dict):
 ###################### QUEUED MODEL CHANGE ######################
 #################################################################
 # Process selected Img model
-async def change_imgmodel_task(user_name:str, channel, params:dict, inter=None):
+async def change_imgmodel_task(user_name:str, channel, params:dict, ictx=None):
     try:
-        if inter:
-            user_name = inter.author.display_name
-            channel = inter.channel
+        if ictx:
+            user_name = get_user_ctx_inter(ictx).display_name
+            channel = ictx.channel
         change_embed = None
         await sd_online(channel) # Can't change Img model if not online!
 
@@ -1991,7 +1991,7 @@ async def change_imgmodel_task(user_name:str, channel, params:dict, inter=None):
             await change_embed.delete()
             if bot_database.announce_channels:
                 # Send embeds to announcement channels
-                await bg_task_queue.put(announce_changes(inter, 'Img model', imgmodel_name))
+                await bg_task_queue.put(announce_changes(ictx, 'Img model', imgmodel_name))
             else:
                 # Send change embed to interaction channel
                 change_embed_info.title = f"{user_name} changed Img model:"
@@ -2072,8 +2072,8 @@ async def change_llmmodel_task(ictx, params:dict):
 #################################################################
 #################### QUEUED CHARACTER CHANGE ####################
 #################################################################
-async def send_char_greeting_or_history(inter, char_name):
-    channel = inter.channel
+async def send_char_greeting_or_history(ictx: CtxInteraction, char_name:str):
+    channel = ictx.channel
     try:
         # Send message to channel
         message = ''
@@ -2094,8 +2094,8 @@ async def send_char_greeting_or_history(inter, char_name):
     except Exception as e:
         logging.error(f'An error occurred while sending greeting or history for "{char_name}": {e}')
 
-async def announce_changes(inter, change_label:str, change_name:str):
-    user_name = inter.author.display_name if inter else 'Automatically'
+async def announce_changes(ictx: CtxInteraction, change_label:str, change_name:str):
+    user_name = get_user_ctx_inter(ictx).display_name if ictx else 'Automatically'
     change_embed_info.title = f"{user_name} changed {change_label}:"
     change_embed_info.description = f'**{change_name}**'
     try:
@@ -2105,13 +2105,13 @@ async def announce_changes(inter, change_label:str, change_name:str):
             await asyncio.sleep(delay)
             channel = await client.fetch_channel(channel_id)
             # if Automatic imgmodel change (no interaction object)
-            if inter is None:
+            if ictx is None:
                 await channel.send(embed=change_embed_info)
             # Channel is interaction channel
-            elif channel_id == inter.channel.id:
+            elif channel_id == ictx.channel.id:
                 continue # already sent
             # Channel in interaction server
-            elif channel_id in [channel.id for channel in inter.guild.channels]:
+            elif channel_id in [channel.id for channel in ictx.guild.channels]:
                 await channel.send(embed=change_embed_info)
             # Channel is in another server
             else:
@@ -2139,7 +2139,10 @@ async def change_char_task(ictx: CtxInteraction, source:str, params:dict):
         if bot_history.autoload_history and (bot_history.change_char_history_method == 'keep' and source != 'reset'):
             bot_history.load_bot_history()
         else:
-            await bot_history.reset_session_history(ictx)
+            if source == 'reset':
+                await bot_history.reset_session_history(ictx)
+            else:
+                await bot_history.reset_session_history()
         if change_embed:
             await change_embed.delete()
             # Send embeds to announcement channels
@@ -3703,18 +3706,18 @@ if system_embed_info:
         await ctx.send(embed=system_embed_info)
 
 @client.hybrid_command(description="Toggle current channel as an announcement channel for the bot (model changes)")
-async def announce(inter):
+async def announce(ctx: commands.Context):
     try:
-        if inter.channel.id in bot_database.announce_channels:
-            bot_database.announce_channels.remove(inter.channel.id) # If the channel is already in the announce channels, remove it
-            action_message = f'Removed {inter.channel.mention} from announce channels. Use "/announce" again if you want to add it back.'
+        if ctx.channel.id in bot_database.announce_channels:
+            bot_database.announce_channels.remove(ctx.channel.id) # If the channel is already in the announce channels, remove it
+            action_message = f'Removed {ctx.channel.mention} from announce channels. Use "/announce" again if you want to add it back.'
         else:
             # If the channel is not in the announce channels, add it
-            bot_database.announce_channels.append(inter.channel.id)
-            action_message = f'Added {inter.channel.mention} to announce channels. Use "/announce" again to remove it.'
+            bot_database.announce_channels.append(ctx.channel.id)
+            action_message = f'Added {ctx.channel.mention} to announce channels. Use "/announce" again to remove it.'
 
         bot_database.save()
-        await inter.reply(action_message)
+        await ctx.reply(action_message)
     except Exception as e:
         logging.error(f"Error toggling announce channel setting: {e}")
 
@@ -4773,10 +4776,8 @@ class History:
         if 'internal' in f and 'visible' in f:
             history = f
         elif 'data' in f and 'data_visible' in f:
-            history = {
-                'internal': f['data'],
-                'visible': f['data_visible']
-            }
+            history = {'internal': f['data'],
+                       'visible': f['data_visible']}
         else:
             history = f
             type = 'multichan'
@@ -4792,7 +4793,7 @@ class History:
             history = {}
         return history, type
 
-    # Loads most recent history for current character (not "per-channel")
+    # Loads most recent history for current character
     def load_bot_history(self):
         state_dict = bot_settings.settings['llmstate']['state']
         values_to_load_history = {'character_menu': state_dict['character_menu'],
@@ -4835,13 +4836,15 @@ class History:
                 self.unique_id = datetime.now().strftime('%Y%m%d-%H-%M-%S')
             logging.info(f'''Chat history was saved to "/logs/{mode}/{character_menu}/{self.unique_id}.json"''')
         save_history(self.session_history, self.unique_id, character_menu, mode)
-
+    
+    # Truncates history to approx. same length as 'truncation_length' state parameter
     def limit_prompt_history(self, i_list:list, v_list:list):
         truncation = int(bot_settings.settings['llmstate']['state']['truncation_length'] * 4) #approx tokens
-        while sum(len(message) for exchange in i_list for message in exchange) > truncation:
-            oldest_exchange = i_list.pop(0)
-        while sum(len(message) for exchange in v_list for message in exchange) > truncation:
-            oldest_exchange = v_list.pop(0)
+        while (sum(len(message) for exchange in i_list for message in exchange) > truncation) \
+            or (sum(len(message) for exchange in v_list for message in exchange) > truncation):
+            if i_list and v_list:
+                i_list.pop(0) # pop oldest exchanges
+                v_list.pop(0)
 
     # Manage the session history for textgen-webui
     def manage_prompt_history(self, cp_list:list, i_list:list, v_list:list, prompt:str, reply:str=None, save_to_history:bool=True):
@@ -4862,10 +4865,13 @@ class History:
             if save_to_history:
                 i_list.append([prompt, reply])
                 # Do not append Visible list for per-channel history
-               # if not self.per_channel_history_enabled:
-                v_list.append([prompt, reply])
+                if self.per_channel_history_enabled:
+                    v_list.append(['', ''])
+                else:
+                    v_list.append([prompt, reply])
         #TODO return prompt
 
+    # Gets list keys to simplify code in further steps
     def get_history_lists_keys(self, chankey:str=None):
         # If per-channel history
         if self.per_channel_history_enabled:
@@ -4908,7 +4914,7 @@ class History:
                 oldest_message = l_list.pop()
 
     def manage_history(self, prompt:str, reply:str=None, save_to_history:bool=True, chankey:str=None):
-        # Get list keys to simplify next steps
+        # Get list keys to simplify code in further steps
         i_list, v_list, u_list, l_list, cp_list = self.get_history_lists_keys(chankey)
         # Update recent user/LLM messages (separate from chat history)
         self.manage_recent_messages(u_list, l_list, prompt, reply)
@@ -4921,16 +4927,16 @@ class History:
         if self.autosave_history:
             self.save_bot_history()
 
-    async def get_channel_history(self, i=None):
+    async def get_channel_history(self, ictx=None):
         # If per-channel history
         if self.per_channel_history_enabled:
-            chkey = str(i.channel.id)
+            chkey = str(ictx.channel.id)
             if not self.session_history.get(chkey):
                 self.session_history[chkey] = {
-                    'guild_name': str(i.guild),
-                    'channel_name': str(i.channel),
+                    'guild_name': str(ictx.guild),
+                    'channel_name': str(ictx.channel),
                     'internal': [],
-                    'visible': [[], []]
+                    'visible': []
                     }
             return self.session_history[chkey]
         # If only one history
@@ -4939,20 +4945,20 @@ class History:
                 self.session_history = {'internal': [], 'visible': []}
             return self.session_history
 
-    async def reset_session_history(self, inter=None):
+    async def reset_session_history(self, ictx=None):
         # If per-channel history
         if self.per_channel_history_enabled:
             # if no interaction, all history will be reset
-            if inter:
-                guild_chan = f'{inter.guild} - {inter.channel}'
+            if ictx:
+                guild_chan = f'{ictx.guild} - {ictx.channel}'
                 logging.info(f"Starting new conversation in: {guild_chan}.")
                 # If channel has history
-                if self.session_history.get(inter.channel.id):
-                    self.session_history[inter.channel.id]['internal'] = []
-                    self.session_history[inter.channel.id]['visible'] = [[], []]
+                if self.session_history.get(ictx.channel.id):
+                    self.session_history[ictx.channel.id]['internal'] = []
+                    self.session_history[ictx.channel.id]['visible'] = []
                 # if channel does not have history
                 else:
-                    await self.get_channel_history(i) # will initialize a fresh channel key
+                    await self.get_channel_history(ictx) # will initialize a fresh channel key
                 return
             else:
                 logging.info("Starting new conversation in all channels.")
