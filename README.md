@@ -201,6 +201,11 @@
 
 ## Features:
 
+- **Chat History for each channel!**
+  - Each channel has its chat history maintained seperately and cleanly.
+  - History is gracefully loaded for all channels on startup.
+  - **`/reset_conversation`** will reset history in interaction channel only.
+
 - **Robust ["Tags" system](https://github.com/altoiddealer/ad_discordbot/wiki/tags) to manipulate bot behavior persistently or via trigger phrases, including:**
   - Trigger Text and/or Image response
   - Image censoring settings (None / Spoiler / Block)
@@ -228,6 +233,7 @@
   - **/helpmenu** - Display information message
   - **/character** - Change character
   - **/main** - Toggle if Bot always replies, per channel
+  - **/announce** - Toggle channels as "Announcement" channels
   - **/image** - Allows more controlled image prompting (positive prompt, neg prompt, Size settings, **ControlNet**, **ReActor**)
   - **/speak** - Bot can speak any text, using any voices (including user attach .mp3 or .wav for alltalk_tts)!
   - **/imgmodel** - Change A1111 model & img_payload settings
