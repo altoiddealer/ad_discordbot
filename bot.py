@@ -2479,7 +2479,7 @@ async def sd_img_gen(channel, temp_dir:str, img_payload:dict, endpoint:str):
 async def process_image_gen(img_payload:dict, channel, params:dict):
     try:
         bot_will_do = params.get('bot_will_do', {})
-        censor_mode = params.get('censor_mode', 0)
+        img_censoring = params.get('img_censoring', 0)
         endpoint = params.get('endpoint', '/sdapi/v1/txt2img')
         default_save_path = os.path.join('ad_discordbot', 'sd_outputs')
         sd_output_dir = params.get('sd_output_dir', default_save_path)
@@ -2494,7 +2494,7 @@ async def process_image_gen(img_payload:dict, channel, params:dict):
         # Send images to discord
         # If the censor mode is 1 (blur), prefix the image file with "SPOILER_"
         file_prefix = 'temp_img_'
-        if censor_mode == 1:
+        if img_censoring == 1:
             file_prefix = 'SPOILER_temp_img_'
         image_files = [discord.File(f'{temp_dir}/temp_img_{idx}.png', filename=f'{file_prefix}{idx}.png') for idx in range(len(images))]
         if bot_will_do['should_send_image']:
@@ -2837,9 +2837,7 @@ def get_image_tag_args(extension, value, key=None, set_dir=None):
 
 async def process_img_payload_tags(img_payload:dict, mods:dict, params:dict):
     try:
-        default_save_path = os.path.join('ad_discordbot', 'sd_outputs')
         flow = mods.pop('flow', None)
-        img_censoring = mods.pop('img_censoring', None)
         change_imgmodel = mods.pop('change_imgmodel', None)
         swap_imgmodel = mods.pop('swap_imgmodel', None)
         payload = mods.pop('payload', None)
@@ -2852,14 +2850,10 @@ async def process_img_payload_tags(img_payload:dict, mods:dict, params:dict):
         img2img = mods.pop('img2img', {})
         img2img_mask = mods.pop('img2img_mask', {})
         # Process the tag matches
-        if flow or img_censoring or change_imgmodel or swap_imgmodel or payload or aspect_ratio or param_variances or controlnet or forge_couple or layerdiffuse or reactor or img2img or img2img_mask:
+        if flow or change_imgmodel or swap_imgmodel or payload or aspect_ratio or param_variances or controlnet or forge_couple or layerdiffuse or reactor or img2img or img2img_mask:
             # Flow handling
             if flow is not None and not flow_event.is_set():
                 await build_flow_queue(flow)
-            # Img censoring handling
-            if img_censoring and img_censoring > 0:
-                params['censor_mode'] = int(img_censoring)
-                logging.info(f"[TAGS] Censoring: {'Image Blurred' if img_censoring == 1 else 'Generation Blocked'}")
             # Imgmodel handling
             new_imgmodel = change_imgmodel or swap_imgmodel or None
             if new_imgmodel:
@@ -3011,7 +3005,7 @@ def collect_img_tag_values(tags, params):
     layerdiffuse_args = {}
     reactor_args = {}
     extensions = config.get('sd', {}).get('extensions', {})
-    accept_only_first = ['flow', 'img_censoring', 'aspect_ratio', 'img2img', 'img2img_mask']
+    accept_only_first = ['flow', 'aspect_ratio', 'img2img', 'img2img_mask']
     try:
         for tag in tags['matches']:
             if isinstance(tag, tuple):
@@ -3022,6 +3016,9 @@ def collect_img_tag_values(tags, params):
                     img_payload_mods[key] = value
                 elif key == 'sd_output_dir' and not params.get('sd_output_dir'):
                     params['sd_output_dir'] = str(value)
+                elif key == 'img_censoring' and not params.get('img_censoring'):
+                    params['img_censoring'] = int(value)
+                    logging.info(f"[TAGS] Censoring: {'Image Blurred' if value == 1 else 'Generation Blocked'}")
                 # Accept only first 'change' or 'swap'
                 elif key == 'change_imgmodel' or key == 'swap_imgmodel' and not (img_payload_mods.get('change_imgmodel') or img_payload_mods.get('swap_imgmodel')):
                     img_payload_mods[key] = str(value)
@@ -3154,7 +3151,7 @@ async def img_gen_task(source:str, img_prompt:str, params:dict, ictx:CtxInteract
     user_name = get_user_ctx_inter(ictx).display_name or None
     channel = ictx.channel
     bot_will_do = params.get('bot_will_do', {})
-    censor_mode = params.get('censor_mode', 0)
+    img_censoring = params.get('img_censoring', 0)
     try:
         check_key = bot_settings.settings['imgmodel'].get('override_settings', {}) or bot_settings.settings['imgmodel'].get('payload', {}).get('override_settings', {})
         if check_key.get('sd_model_checkpoint', '') == 'None': # Model currently unloaded
@@ -3173,7 +3170,7 @@ async def img_gen_task(source:str, img_prompt:str, params:dict, ictx:CtxInteract
         # Apply tags relevant to Img gen
         img_payload, params = await process_img_payload_tags(img_payload, img_payload_mods, params)
         # Check censoring
-        if censor_mode == 2:
+        if img_censoring == 2:
             if img_send_embed_info:
                 img_send_embed_info.title = "Image prompt was flagged as inappropriate."
                 img_send_embed_info.description = ""
