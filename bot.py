@@ -984,7 +984,6 @@ async def process_llm_payload_tags(ictx: CtxInteraction, llm_payload:dict, llm_p
         swap_character = mods.get('swap_character', None)
         change_llmmodel = mods.get('change_llmmodel', None)
         swap_llmmodel = mods.get('swap_llmmodel', None)
-        send_user_image = mods.get('send_user_image', [])
         # Flow handling
         if flow is not None and not flow_event.is_set():
             await build_flow_queue(flow)
@@ -1037,10 +1036,6 @@ async def process_llm_payload_tags(ictx: CtxInteraction, llm_payload:dict, llm_p
                 else:
                     logging.info(f'[TAGS] {verb} LLM Model: {model_change}')
                     params['llmmodel'] = {'llmmodel_name': params, 'mode': mode, 'verb': verb}
-        # Send User Image handling
-        if send_user_image:
-            params['send_user_image'] = send_user_image
-            logging.info(f"[TAGS] Sending user image{'s' if len(send_user_image) > 1 else ''}")
         return llm_payload, llm_prompt, params
     except Exception as e:
         logging.error(f"Error processing LLM tags: {e}")
@@ -1076,8 +1071,9 @@ def collect_llm_tag_values(tags, params):
                 user_image_file = tag.pop('send_user_image')
                 user_image_args = get_image_tag_args('User image', str(user_image_file), key=None, set_dir=None)
                 user_image = discord.File(user_image_args)
-                llm_payload_mods.setdefault('send_user_image', [])
-                llm_payload_mods['send_user_image'].append(user_image)
+                params.setdefault('send_user_image', [])
+                params['send_user_image'].append(user_image)
+                logging.info(f'[TAGS] Sending user image.')
             if 'format_prompt' in tag:
                 formatting.setdefault('format_prompt', [])
                 formatting['format_prompt'].append(str(tag.pop('format_prompt')))
@@ -2842,7 +2838,6 @@ def get_image_tag_args(extension, value, key=None, set_dir=None):
 async def process_img_payload_tags(img_payload:dict, mods:dict, params:dict):
     try:
         default_save_path = os.path.join('ad_discordbot', 'sd_outputs')
-        params['sd_output_dir'] = mods.pop('sd_output_dir', default_save_path)
         flow = mods.pop('flow', None)
         img_censoring = mods.pop('img_censoring', None)
         change_imgmodel = mods.pop('change_imgmodel', None)
@@ -2856,9 +2851,8 @@ async def process_img_payload_tags(img_payload:dict, mods:dict, params:dict):
         reactor = mods.pop('reactor', {})
         img2img = mods.pop('img2img', {})
         img2img_mask = mods.pop('img2img_mask', {})
-        send_user_image = mods.pop('send_user_image', [])
         # Process the tag matches
-        if flow or img_censoring or change_imgmodel or swap_imgmodel or payload or aspect_ratio or param_variances or controlnet or forge_couple or layerdiffuse or reactor or img2img or img2img_mask or send_user_image:
+        if flow or img_censoring or change_imgmodel or swap_imgmodel or payload or aspect_ratio or param_variances or controlnet or forge_couple or layerdiffuse or reactor or img2img or img2img_mask:
             # Flow handling
             if flow is not None and not flow_event.is_set():
                 await build_flow_queue(flow)
@@ -2931,9 +2925,6 @@ async def process_img_payload_tags(img_payload:dict, mods:dict, params:dict):
             # Inpaint Mask handling
             if img2img_mask:
                 img_payload['mask'] = str(img2img_mask)
-            # Send User Image handling
-            if send_user_image:
-                logging.info(f"[TAGS] Sending user image{'s' if len(send_user_image) > 1 else ''}")
         return img_payload, params
     except Exception as e:
         logging.error(f"Error processing Img tags: {e}")
@@ -3012,7 +3003,7 @@ def collect_img_extension_mods(mods):
             logging.error(f"Error collecting ReActor tag values: {e}")
     return mods
 
-def collect_img_tag_values(tags):
+def collect_img_tag_values(tags, params):
     img_payload_mods = {}
     payload_order_hack = {}
     controlnet_args = {}
@@ -3020,7 +3011,7 @@ def collect_img_tag_values(tags):
     layerdiffuse_args = {}
     reactor_args = {}
     extensions = config.get('sd', {}).get('extensions', {})
-    accept_only_first = ['sd_output_dir', 'flow', 'img_censoring', 'aspect_ratio', 'img2img', 'img2img_mask']
+    accept_only_first = ['flow', 'img_censoring', 'aspect_ratio', 'img2img', 'img2img_mask']
     try:
         for tag in tags['matches']:
             if isinstance(tag, tuple):
@@ -3029,6 +3020,8 @@ def collect_img_tag_values(tags):
                 # Accept only the first occurance
                 if key in accept_only_first and not img_payload_mods.get(key):
                     img_payload_mods[key] = value
+                elif key == 'sd_output_dir' and not params.get('sd_output_dir'):
+                    params['sd_output_dir'] = str(value)
                 # Accept only first 'change' or 'swap'
                 elif key == 'change_imgmodel' or key == 'swap_imgmodel' and not (img_payload_mods.get('change_imgmodel') or img_payload_mods.get('swap_imgmodel')):
                     img_payload_mods[key] = str(value)
@@ -3085,7 +3078,10 @@ def collect_img_tag_values(tags):
                 elif key == 'send_user_image':
                     user_image_args = get_image_tag_args('User image', str(value), key=None, set_dir=None)
                     user_image = discord.File(user_image_args)
-                    img_payload_mods['send_user_image'].append(user_image)
+                    user_image = discord.File(user_image_args)
+                    params.setdefault('send_user_image', [])
+                    params['send_user_image'].append(user_image)
+                    logging.info(f'[TAGS] Sending user image.')
         # Add the collected SD WebUI extension args to the img_payload_mods dict
         if controlnet_args:
             img_payload_mods.setdefault('controlnet', [])
@@ -3105,10 +3101,9 @@ def collect_img_tag_values(tags):
             img_payload_mods['reactor'].update(reactor_args)
 
         img_payload_mods = collect_img_extension_mods(img_payload_mods)
-        return img_payload_mods
     except Exception as e:
         logging.error(f"Error collecting Img tag values: {e}")
-        return tags
+    return img_payload_mods, params
 
 def init_img_payload(img_prompt:str, neg_prompt:str) -> dict:
     try:
@@ -3173,7 +3168,7 @@ async def img_gen_task(source:str, img_prompt:str, params:dict, ictx:CtxInteract
         neg_prompt = params.get('neg_prompt', '')
         img_payload = init_img_payload(img_prompt, neg_prompt)
         # collect matched tag values
-        img_payload_mods = collect_img_tag_values(tags)
+        img_payload_mods, params = collect_img_tag_values(tags, params)
         send_user_image = img_payload_mods.pop('send_user_image', [])
         # Apply tags relevant to Img gen
         img_payload, params = await process_img_payload_tags(img_payload, img_payload_mods, params)
