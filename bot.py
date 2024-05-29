@@ -977,7 +977,6 @@ async def process_llm_payload_tags(ictx: CtxInteraction, llm_payload:dict, llm_p
         user_name = get_user_ctx_inter(ictx).display_name
         char_params = {}
         flow = mods.get('flow', None)
-        save_to_history = mods.get('save_to_history', None)
         load_history = mods.get('load_history', None)
         param_variances = mods.get('param_variances', {})
         state = mods.get('state', {})
@@ -990,8 +989,6 @@ async def process_llm_payload_tags(ictx: CtxInteraction, llm_payload:dict, llm_p
         if flow is not None and not flow_event.is_set():
             await build_flow_queue(flow)
         # History handling
-        if save_to_history is not None:
-            llm_payload['save_to_history'] = save_to_history # Save this interaction to history (True/False)
         if load_history is not None:
             if load_history < 0:
                 llm_payload['state']['history'] = {'internal': [], 'visible': []} # No history
@@ -1049,7 +1046,7 @@ async def process_llm_payload_tags(ictx: CtxInteraction, llm_payload:dict, llm_p
         logging.error(f"Error processing LLM tags: {e}")
         return llm_payload, llm_prompt, {}
 
-def collect_llm_tag_values(tags):
+def collect_llm_tag_values(tags, params):
     llm_payload_mods = {}
     formatting = {}
     try:
@@ -1057,8 +1054,8 @@ def collect_llm_tag_values(tags):
             # Values that will only apply from the first tag matches
             if 'flow' in tag and not llm_payload_mods.get('flow'):
                 llm_payload_mods['flow'] = tag.pop('flow')
-            if 'save_history' in tag and not llm_payload_mods.get('save_to_history'):
-                llm_payload_mods['save_to_history'] = bool(tag.pop('save_history'))
+            if 'save_history' in tag and not params.get('save_to_history'):
+                params['save_to_history'] = bool(tag.pop('save_history'))
             if 'load_history' in tag and not llm_payload_mods.get('load_history'):
                 llm_payload_mods['load_history'] = int(tag.pop('load_history'))
                 
@@ -1104,10 +1101,9 @@ def collect_llm_tag_values(tags):
                     llm_payload_mods['state'].update(state) # Allow multiple to accumulate.
                 except:
                     logging.warning("Error processing a matched 'state' tag; ensure it is a dictionary.")
-        return llm_payload_mods, formatting
     except Exception as e:
         logging.error(f"Error collecting LLM tag values: {e}")
-        return llm_payload_mods, formatting
+    return llm_payload_mods, formatting, params
 
 def process_tag_insertions(prompt:str, tags:dict):
     try:
@@ -1415,7 +1411,6 @@ async def init_llm_payload(ictx: CtxInteraction, user_name:str, text:str) -> dic
     llm_payload['state']['name2_instruct'] = name2
     llm_payload['state']['character_menu'] = name2
     llm_payload['state']['context'] = context
-    llm_payload['save_to_history'] = True
     ictx_history = await bot_history.get_channel_history(ictx)
     llm_payload['state']['history'] = ictx_history
     return llm_payload
@@ -1614,7 +1609,7 @@ async def on_message_task(ictx: CtxInteraction, source:str, text:str):
             # apply tags to prompt
             llm_prompt, tags = process_tag_insertions(llm_prompt, tags)
             # collect matched tag values
-            llm_payload_mods, formatting = collect_llm_tag_values(tags)
+            llm_payload_mods, formatting, params = collect_llm_tag_values(tags, params)
             # apply tags relevant to LLM payload
             llm_payload, llm_prompt, params = await process_llm_payload_tags(ictx, llm_payload, llm_prompt, llm_payload_mods, params)
             # apply formatting tags to LLM prompt
@@ -1674,7 +1669,7 @@ async def hybrid_llm_img_gen(ictx: CtxInteraction, source:str, text:str, tags:di
             if (not bot_will_do['should_send_text']) or (voice_client and (voice_client != ictx.guild.voice_client) and int(tts_settings.get('play_mode', 0)) == 0):
                 tts_sw = await toggle_tts(toggle='off')
             # generate text with text-gen-webui
-            last_resp, tts_resp = await llm_gen(llm_payload, ictx, tts_sw)
+            last_resp, tts_resp = await llm_gen(llm_payload, params, ictx, tts_sw)
             # If no text was generated, treat user input at the response
             if last_resp is not None:
                 logging.info("reply sent: \"" + user_name + ": {'text': '" + llm_payload["text"] + "', 'response': '" + last_resp + "'}\"")
@@ -1798,7 +1793,7 @@ async def toggle_tts(toggle='on', tts_sw=None):
     return None
 
 # Send LLM Payload - get response
-async def llm_gen(llm_payload:dict, i=None, tts_sw=None):
+async def llm_gen(llm_payload:dict, params:dict={}, i=None, tts_sw=None):
     try:
         if shared.model_name == 'None':
             return None, None
@@ -1832,7 +1827,7 @@ async def llm_gen(llm_payload:dict, i=None, tts_sw=None):
 
         if last_resp:
             update_llm_gen_statistics(last_resp) # Update statistics
-            save_to_history = llm_payload.get('save_to_history', True)
+            save_to_history = params.get('save_to_history', True)
             bot_history.manage_history(prompt=llm_payload['text'], reply=last_resp, save_to_history=save_to_history, chankey=str(i.channel.id))
 
         # Toggle TTS back on if it was toggled off
@@ -1853,7 +1848,7 @@ async def cont_regen_task(inter:discord.Interaction, source:str, text:str, messa
         channel = inter.channel
         system_embed = None
         llm_payload = await init_llm_payload(inter, user_name, text)
-        llm_payload['save_to_history'] = False
+        params = {'save_to_history': False}
         if source == 'cont':
             cmd = 'Continuing'
             llm_payload['_continue'] = True
@@ -1875,7 +1870,7 @@ async def cont_regen_task(inter:discord.Interaction, source:str, text:str, messa
         if voice_client and (voice_client != inter.guild.voice_client) and int(tts_settings.get('play_mode', 0)) == 0:
             tts_sw = await toggle_tts(toggle='off')
         # generate text with text-gen-webui
-        last_resp, tts_resp = await llm_gen(llm_payload, inter, tts_sw)
+        last_resp, tts_resp = await llm_gen(llm_payload, params, inter, tts_sw)
         if system_embed:
             await system_embed.delete()
         if last_resp is None:
@@ -1917,10 +1912,10 @@ async def speak_task(ctx: commands.Context, text:str, params:dict):
         llm_payload['_continue'] = True
         llm_payload['state']['max_new_tokens'] = 1
         llm_payload['state']['history'] = {'internal': [[text, text]], 'visible': [[text, text]]}
-        llm_payload['save_to_history'] = False
+        params['save_to_history'] = False
         tts_args = params.get('tts_args', {})
         await update_extensions(tts_args)
-        _, tts_resp = await llm_gen(llm_payload)
+        _, tts_resp = await llm_gen(llm_payload, params)
         if system_embed:
             await system_embed.delete()
         if tts_resp is None:
