@@ -24,6 +24,17 @@
 <details>
   <summary>click to expand</summary>
 
+   **05/28/2024:** Per-Channel History!
+
+    - New setting 'per_channel_history' enables all channels to have their own chat history.
+    - Custom logging format puts chat history, server name, and channel name under each channel.id key.
+    - A utility .bat file is now included to split these custom logs into normal logs, if needed.
+    - New '/announce/ command allows channels to be assigned as Announcement channels.
+      Announcement channels will receive Model / Character change announcements
+      instead of interaction channels.
+
+  ---
+
    **05/22/2024:** Big Update - Easier to Update Moving Forward
 
    Quick shoutout to @Artificiangel who has recently joined development and made **stunning contributions**.
