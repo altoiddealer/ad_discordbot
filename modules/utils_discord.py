@@ -5,6 +5,7 @@ import discord
 from discord.ext import commands
 from typing import Union
 from ad_discordbot.modules.typing import CtxInteraction
+from ad_discordbot.modules.history import HistoryManager, History, HMessage
 
 # Send message response to user's interaction command
 async def ireply(ictx: 'CtxInteraction', process):
@@ -19,7 +20,7 @@ async def ireply(ictx: 'CtxInteraction', process):
 
 
 
-async def send_long_message(channel, message_text):
+async def send_long_message(channel, message_text, bot_message:HMessage=None):
     """ Splits a longer message into parts while preserving sentence boundaries and code blocks """
     activelang = ''
 
@@ -75,6 +76,9 @@ async def send_long_message(channel, message_text):
                 chunk_text, code_block_inserted = ensure_even_code_blocks(message_text, code_block_inserted)
                 sent_message = await channel.send(chunk_text)
                 break
+            
+    if bot_message:
+        bot_message.id = sent_message.id
 
 class SelectedListItem(discord.ui.Select):
     def __init__(self, options, placeholder, custom_id):

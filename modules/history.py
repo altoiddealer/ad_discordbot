@@ -1,3 +1,6 @@
+from ad_discordbot.modules.logs import import_track, log, get_logger; import_track(__file__, fp=True)
+logging = get_logger(__name__)
+import os
 from dataclasses import dataclass, field
 from dataclasses_json import dataclass_json, config
 import time
@@ -8,9 +11,8 @@ import discord
 import copy
 from uuid import uuid4
 import json
-import os
 from ad_discordbot.modules.utils_discord import get_message_ctx_inter, get_user_ctx_inter
-
+import asyncio
 
 #########################
 # Config encoder/decoders
@@ -20,6 +22,10 @@ def get_uuid_hex():
 
 def reduce_to_none(i):
     return None
+
+
+def cls_get_pass(x):
+    return x
 
 
 def cls_get_uuid(x):
@@ -55,24 +61,26 @@ def decoder_dict_int_key(x):
 config_dict_uuid = config(encoder=cls_get_id_dict, decoder=dict)
 config_list_uuid = config(encoder=cls_get_id_list, decoder=list)
 config_uuid = config(encoder=cls_get_id, decoder=str)
+config_null = config(encoder=reduce_to_none, decoder=cls_get_pass)
 
 
 #############
 # dataclasses
 @dataclass_json
 @dataclass
-class Message:
+class HMessage:
     history: 'History' = field(metadata=config_uuid)
     name: str
     text: str
     role: str # Assistant, user, internal
     author_id: UserID
 
-    replies: Optional[list['Message']] = field(default_factory=list, metadata=config_list_uuid)
-    reply_to: Optional['Message'] = field(default=None, metadata=config_uuid)
+    replies: Optional[list['HMessage']] = field(default_factory=list, metadata=config_list_uuid)
+    reply_to: Optional['HMessage'] = field(default=None, metadata=config_uuid)
 
     text_visible: str = field(default='')
     id: Optional[MessageID] = field(default=None)
+    audio_id: Optional[MessageID] = field(default=None)
     typing: bool = field(default=False)
     spoken: bool = field(default=False)
     created: float = field(default_factory=time.time)
@@ -88,23 +96,30 @@ class Message:
 
     def __repr__(self):
         replies = f', Replies({len(self.replies)})' if self.replies else ''
-        return f'<Message ({self.role}) by {self.name!r}: {self.text[:20]!r}{replies}>'
+        return f'<HMessage ({self.role}) by {self.name!r}: {self.text[:20]!r}{replies}>'
 
 
     def delta(self) -> float:
         return time.time()-self.created
+    
+    
+    def save_to_history(self):
+        self.history.append(self)
 
 
     ###############
     # relationships
-    def mark_as_reply_for(self, message: 'Message'):
+    def mark_as_reply_for(self, message: 'HMessage'):
+        if not message:
+            return self
+        
         self.reply_to = message
         message.replies.append(self)
         return self
 
 
     def unmark_reply(self):
-        message:Message = self.reply_to
+        message:HMessage = self.reply_to
         if message:
             if self in message.replies:
                 message.replies.pop(self)
@@ -149,8 +164,8 @@ class Message:
 
 @dataclass
 class HistoryPairForTGWUI:
-    user: Message = field(default=None)
-    assistant: Message = field(default=None)
+    user: HMessage = field(default=None)
+    assistant: HMessage = field(default=None)
 
 
     def add_pair_to(self, internal:list, visible:list):
@@ -180,16 +195,20 @@ class HistoryPairForTGWUI:
 class History:
     manager: 'HistoryManager' = field(metadata=config_uuid)
     id: ChannelID
+    
+    file_name: Optional[str] = field(default=None)
 
-    _last: dict[UserID, Message] = field(default_factory=dict, init=False, metadata=config(encoder=cls_get_id_dict, decoder=decoder_dict_int_key))
-    _items: list[Message] = field(default_factory=list, init=False, metadata=config(encoder=cls_get_id_list,))
+    _last: dict[UserID, HMessage] = field(default_factory=dict, init=False, metadata=config(encoder=cls_get_id_dict, decoder=decoder_dict_int_key))
+    _items: list[HMessage] = field(default_factory=list, init=False, metadata=config(encoder=cls_get_id_list,))
     uuid: str = field(default_factory=get_uuid_hex)
-
+    _save_event: asyncio.Event = field(default_factory=asyncio.Event, init=False, metadata=config_null)
 
     def __copy__(self, x: 'History'):
         new = self.__class__(
             manager=x.manager,
             id=x.id,
+            uuid=x.uuid,
+            file_name=x.file_name,
             )
 
         new._last = x._last
@@ -199,27 +218,30 @@ class History:
 
     ###########
     # Item list
-    def __contains__(self, message: Message):
+    def __contains__(self, message: HMessage):
         return message in self._items
 
 
-    def index(self, message: Message):
+    def index(self, message: HMessage):
         return self._items.index(message)
 
 
     def clear(self):
         self._items.clear()
         self._last.clear()
+        self._save_event.set()
         return self
 
 
-    def append(self, message: Message):
+    def append(self, message: HMessage):
         self._items.append(message)
         self._last[message.author_id] = message
+        self._save_event.set()
         return self
 
 
     def pop(self, index=-1):
+        self._save_event.set()
         return self._items.pop(index=index)
 
 
@@ -231,11 +253,46 @@ class History:
         return self._last.items()
 
 
-    def __setitem__(self, slice:slice, message: Message):
+    def __setitem__(self, slice:slice, message: HMessage):
         self._items[slice] = message
+        self._save_event.set()
+
 
     def __getitem__(self, slice:slice):
         return self._items[slice]
+    
+    
+    @property
+    def empty(self):
+        return not self._items
+
+
+    ##########
+    # Messages
+    def new_message(self, name, text, role, author_id, save=True, **kw) -> HMessage:
+        message = HMessage(self, name, text, role, author_id, **kw)
+        if save:
+            self.append(message)
+        return message
+
+    
+    def role_messages(self, role) -> list[HMessage]:
+        return [message for message in self if message.role == role]
+    
+    
+    def _get_sum_text(self, attr='text'):
+        return sum(len(getattr(message, attr, '')) for message in self)
+    
+    
+    def truncate(self, target_str_length: int, force=False):
+        if self.manager.limit_history or force:
+            while self._get_sum_text('text') > target_str_length or self._get_sum_text('text_visible') > target_str_length:
+                if self.empty:
+                    break
+                
+                self.pop(0)
+                
+        return self
 
 
     ###########
@@ -275,13 +332,19 @@ class History:
 
     ###########
     # Save/load
-    def save_rendered_tgwui(self, fp):
-        with open(fp, 'w', encoding='utf8') as f:
-            json_out = json.dumps(self.render_to_tgwui(), indent=2)
-            f.write(json_out)
-
-
-    def save(self, fp):
+    def get_unique_save_file_name(self):
+        return get_uuid_hex()
+    
+    
+    def get_save_file_name(self) -> str:
+        if not self.file_name:
+            self.file_name = self.get_unique_save_file_name()
+        return self.file_name
+    
+    
+    def trigger_save(self, fp):
+        self._save_event.clear()
+        
         history = self.to_dict()
         messages = []
         for message in self._items:
@@ -290,8 +353,27 @@ class History:
         with open(fp, 'w', encoding='utf8') as f:
             json_out = json.dumps(dict(history=history, messages=messages), indent=2)
             f.write(json_out)
+            
         return self
-
+    
+    
+    async def save(self, fp, timeout=30):
+        if timeout:
+            await asyncio.sleep(timeout)
+        
+        if self._save_event.is_set():
+            self.trigger_save(fp)
+            return True
+        
+        return False
+    
+    
+    # def save_rendered_tgwui(self, fp):
+    #     with open(fp, 'w', encoding='utf8') as f:
+    #         json_out = json.dumps(self.render_to_tgwui(), indent=2)
+    #         f.write(json_out)
+    #     return self
+    
 
     @classmethod
     def load_from(cls, fp, hm: 'HistoryManager', id_: ChannelID=None) -> 'History':
@@ -312,9 +394,9 @@ class History:
         hm.add_history(history)
 
         # initialize messages
-        local_message_storage: dict[str, Message] = {}
+        local_message_storage: dict[str, HMessage] = {}
         for message in messages:
-            message:Message = Message.from_dict(message)
+            message:HMessage = HMessage.from_dict(message)
             message.history = history
             history.append(message)
             local_message_storage[message.uuid] = message
@@ -329,20 +411,25 @@ class History:
 
 @dataclass
 class HistoryManager:
-    # limit_history: bool = field(default=True)
-    # autosave_history: bool = field(default=False)
-    # autoload_history: bool = field(default=False)
-    # change_char_history_method: bool = field(default='new')
-    # greeting_or_history: bool = field(default='history')
+    limit_history: bool = field(default=True)
+    autosave_history: bool = field(default=False)
+    autoload_history: bool = field(default=False)
+    change_char_history_method: bool = field(default='new')
+    greeting_or_history: bool = field(default='history')
     per_channel_history_enabled: bool = field(default=True)
 
     _histories: dict[ChannelID, History] = field(default_factory=dict)
     uuid: str = field(default_factory=get_uuid_hex, init=False)
+    class_builder_history: type = field(default=History)
 
 
     def _get_channel_id(self, id_: ChannelID) -> ChannelID:
         if self.per_channel_history_enabled and id_ is None:
             raise Exception(f'Channel id is None and multi channel history enabled.')
+        
+        if not self.per_channel_history_enabled:
+            return 0
+        
         return id_
 
 
@@ -360,7 +447,7 @@ class HistoryManager:
             history = self.load_history_from(fp, id_)
 
         if history is None:
-            history = self.add_history(History(self, id_))
+            history = self.add_history(self.class_builder_history(self, id_))
 
         return history
 
@@ -369,27 +456,28 @@ class HistoryManager:
         '''
         Pass an id to overwrite channel id.
         '''
-        return History.load_from(fp, self, id_)
-
+        return self.class_builder_history.load_from(fp, self, id_)
+    
+    
 
 if __name__ == '__main__':
     file_path = os.path.join('ad_discordbot', 'modules', 'TMP_h2.json')
     hm = HistoryManager()
     h = hm.get_history_for(100)
 
-    m = Message(h, 'Kat', 'Hey!', 'user', 11111)
+    m = HMessage(h, 'Kat', 'Hey!', 'user', 11111)
     h.append(m)
 
-    m2 = Message(h, 'Skye', 'Hello Kat', 'assistant', 22222)
+    m2 = HMessage(h, 'Skye', 'Hello Kat', 'assistant', 22222)
     h.append(m2)
     m2.mark_as_reply_for(m)
 
 
-    h.append(Message(h, 'Kat', 'What is 2+2?', 'user', 11111))
-    h.append(Message(h, 'Skye', '4', 'assistant', 22222))
-    h.append(Message(h, 'Skye', 'What else can I assist you with?', 'assistant', 22222))
-    h.append(Message(h, 'Skye', 'Goodbye', 'assistant', 22222))
-    h.append(Message(h, 'Kat', 'No wait!', 'user', 11111))
+    h.append(HMessage(h, 'Kat', 'What is 2+2?', 'user', 11111))
+    h.append(HMessage(h, 'Skye', '4', 'assistant', 22222))
+    h.append(HMessage(h, 'Skye', 'What else can I assist you with?', 'assistant', 22222))
+    h.append(HMessage(h, 'Skye', 'Goodbye', 'assistant', 22222))
+    h.append(HMessage(h, 'Kat', 'No wait!', 'user', 11111))
 
     print(h)
 
