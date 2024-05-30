@@ -212,6 +212,8 @@ tag_presets:
 #   load_history: 0                   0 = default (all history included) / -1 = prompt excludes chat history / > 1 = llm only sees this many recent exchanges.
 #   save_history: (true/false)        Whether to save this interaction to history or not.
 #   state: {dictionary}               Update values for textgen-webui state parameters. Must be formatted as a dictionary.
+#   prefix_context: 'string'          Inserts text immediately before the 'context', joined by \n (new line). Multiple can accumulate.
+#   suffix_context: 'string'          Inserts text immediately after the 'context', joined by \n (new line). Multiple can accumulate.
 #   llm_param_variances: {dictionary} Randomization ranges for textgen-webui state parameters. Must be formatted as a dictionary.
 
 # Relevant to img generation (A1111 / Forge):
