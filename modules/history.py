@@ -499,6 +499,18 @@ class History:
         return False
     
     
+    def save_sync(self, fp=None, modify_fp=False, force=False):
+        if fp is not None and modify_fp:
+            fp = self.manager.modify_saved_path(fp, self.id)
+        fp = fp or self.fp
+        
+        if self.event_save.is_set() or force:
+            self.trigger_save(fp)
+            return True
+        
+        return False
+    
+    
     # def save_rendered_tgwui(self, fp):
     #     with open(fp, 'w', encoding='utf8') as f:
     #         json_out = json.dumps(self.render_to_tgwui(), indent=2)
@@ -549,6 +561,7 @@ class HistoryManager:
     change_char_history_method: str = field(default='new')
     greeting_or_history: str = field(default='history')
     per_channel_history: bool = field(default=True)
+    save_interval:int = field(default=30)
 
     _histories: dict[ChannelID, History] = field(default_factory=dict)
     uuid: str = field(default_factory=get_uuid_hex, init=False)
@@ -587,6 +600,17 @@ class HistoryManager:
 
     def unload_history(self):
         self._histories.clear()
+        return self
+    
+    
+    async def save_all(self, modify_fp=False, force=False):
+        for history in self._histories.values():
+            await history.save(modify_fp=modify_fp, timeout=0, force=force)
+        return self
+    
+    def save_all_sync(self, modify_fp=False, force=False):
+        for history in self._histories.values():
+            history.save_sync(modify_fp=modify_fp, force=force)
         return self
     
 

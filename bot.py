@@ -1,5 +1,6 @@
 from ad_discordbot.modules.logs import import_track, log, get_logger, log_file_handler, log_file_formatter; import_track(__file__, fp=True)
 logging = get_logger(__name__)
+import logging as _logging
 from datetime import datetime, timedelta
 from dataclasses import dataclass, field
 from dataclasses_json import dataclass_json, config
@@ -665,7 +666,10 @@ async def on_ready():
             imgmodels_data = load_file(shared_path.img_models, {})
             if imgmodels_data and imgmodels_data.get('settings', {}).get('auto_change_imgmodels', {}).get('enabled', False):
                 await bg_task_queue.put(start_auto_change_imgmodels())
-        logging.info("Bot is ready")
+        logging.info("----------------------------------------------")
+        logging.info("                Bot is ready")
+        logging.info("    Use Ctrl+C to shutdown the bot cleanly")
+        logging.info("----------------------------------------------")
     except Exception as e:
         logging.error(f"Error with on_ready: {e}")
         traceback.print_exc()
@@ -4864,7 +4868,7 @@ class CustomHistoryManager(HistoryManager):
                 return internal_history_path
             
             
-    def get_history_for(self, id_: ChannelID=None, fp=None) -> History:
+    def get_history_for(self, id_: ChannelID=None, fp=None, modify_fp=False) -> History:
         state_dict = bot_settings.settings['llmstate']['state']
         mode = state_dict['mode']
         character_menu = state_dict["character_menu"]
@@ -4878,13 +4882,36 @@ class CustomHistoryManager(HistoryManager):
         # TODO if there's a setting about keeping history between characters, maybe duplicating would be better?
         # or just edit the ID here to match both
         
-        history = super().get_history_for(f'{id_}_{character_menu}_{mode}', fp=fp, modify_fp=False, search=search)
+        history = super().get_history_for(f'{id_}_{character_menu}_{mode}', fp=fp, modify_fp=modify_fp, search=search)
         return history
 
-        
         
 bot_behavior = Behavior() # needs to be loaded before settings
 bot_settings = Settings(bot_behavior=bot_behavior)
 bot_history = CustomHistoryManager(class_builder_history=CustomHistory, **config.get('textgenwebui', {}).get('chat_history', {}))
 
-client.run(bot_token, log_handler=log_file_handler, log_formatter=log_file_formatter)
+
+
+
+
+# Manually start the bot so we can catch keyboard interupts
+async def runner():
+    async with client:
+        await client.start(bot_token, reconnect=True)
+
+discord.utils.setup_logging(
+            handler=log_file_handler,
+            formatter=log_file_formatter,
+            level=_logging.INFO,
+            root=False,
+        )
+try:
+    asyncio.run(runner())
+except KeyboardInterrupt:
+    logging.info(f'Received signal to terminate and event loop.')
+    bot_history.save_all_sync()
+    log.info('Saved all histories')
+
+finally:
+    logging.info(f'Loop closed')
+    # The loop is closed now, can't use await anymore
