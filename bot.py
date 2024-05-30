@@ -1011,12 +1011,13 @@ async def process_llm_payload_tags(ictx: CtxInteraction, llm_payload:dict, llm_p
             update_dict(llm_payload['state'], state)
             logging.info(f'[TAGS] LLM State was modified')
         # Context insertions
-        if prefix_context or suffix_context:
-            prefix_str = "\n".join(prefix_context)
-            suffix_str = "\n".join(suffix_context)
+        if prefix_context:
+            prefix_str = "\n".join(str(item) for item in prefix_context)
             if prefix_str:
                 llm_payload['state']['context'] = f"{prefix_str}\n{llm_payload['state']['context']}"
                 logging.info(f'[TAGS] Prefixed context with text.')
+        if suffix_context:
+            suffix_str = "\n".join(str(item) for item in suffix_context)
             if suffix_str:
                 llm_payload['state']['context'] = f"{llm_payload['state']['context']}\n{suffix_str}"
                 logging.info(f'[TAGS] Suffixed context with text.')
