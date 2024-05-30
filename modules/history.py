@@ -285,16 +285,16 @@ class History:
     _save_event: asyncio.Event = field(default_factory=asyncio.Event, init=False, metadata=config_null)
     _last_save: float = field(default_factory=time.time, init=False, metadata=config_null)
 
-    def __copy__(self, x: 'History'):
+    def __copy__(self) -> 'History':
         new = self.__class__(
-            manager=x.manager,
-            id=x.id,
-            uuid=x.uuid,
-            fp=x.fp,
+            manager=self.manager,
+            id=self.id,
+            uuid=self.uuid,
+            fp=self.fp,
             )
 
-        new._last = x._last
-        new._items = x._items
+        new._last = self._last
+        new._items = self._items
         return new
 
 
@@ -546,8 +546,8 @@ class HistoryManager:
     limit_history: bool = field(default=True)
     autosave_history: bool = field(default=False)
     autoload_history: bool = field(default=False)
-    change_char_history_method: bool = field(default='new')
-    greeting_or_history: bool = field(default='history')
+    change_char_history_method: str = field(default='new')
+    greeting_or_history: str = field(default='history')
     per_channel_history: bool = field(default=True)
 
     _histories: dict[ChannelID, History] = field(default_factory=dict)

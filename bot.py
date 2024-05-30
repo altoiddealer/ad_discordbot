@@ -3801,6 +3801,7 @@ if textgenwebui_enabled:
                 await change_char_task(ctx, 'reset', params)
 
         except Exception as e:
+            print(traceback.format_exc())
             logging.error(f"Error with /reset: {e}")
 
     # /reset command - Resets current character
@@ -4797,9 +4798,9 @@ class Settings:
 class CustomHistory(History):
     fp_unique_id: Optional[str] = field(default=None)
     
-    def __copy__(self, x: 'CustomHistory'):
-        new = super().__copy__(x)
-        new.fp_unique_id = x.fp_unique_id
+    def __copy__(self):
+        new = super().__copy__()
+        new.fp_unique_id = self.fp_unique_id
         return new
     
     def fresh(self):
@@ -4868,8 +4869,10 @@ class CustomHistoryManager(HistoryManager):
         character_menu = state_dict["character_menu"]
         
         search = True
-        if self.change_char_history_method == 'keep':
+        if self.change_char_history_method == 'new':
             search = False # don't import old logs
+        
+        logging.warning(f'{search=} {self.change_char_history_method}')
             
         # TODO if there's a setting about keeping history between characters, maybe duplicating would be better?
         # or just edit the ID here to match both
