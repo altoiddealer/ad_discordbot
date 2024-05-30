@@ -2182,7 +2182,9 @@ async def change_char_task(ictx: CtxInteraction, source:str, params:dict):
             if source == 'reset':
                 bot_history.get_history_for(ictx.channel.id).clear()
             else:
-                bot_history.clear_all_history()
+                logging.warning('This originally cleared all history. No need, just unload maybe?')
+                # bot_history.clear_all_history()
+                bot_history.unload_history()
                 
         if change_embed:
             await change_embed.delete()
@@ -4804,30 +4806,37 @@ class CustomHistory(History):
         new.fp_unique_id = x.fp_unique_id
         return new
     
-    async def save(self, fp=None, modify_fp=False, timeout=30, force=False):
-        state_dict = bot_settings.settings['llmstate']['state']
-        mode = state_dict['mode']
-        character_menu = state_dict["character_menu"]
-        
-        has_file_name = self.fp_unique_id
-        if not self.fp_unique_id:
-            if self.manager.per_channel_history:
-                self.fp_unique_id = f"{datetime.now().strftime('%Y%m%d-%H-%M-%S')}_channel"
-            else:
-                self.fp_unique_id = datetime.now().strftime('%Y%m%d-%H-%M-%S')
-        
-        
-        internal_history_path:Path = get_history_file_path(self.fp_unique_id, character_menu, mode)
-        status = await super().save(fp=internal_history_path, modify_fp=True, timeout=timeout, force=force)
-        if not status: # don't bother saving if nothing changed
-            return False
-        
-        if not has_file_name:
-            logging.info(f'''Chat history will be saved to "/logs/{mode}/{character_menu}/{self.fp_unique_id}.json"''')
+    async def save(self, fp=None, modify_fp=False, timeout=10, force=False):
+        try:
+            state_dict = bot_settings.settings['llmstate']['state']
+            mode = state_dict['mode']
+            character_menu = state_dict["character_menu"]
             
-        save_history(self.render_to_tgwui(), self.fp_unique_id, character_menu, mode)
-        logging.debug('Finished saving chat history and internal history.')
-        return status
+            has_file_name = self.fp_unique_id
+            if not self.fp_unique_id:
+                if self.manager.per_channel_history:
+                    self.fp_unique_id = f"{datetime.now().strftime('%Y%m%d-%H-%M-%S')}_channel"
+                else:
+                    self.fp_unique_id = datetime.now().strftime('%Y%m%d-%H-%M-%S')
+            
+            
+            internal_history_path = str(get_history_file_path(self.fp_unique_id, character_menu, mode))
+            
+            os.makedirs(os.path.dirname(internal_history_path), exist_ok=True)
+            status = await super().save(fp=internal_history_path, modify_fp=True, timeout=timeout, force=force)
+            if not status: # don't bother saving if nothing changed
+                return False
+            
+            if not has_file_name:
+                logging.info(f'''Chat history will be saved to "/logs/{mode}/{character_menu}/{self.fp_unique_id}.json"''')
+                
+            save_history(self.render_to_tgwui(), self.fp_unique_id, character_menu, mode)
+            logging.debug('Finished saving chat history and internal history.')
+            return status
+
+        except Exception as e:
+            print(traceback.format_exc())
+            logging.critical(e)
     
     
     def last_exchange(self):
@@ -4845,11 +4854,11 @@ class CustomHistoryManager(HistoryManager):
         
         # get latest valid history file
         for i in unique_ids:
-            internal_history_path:Path = get_history_file_path(i, state['character_menu'], state['mode'])
+            internal_history_path = str(get_history_file_path(i, state['character_menu'], state['mode']))
             internal_history_path = self.modify_saved_path(internal_history_path, id_)
             
-            if internal_history_path.is_file():
-                return str(internal_history_path)
+            if os.path.isfile(internal_history_path):
+                return internal_history_path
             
             
     def load_bot_history(self):
@@ -4869,6 +4878,20 @@ class CustomHistoryManager(HistoryManager):
                     logging.info(f'Loaded most recent chat history. Last message exchange:\n User: "{last_user_message.text_visible}"\n {bot_database.last_character}: "{last_assistant_message.text_visible}"')
                     
         logging.info("Loaded most recent chat history for all channels.")
+        
+        
+    
+    def get_history_for(self, id_: ChannelID=None, fp=None, modify_fp=False, search=False) -> History:
+        state_dict = bot_settings.settings['llmstate']['state']
+        mode = state_dict['mode']
+        character_menu = state_dict["character_menu"]
+        
+        # TODO if there's a setting about keeping history between characters, maybe duplicating would be better?
+        # or just edit the ID here to match both
+        
+        history = super().get_history_for(f'{id_}_{character_menu}_{mode}', fp=fp, modify_fp=modify_fp, search=True)
+        return history
+
         
         
 bot_behavior = Behavior() # needs to be loaded before settings

@@ -2,7 +2,7 @@ from discord.ext import commands
 import discord
 from typing import Union
 
-ChannelID = int
+ChannelID = str
 UserID = int
 MessageID = int
 
