@@ -4918,8 +4918,6 @@ class CustomHistoryManager(HistoryManager):
         if self.change_char_history_method == 'new':
             search = False # don't import old logs
         
-        logging.warning(f'{search=} {self.change_char_history_method}')
-            
         # TODO if there's a setting about keeping history between characters, maybe duplicating would be better?
         # or just edit the ID here to match both
         
