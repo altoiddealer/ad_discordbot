@@ -4,6 +4,7 @@ from ad_discordbot.modules.utils_shared import task_semaphore
 import discord
 from discord.ext import commands
 from typing import Union
+from ad_discordbot.modules.typing import CtxInteraction
 
 # Send message response to user's interaction command
 async def ireply(ictx: 'CtxInteraction', process):
@@ -164,14 +165,16 @@ class SelectOptionsView(discord.ui.View):
         self.selected_item = self.unload_item
         await interaction.response.defer()
         self.stop()
-        
 
-CtxInteraction = Union[commands.Context, discord.Interaction, discord.Message]
 
 def get_user_ctx_inter(ictx: CtxInteraction) -> Union[discord.User, discord.Member]:
     # Found instances of "i" with \((self, )?i[^a-z_\)]
     if isinstance(ictx, discord.Interaction):
-        log.debug(f'Test for Kat (Reality): We reached interaction.user!')
         return ictx.user
-    
     return ictx.author
+
+
+def get_message_ctx_inter(ictx: CtxInteraction) -> discord.Message:
+    if isinstance(ictx, discord.Message):
+        return ictx
+    return ictx.message
