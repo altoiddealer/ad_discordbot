@@ -1687,7 +1687,7 @@ async def hybrid_llm_img_gen(ictx: CtxInteraction, source:str, text:str, tags:di
             if (not bot_will_do['should_send_text']) or (voice_client and (voice_client != ictx.guild.voice_client) and int(tts_settings.get('play_mode', 0)) == 0):
                 tts_sw = await toggle_tts(toggle='off')
             # generate text with text-gen-webui
-            last_resp, tts_resp = await llm_gen(llm_payload, params, ictx, tts_sw)
+            last_resp, tts_resp = await llm_gen(llm_payload, source, params, ictx, tts_sw)
             # If no text was generated, treat user input at the response
             if last_resp is not None:
                 logging.info("reply sent: \"" + user_name + ": {'text': '" + llm_payload["text"] + "', 'response': '" + last_resp + "'}\"")
@@ -1811,7 +1811,7 @@ async def toggle_tts(toggle='on', tts_sw=None):
     return None
 
 # Send LLM Payload - get response
-async def llm_gen(llm_payload:dict, params:dict={}, i=None, tts_sw=None):
+async def llm_gen(llm_payload:dict, source:str, params:dict={}, i=None, tts_sw=None):
     try:
         if shared.model_name == 'None':
             return None, None
@@ -1843,7 +1843,7 @@ async def llm_gen(llm_payload:dict, params:dict={}, i=None, tts_sw=None):
         # Offload the synchronous task to a separate thread using run_in_executor
         last_resp, tts_resp = await loop.run_in_executor(None, process_responses)
 
-        if last_resp:
+        if last_resp and source != 'speak':
             update_llm_gen_statistics(last_resp) # Update statistics
             save_to_history = params.get('save_to_history', True)
             bot_history.manage_history(prompt=llm_payload['text'], reply=last_resp, save_to_history=save_to_history, chankey=str(i.channel.id))
@@ -1888,7 +1888,7 @@ async def cont_regen_task(inter:discord.Interaction, source:str, text:str, messa
         if voice_client and (voice_client != inter.guild.voice_client) and int(tts_settings.get('play_mode', 0)) == 0:
             tts_sw = await toggle_tts(toggle='off')
         # generate text with text-gen-webui
-        last_resp, tts_resp = await llm_gen(llm_payload, params, inter, tts_sw)
+        last_resp, tts_resp = await llm_gen(llm_payload, source, params, inter, tts_sw)
         if system_embed:
             await system_embed.delete()
         if last_resp is None:
@@ -1933,7 +1933,7 @@ async def speak_task(ctx: commands.Context, text:str, params:dict):
         params['save_to_history'] = False
         tts_args = params.get('tts_args', {})
         await update_extensions(tts_args)
-        _, tts_resp = await llm_gen(llm_payload, params)
+        _, tts_resp = await llm_gen(llm_payload, 'speak', params)
         if system_embed:
             await system_embed.delete()
         if tts_resp is None:
