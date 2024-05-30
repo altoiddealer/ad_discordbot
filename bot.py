@@ -2176,6 +2176,7 @@ async def change_char_task(ictx: CtxInteraction, source:str, params:dict):
             
         else:
             if source == 'reset':
+                # create a clone with same settings but empty, and replace it in the manager
                 bot_history.get_history_for(ictx.channel.id).fresh().replace()
             else:
                 logging.warning('This originally cleared all history. No need, just unload maybe?')
