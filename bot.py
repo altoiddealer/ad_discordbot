@@ -655,11 +655,6 @@ async def on_ready():
             char_name = get_character() # Try loading character data regardless of mode (chat/instruct)
             if char_name:
                 await character_loader(char_name)
-            # Load history or set empty history
-            if bot_history.autoload_history and (bot_history.change_char_history_method == 'keep'):
-                bot_history.load_bot_history()
-                
-            # removed clear because history is created "just in time"
                 
         # Create background task processing queue
         client.loop.create_task(process_tasks_in_background())
@@ -2177,10 +2172,11 @@ async def change_char_task(ictx: CtxInteraction, source:str, params:dict):
         await change_character(char_name, channel, source)
         # Set history
         if bot_history.autoload_history and (bot_history.change_char_history_method == 'keep' and source != 'reset'):
-            bot_history.load_bot_history()
+            pass # no need to preload history as it gets loaded when needed.
+            
         else:
             if source == 'reset':
-                bot_history.get_history_for(ictx.channel.id).clear()
+                bot_history.get_history_for(ictx.channel.id).fresh().replace()
             else:
                 logging.warning('This originally cleared all history. No need, just unload maybe?')
                 # bot_history.clear_all_history()
@@ -4806,6 +4802,11 @@ class CustomHistory(History):
         new.fp_unique_id = x.fp_unique_id
         return new
     
+    def fresh(self):
+        new = super().fresh()
+        new.fp_unique_id = None
+        return new
+    
     async def save(self, fp=None, modify_fp=False, timeout=10, force=False):
         try:
             state_dict = bot_settings.settings['llmstate']['state']
@@ -4861,35 +4862,19 @@ class CustomHistoryManager(HistoryManager):
                 return internal_history_path
             
             
-    def load_bot_history(self):
-        state_dict = bot_settings.settings['llmstate']['state']
-        state = {'character_menu': state_dict['character_menu'], 'mode': state_dict['mode']}
-        
-        unique_ids: list[str] = find_all_histories(state)
-        history = None
-        if not self.per_channel_history:
-            if unique_ids:
-                history = self.get_history_for()
-                
-
-            if history:
-                last_user_message, last_assistant_message = history.last_exchange()
-                if last_user_message:
-                    logging.info(f'Loaded most recent chat history. Last message exchange:\n User: "{last_user_message.text_visible}"\n {bot_database.last_character}: "{last_assistant_message.text_visible}"')
-                    
-        logging.info("Loaded most recent chat history for all channels.")
-        
-        
-    
-    def get_history_for(self, id_: ChannelID=None, fp=None, modify_fp=False, search=False) -> History:
+    def get_history_for(self, id_: ChannelID=None, fp=None) -> History:
         state_dict = bot_settings.settings['llmstate']['state']
         mode = state_dict['mode']
         character_menu = state_dict["character_menu"]
         
+        search = True
+        if self.change_char_history_method == 'keep':
+            search = False # don't import old logs
+            
         # TODO if there's a setting about keeping history between characters, maybe duplicating would be better?
         # or just edit the ID here to match both
         
-        history = super().get_history_for(f'{id_}_{character_menu}_{mode}', fp=fp, modify_fp=modify_fp, search=True)
+        history = super().get_history_for(f'{id_}_{character_menu}_{mode}', fp=fp, modify_fp=False, search=search)
         return history
 
         

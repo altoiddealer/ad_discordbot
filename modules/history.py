@@ -313,6 +313,27 @@ class History:
         self._last.clear()
         self.event_save.set()
         return self
+    
+    
+    def fresh(self):
+        '''
+        Returns a copy of the history that is empty but keeps similar settings.
+        '''
+        new = copy.copy(self)
+        new._items = []
+        new._last = {}
+        
+        new._items.clear()
+        new._last.clear()
+        return new
+    
+    
+    def replace(self):
+        '''
+        Replace the current copy of history in the manager
+        '''
+        self.manager.add_history(self)
+        return self
 
 
     def append(self, message: HMessage):
@@ -567,7 +588,7 @@ class HistoryManager:
     def unload_history(self):
         self._histories.clear()
         return self
-
+    
 
     def add_history(self, history: History):
         self._histories[history.id] = history
