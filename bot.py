@@ -654,7 +654,7 @@ async def on_ready():
             if bot_history.autoload_history and (bot_history.change_char_history_method == 'keep'):
                 bot_history.load_bot_history()
             else:
-                await bot_history.reset_session_history()
+                bot_history.reset_session_history()
         # Create background task processing queue
         client.loop.create_task(process_tasks_in_background())
         # Start background task to sync the discord client tree
@@ -1429,7 +1429,7 @@ async def init_llm_payload(ictx: CtxInteraction, user_name:str, text:str) -> dic
     llm_payload['state']['name2_instruct'] = name2
     llm_payload['state']['character_menu'] = name2
     llm_payload['state']['context'] = context
-    ictx_history = await bot_history.get_channel_history(ictx)
+    ictx_history = bot_history.get_channel_history(ictx)
     llm_payload['state']['history'] = ictx_history
     return llm_payload
 
@@ -2153,9 +2153,9 @@ async def change_char_task(ictx: CtxInteraction, source:str, params:dict):
             bot_history.load_bot_history()
         else:
             if source == 'reset':
-                await bot_history.reset_session_history(ictx)
+                bot_history.reset_session_history(ictx)
             else:
-                await bot_history.reset_session_history()
+                bot_history.reset_session_history()
         if change_embed:
             await change_embed.delete()
             # Send embeds to announcement channels
@@ -3765,7 +3765,7 @@ if textgenwebui_enabled:
         try:
             shared.stop_everything = True
             await ireply(ctx, 'character reset') # send a response msg to the user
-            await bot_history.reset_session_history(ctx)
+            bot_history.reset_session_history(ctx)
 
             async with task_semaphore:
                 # offload to ai_gen queue
@@ -4950,46 +4950,58 @@ class History:
         if self.autosave_history:
             self.save_bot_history()
 
-    async def get_channel_history(self, ictx=None):
+    def set_history_key_defaults(self, ictx=None):
+        # If per-channel history
+        if self.per_channel_history_enabled and ictx:
+            chkey = str(ictx.channel.id)
+            self.session_history[chkey] = {
+                'guild_name': str(ictx.guild),
+                'channel_name': str(ictx.channel),
+                'internal': [],
+                'visible': []
+                }
+            self.collected_prompts[chkey] = []
+        # If only one history
+        else:
+            self.session_history = {'internal': [], 'visible': []}
+            self.collected_prompts = []
+
+    def get_channel_history(self, ictx=None):
         # If per-channel history
         if self.per_channel_history_enabled:
             chkey = str(ictx.channel.id)
             if not self.session_history.get(chkey):
-                self.session_history[chkey] = {
-                    'guild_name': str(ictx.guild),
-                    'channel_name': str(ictx.channel),
-                    'internal': [],
-                    'visible': []
-                    }
+                self.set_history_key_defaults(ictx)
             return self.session_history[chkey]
         # If only one history
         else:
             if not self.session_history:
-                self.session_history = {'internal': [], 'visible': []}
+                self.set_history_key_defaults()
             return self.session_history
 
-    async def reset_session_history(self, ictx=None):
+    def reset_session_history(self, ictx=None):
         # If per-channel history
         if self.per_channel_history_enabled:
             # if no interaction, all history will be reset
             if ictx:
+                chkey = str(ictx.channel.id)
                 guild_chan = f'{ictx.guild} - {ictx.channel}'
                 logging.info(f"Starting new conversation in: {guild_chan}.")
                 # If channel has history
-                if self.session_history.get(ictx.channel.id):
-                    self.session_history[ictx.channel.id]['internal'] = []
-                    self.session_history[ictx.channel.id]['visible'] = []
+                if self.session_history.get(chkey):
+                    self.set_history_key_defaults(ictx)
                 # if channel does not have history
                 else:
-                    await self.get_channel_history(ictx) # will initialize a fresh channel key
+                    self.get_channel_history(ictx) # will initialize channel keys
                 return
             else:
                 logging.info("Starting new conversation in all channels.")
         # If only one history
         else:
             logging.info("Starting new conversation.")
-        # empty dictionary = all history is reset
+        # Reset everything
         self.session_history = {}
+        self.collected_prompts = {}
 
 bot_behavior = Behavior() # needs to be loaded before settings
 bot_settings = Settings(bot_behavior=bot_behavior)
