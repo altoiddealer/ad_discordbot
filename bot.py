@@ -3816,7 +3816,8 @@ if textgenwebui_enabled:
         try:
             shared.stop_everything = True
             await ireply(ctx, 'character reset') # send a response msg to the user
-            bot_history.get_history_for(ctx.channel.id).clear()
+            # Create a new instanec of the history and set it to active
+            bot_history.get_history_for(ctx.channel.id).fresh().replace()
 
             async with task_semaphore:
                 # offload to ai_gen queue
