@@ -4813,32 +4813,53 @@ class CustomHistory(History):
         new.fp_unique_id = None
         return new
     
+    def _internal_pre_save(self):
+        state_dict = bot_settings.settings['llmstate']['state']
+        mode = state_dict['mode']
+        character_menu = state_dict["character_menu"]
+        
+        has_file_name = self.fp_unique_id
+        if not self.fp_unique_id:
+            if self.manager.per_channel_history:
+                self.fp_unique_id = f"{datetime.now().strftime('%Y%m%d-%H-%M-%S')}_channel"
+            else:
+                self.fp_unique_id = datetime.now().strftime('%Y%m%d-%H-%M-%S')
+    
+        internal_history_path = str(get_history_file_path(self.fp_unique_id, character_menu, mode))
+        os.makedirs(os.path.dirname(internal_history_path), exist_ok=True)
+        
+        return internal_history_path, has_file_name, character_menu, mode
+    
+    def _internal_post_save(self, has_file_name, character_menu, mode):
+        if not has_file_name:
+            logging.info(f'''Chat history will be saved to "/logs/{mode}/{character_menu}/{self.fp_unique_id}.json"''')
+            
+        save_history(self.render_to_tgwui(), self.fp_unique_id, character_menu, mode)
+        logging.debug('Finished saving chat history and internal history.')
+    
     async def save(self, fp=None, modify_fp=False, timeout=10, force=False):
         try:
-            state_dict = bot_settings.settings['llmstate']['state']
-            mode = state_dict['mode']
-            character_menu = state_dict["character_menu"]
-            
-            has_file_name = self.fp_unique_id
-            if not self.fp_unique_id:
-                if self.manager.per_channel_history:
-                    self.fp_unique_id = f"{datetime.now().strftime('%Y%m%d-%H-%M-%S')}_channel"
-                else:
-                    self.fp_unique_id = datetime.now().strftime('%Y%m%d-%H-%M-%S')
-            
-            
-            internal_history_path = str(get_history_file_path(self.fp_unique_id, character_menu, mode))
-            
-            os.makedirs(os.path.dirname(internal_history_path), exist_ok=True)
+            internal_history_path, has_file_name, character_menu, mode = self._internal_pre_save()
             status = await super().save(fp=internal_history_path, modify_fp=True, timeout=timeout, force=force)
             if not status: # don't bother saving if nothing changed
                 return False
             
-            if not has_file_name:
-                logging.info(f'''Chat history will be saved to "/logs/{mode}/{character_menu}/{self.fp_unique_id}.json"''')
-                
-            save_history(self.render_to_tgwui(), self.fp_unique_id, character_menu, mode)
-            logging.debug('Finished saving chat history and internal history.')
+            self._internal_post_save(has_file_name, character_menu, mode)
+            return status
+
+        except Exception as e:
+            print(traceback.format_exc())
+            logging.critical(e)
+            
+            
+    def save_sync(self, fp=None, modify_fp=False, force=False):
+        try:
+            internal_history_path, has_file_name, character_menu, mode = self._internal_pre_save()
+            status = super().save_sync(fp=internal_history_path, modify_fp=True, force=force)
+            if not status: # don't bother saving if nothing changed
+                return False
+            
+            self._internal_post_save(has_file_name, character_menu, mode)
             return status
 
         except Exception as e:
@@ -4892,7 +4913,20 @@ bot_history = CustomHistoryManager(class_builder_history=CustomHistory, **config
 
 
 
+import sys
+import atexit
+import signal
 
+def exit_handler():
+    bot_history.save_all_sync()
+    log.info('Saved all histories')
+
+def kill_handler(*args):
+    sys.exit(0)
+
+atexit.register(exit_handler)
+signal.signal(signal.SIGINT, kill_handler)
+signal.signal(signal.SIGTERM, kill_handler)
 
 # Manually start the bot so we can catch keyboard interupts
 async def runner():
@@ -4905,13 +4939,11 @@ discord.utils.setup_logging(
             level=_logging.INFO,
             root=False,
         )
-try:
-    asyncio.run(runner())
-except KeyboardInterrupt:
-    logging.info(f'Received signal to terminate and event loop.')
-    bot_history.save_all_sync()
-    log.info('Saved all histories')
+# try:
+asyncio.run(runner())
+# except KeyboardInterrupt:
+#     logging.info(f'Received signal to terminate and event loop.')
 
-finally:
-    logging.info(f'Loop closed')
-    # The loop is closed now, can't use await anymore
+# finally:
+#     logging.info(f'Loop closed')
+#     # The loop is closed now, can't use await anymore

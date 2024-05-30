@@ -484,7 +484,7 @@ class History:
     async def save(self, fp=None, modify_fp=False, timeout=10, force=False):
         if fp is not None and modify_fp:
             fp = self.manager.modify_saved_path(fp, self.id)
-        fp = fp or self.fp
+        self.fp = fp or self.fp
         
         delta = self.last_save_delta()
         if timeout:
@@ -493,7 +493,7 @@ class History:
                 await asyncio.sleep(timeout-delta)
         
         if self.event_save.is_set() or force:
-            self.trigger_save(fp)
+            self.trigger_save(self.fp)
             return True
         
         return False
@@ -502,10 +502,10 @@ class History:
     def save_sync(self, fp=None, modify_fp=False, force=False):
         if fp is not None and modify_fp:
             fp = self.manager.modify_saved_path(fp, self.id)
-        fp = fp or self.fp
+        self.fp = fp or self.fp
         
         if self.event_save.is_set() or force:
-            self.trigger_save(fp)
+            self.trigger_save(self.fp)
             return True
         
         return False
