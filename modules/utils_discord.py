@@ -4,6 +4,11 @@ from ad_discordbot.modules.utils_shared import task_semaphore
 import discord
 from discord.ext import commands
 from typing import Union
+from ad_discordbot.modules.typing import CtxInteraction
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from ad_discordbot.modules.history import HistoryManager, History, HMessage
 
 # Send message response to user's interaction command
 async def ireply(ictx: 'CtxInteraction', process):
@@ -18,7 +23,7 @@ async def ireply(ictx: 'CtxInteraction', process):
 
 
 
-async def send_long_message(channel, message_text):
+async def send_long_message(channel, message_text, bot_message:'HMessage'=None):
     """ Splits a longer message into parts while preserving sentence boundaries and code blocks """
     activelang = ''
 
@@ -74,6 +79,9 @@ async def send_long_message(channel, message_text):
                 chunk_text, code_block_inserted = ensure_even_code_blocks(message_text, code_block_inserted)
                 sent_message = await channel.send(chunk_text)
                 break
+            
+    if bot_message:
+        bot_message.id = sent_message.id
 
 class SelectedListItem(discord.ui.Select):
     def __init__(self, options, placeholder, custom_id):
@@ -164,13 +172,16 @@ class SelectOptionsView(discord.ui.View):
         self.selected_item = self.unload_item
         await interaction.response.defer()
         self.stop()
-        
 
-CtxInteraction = Union[commands.Context, discord.Interaction, discord.Message]
 
 def get_user_ctx_inter(ictx: CtxInteraction) -> Union[discord.User, discord.Member]:
     # Found instances of "i" with \((self, )?i[^a-z_\)]
     if isinstance(ictx, discord.Interaction):
         return ictx.user
-    
     return ictx.author
+
+
+def get_message_ctx_inter(ictx: CtxInteraction) -> discord.Message:
+    if isinstance(ictx, discord.Message):
+        return ictx
+    return ictx.message

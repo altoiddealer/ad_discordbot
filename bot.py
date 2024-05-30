@@ -1,6 +1,10 @@
 from ad_discordbot.modules.logs import import_track, log, get_logger, log_file_handler, log_file_formatter; import_track(__file__, fp=True)
 logging = get_logger(__name__)
+import logging as _logging
 from datetime import datetime, timedelta
+from dataclasses import dataclass, field
+from dataclasses_json import dataclass_json, config
+from typing import Optional
 from pathlib import Path
 import asyncio
 import random
@@ -28,6 +32,7 @@ import copy
 from shutil import copyfile
 import sys
 import traceback
+from ad_discordbot.modules.typing import ChannelID, UserID, MessageID, CtxInteraction
 
 from typing import Union
 
@@ -39,6 +44,7 @@ from ad_discordbot.modules.utils_misc import fix_dict, update_dict, sum_update_d
 from ad_discordbot.modules.utils_discord import ireply, send_long_message, SelectedListItem, SelectOptionsView, CtxInteraction, get_user_ctx_inter
 from ad_discordbot.modules.utils_files import load_file, merge_base, save_yaml_file
 from ad_discordbot.modules.utils_aspect_ratios import round_to_precision, res_to_model_fit, dims_from_ar, avg_from_dims, get_aspect_ratio_parts, calculate_aspect_ratio_sizes
+from ad_discordbot.modules.history import HistoryManager, History, HMessage
 
 # Databases
 bot_active_settings = ActiveSettings()
@@ -269,7 +275,7 @@ else:
 
 if textgenwebui_enabled:
     import modules.extensions as extensions_module
-    from modules.chat import chatbot_wrapper, load_character, save_history, get_history_file_path, find_all_histories
+    from modules.chat import chatbot_wrapper, load_character, save_history, get_history_file_path, find_all_histories, load_history
     from modules import shared
     from modules import chat, utils
     from modules.LoRA import add_lora_to_model
@@ -650,11 +656,7 @@ async def on_ready():
             char_name = get_character() # Try loading character data regardless of mode (chat/instruct)
             if char_name:
                 await character_loader(char_name)
-            # Load history or set empty history
-            if bot_history.autoload_history and (bot_history.change_char_history_method == 'keep'):
-                bot_history.load_bot_history()
-            else:
-                bot_history.reset_session_history()
+                
         # Create background task processing queue
         client.loop.create_task(process_tasks_in_background())
         # Start background task to sync the discord client tree
@@ -664,7 +666,10 @@ async def on_ready():
             imgmodels_data = load_file(shared_path.img_models, {})
             if imgmodels_data and imgmodels_data.get('settings', {}).get('auto_change_imgmodels', {}).get('enabled', False):
                 await bg_task_queue.put(start_auto_change_imgmodels())
-        logging.info("Bot is ready")
+        logging.info("----------------------------------------------")
+        logging.info("                Bot is ready")
+        logging.info("    Use Ctrl+C to shutdown the bot cleanly")
+        logging.info("----------------------------------------------")
     except Exception as e:
         logging.error(f"Error with on_ready: {e}")
         traceback.print_exc()
@@ -825,26 +830,31 @@ async def play_in_voice_channel(file):
         voice_client.play(source, after=lambda e: after_playback(file, e))
 
 
-async def upload_tts_file(channel, tts_resp):
-    filename = os.path.basename(tts_resp)
+async def upload_tts_file(channel:discord.TextChannel, bot_message:HMessage):
+    file = bot_message.text_visible
+    filename = os.path.basename(file)
     mp3_filename = os.path.splitext(filename)[0] + '.mp3'
     
     bit_rate = int(tts_settings.get('mp3_bit_rate', 128))
     with io.BytesIO() as buffer:
-        audio = AudioSegment.from_wav(tts_resp)
+        audio = AudioSegment.from_wav(file)
         audio.export(buffer, format="mp3", bitrate=f"{bit_rate}k")
         mp3_file = File(buffer, filename=mp3_filename)
-        await channel.send(file=mp3_file)
+        
+        sent_message = await channel.send(file=mp3_file)
+        bot_message.update(audio_id=sent_message.id)
     
 
-async def process_tts_resp(channel, tts_resp, i=None):
+async def process_tts_resp(channel:discord.TextChannel, bot_message:HMessage):
     play_mode = int(tts_settings.get('play_mode', 0))
     # Upload to interaction channel
     if play_mode > 0:
-        await upload_tts_file(channel, tts_resp)
+        await upload_tts_file(channel, bot_message)
     # Play in voice channel
-    if play_mode != 1 and (voice_client == i.guild.voice_client):
-        await bg_task_queue.put(play_in_voice_channel(tts_resp)) # run task in background
+    if play_mode != 1 and (voice_client == channel.guild.voice_client):
+        await bg_task_queue.put(play_in_voice_channel(bot_message.text_visible)) # run task in background
+        
+    bot_message.update(spoken=True)
 
 #################################################################
 ########################### ON MESSAGE ##########################
@@ -894,32 +904,32 @@ async def swap_llm_character(char_name:str, user_name:str, llm_payload:dict):
         logging.error(f"An error occurred while loading the file for swap_character: {e}")
         return llm_payload
 
-def format_prompt_with_recent_output(user_name:str, prompt:str):
-    try:
-        formatted_prompt = prompt
-        # Find all matches of {user_x} and {llm_x} in the prompt
-        matches = patterns.recent_msg_roles.findall(prompt)
-        # Iterate through the matches
-        for match in matches:
-            prefix, index = match
-            index = int(index)
-            if prefix in ['user', 'llm'] and 0 <= index <= 10:
-                message_list = bot_history.recent_messages[prefix]
-                if not message_list or index >= len(message_list):
-                    continue
-                matched_syntax = f"{prefix}_{index}"
-                formatted_prompt = formatted_prompt.replace(f"{{{matched_syntax}}}", message_list[index])
-            elif prefix == 'history' and 0 <= index <= 10:
-                user_message = bot_history.recent_messages['user'][index] if index < len(bot_history.recent_messages['user']) else ''
-                llm_message = bot_history.recent_messages['llm'][index] if index < len(bot_history.recent_messages['llm']) else ''
-                formatted_history = f'"{user_name}:" {user_message}\n"{bot_database.last_character}:" {llm_message}\n'
-                matched_syntax = f"{prefix}_{index}"
-                formatted_prompt = formatted_prompt.replace(f"{{{matched_syntax}}}", formatted_history)
-        formatted_prompt = formatted_prompt.replace('{last_image}', '__temp/temp_img_0.png')
-        return formatted_prompt
-    except Exception as e:
-        logging.error(f'An error occurred while formatting prompt with recent messages: {e}')
-        return prompt
+# def format_prompt_with_recent_output(user_name:str, prompt:str):
+#     try:
+#         formatted_prompt = prompt
+#         # Find all matches of {user_x} and {llm_x} in the prompt
+#         matches = patterns.recent_msg_roles.findall(prompt)
+#         # Iterate through the matches
+#         for match in matches:
+#             prefix, index = match
+#             index = int(index)
+#             if prefix in ['user', 'llm'] and 0 <= index <= 10:
+#                 message_list = bot_history.message_ids[prefix]
+#                 if not message_list or index >= len(message_list):
+#                     continue
+#                 matched_syntax = f"{prefix}_{index}"
+#                 formatted_prompt = formatted_prompt.replace(f"{{{matched_syntax}}}", message_list[index])
+#             elif prefix == 'history' and 0 <= index <= 10:
+#                 user_message = bot_history.message_ids['user'][index] if index < len(bot_history.message_ids['user']) else ''
+#                 llm_message = bot_history.message_ids['llm'][index] if index < len(bot_history.message_ids['llm']) else ''
+#                 formatted_history = f'"{user_name}:" {user_message}\n"{bot_database.last_character}:" {llm_message}\n'
+#                 matched_syntax = f"{prefix}_{index}"
+#                 formatted_prompt = formatted_prompt.replace(f"{{{matched_syntax}}}", formatted_history)
+#         formatted_prompt = formatted_prompt.replace('{last_image}', '__temp/temp_img_0.png')
+#         return formatted_prompt
+#     except Exception as e:
+#         logging.error(f'An error occurred while formatting prompt with recent messages: {e}')
+#         return prompt
 
 def process_tag_formatting(user_name:str, prompt:str, formatting:dict):
     try:
@@ -933,7 +943,7 @@ def process_tag_formatting(user_name:str, prompt:str, formatting:dict):
             for fmt_prompt in format_prompt:
                 updated_prompt = fmt_prompt.replace('{prompt}', updated_prompt)
         # format prompt with any defined recent messages
-        updated_prompt = format_prompt_with_recent_output(user_name, updated_prompt)
+        #updated_prompt = format_prompt_with_recent_output(user_name, updated_prompt)
         # Format time if defined
         new_time, new_date = get_time(time_offset, time_format, date_format)
         updated_prompt = updated_prompt.replace('{time}', new_time)
@@ -989,20 +999,24 @@ async def process_llm_payload_tags(ictx: CtxInteraction, llm_payload:dict, llm_p
         # Flow handling
         if flow is not None and not flow_event.is_set():
             await build_flow_queue(flow)
+            
         # History handling
         if load_history is not None:
-            chankey = str(ictx.channel.id)
-            if load_history < 0:
+            if load_history <= 0:
                 llm_payload['state']['history']['internal'] = []
                 llm_payload['state']['history']['visible'] = []
                 logging.info("[TAGS] History is being ignored")
+                
             elif load_history > 0:
-                i_list, v_list = bot_history.get_history_iv_lists_keys(chankey)
-                # Calculate the number of items to retain (up to the length of session_history)
+                i_list, v_list = bot_history.get_history_for(ictx.channel.id).render_to_tgwui_tuple()
+
+                # Calculate the number of items to retain (up to the length of history)
                 num_to_retain = min(load_history, len(i_list))
                 llm_payload['state']['history']['internal'] = i_list[-num_to_retain:]
                 llm_payload['state']['history']['visible'] = v_list[-num_to_retain:]
                 logging.info(f'[TAGS] History is being limited to previous {load_history} exchanges')
+                
+                
         if param_variances:
             processed_params = process_param_variances(param_variances)
             logging.info(f'[TAGS] LLM Param Variances: {processed_params}')
@@ -1421,7 +1435,7 @@ async def init_llm_payload(ictx: CtxInteraction, user_name:str, text:str) -> dic
     llm_payload = copy.deepcopy(bot_settings.settings['llmstate'])
     llm_payload['text'] = text
     name1 = user_name
-    name2 = bot_settings.settings['llmcontext']['name']
+    name2 = bot_settings.name
     context = bot_settings.settings['llmcontext']['context']
     llm_payload['state']['name1'] = name1
     llm_payload['state']['name2'] = name2
@@ -1429,7 +1443,7 @@ async def init_llm_payload(ictx: CtxInteraction, user_name:str, text:str) -> dic
     llm_payload['state']['name2_instruct'] = name2
     llm_payload['state']['character_menu'] = name2
     llm_payload['state']['context'] = context
-    ictx_history = bot_history.get_channel_history(ictx)
+    ictx_history = bot_history.get_history_for(ictx.channel.id).render_to_tgwui()
     llm_payload['state']['history'] = ictx_history
     return llm_payload
 
@@ -1687,13 +1701,13 @@ async def hybrid_llm_img_gen(ictx: CtxInteraction, source:str, text:str, tags:di
             if (not bot_will_do['should_send_text']) or (voice_client and (voice_client != ictx.guild.voice_client) and int(tts_settings.get('play_mode', 0)) == 0):
                 tts_sw = await toggle_tts(toggle='off')
             # generate text with text-gen-webui
-            last_resp, tts_resp = await llm_gen(llm_payload, params, ictx, tts_sw)
+            bot_message = await llm_gen(llm_payload, params, ictx, tts_sw)
             # If no text was generated, treat user input at the response
-            if last_resp is not None:
-                logging.info("reply sent: \"" + user_name + ": {'text': '" + llm_payload["text"] + "', 'response': '" + last_resp + "'}\"")
+            if bot_message:
+                logging.info("reply sent: \"" + user_name + ": {'text': '" + llm_payload["text"] + "', 'response': '" + bot_message.text + "'}\"")
             else:
                 if bot_will_do['should_gen_image'] and sd_enabled:
-                    last_resp = text
+                    bot_message.update(text=text)
                 else:
                     return
 
@@ -1706,18 +1720,21 @@ async def hybrid_llm_img_gen(ictx: CtxInteraction, source:str, text:str, tags:di
 
         # process image generation (A1111 / Forge)
         if sd_enabled:
-            tags = match_img_tags(last_resp, tags)
+            tags = match_img_tags(bot_message.text, tags)
             bot_will_do = bot_should_do(tags, bot_will_do) # check for updates from tags
             if bot_will_do['should_gen_image']:
                 if img_gen_embed:
                     await img_gen_embed.delete()
                 params['bot_will_do'] = bot_will_do
-                await img_gen_task(source, last_resp, params, ictx, tags)
-        if tts_resp:
-            await process_tts_resp(channel, tts_resp, ictx)
-        mention_resp = update_mention(get_user_ctx_inter(ictx).mention, last_resp) # @mention non-consecutive users
+                await img_gen_task(source, bot_message.text, params, ictx, tags)
+                
+        if bot_message.text_visible:
+            await process_tts_resp(channel, bot_message)
+            
+        mention_resp = update_mention(get_user_ctx_inter(ictx).mention, bot_message.text) # @mention non-consecutive users
         if bot_will_do['should_send_text']:
-            await send_long_message(channel, mention_resp)
+            await send_long_message(channel, mention_resp, bot_message=bot_message)
+
         if send_user_image:
             await channel.send(file=send_user_image) if len(send_user_image) == 1 else await channel.send(files=send_user_image)
         return
@@ -1811,13 +1828,20 @@ async def toggle_tts(toggle='on', tts_sw=None):
     return None
 
 # Send LLM Payload - get response
-async def llm_gen(llm_payload:dict, params:dict={}, i=None, tts_sw=None):
+async def llm_gen(llm_payload:dict, params:dict={}, ictx=None, tts_sw=None) -> HMessage:
     try:
         if shared.model_name == 'None':
-            return None, None
+            return
         llm_payload = extra_stopping_strings(llm_payload)
-
         loop = asyncio.get_event_loop()
+        
+        save_to_history = params.get('save_to_history', True)
+        
+        # Add user message before processing bot reply.
+        # this gives time for other messages to pile up before the bot's as they do in actual chat.
+        user = get_user_ctx_inter(ictx)
+        local_history = bot_history.get_history_for(ictx.channel.id)
+        user_message = local_history.new_message(llm_payload['state']['name1'], llm_payload['text'], 'user', user.id, save=save_to_history)
 
         # Store time for statistics
         bot_statistics._llm_gen_time_start_last = time.time()
@@ -1843,29 +1867,46 @@ async def llm_gen(llm_payload:dict, params:dict={}, i=None, tts_sw=None):
         # Offload the synchronous task to a separate thread using run_in_executor
         last_resp, tts_resp = await loop.run_in_executor(None, process_responses)
 
+        
+        bot_message = local_history.new_message(bot_settings.name, last_resp, 'assistant', bot_settings._bot_id, text_visible=tts_resp, save=save_to_history)
+        bot_message.mark_as_reply_for(user_message)
+        
         if last_resp:
             update_llm_gen_statistics(last_resp) # Update statistics
-            save_to_history = params.get('save_to_history', True)
-            bot_history.manage_history(prompt=llm_payload['text'], reply=last_resp, save_to_history=save_to_history, chankey=str(i.channel.id))
+            truncation = int(bot_settings.settings['llmstate']['state']['truncation_length'] * 4) #approx tokens
+            bot_message.history.truncate(truncation)
+            client.loop.create_task(bot_message.history.save())
 
         # Toggle TTS back on if it was toggled off
         await toggle_tts(toggle='on', tts_sw=tts_sw)
 
-        return last_resp, tts_resp
+        return bot_message
+    
     except Exception as e:
         logging.error(f'An error occurred in llm_gen(): {e}')
         if str(e).startswith('list index out of range'):
             logging.warning(f'Note (this may not be the cause of error): "regen" and "continue" commands only work if bot sent message during current session.')
         traceback.print_exc()
-        return None, None
+        return
 
-async def cont_regen_task(inter:discord.Interaction, source:str, text:str, message:discord.Message):
+async def cont_regen_task(inter:discord.Interaction, source:str, message:discord.Message, text:str=''):
     cmd = ''
     try:
         user_name = get_user_ctx_inter(inter).display_name # just incase this function is used elsewhere later
         channel = inter.channel
         system_embed = None
         llm_payload = await init_llm_payload(inter, user_name, text)
+        
+        history = bot_history.get_history_for(inter.channel.id)
+        target_message = history.search(lambda m: m.id == message.id)
+        if target_message:
+            logging.warning(f'Failed to find message: {message}')
+            history = target_message.new_history_start_here() # use new_history_end_here if you want to regenerate a message in the middle.
+            
+        sliced_i, sliced_v = history.render_to_tgwui_tuple()
+        
+        llm_payload['state']['history']['internal'] = sliced_i
+        llm_payload['state']['history']['visible'] = sliced_v
         params = {'save_to_history': False}
         if source == 'cont':
             cmd = 'Continuing'
@@ -1888,19 +1929,25 @@ async def cont_regen_task(inter:discord.Interaction, source:str, text:str, messa
         if voice_client and (voice_client != inter.guild.voice_client) and int(tts_settings.get('play_mode', 0)) == 0:
             tts_sw = await toggle_tts(toggle='off')
         # generate text with text-gen-webui
-        last_resp, tts_resp = await llm_gen(llm_payload, params, inter, tts_sw)
+        bot_message = await llm_gen(llm_payload, params, inter, tts_sw)
+        
         if system_embed:
             await system_embed.delete()
-        if last_resp is None:
+            
+        if not bot_message:
             return
-        logging.info("reply sent: \"" + user_name + ": {'text': '" + llm_payload["text"] + "', 'response': '" + last_resp + "'}\"")
+        
+        logging.info("reply sent: \"" + user_name + ": {'text': '" + llm_payload["text"] + "', 'response': '" + bot_message.text + "'}\"")
         fetched_message = await channel.fetch_message(message)
         await fetched_message.delete()
-        if tts_resp:
-            await process_tts_resp(channel, tts_resp, inter)
+        
+        if bot_message.text_visible:
+            await process_tts_resp(channel, bot_message)
+            
         if source == 'regen':
             await inter.followup.send('__Regenerated text:__', silent=True)
-        await send_long_message(channel, last_resp)
+        await send_long_message(channel, bot_message.text, bot_message=bot_message)
+        
     except Exception as e:
         e_msg = f'An error occurred while processing "{cmd}"'
         logging.error(f'{e_msg}: {e}')
@@ -1933,12 +1980,12 @@ async def speak_task(ctx: commands.Context, text:str, params:dict):
         params['save_to_history'] = False
         tts_args = params.get('tts_args', {})
         await update_extensions(tts_args)
-        _, tts_resp = await llm_gen(llm_payload, params)
+        bot_message = await llm_gen(llm_payload, params)
         if system_embed:
             await system_embed.delete()
-        if tts_resp is None:
+        if not bot_message:
             return
-        await process_tts_resp(channel, tts_resp, ctx)
+        await process_tts_resp(channel, bot_message)
         # remove api key (don't want to share this to the world!)
         for sub_dict in tts_args.values():
             if 'api_key' in sub_dict:
@@ -2091,11 +2138,9 @@ async def send_char_greeting_or_history(ictx: CtxInteraction, char_name:str):
         # Send message to channel
         message = ''
         if bot_history.greeting_or_history == 'history':
-            last_exchange = bot_history.session_history['visible'][-1] if bot_history.session_history.get('visible') else None
-            if last_exchange:
-                last_user_message = last_exchange[0]
-                last_assistant_message = last_exchange[1]
-                message = f'__**Last message exchange**__:\n>>> **User**: "{last_user_message}"\n **{bot_database.last_character}**: "{last_assistant_message}"'
+            last_user_message, last_assistant_message = bot_history.get_history_for(ictx.channel.id).last_exchange()
+            if last_user_message:
+                message = f'__**Last message exchange**__:\n>>> **User**: "{last_user_message.text_visible}"\n **{bot_database.last_character}**: "{last_assistant_message.text_visible}"'
         if not message:
             greeting = bot_settings.settings['llmcontext']['greeting']
             if greeting:
@@ -2150,12 +2195,17 @@ async def change_char_task(ictx: CtxInteraction, source:str, params:dict):
         await change_character(char_name, channel, source)
         # Set history
         if bot_history.autoload_history and (bot_history.change_char_history_method == 'keep' and source != 'reset'):
-            bot_history.load_bot_history()
+            pass # no need to preload history as it gets loaded when needed.
+            
         else:
             if source == 'reset':
-                bot_history.reset_session_history(ictx)
+                # create a clone with same settings but empty, and replace it in the manager
+                bot_history.get_history_for(ictx.channel.id).fresh().replace()
             else:
-                bot_history.reset_session_history()
+                logging.warning('This originally cleared all history. No need, just unload maybe?')
+                # bot_history.clear_all_history()
+                bot_history.unload_history()
+                
         if change_embed:
             await change_embed.delete()
             # Send embeds to announcement channels
@@ -2166,7 +2216,7 @@ async def change_char_task(ictx: CtxInteraction, source:str, params:dict):
                 change_embed_info.title = f"{user_name} changed character:"
                 change_embed_info.description = f'**{char_name}**'
                 await channel.send(embed=change_embed_info)
-        if not bot_history.per_channel_history_enabled:
+        if not bot_history.per_channel_history:
             await send_char_greeting_or_history(ictx, char_name)
         logging.info(f"Character loaded: {char_name}")
     except Exception as e:
@@ -2235,7 +2285,8 @@ async def format_next_flow(next_flow, user_name:str, text:str):
     for key, value in next_flow.items():
         # see if any tag values have dynamic formatting (user prompt, LLM reply, etc)
         if isinstance(value, str):
-            formatted_value = format_prompt_with_recent_output(user_name, value)       # output will be a string
+            formatted_value = value
+            # formatted_value = format_prompt_with_recent_output(user_name, value)       # output will be a string
             if formatted_value != value:                                        # if the value changed,
                 formatted_value = parse_tag_from_text_value(formatted_value)    # convert new string to correct value type
             formatted_flow_tags[key] = formatted_value
@@ -3765,7 +3816,7 @@ if textgenwebui_enabled:
         try:
             shared.stop_everything = True
             await ireply(ctx, 'character reset') # send a response msg to the user
-            bot_history.reset_session_history(ctx)
+            bot_history.get_history_for(ctx.channel.id).clear()
 
             async with task_semaphore:
                 # offload to ai_gen queue
@@ -3774,29 +3825,29 @@ if textgenwebui_enabled:
                 await change_char_task(ctx, 'reset', params)
 
         except Exception as e:
+            print(traceback.format_exc())
             logging.error(f"Error with /reset: {e}")
 
     # /reset command - Resets current character
     @client.hybrid_command(description="Saves the current conversation to a new file in text-generation-webui/logs/")
     async def save_conversation(ctx: commands.Context):
         try:
+            await bot_history.get_history_for(ctx.channel.id).save(timeout=0, force=True)
             await ctx.reply('Saved current conversation history', ephemeral=True)
-            bot_history.save_history()
+            
         except Exception as e:
             logging.error(f"Error with /reset: {e}")
 
     # Context menu command to Regenerate last reply
     @client.tree.context_menu(name="regenerate")
     async def regen_llm_gen(inter: discord.Interaction, message:discord.Message):
-        text = message.content
         await inter.response.defer(thinking=False)
 
         async with task_semaphore:
             async with inter.channel.typing():
                 # offload to ai_gen queue
                 logging.info(f'{inter.user.display_name} used "Regenerate"')
-                await cont_regen_task(inter, 'regen', text, message.id)
-                await run_flow_if_any(inter, 'regen', text)
+                await cont_regen_task(inter, 'regen', message)
 
     # Context menu command to Continue last reply
     @client.tree.context_menu(name="continue")
@@ -3808,8 +3859,7 @@ if textgenwebui_enabled:
             async with inter.channel.typing():
                 # offload to ai_gen queue
                 logging.info(f'{inter.user.display_name} used "Continue"')
-                await cont_regen_task(inter, 'cont', text, message.id)
-                await run_flow_if_any(inter, 'cont', text)
+                await cont_regen_task(inter, 'cont', message, text)
 
 async def load_character_data(char_name):
     char_data = None
@@ -4718,6 +4768,7 @@ class LLMState:
 
 class Settings:
     def __init__(self, bot_behavior):
+        self._bot_id = 0
         self.bot_behavior = bot_behavior
         self.imgmodel = ImgModel()
         self.llmcontext = LLMContext()
@@ -4727,6 +4778,10 @@ class Settings:
         # Initialize main settings and base tags
         self.update_settings()
         asyncio.run(self.update_base_tags())
+        
+    @property
+    def name(self):
+        return self.settings.get('llmcontext', {}).get('name', 'AI')
 
     async def update_base_tags(self):
         try:
@@ -4761,250 +4816,153 @@ class Settings:
         attributes = ", ".join(f"{attr}={getattr(self, attr)}" for attr in dir(self) if not callable(getattr(self, attr)) and not attr.startswith("__"))
         return f"{self.__class__.__name__}({attributes})"
     
-class History:
-    def __init__(self):
-        # History settings
-        chat_history = config.get('textgenwebui', {}).get('chat_history', {})
-        self.limit_history = chat_history.get('limit_history', True)
-        self.autosave_history = chat_history.get('autosave_history', False)
-        self.autoload_history = chat_history.get('autoload_history', False)
-        self.change_char_history_method = chat_history.get('change_char_history_method', 'new')
-        self.greeting_or_history = chat_history.get('greeting_or_history', 'history')
-        self.per_channel_history_enabled = chat_history.get('per_channel_history', True)
-        # History management
-        self.unique_id = None
-        self.session_history = {}
-        self.recent_messages = {}
-        self.collected_prompts = {}
 
-    # Modified version of TGQUI function
-    def load_history(self, unique_id, character, mode):
-        type = 'single'
-        p = get_history_file_path(unique_id, character, mode)
-        f = json.loads(open(p, 'rb').read())
-        if 'internal' in f and 'visible' in f:
-            history = f
-        elif 'data' in f and 'data_visible' in f:
-            history = {'internal': f['data'],
-                       'visible': f['data_visible']}
-        else:
-            history = f
-            type = 'multichan'
-        return history, type
-
-    # Modified version of TGQUI function
-    def load_latest_history(self, state):
-        type = 'single'
-        histories = find_all_histories(state)
-        if len(histories) > 0:
-            history, type = self.load_history(histories[0], state['character_menu'], state['mode'])
-        else:
-            history = {}
-        return history, type
-
-    # Loads most recent history for current character
-    def load_bot_history(self):
-        state_dict = bot_settings.settings['llmstate']['state']
-        values_to_load_history = {'character_menu': state_dict['character_menu'],
-                                'mode': state_dict['mode']}
-        latest_history, history_type = self.load_latest_history(values_to_load_history)
-        # Only load history if most recent history type matches current history mode
-        matched = None
-        if self.per_channel_history_enabled:
-            if history_type == 'multichan':
-                matched = 'multichan'
-        else:
-            if history_type == 'single':
-                matched = 'single'
-        if matched:
-            self.session_history = dict(latest_history)
-            # print recent exchange if per-channel history
-            if matched == 'single':
-                last_exchange = self.session_history['visible'][-1] if self.session_history.get('visible') else None
-                if last_exchange:
-                    last_user_message = last_exchange[0]
-                    last_assistant_message = last_exchange[1]
-                    logging.info(f'Loaded most recent chat history. Last message exchange:\n User: "{last_user_message}"\n {bot_database.last_character}: "{last_assistant_message}"')
-                else:
-                    logging.info("Starting new conversation.")
-            if matched == 'multichan':
-                logging.info("Loaded most recent chat history for all channels.")
-            all_histories = find_all_histories(values_to_load_history)
-            if len(all_histories) > 0:
-                self.unique_id = all_histories[0]
-
-    # Save history to a new file
-    def save_bot_history(self):
+@dataclass_json
+@dataclass
+class CustomHistory(History):
+    fp_unique_id: Optional[str] = field(default=None)
+    
+    def __copy__(self):
+        new = super().__copy__()
+        new.fp_unique_id = self.fp_unique_id
+        return new
+    
+    def fresh(self):
+        new = super().fresh()
+        new.fp_unique_id = None
+        return new
+    
+    def _internal_pre_save(self):
         state_dict = bot_settings.settings['llmstate']['state']
         mode = state_dict['mode']
         character_menu = state_dict["character_menu"]
-        if not self.unique_id:
-            if self.per_channel_history_enabled:
-                self.unique_id = f"{datetime.now().strftime('%Y%m%d-%H-%M-%S')}_multiple-history"
+        
+        has_file_name = self.fp_unique_id
+        if not self.fp_unique_id:
+            if self.manager.per_channel_history:
+                self.fp_unique_id = f"{datetime.now().strftime('%Y%m%d-%H-%M-%S')}_channel"
             else:
-                self.unique_id = datetime.now().strftime('%Y%m%d-%H-%M-%S')
-            logging.info(f'''Chat history was saved to "/logs/{mode}/{character_menu}/{self.unique_id}.json"''')
-        save_history(self.session_history, self.unique_id, character_menu, mode)
+                self.fp_unique_id = datetime.now().strftime('%Y%m%d-%H-%M-%S')
     
-    # Truncates history to approx. same length as 'truncation_length' state parameter
-    def limit_prompt_history(self, i_list:list, v_list:list):
-        truncation = int(bot_settings.settings['llmstate']['state']['truncation_length'] * 4) #approx tokens
-        while (sum(len(message) for exchange in i_list for message in exchange) > truncation) \
-            or (sum(len(message) for exchange in v_list for message in exchange) > truncation):
-            if i_list and v_list:
-                i_list.pop(0) # pop oldest exchanges
-                v_list.pop(0)
+        internal_history_path = str(get_history_file_path(self.fp_unique_id, character_menu, mode))
+        os.makedirs(os.path.dirname(internal_history_path), exist_ok=True)
+        
+        return internal_history_path, has_file_name, character_menu, mode
+    
+    def _internal_post_save(self, has_file_name, character_menu, mode):
+        if not has_file_name:
+            logging.info(f'''Chat history will be saved to "/logs/{mode}/{character_menu}/{self.fp_unique_id}.json"''')
+            
+        save_history(self.render_to_tgwui(), self.fp_unique_id, character_menu, mode)
+        logging.debug('Finished saving chat history and internal history.')
+    
+    async def save(self, fp=None, modify_fp=False, timeout=10, force=False):
+        try:
+            internal_history_path, has_file_name, character_menu, mode = self._internal_pre_save()
+            status = await super().save(fp=internal_history_path, modify_fp=True, timeout=timeout, force=force)
+            if not status: # don't bother saving if nothing changed
+                return False
+            
+            self._internal_post_save(has_file_name, character_menu, mode)
+            return status
 
-    # Manage the session history for textgen-webui
-    def manage_prompt_history(self, cp_list:list, i_list:list, v_list:list, prompt:str, reply:str=None, save_to_history:bool=True):
-        # Only prompt is received (no 'reply)
-        if reply is None:
-            # If there are previously collected prompts, join with '\n\n'
-            if cp_list:
-                cp_list += '\n\n' + prompt
-            else:
-                cp_list = prompt
-        # Both prompt and reply are received
-        else:
-            # If there are previously collected prompts, merge and reset collected prompts
-            if cp_list:
-                prompt = cp_list + '\n\n' + prompt
-                # Reset collected prompts
-                cp_list = []
-            if save_to_history:
-                i_list.append([prompt, reply])
-                # Do not append Visible list for per-channel history
-                if self.per_channel_history_enabled:
-                    v_list.append(['', ''])
-                else:
-                    v_list.append([prompt, reply])
-        #TODO return prompt
+        except Exception as e:
+            print(traceback.format_exc())
+            logging.critical(e)
+            
+            
+    def save_sync(self, fp=None, modify_fp=False, force=False):
+        try:
+            internal_history_path, has_file_name, character_menu, mode = self._internal_pre_save()
+            status = super().save_sync(fp=internal_history_path, modify_fp=True, force=force)
+            if not status: # don't bother saving if nothing changed
+                return False
+            
+            self._internal_post_save(has_file_name, character_menu, mode)
+            return status
 
-    def get_history_iv_lists_keys(self, chankey:str = None):
-        if self.per_channel_history_enabled:
-            # internal and visible lists
-            i_list = self.session_history.setdefault(chankey, {}).setdefault('internal', [])
-            v_list = self.session_history[chankey].setdefault('visible', [])
-        else:
-            # internal and visible lists
-            i_list = self.session_history.setdefault('internal', [])
-            v_list = self.session_history.setdefault('visible', [])
-        return i_list, v_list
+        except Exception as e:
+            print(traceback.format_exc())
+            logging.critical(e)
+    
+    
+    def last_exchange(self):
+        if not self.empty:
+            last_message:HMessage = self[-1]
+            previous_message = last_message.reply_to
+            return previous_message, last_message
+    
+        
+class CustomHistoryManager(HistoryManager):
+    def search_for_fp(self, id_:ChannelID):
+        state_dict = bot_settings.settings['llmstate']['state']
+        state = {'character_menu': state_dict['character_menu'], 'mode': state_dict['mode']}
+        unique_ids: list[str] = find_all_histories(state)
+        
+        # get latest valid history file
+        for i in unique_ids:
+            internal_history_path = str(get_history_file_path(i, state['character_menu'], state['mode']))
+            internal_history_path = self.modify_saved_path(internal_history_path, id_)
+            
+            if os.path.isfile(internal_history_path):
+                return internal_history_path
+            
+            
+    def get_history_for(self, id_: ChannelID=None, fp=None, modify_fp=False) -> History:
+        state_dict = bot_settings.settings['llmstate']['state']
+        mode = state_dict['mode']
+        character_menu = state_dict["character_menu"]
+        
+        search = True
+        if self.change_char_history_method == 'new':
+            search = False # don't import old logs
+        
+        logging.warning(f'{search=} {self.change_char_history_method}')
+            
+        # TODO if there's a setting about keeping history between characters, maybe duplicating would be better?
+        # or just edit the ID here to match both
+        
+        history = super().get_history_for(f'{id_}_{character_menu}_{mode}', fp=fp, modify_fp=modify_fp, search=search)
+        return history
 
-    def get_history_ul_lists_keys(self, chankey:str = None):
-        if self.per_channel_history_enabled:
-            # user and llm lists
-            u_list = self.recent_messages.setdefault(chankey, {}).setdefault('user', [])
-            l_list = self.recent_messages[chankey].setdefault('llm', [])
-        else:
-            # user and llm lists
-            u_list = self.recent_messages.setdefault('user', [])
-            l_list = self.recent_messages.setdefault('llm', [])
-        return u_list, l_list
-
-    def get_history_cp_list_key(self, chankey:str = None):
-        if self.per_channel_history_enabled:
-            # collected prompts lists
-            cp_list = self.collected_prompts.setdefault(chankey, [])
-        else:
-            # collected prompts lists
-            cp_list = self.collected_prompts
-        return cp_list
-
-    def get_history_lists_keys(self, chankey:str = None):
-        i_list, v_list = self.get_history_iv_lists_keys(chankey)
-        u_list, l_list = self.get_history_ul_lists_keys(chankey)
-        cp_list = self.get_history_cp_list_key(chankey)
-
-        return i_list, v_list, u_list, l_list, cp_list
-
-    # Retain most recent elements or characters from user prompts and bot replies (mainly for Flows feature)
-    def manage_recent_messages(self, u_list:list, l_list:list, prompt:str, reply:str=None):
-        if self.per_channel_history_enabled:
-            elem_limit = 5
-            character_limit = 3000
-        else:
-            elem_limit = 10
-            character_limit = 10000
-
-        if prompt:
-            u_list.insert(0, prompt)
-            while len(u_list) > elem_limit or sum(len(message) for message in u_list) > character_limit:
-                oldest_message = u_list.pop()
-        if reply:
-            l_list.insert(0, reply)
-            while len(l_list) > elem_limit or sum(len(message) for message in l_list) > character_limit:
-                oldest_message = l_list.pop()
-
-    def manage_history(self, prompt:str, reply:str=None, save_to_history:bool=True, chankey:str=None):
-        # Get list keys to simplify code in further steps
-        i_list, v_list, u_list, l_list, cp_list = self.get_history_lists_keys(chankey)
-        # Update recent user/LLM messages (separate from chat history)
-        self.manage_recent_messages(u_list, l_list, prompt, reply)
-        # Update history
-        self.manage_prompt_history(cp_list, i_list, v_list, prompt, reply, save_to_history)
-        # Truncate history
-        if self.limit_history:
-            self.limit_prompt_history(i_list, v_list)
-        # Save history
-        if self.autosave_history:
-            self.save_bot_history()
-
-    def set_history_key_defaults(self, ictx=None):
-        # If per-channel history
-        if self.per_channel_history_enabled and ictx:
-            chkey = str(ictx.channel.id)
-            self.session_history[chkey] = {
-                'guild_name': str(ictx.guild),
-                'channel_name': str(ictx.channel),
-                'internal': [],
-                'visible': []
-                }
-            self.collected_prompts[chkey] = []
-        # If only one history
-        else:
-            self.session_history = {'internal': [], 'visible': []}
-            self.collected_prompts = []
-
-    def get_channel_history(self, ictx=None):
-        # If per-channel history
-        if self.per_channel_history_enabled:
-            chkey = str(ictx.channel.id)
-            if not self.session_history.get(chkey):
-                self.set_history_key_defaults(ictx)
-            return self.session_history[chkey]
-        # If only one history
-        else:
-            if not self.session_history:
-                self.set_history_key_defaults()
-            return self.session_history
-
-    def reset_session_history(self, ictx=None):
-        # If per-channel history
-        if self.per_channel_history_enabled:
-            # if no interaction, all history will be reset
-            if ictx:
-                chkey = str(ictx.channel.id)
-                guild_chan = f'{ictx.guild} - {ictx.channel}'
-                logging.info(f"Starting new conversation in: {guild_chan}.")
-                # If channel has history
-                if self.session_history.get(chkey):
-                    self.set_history_key_defaults(ictx)
-                # if channel does not have history
-                else:
-                    self.get_channel_history(ictx) # will initialize channel keys
-                return
-            else:
-                logging.info("Starting new conversation in all channels.")
-        # If only one history
-        else:
-            logging.info("Starting new conversation.")
-        # Reset everything
-        self.session_history = {}
-        self.collected_prompts = {}
-
+        
 bot_behavior = Behavior() # needs to be loaded before settings
 bot_settings = Settings(bot_behavior=bot_behavior)
-bot_history = History()
+bot_history = CustomHistoryManager(class_builder_history=CustomHistory, **config.get('textgenwebui', {}).get('chat_history', {}))
 
-client.run(bot_token, log_handler=log_file_handler, log_formatter=log_file_formatter)
+
+
+import sys
+import atexit
+import signal
+
+def exit_handler():
+    bot_history.save_all_sync()
+    log.info('Saved all histories')
+
+def kill_handler(*args):
+    sys.exit(0)
+
+atexit.register(exit_handler)
+signal.signal(signal.SIGINT, kill_handler)
+signal.signal(signal.SIGTERM, kill_handler)
+
+# Manually start the bot so we can catch keyboard interupts
+async def runner():
+    async with client:
+        await client.start(bot_token, reconnect=True)
+
+discord.utils.setup_logging(
+            handler=log_file_handler,
+            formatter=log_file_formatter,
+            level=_logging.INFO,
+            root=False,
+        )
+# try:
+asyncio.run(runner())
+# except KeyboardInterrupt:
+#     logging.info(f'Received signal to terminate and event loop.')
+
+# finally:
+#     logging.info(f'Loop closed')
+#     # The loop is closed now, can't use await anymore
