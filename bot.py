@@ -990,6 +990,8 @@ async def process_llm_payload_tags(ictx: CtxInteraction, llm_payload:dict, llm_p
         load_history = mods.get('load_history', None)
         param_variances = mods.get('param_variances', {})
         state = mods.get('state', {})
+        prefix_context = mods.get('prefix_context', None)
+        suffix_context = mods.get('suffix_context', None)
         change_character = mods.get('change_character', None)
         swap_character = mods.get('swap_character', None)
         change_llmmodel = mods.get('change_llmmodel', None)
@@ -1022,6 +1024,17 @@ async def process_llm_payload_tags(ictx: CtxInteraction, llm_payload:dict, llm_p
         if state:
             update_dict(llm_payload['state'], state)
             logging.info(f'[TAGS] LLM State was modified')
+        # Context insertions
+        if prefix_context:
+            prefix_str = "\n".join(str(item) for item in prefix_context)
+            if prefix_str:
+                llm_payload['state']['context'] = f"{prefix_str}\n{llm_payload['state']['context']}"
+                logging.info(f'[TAGS] Prefixed context with text.')
+        if suffix_context:
+            suffix_str = "\n".join(str(item) for item in suffix_context)
+            if suffix_str:
+                llm_payload['state']['context'] = f"{llm_payload['state']['context']}\n{suffix_str}"
+                logging.info(f'[TAGS] Suffixed context with text.')
         # Character handling
         char_params = change_character or swap_character or {} # 'character_change' will trump 'character_swap'
         if char_params:
@@ -1084,6 +1097,12 @@ def collect_llm_tag_values(tags, params):
                 llm_payload_mods['swap_llmmodel'] = str(tag.pop('swap_llmmodel'))
                 
             # Values that may apply repeatedly
+            if 'prefix_context' in tag:
+                llm_payload_mods.setdefault('prefix_context', [])
+                llm_payload_mods['prefix_context'].append(tag.pop('prefix_context'))
+            if 'suffix_context' in tag:
+                llm_payload_mods.setdefault('suffix_context', [])
+                llm_payload_mods['suffix_context'].append(tag.pop('suffix_context'))
             if 'send_user_image' in tag:
                 user_image_file = tag.pop('send_user_image')
                 user_image_args = get_image_tag_args('User image', str(user_image_file), key=None, set_dir=None)
