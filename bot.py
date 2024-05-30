@@ -999,7 +999,7 @@ async def process_llm_payload_tags(ictx: CtxInteraction, llm_payload:dict, llm_p
         if load_history is not None:
             chankey = str(ictx.channel.id)
             
-            if load_history < 0:
+            if load_history <= 0:
                 llm_payload['state']['history']['internal'] = []
                 llm_payload['state']['history']['visible'] = []
                 logging.info("[TAGS] History is being ignored")
