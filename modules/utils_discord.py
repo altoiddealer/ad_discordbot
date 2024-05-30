@@ -5,7 +5,10 @@ import discord
 from discord.ext import commands
 from typing import Union
 from ad_discordbot.modules.typing import CtxInteraction
-from ad_discordbot.modules.history import HistoryManager, History, HMessage
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from ad_discordbot.modules.history import HistoryManager, History, HMessage
 
 # Send message response to user's interaction command
 async def ireply(ictx: 'CtxInteraction', process):
@@ -20,7 +23,7 @@ async def ireply(ictx: 'CtxInteraction', process):
 
 
 
-async def send_long_message(channel, message_text, bot_message:HMessage=None):
+async def send_long_message(channel, message_text, bot_message:'HMessage'=None):
     """ Splits a longer message into parts while preserving sentence boundaries and code blocks """
     activelang = ''
 

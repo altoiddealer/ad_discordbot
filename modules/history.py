@@ -1,3 +1,7 @@
+# Designed by Artificiangel
+# https://github.com/Artificiangel/llm-history-manager.git for future updates
+
+
 from ad_discordbot.modules.logs import import_track, log, get_logger; import_track(__file__, fp=True)
 logging = get_logger(__name__)
 import os
@@ -7,12 +11,58 @@ import time
 from typing import Optional
 from ad_discordbot.modules.typing import ChannelID, UserID, MessageID, CtxInteraction
 from typing import Union
-import discord
 import copy
 from uuid import uuid4
 import json
 from ad_discordbot.modules.utils_discord import get_message_ctx_inter, get_user_ctx_inter
 import asyncio
+from typing import (
+    Any,
+    AsyncIterable,
+    Awaitable,
+    Callable,
+    Coroutine,
+    Iterable,
+    Optional,
+    TypeVar,
+    Union,
+    overload,
+)
+
+#######
+# Utils
+# Copied from discord.utils.find for use in non discord projects
+T = TypeVar('T')
+T_co = TypeVar('T_co', covariant=True)
+_Iter = Union[Iterable[T], AsyncIterable[T]]
+MaybeAwaitable = Union[T, Awaitable[T]]
+Coro = Coroutine[Any, Any, T]
+
+def _find(predicate: Callable[[T], Any], iterable: Iterable[T], /) -> Optional[T]:
+    return next((element for element in iterable if predicate(element)), None)
+
+async def _afind(predicate: Callable[[T], Any], iterable: AsyncIterable[T], /) -> Optional[T]:
+    async for element in iterable:
+        if predicate(element):
+            return element
+
+    return None
+
+@overload
+def find(predicate: Callable[[T], Any], iterable: AsyncIterable[T], /) -> Coro[Optional[T]]:
+    ...
+
+@overload
+def find(predicate: Callable[[T], Any], iterable: Iterable[T], /) -> Optional[T]:
+    ...
+
+def find(predicate: Callable[[T], Any], iterable: _Iter[T], /) -> Union[Optional[T], Coro[Optional[T]]]:
+    return (
+        _afind(predicate, iterable)  # type: ignore
+        if hasattr(iterable, '__aiter__')  # isinstance(iterable, collections.abc.AsyncIterable) is too slow
+        else _find(predicate, iterable)  # type: ignore
+    )
+
 
 #########################
 # Config encoder/decoders
@@ -105,6 +155,16 @@ class HMessage:
     
     def save_to_history(self):
         self.history.append(self)
+        
+        
+    def update(self, **kw): # TODO could replace all attrs with private internals so users don't accidentally set them.
+        for k, v in kw.items():
+            setattr(self, k, v)
+            
+        if kw:
+            self.history.event_save.set()
+            
+        return self
 
 
     ###############
@@ -115,6 +175,7 @@ class HMessage:
         
         self.reply_to = message
         message.replies.append(self)
+        self.history.event_save.set()
         return self
 
 
@@ -123,8 +184,8 @@ class HMessage:
         if message:
             if self in message.replies:
                 message.replies.pop(self)
+        self.history.event_save.set()
         return self
-
 
 
     ###########
@@ -146,13 +207,32 @@ class HMessage:
 
     ###########
     # Save/load
-    def new_history_from_here(self) -> Union['History', None]:
-        new_history = copy.copy(self.history)
+    def duplicate_history(self) -> 'History':
+        return copy.copy(self.history)
+        
+    
+    def new_history_end_here(self, include_self=True) -> Union['History', None]:
+        new_history = self.duplicate_history()
         if not self in new_history:
             return None
 
         index = new_history.index(self)
+        if not include_self:
+            index -= 1
         new_history._items = new_history._items[:index+1] # TODO write internal methods to set/get items
+
+        return new_history
+    
+    
+    def new_history_start_here(self, include_self=True) -> Union['History', None]:
+        new_history = self.duplicate_history()
+        if not self in new_history:
+            return None
+
+        index = new_history.index(self)
+        if not include_self:
+            index += 1
+        new_history._items = new_history._items[index:] # TODO write internal methods to set/get items
 
         return new_history
 
@@ -160,6 +240,7 @@ class HMessage:
     def from_ctx(self, ictx: CtxInteraction):
         self.author_id = get_user_ctx_inter(ictx).id
         self.id = get_message_ctx_inter(ictx).id
+        # self.history.event_save.set() # TODO maybe?
 
 
 @dataclass
@@ -196,19 +277,20 @@ class History:
     manager: 'HistoryManager' = field(metadata=config_uuid)
     id: ChannelID
     
-    file_name: Optional[str] = field(default=None)
+    fp: Optional[str] = field(default=None)
 
     _last: dict[UserID, HMessage] = field(default_factory=dict, init=False, metadata=config(encoder=cls_get_id_dict, decoder=decoder_dict_int_key))
     _items: list[HMessage] = field(default_factory=list, init=False, metadata=config(encoder=cls_get_id_list,))
     uuid: str = field(default_factory=get_uuid_hex)
     _save_event: asyncio.Event = field(default_factory=asyncio.Event, init=False, metadata=config_null)
+    _last_save: float = field(default_factory=time.time, init=False, metadata=config_null)
 
     def __copy__(self, x: 'History'):
         new = self.__class__(
             manager=x.manager,
             id=x.id,
             uuid=x.uuid,
-            file_name=x.file_name,
+            fp=x.fp,
             )
 
         new._last = x._last
@@ -229,19 +311,19 @@ class History:
     def clear(self):
         self._items.clear()
         self._last.clear()
-        self._save_event.set()
+        self.event_save.set()
         return self
 
 
     def append(self, message: HMessage):
         self._items.append(message)
         self._last[message.author_id] = message
-        self._save_event.set()
+        self.event_save.set()
         return self
 
 
     def pop(self, index=-1):
-        self._save_event.set()
+        self.event_save.set()
         return self._items.pop(index=index)
 
 
@@ -255,7 +337,7 @@ class History:
 
     def __setitem__(self, slice:slice, message: HMessage):
         self._items[slice] = message
-        self._save_event.set()
+        self.event_save.set()
 
 
     def __getitem__(self, slice:slice):
@@ -280,6 +362,10 @@ class History:
         return [message for message in self if message.role == role]
     
     
+    def search(self, predicate):
+        return find(predicate, self._items)
+    
+    
     def _get_sum_text(self, attr='text'):
         return sum(len(getattr(message, attr, '')) for message in self)
     
@@ -297,7 +383,7 @@ class History:
 
     ###########
     # Rendering
-    def render_to_tgwui(self):
+    def render_to_tgwui_tuple(self): # TODO create caching by storing event and clearing on render.
         internal = []
         visible = []
         current_pair = HistoryPairForTGWUI()
@@ -319,9 +405,14 @@ class History:
 
         if current_pair:
             current_pair.add_pair_to(internal, visible).clear()
-
+            
+        return internal, visible
+            
+            
+    def render_to_tgwui(self):
+        internal, visible = self.render_to_tgwui_tuple()
         return dict(internal=internal, visible=visible)
-
+    
 
     def render_to_prompt(self, each_new_line=True):
         output = []
@@ -332,18 +423,28 @@ class History:
 
     ###########
     # Save/load
-    def get_unique_save_file_name(self):
-        return get_uuid_hex()
+    def last_save_delta(self):
+        return time.time()-self._last_save
     
     
-    def get_save_file_name(self) -> str:
-        if not self.file_name:
-            self.file_name = self.get_unique_save_file_name()
-        return self.file_name
+    @property
+    def event_save(self):
+        return self._save_event
+        
+    
+    # def get_unique_save_file_name(self):
+    #     return get_uuid_hex()
+    
+    
+    # def get_save_file_name(self) -> str:
+    #     if not self.file_name:
+    #         self.file_name = self.get_unique_save_file_name()
+    #     return self.file_name
     
     
     def trigger_save(self, fp):
-        self._save_event.clear()
+        self._last_save =  time.time()
+        self.event_save.clear()
         
         history = self.to_dict()
         messages = []
@@ -354,14 +455,23 @@ class History:
             json_out = json.dumps(dict(history=history, messages=messages), indent=2)
             f.write(json_out)
             
+        log.debug(f'Saved file: {fp}')
+            
         return self
     
     
-    async def save(self, fp, timeout=30):
-        if timeout:
-            await asyncio.sleep(timeout)
+    async def save(self, fp=None, modify_fp=False, timeout=30, force=False):
+        if fp is not None and modify_fp:
+            fp = self.modify_saved_path(fp, self.id)
+        fp = fp or self.fp
         
-        if self._save_event.is_set():
+        delta = self.last_save_delta()
+        if timeout:
+            # wait at least 30s between saves
+            if delta < timeout: 
+                await asyncio.sleep(timeout-delta)
+        
+        if self.event_save.is_set() or force:
             self.trigger_save(fp)
             return True
         
@@ -376,7 +486,7 @@ class History:
     
 
     @classmethod
-    def load_from(cls, fp, hm: 'HistoryManager', id_: ChannelID=None) -> 'History':
+    def load_from(cls, hm: 'HistoryManager', fp, id_: ChannelID=None) -> 'History':
         '''
         Pass an id to overwrite channel id.
         '''
@@ -388,6 +498,7 @@ class History:
         # initialize history and overwrite vars
         history:'History' = cls.from_dict(history)
         history.id = id_ or history.id
+        history.fp = fp
         history.manager = hm
 
         # add history to manager
@@ -416,7 +527,7 @@ class HistoryManager:
     autoload_history: bool = field(default=False)
     change_char_history_method: bool = field(default='new')
     greeting_or_history: bool = field(default='history')
-    per_channel_history_enabled: bool = field(default=True)
+    per_channel_history: bool = field(default=True)
 
     _histories: dict[ChannelID, History] = field(default_factory=dict)
     uuid: str = field(default_factory=get_uuid_hex, init=False)
@@ -424,13 +535,31 @@ class HistoryManager:
 
 
     def _get_channel_id(self, id_: ChannelID) -> ChannelID:
-        if self.per_channel_history_enabled and id_ is None:
+        if self.per_channel_history and id_ is None:
             raise Exception(f'Channel id is None and multi channel history enabled.')
         
-        if not self.per_channel_history_enabled:
+        if not self.per_channel_history:
             return 0
         
         return id_
+    
+    def modify_saved_path(self, fp, id_: ChannelID=None):
+        id_ = self._get_channel_id(id_)
+        # if not id_:
+        #     return fp
+        
+        path, ext = fp.rsplit('.',1)
+        return f'{path}.{id_}.{ext}'
+    
+    
+    def search_for_fp(self, id_:ChannelID):
+        return
+        
+    
+    def clear_all_history(self):
+        for history in self._histories.values():
+            history.clear()
+        return self
 
 
     def add_history(self, history: History):
@@ -438,73 +567,37 @@ class HistoryManager:
         return history
 
 
-    def get_history_for(self, id_: ChannelID=None, fp=None) -> History:
+    def load_history_from_fp(self, fp=None, id_: ChannelID=None) -> History:
+        '''
+        Pass an id to overwrite channel id.
+        '''
+        return self.class_builder_history.load_from(self, fp=fp, id_=id_)
+    
+
+    def get_history_for(self, id_: ChannelID=None, fp=None, modify_fp=False, search=False) -> History:
         id_ = self._get_channel_id(id_)
 
         history = self._histories.get(id_)
         if history is None and fp is not None:
-            print('no channel, trying to load from file:')
-            history = self.load_history_from(fp, id_)
+            if modify_fp:
+                fp = self.modify_saved_path(fp, id_)
+            
+            logging.debug(f'No channel {id_}, trying to load from file: {fp}')
+            history = self.load_history_from_fp(fp=fp, id_=id_)
+            
+            
+        elif history is None and search:
+            logging.debug(f'No channel {id_}, Searching for file')
+            fp = self.search_for_fp(id_)
+            if fp:
+                logging.debug(f'Found: {fp}')
+                
+                history = self.load_history_from_fp(fp=fp, id_=id_)
+            
 
         if history is None:
+            logging.debug(f'No history for channel {id_}, creating new')
             history = self.add_history(self.class_builder_history(self, id_))
 
         return history
 
-
-    def load_history_from(self, fp, id_: ChannelID=None) -> History:
-        '''
-        Pass an id to overwrite channel id.
-        '''
-        return self.class_builder_history.load_from(fp, self, id_)
-    
-    
-
-if __name__ == '__main__':
-    file_path = os.path.join('ad_discordbot', 'modules', 'TMP_h2.json')
-    hm = HistoryManager()
-    h = hm.get_history_for(100)
-
-    m = HMessage(h, 'Kat', 'Hey!', 'user', 11111)
-    h.append(m)
-
-    m2 = HMessage(h, 'Skye', 'Hello Kat', 'assistant', 22222)
-    h.append(m2)
-    m2.mark_as_reply_for(m)
-
-
-    h.append(HMessage(h, 'Kat', 'What is 2+2?', 'user', 11111))
-    h.append(HMessage(h, 'Skye', '4', 'assistant', 22222))
-    h.append(HMessage(h, 'Skye', 'What else can I assist you with?', 'assistant', 22222))
-    h.append(HMessage(h, 'Skye', 'Goodbye', 'assistant', 22222))
-    h.append(HMessage(h, 'Kat', 'No wait!', 'user', 11111))
-
-    print(h)
-
-    print(h.render_to_tgwui())
-    print(h.render_to_prompt())
-
-    # print(h.to_dict())
-
-    h.save(file_path)
-
-    print('------------------')
-    print('After save')
-
-    hm = HistoryManager()
-    h = hm.get_history_for(100, file_path)
-    print(h)
-
-    print(h.render_to_tgwui())
-    print(h.render_to_prompt())
-
-
-    # print(h.to_dict())
-
-    print(h[0].replies)
-    print(h[1].reply_to)
-    print(h[1:3])
-
-
-    # print(json.dumps(h.render_to_tgwui(), indent=2))
-    
