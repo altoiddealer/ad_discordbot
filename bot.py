@@ -3810,13 +3810,14 @@ async def sync(ctx: commands.Context):
 ######################### LLM COMMANDS ##########################
 #################################################################
 if textgenwebui_enabled:
-    # /reset command - Resets current character
+    # /reset_conversation command - Resets current character
     @client.hybrid_command(description="Reset the conversation with current character")
     async def reset_conversation(ctx: commands.Context):
         try:
             shared.stop_everything = True
             await ireply(ctx, 'character reset') # send a response msg to the user
-            bot_history.get_history_for(ctx.channel.id).clear()
+            # Create a new instanec of the history and set it to active
+            bot_history.get_history_for(ctx.channel.id).fresh().replace()
 
             async with task_semaphore:
                 # offload to ai_gen queue
@@ -3826,9 +3827,9 @@ if textgenwebui_enabled:
 
         except Exception as e:
             print(traceback.format_exc())
-            logging.error(f"Error with /reset: {e}")
+            logging.error(f"Error with /reset_conversation: {e}")
 
-    # /reset command - Resets current character
+    # /save_conversation command
     @client.hybrid_command(description="Saves the current conversation to a new file in text-generation-webui/logs/")
     async def save_conversation(ctx: commands.Context):
         try:
@@ -3836,7 +3837,7 @@ if textgenwebui_enabled:
             await ctx.reply('Saved current conversation history', ephemeral=True)
             
         except Exception as e:
-            logging.error(f"Error with /reset: {e}")
+            logging.error(f"Error with /save_conversation: {e}")
 
     # Context menu command to Regenerate last reply
     @client.tree.context_menu(name="regenerate")
@@ -4917,8 +4918,6 @@ class CustomHistoryManager(HistoryManager):
         if self.change_char_history_method == 'new':
             search = False # don't import old logs
         
-        logging.warning(f'{search=} {self.change_char_history_method}')
-            
         # TODO if there's a setting about keeping history between characters, maybe duplicating would be better?
         # or just edit the ID here to match both
         
