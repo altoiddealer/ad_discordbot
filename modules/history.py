@@ -110,16 +110,16 @@ def cnf(default=None, default_list:tuple=None, check_bool=True, encoder=None, de
 @dataclass_json
 @dataclass
 class HMessage:
+    history: Optional['History']        = field(metadata=cnf(dont_save=True))
     # TODO make history optional
     # so that HMessage could be subclassed to fill out items like role
     # then the message has an .add_to_history(history) method
     # which will assign it, and grab a uuid
     
-    history: 'History'                  = field(metadata=cnf(dont_save=True))
-    name: Optional[str]                 = field(metadata=cnf())
-    text: Optional[str]                 = field(metadata=cnf())
-    role: Optional[str]                 = field(metadata=cnf())
-    author_id: Optional[UserID]         = field(metadata=cnf())
+    name: Optional[str]                 = field(default='', metadata=cnf())
+    text: Optional[str]                 = field(default='', metadata=cnf())
+    role: Optional[str]                 = field(default=None, metadata=cnf())
+    author_id: Optional[UserID]         = field(default=None, metadata=cnf())
 
     replies: Optional[list['HMessage']] = field(default_factory=list,   metadata=cnf(dont_save=True))
     reply_to: Optional['HMessage']      = field(default=None,           metadata=cnf(encoder=cls_get_id, decoder=str))
@@ -281,17 +281,17 @@ class HistoryPairForTGWUI:
 @dataclass_json
 @dataclass
 class History:
-    manager: 'HistoryManager'       = field(metadata=cnf(dont_save=True))
+    manager: Optional['HistoryManager'] = field(metadata=cnf(dont_save=True))
     id: ChannelID
     
-    fp: Optional[str]               = field(default=None) # TODO just set this on load when found correct file.
+    fp: Optional[str]                   = field(default=None) # TODO just set this on load when found correct file.
 
-    _last: dict[UserID, HMessage]   = field(default_factory=dict, init=False, metadata=cnf(dont_save=True))
-    _items: list[HMessage]          = field(default_factory=list, init=False, metadata=cnf(dont_save=True))
-    uuid: str                       = field(default_factory=get_uuid_hex,   metadata=cnf(dont_save=True))
-    _save_event: asyncio.Event      = field(default_factory=asyncio.Event,  init=False, metadata=cnf(dont_save=True))
-    _last_save: float               = field(default_factory=time.time,      init=False, metadata=cnf(dont_save=True))
-
+    _last: dict[UserID, HMessage]       = field(default_factory=dict, init=False, metadata=cnf(dont_save=True))
+    _items: list[HMessage]              = field(default_factory=list, init=False, metadata=cnf(dont_save=True))
+    uuid: str                           = field(default_factory=get_uuid_hex,   metadata=cnf(dont_save=True))
+    _save_event: asyncio.Event          = field(default_factory=asyncio.Event,  init=False, metadata=cnf(dont_save=True))
+    _last_save: float                   = field(default_factory=time.time,      init=False, metadata=cnf(dont_save=True))
+    
     def __copy__(self) -> 'History':
         new = self.__class__(
             manager=self.manager,
@@ -380,8 +380,8 @@ class History:
 
     ##########
     # Messages
-    def new_message(self, name, text, role, author_id, save=True, **kw) -> HMessage:
-        message = HMessage(self, name, text, role, author_id, **kw)
+    def new_message(self, name='', text='', role=None, author_id=None, save=True, **kw) -> HMessage:
+        message = HMessage(name=name, text=text, role=role, author_id=author_id, history=self, **kw)
         if save:
             self.append(message)
         return message
@@ -539,23 +539,24 @@ class History:
         '''
         with open(fp, 'r', encoding='utf8') as f:
             json_in = json.loads(f.read())
-            history = json_in.get('history', {})
-            messages = json_in.get('messages', [])
+            history_json = json_in.get('history', {})
+            messages_json = json_in.get('messages', [])
+
 
         # initialize history and overwrite vars
-        history:'History' = cls.from_dict(history)
+        history_json['manager'] = hm
+        history:'History' = cls.from_dict(history_json)
         history.id = id_ or history.id
         history.fp = fp
-        history.manager = hm
 
         # add history to manager
         hm.add_history(history)
 
         # initialize messages
         local_message_storage: dict[str, HMessage] = {}
-        for message in messages:
-            message:HMessage = HMessage.from_dict(message)
-            message.history = history
+        for message_json in messages_json:
+            message_json['history'] = history
+            message:HMessage = HMessage.from_dict(message_json)
             history.append(message)
             local_message_storage[message.uuid] = message
 
@@ -564,6 +565,7 @@ class History:
             replying_to = local_message_storage.get(message.reply_to)
             message.mark_as_reply_for(replying_to, save=False) # don't save because it's already saved
 
+        log.debug(f'Loaded {len(history._items)} total messages (some may be hidden)')
         return history
 
 
@@ -587,7 +589,7 @@ class HistoryManager:
             raise Exception(f'Channel id is None and multi channel history enabled.')
         
         if not self.per_channel_history:
-            return 0
+            return '0'
         
         return id_
     
