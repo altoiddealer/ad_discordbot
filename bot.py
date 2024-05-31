@@ -2202,9 +2202,7 @@ async def change_char_task(ictx: CtxInteraction, source:str, params:dict):
                 # create a clone with same settings but empty, and replace it in the manager
                 bot_history.get_history_for(ictx.channel.id).fresh().replace()
             else:
-                logging.warning('This originally cleared all history. No need, just unload maybe?')
-                # bot_history.clear_all_history()
-                bot_history.unload_history()
+                bot_history.unload_history() #.clear_all_history()
                 
         if change_embed:
             await change_embed.delete()
