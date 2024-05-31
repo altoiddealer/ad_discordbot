@@ -64,77 +64,82 @@ def find(predicate: Callable[[T], Any], iterable: _Iter[T], /) -> Union[Optional
     )
 
 
-#########################
-# Config encoder/decoders
 def get_uuid_hex():
     return uuid4().hex
 
-
-def reduce_to_none(i):
-    return None
-
-
+#########################
+# Config encoder/decoders
 def cls_get_pass(x):
     return x
 
 
-def cls_get_uuid(x):
-    return x.uuid
+def cls_get_none(x):
+    return None
 
 
 def cls_get_id(x):
     return x.uuid if x else None
 
-
-def cls_get_id_list(x):
-    out = []
-    for i in x:
-        if i is not None:
-            i = i.uuid
-        out.append(i)
-    return out
-
-
-def cls_get_id_dict(x):
-    out = {}
-    for k,v in x.items():
-        if v is not None:
-            v = v.uuid
-        out[k] = v
-    return out
-
-
-def decoder_dict_int_key(x):
-    return {int(k):v for k,v in x.items()}
-
-
-config_dict_uuid = config(encoder=cls_get_id_dict, decoder=dict)
-config_list_uuid = config(encoder=cls_get_id_list, decoder=list)
-config_uuid = config(encoder=cls_get_id, decoder=str)
-config_null = config(encoder=reduce_to_none, decoder=cls_get_pass)
-
+# config
+def cnf(default=None, default_list:tuple=None, check_bool=True, encoder=None, decoder=None, name=None, dont_save=False, decode_pass=True, exclude=None):
+    
+    # Create an exclusion function based on passed settings
+    def exclude_func(x):
+        if dont_save:
+            return True
+        if x == default:
+            return True
+        if default_list and x in default_list:
+            return True
+        if check_bool and not bool(x):
+            return True
+        return False
+    
+    # if decoder is None and decode_pass: # TODO test this?
+    #     decoder = cls_get_pass
+    
+    exclude = exclude or exclude_func
+    if dont_save:
+        encoder = dont_save
+    
+    return config(exclude=exclude, encoder=encoder, decoder=decoder, field_name=name)
+    
 
 #############
 # dataclasses
 @dataclass_json
 @dataclass
 class HMessage:
-    history: 'History' = field(metadata=config_uuid)
-    name: str
-    text: str
-    role: str # Assistant, user, internal
-    author_id: UserID
+    # TODO make history optional
+    # so that HMessage could be subclassed to fill out items like role
+    # then the message has an .add_to_history(history) method
+    # which will assign it, and grab a uuid
+    
+    history: 'History'                  = field(metadata=cnf(dont_save=True))
+    name: Optional[str]                 = field(metadata=cnf())
+    text: Optional[str]                 = field(metadata=cnf())
+    role: Optional[str]                 = field(metadata=cnf())
+    author_id: Optional[UserID]         = field(metadata=cnf())
 
-    replies: Optional[list['HMessage']] = field(default_factory=list, metadata=config_list_uuid)
-    reply_to: Optional['HMessage'] = field(default=None, metadata=config_uuid)
+    replies: Optional[list['HMessage']] = field(default_factory=list,   metadata=cnf(dont_save=True))
+    reply_to: Optional['HMessage']      = field(default=None,           metadata=cnf(encoder=cls_get_id, decoder=str))
 
-    text_visible: str = field(default='')
-    id: Optional[MessageID] = field(default=None)
-    audio_id: Optional[MessageID] = field(default=None)
-    typing: bool = field(default=False)
-    spoken: bool = field(default=False)
-    created: float = field(default_factory=time.time)
-    uuid: str = field(default_factory=get_uuid_hex)
+    text_visible: str                   = field(default='',     metadata=cnf())
+    id: Optional[MessageID]             = field(default=None,   metadata=cnf(check_bool=False)) # because id's could be "0"
+    audio_id: Optional[MessageID]       = field(default=None,   metadata=cnf(dont_save=True))
+    
+    typing: bool                        = field(default=False,  metadata=cnf(False))
+    spoken: bool                        = field(default=False,  metadata=cnf(False))
+    # hidden: bool                        = field(default=False,  metadata=cnf(False))
+    
+    # internal
+    created: float                      = field(default_factory=time.time)
+    uuid: str                           = field(default_factory=get_uuid_hex)
+    
+    def __post_init__(self):
+        if self.uuid is None:
+            pass
+        # TODO should get new id from history a local counter
 
 
     ##################
@@ -169,22 +174,24 @@ class HMessage:
 
     ###############
     # relationships
-    def mark_as_reply_for(self, message: 'HMessage'):
+    def mark_as_reply_for(self, message: 'HMessage', save=True):
         if not message:
             return self
         
         self.reply_to = message
         message.replies.append(self)
-        self.history.event_save.set()
+        if save:
+            self.history.event_save.set()
         return self
 
 
-    def unmark_reply(self):
+    def unmark_reply(self, save=True):
         message:HMessage = self.reply_to
         if message:
             if self in message.replies:
                 message.replies.pop(self)
-        self.history.event_save.set()
+        if save:
+            self.history.event_save.set()
         return self
 
 
@@ -274,16 +281,16 @@ class HistoryPairForTGWUI:
 @dataclass_json
 @dataclass
 class History:
-    manager: 'HistoryManager' = field(metadata=config_uuid)
+    manager: 'HistoryManager'       = field(metadata=cnf(dont_save=True))
     id: ChannelID
     
-    fp: Optional[str] = field(default=None)
+    fp: Optional[str]               = field(default=None) # TODO just set this on load when found correct file.
 
-    _last: dict[UserID, HMessage] = field(default_factory=dict, init=False, metadata=config(encoder=cls_get_id_dict, decoder=decoder_dict_int_key))
-    _items: list[HMessage] = field(default_factory=list, init=False, metadata=config(encoder=cls_get_id_list,))
-    uuid: str = field(default_factory=get_uuid_hex)
-    _save_event: asyncio.Event = field(default_factory=asyncio.Event, init=False, metadata=config_null)
-    _last_save: float = field(default_factory=time.time, init=False, metadata=config_null)
+    _last: dict[UserID, HMessage]   = field(default_factory=dict, init=False, metadata=cnf(dont_save=True))
+    _items: list[HMessage]          = field(default_factory=list, init=False, metadata=cnf(dont_save=True))
+    uuid: str                       = field(default_factory=get_uuid_hex,   metadata=cnf(dont_save=True))
+    _save_event: asyncio.Event      = field(default_factory=asyncio.Event,  init=False, metadata=cnf(dont_save=True))
+    _last_save: float               = field(default_factory=time.time,      init=False, metadata=cnf(dont_save=True))
 
     def __copy__(self) -> 'History':
         new = self.__class__(
@@ -322,9 +329,6 @@ class History:
         new = copy.copy(self)
         new._items = []
         new._last = {}
-        
-        new._items.clear()
-        new._last.clear()
         return new
     
     
@@ -368,6 +372,10 @@ class History:
     @property
     def empty(self):
         return not self._items
+    
+    
+    def __bool__(self):
+        return bool(self._items)
 
 
     ##########
@@ -410,6 +418,9 @@ class History:
         current_pair = HistoryPairForTGWUI()
 
         for message in self._items:
+            # if message.hidden:
+            #     continue
+            
             if message.role == 'user':
                 if current_pair.user:
                     current_pair.add_pair_to(internal, visible).clear()
@@ -438,6 +449,9 @@ class History:
     def render_to_prompt(self, each_new_line=True):
         output = []
         for message in self._items:
+            # if message.hidden:
+            #     continue
+            
             output.append(message.render_to_prompt(each_new_line=each_new_line))
         return '\n'.join(output)
 
@@ -547,25 +561,25 @@ class History:
 
         # resolve replies
         for message in history:
-            message.replies = [local_message_storage.get(m) for m in message.replies]
-            message.reply_to = local_message_storage.get(message.reply_to)
+            replying_to = local_message_storage.get(message.reply_to)
+            message.mark_as_reply_for(replying_to, save=False) # don't save because it's already saved
 
         return history
 
 
 @dataclass
 class HistoryManager:
-    limit_history: bool = field(default=True)
-    autosave_history: bool = field(default=False)
-    autoload_history: bool = field(default=False)
-    change_char_history_method: str = field(default='new')
-    greeting_or_history: str = field(default='history')
-    per_channel_history: bool = field(default=True)
-    save_interval:int = field(default=30)
+    limit_history: bool                     = field(default=True)
+    autosave_history: bool                  = field(default=False)
+    autoload_history: bool                  = field(default=False)
+    change_char_history_method: str         = field(default='new')
+    greeting_or_history: str                = field(default='history')
+    per_channel_history: bool               = field(default=True)
+    save_interval:int                       = field(default=30)
 
-    _histories: dict[ChannelID, History] = field(default_factory=dict)
-    uuid: str = field(default_factory=get_uuid_hex, init=False)
-    class_builder_history: type = field(default=History)
+    _histories: dict[ChannelID, History]    = field(default_factory=dict)
+    # uuid: str                               = field(default_factory=get_uuid_hex, init=False)
+    class_builder_history: type             = field(default=History)
 
 
     def _get_channel_id(self, id_: ChannelID) -> ChannelID:
@@ -629,7 +643,10 @@ class HistoryManager:
     def get_history_for(self, id_: ChannelID=None, fp=None, modify_fp=False, search=False) -> History:
         id_ = self._get_channel_id(id_)
 
+        # Check if history already loaded
         history = self._histories.get(id_)
+        
+        # Else import from given file if provided
         if history is None and fp is not None:
             if modify_fp:
                 fp = self.modify_saved_path(fp, id_)
@@ -637,7 +654,7 @@ class HistoryManager:
             logging.debug(f'No channel {id_}, trying to load from file: {fp}')
             history = self.load_history_from_fp(fp=fp, id_=id_)
             
-            
+        # Else search for matching files.
         elif history is None and search:
             logging.debug(f'No channel {id_}, Searching for file')
             fp = self.search_for_fp(id_)
@@ -646,7 +663,7 @@ class HistoryManager:
                 
                 history = self.load_history_from_fp(fp=fp, id_=id_)
             
-
+        # Else 
         if history is None:
             logging.debug(f'No history for channel {id_}, creating new')
             history = self.add_history(self.class_builder_history(self, id_))
