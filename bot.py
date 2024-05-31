@@ -275,7 +275,7 @@ else:
 
 if textgenwebui_enabled:
     import modules.extensions as extensions_module
-    from modules.chat import chatbot_wrapper, load_character, save_history, get_history_file_path, find_all_histories, load_history
+    from modules.chat import chatbot_wrapper, load_character, save_history, get_history_file_path, find_all_histories
     from modules import shared
     from modules import chat, utils
     from modules.LoRA import add_lora_to_model
@@ -2138,9 +2138,9 @@ async def send_char_greeting_or_history(ictx: CtxInteraction, char_name:str):
         # Send message to channel
         message = ''
         if bot_history.greeting_or_history == 'history':
-            last_user_message, last_assistant_message = bot_history.get_history_for(ictx.channel.id).last_exchange()
+            last_user_message, last_bot_message = bot_history.get_history_for(ictx.channel.id).last_exchange()
             if last_user_message:
-                message = f'__**Last message exchange**__:\n>>> **User**: "{last_user_message.text_visible}"\n **{bot_database.last_character}**: "{last_assistant_message.text_visible}"'
+                message = f'__**Last message exchange**__:\n>>> **User**: "{last_user_message.text_visible}"\n **{bot_database.last_character}**: "{last_bot_message.text_visible}"'
         if not message:
             greeting = bot_settings.settings['llmcontext']['greeting']
             if greeting:
@@ -2202,9 +2202,7 @@ async def change_char_task(ictx: CtxInteraction, source:str, params:dict):
                 # create a clone with same settings but empty, and replace it in the manager
                 bot_history.get_history_for(ictx.channel.id).fresh().replace()
             else:
-                logging.warning('This originally cleared all history. No need, just unload maybe?')
-                # bot_history.clear_all_history()
-                bot_history.unload_history()
+                bot_history.unload_history() #.clear_all_history()
                 
         if change_embed:
             await change_embed.delete()
