@@ -911,13 +911,8 @@ def format_prompt_with_recent_output(ictx: CtxInteraction, user_name:str, prompt
         matches = patterns.recent_msg_roles.findall(prompt)
         if matches:
             local_history = bot_history.get_history_for(ictx.channel.id)
-            user_history = local_history.role_messages('user')[-10:]
-            llm_history = local_history.role_messages('assistant')[-10:]
-            
-            user_msgs = [user_msg.text for user_msg in user_history]
-            user_msgs = user_msgs[::-1]
-            llm_msgs = [llm_msg.text for llm_msg in llm_history]
-            llm_msgs = llm_msgs[::-1]
+            user_msgs = [user_msg.text for user_msg in local_history.role_messages('user')[-10:]][::-1]
+            llm_msgs = [llm_msg.text for llm_msg in local_history.role_messages('assistant')[-10:]][::-1]
             recent_messages = {'user': user_msgs, 'llm': llm_msgs}
             log.debug(f"format_prompt_with_recent_output {len(user_msgs)}, {len(llm_msgs)}, {repr(user_msgs[0])}, {repr(llm_msgs[0])}")
         # Iterate through the matches
@@ -2298,13 +2293,6 @@ async def format_next_flow(ictx, next_flow, user_name:str, text:str):
     flow_name = ''
     formatted_flow_tags = {}
     for key, value in next_flow.items():
-        # see if any tag values have dynamic formatting (user prompt, LLM reply, etc)
-        if isinstance(value, str):
-            # formatted_value = value
-            formatted_value = format_prompt_with_recent_output(ictx, user_name, value)       # output will be a string
-            if formatted_value != value:                                        # if the value changed,
-                formatted_value = parse_tag_from_text_value(formatted_value)    # convert new string to correct value type
-            formatted_flow_tags[key] = formatted_value
         # get name for message embed
         if key == 'flow_step':
             flow_name = f": {value}"
@@ -2312,6 +2300,12 @@ async def format_next_flow(ictx, next_flow, user_name:str, text:str):
         elif key == 'format_prompt':
             formatting = {'format_prompt': [value]}
             text = process_tag_formatting(ictx, user_name, text, formatting)
+        # see if any tag values have dynamic formatting (user prompt, LLM reply, etc)
+        elif isinstance(value, str):
+            formatted_value = format_prompt_with_recent_output(ictx, user_name, value)       # output will be a string
+            if formatted_value != value:                                        # if the value changed,
+                formatted_value = parse_tag_from_text_value(formatted_value)    # convert new string to correct value type
+            formatted_flow_tags[key] = formatted_value
         # apply wildcards
         text = await dynamic_prompting(user_name, text, i=None)
     next_flow.update(formatted_flow_tags) # commit updates
