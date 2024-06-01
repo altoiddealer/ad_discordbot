@@ -130,7 +130,8 @@ class HMessage:
     
     typing: bool                        = field(default=False,  metadata=cnf(False))
     spoken: bool                        = field(default=False,  metadata=cnf(False))
-    # hidden: bool                        = field(default=False,  metadata=cnf(False))
+    hidden: bool                        = field(default=False,  metadata=cnf(False))
+    unsavable: bool                     = field(default=False,  metadata=cnf(dont_save=True))
     
     # internal
     created: float                      = field(default_factory=time.time)
@@ -147,6 +148,11 @@ class HMessage:
     @property
     def channel(self) -> 'History':
         return self.history
+    
+    
+    @property
+    def in_history(self) -> bool:
+        return self in self.history
 
 
     def __repr__(self):
@@ -214,6 +220,11 @@ class HMessage:
 
     ###########
     # Save/load
+    def dont_save(self):
+        self.unsavable = True
+        return True
+    
+    
     def duplicate_history(self) -> 'History':
         return copy.copy(self.history)
         
@@ -387,8 +398,22 @@ class History:
         return message
 
     
-    def role_messages(self, role) -> list[HMessage]:
-        return [message for message in self if message.role == role]
+    def role_messages(self, role, is_hidden=None) -> list[HMessage]:
+        '''
+        If is_hidden is left None, it will return both hidden and visible.
+        False: return only visible
+        True: return only hidden
+        '''
+        output = []
+        for message in self._items:
+            if is_hidden is not None and is_hidden != message.hidden:
+                continue
+            
+            if message.role != role:
+                continue
+            output.append(message)
+            
+        return output
     
     
     def search(self, predicate):
@@ -418,8 +443,8 @@ class History:
         current_pair = HistoryPairForTGWUI()
 
         for message in self._items:
-            # if message.hidden:
-            #     continue
+            if message.hidden:
+                continue
             
             if message.role == 'user':
                 if current_pair.user:
@@ -449,8 +474,8 @@ class History:
     def render_to_prompt(self, each_new_line=True):
         output = []
         for message in self._items:
-            # if message.hidden:
-            #     continue
+            if message.hidden:
+                continue
             
             output.append(message.render_to_prompt(each_new_line=each_new_line))
         return '\n'.join(output)
@@ -484,6 +509,8 @@ class History:
         history = self.to_dict()
         messages = []
         for message in self._items:
+            if message.unsavable:
+                continue
             messages.append(message.to_dict())
 
         with open(fp, 'w', encoding='utf8') as f:
