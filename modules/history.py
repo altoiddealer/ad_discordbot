@@ -222,7 +222,7 @@ class HMessage:
     # Save/load
     def dont_save(self):
         self.unsavable = True
-        return True
+        return self
     
     
     def duplicate_history(self) -> 'History':

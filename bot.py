@@ -904,7 +904,7 @@ async def swap_llm_character(char_name:str, user_name:str, llm_payload:dict):
         logging.error(f"An error occurred while loading the file for swap_character: {e}")
         return llm_payload
 
-def format_prompt_with_recent_output(ictx, user_name:str, prompt:str):
+def format_prompt_with_recent_output(ictx: CtxInteraction, user_name:str, prompt:str):
     try:
         formatted_prompt = prompt
         # Find all matches of {user_x} and {llm_x} in the prompt
@@ -913,12 +913,13 @@ def format_prompt_with_recent_output(ictx, user_name:str, prompt:str):
             local_history = bot_history.get_history_for(ictx.channel.id)
             user_history = local_history.role_messages('user')[-10:]
             llm_history = local_history.role_messages('assistant')[-10:]
+            
             user_msgs = [user_msg.text for user_msg in user_history]
             user_msgs = user_msgs[::-1]
             llm_msgs = [llm_msg.text for llm_msg in llm_history]
             llm_msgs = llm_msgs[::-1]
-            print("llm_msgs", llm_msgs)
             recent_messages = {'user': user_msgs, 'llm': llm_msgs}
+            log.debug(f"format_prompt_with_recent_output {len(user_msgs)}, {len(llm_msgs)}, {repr(user_msgs[0])}, {repr(llm_msgs[0])}")
         # Iterate through the matches
         for match in matches:
             prefix, index = match
@@ -1851,7 +1852,10 @@ async def llm_gen(llm_payload:dict, params:dict={}, ictx=None, tts_sw=None) -> H
         # this gives time for other messages to pile up before the bot's as they do in actual chat.
         user = get_user_ctx_inter(ictx)
         local_history = bot_history.get_history_for(ictx.channel.id)
-        user_message = local_history.new_message(llm_payload['state']['name1'], llm_payload['text'], 'user', user.id, save=save_to_history)
+        user_message = local_history.new_message(llm_payload['state']['name1'], llm_payload['text'], 'user', user.id)
+        if not save_to_history:
+            user_message.hidden = True
+            user_message.dont_save()
 
         # Store time for statistics
         bot_statistics._llm_gen_time_start_last = time.time()
@@ -1878,9 +1882,12 @@ async def llm_gen(llm_payload:dict, params:dict={}, ictx=None, tts_sw=None) -> H
         last_resp, tts_resp = await loop.run_in_executor(None, process_responses)
 
         
-        bot_message = local_history.new_message(bot_settings.name, last_resp, 'assistant', bot_settings._bot_id, text_visible=tts_resp, save=save_to_history)
+        bot_message = local_history.new_message(bot_settings.name, last_resp, 'assistant', bot_settings._bot_id, text_visible=tts_resp)
         bot_message.mark_as_reply_for(user_message)
-        
+        if not save_to_history:
+            bot_message.hidden = True
+            bot_message.dont_save()
+            
         if last_resp:
             update_llm_gen_statistics(last_resp) # Update statistics
             truncation = int(bot_settings.settings['llmstate']['state']['truncation_length'] * 4) #approx tokens
