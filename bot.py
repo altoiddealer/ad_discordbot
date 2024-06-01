@@ -2233,12 +2233,6 @@ async def format_next_flow(next_flow, user_name:str, text:str):
     flow_name = ''
     formatted_flow_tags = {}
     for key, value in next_flow.items():
-        # see if any tag values have dynamic formatting (user prompt, LLM reply, etc)
-        if isinstance(value, str):
-            formatted_value = format_prompt_with_recent_output(user_name, value)       # output will be a string
-            if formatted_value != value:                                        # if the value changed,
-                formatted_value = parse_tag_from_text_value(formatted_value)    # convert new string to correct value type
-            formatted_flow_tags[key] = formatted_value
         # get name for message embed
         if key == 'flow_step':
             flow_name = f": {value}"
@@ -2246,6 +2240,12 @@ async def format_next_flow(next_flow, user_name:str, text:str):
         elif key == 'format_prompt':
             formatting = {'format_prompt': [value]}
             text = process_tag_formatting(user_name, text, formatting)
+        # see if any tag values have dynamic formatting (user prompt, LLM reply, etc)
+        elif key != 'format_prompt' and isinstance(value, str):
+            formatted_value = format_prompt_with_recent_output(user_name, value)       # output will be a string
+            if formatted_value != value:                                        # if the value changed,
+                formatted_value = parse_tag_from_text_value(formatted_value)    # convert new string to correct value type
+            formatted_flow_tags[key] = formatted_value
         # apply wildcards
         text = await dynamic_prompting(user_name, text, i=None)
     next_flow.update(formatted_flow_tags) # commit updates
