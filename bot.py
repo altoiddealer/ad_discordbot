@@ -904,34 +904,44 @@ async def swap_llm_character(char_name:str, user_name:str, llm_payload:dict):
         logging.error(f"An error occurred while loading the file for swap_character: {e}")
         return llm_payload
 
-# def format_prompt_with_recent_output(user_name:str, prompt:str):
-#     try:
-#         formatted_prompt = prompt
-#         # Find all matches of {user_x} and {llm_x} in the prompt
-#         matches = patterns.recent_msg_roles.findall(prompt)
-#         # Iterate through the matches
-#         for match in matches:
-#             prefix, index = match
-#             index = int(index)
-#             if prefix in ['user', 'llm'] and 0 <= index <= 10:
-#                 message_list = bot_history.message_ids[prefix]
-#                 if not message_list or index >= len(message_list):
-#                     continue
-#                 matched_syntax = f"{prefix}_{index}"
-#                 formatted_prompt = formatted_prompt.replace(f"{{{matched_syntax}}}", message_list[index])
-#             elif prefix == 'history' and 0 <= index <= 10:
-#                 user_message = bot_history.message_ids['user'][index] if index < len(bot_history.message_ids['user']) else ''
-#                 llm_message = bot_history.message_ids['llm'][index] if index < len(bot_history.message_ids['llm']) else ''
-#                 formatted_history = f'"{user_name}:" {user_message}\n"{bot_database.last_character}:" {llm_message}\n'
-#                 matched_syntax = f"{prefix}_{index}"
-#                 formatted_prompt = formatted_prompt.replace(f"{{{matched_syntax}}}", formatted_history)
-#         formatted_prompt = formatted_prompt.replace('{last_image}', '__temp/temp_img_0.png')
-#         return formatted_prompt
-#     except Exception as e:
-#         logging.error(f'An error occurred while formatting prompt with recent messages: {e}')
-#         return prompt
+def format_prompt_with_recent_output(ictx, user_name:str, prompt:str):
+    try:
+        formatted_prompt = prompt
+        # Find all matches of {user_x} and {llm_x} in the prompt
+        matches = patterns.recent_msg_roles.findall(prompt)
+        if matches:
+            local_history = bot_history.get_history_for(ictx.channel.id)
+            user_history = local_history.role_messages('user')[-10:]
+            llm_history = local_history.role_messages('assistant')[-10:]
+            user_msgs = [user_msg.text for user_msg in user_history]
+            user_msgs = user_msgs[::-1]
+            llm_msgs = [llm_msg.text for llm_msg in llm_history]
+            llm_msgs = llm_msgs[::-1]
+            print("llm_msgs", llm_msgs)
+            recent_messages = {'user': user_msgs, 'llm': llm_msgs}
+        # Iterate through the matches
+        for match in matches:
+            prefix, index = match
+            index = int(index)
+            if prefix in ['user', 'llm'] and 0 <= index <= 10:
+                message_list = recent_messages[prefix]
+                if not message_list or index >= len(message_list):
+                    continue
+                matched_syntax = f"{prefix}_{index}"
+                formatted_prompt = formatted_prompt.replace(f"{{{matched_syntax}}}", message_list[index])
+            elif prefix == 'history' and 0 <= index <= 10:
+                user_message = recent_messages['user'][index] if index < len(recent_messages['user']) else ''
+                llm_message = recent_messages['llm'][index] if index < len(recent_messages['llm']) else ''
+                formatted_history = f'"{user_name}:" {user_message}\n"{bot_database.last_character}:" {llm_message}\n'
+                matched_syntax = f"{prefix}_{index}"
+                formatted_prompt = formatted_prompt.replace(f"{{{matched_syntax}}}", formatted_history)
+        formatted_prompt = formatted_prompt.replace('{last_image}', '__temp/temp_img_0.png')
+        return formatted_prompt
+    except Exception as e:
+        logging.error(f'An error occurred while formatting prompt with recent messages: {e}')
+        return prompt
 
-def process_tag_formatting(user_name:str, prompt:str, formatting:dict):
+def process_tag_formatting(ictx, user_name:str, prompt:str, formatting:dict):
     try:
         updated_prompt = prompt
         format_prompt = formatting.get('format_prompt', [])
@@ -943,7 +953,7 @@ def process_tag_formatting(user_name:str, prompt:str, formatting:dict):
             for fmt_prompt in format_prompt:
                 updated_prompt = fmt_prompt.replace('{prompt}', updated_prompt)
         # format prompt with any defined recent messages
-        #updated_prompt = format_prompt_with_recent_output(user_name, updated_prompt)
+        updated_prompt = format_prompt_with_recent_output(ictx, user_name, updated_prompt)
         # Format time if defined
         new_time, new_date = get_time(time_offset, time_format, date_format)
         updated_prompt = updated_prompt.replace('{time}', new_time)
@@ -1645,7 +1655,7 @@ async def on_message_task(ictx: CtxInteraction, source:str, text:str):
             # apply tags relevant to LLM payload
             llm_payload, llm_prompt, params = await process_llm_payload_tags(ictx, llm_payload, llm_prompt, llm_payload_mods, params)
             # apply formatting tags to LLM prompt
-            llm_prompt = process_tag_formatting(user_name, llm_prompt, formatting)
+            llm_prompt = process_tag_formatting(ictx, user_name, llm_prompt, formatting)
             # offload to ai_gen queue
             llm_payload['text'] = llm_prompt
 
@@ -2277,14 +2287,14 @@ flow_queue = asyncio.Queue()
 #################################################################
 ########################## QUEUED FLOW ##########################
 #################################################################
-async def format_next_flow(next_flow, user_name:str, text:str):
+async def format_next_flow(ictx, next_flow, user_name:str, text:str):
     flow_name = ''
     formatted_flow_tags = {}
     for key, value in next_flow.items():
         # see if any tag values have dynamic formatting (user prompt, LLM reply, etc)
         if isinstance(value, str):
-            formatted_value = value
-            # formatted_value = format_prompt_with_recent_output(user_name, value)       # output will be a string
+            # formatted_value = value
+            formatted_value = format_prompt_with_recent_output(ictx, user_name, value)       # output will be a string
             if formatted_value != value:                                        # if the value changed,
                 formatted_value = parse_tag_from_text_value(formatted_value)    # convert new string to correct value type
             formatted_flow_tags[key] = formatted_value
@@ -2294,21 +2304,21 @@ async def format_next_flow(next_flow, user_name:str, text:str):
         # format prompt before feeding it back into on_message_task()
         elif key == 'format_prompt':
             formatting = {'format_prompt': [value]}
-            text = process_tag_formatting(user_name, text, formatting)
+            text = process_tag_formatting(ictx, user_name, text, formatting)
         # apply wildcards
         text = await dynamic_prompting(user_name, text, i=None)
     next_flow.update(formatted_flow_tags) # commit updates
     return flow_name, text
 
 # function to get a copy of the next queue item while maintaining the original queue
-async def peek_flow_queue(queue, user_name:str, text:str):
+async def peek_flow_queue(ictx, queue, user_name:str, text:str):
     temp_queue = asyncio.Queue()
     total_queue_size = queue.qsize()
     first_flow = None
     while queue.qsize() > 0:
         if queue.qsize() == total_queue_size:
             item = await queue.get()
-            flow_name, formatted_text = await format_next_flow(item, user_name, text)
+            flow_name, formatted_text = await format_next_flow(ictx, item, user_name, text)
         else:
             item = await queue.get()
         await temp_queue.put(item)
@@ -2330,7 +2340,7 @@ async def flow_task(ictx: CtxInteraction, source:str, text:str):
             flow_embed_info.description = ''
             flow_embed = await channel.send(embed=flow_embed_info)
         while flow_queue.qsize() > 0:   # flow_queue items are removed in get_tags()
-            flow_name, text = await peek_flow_queue(flow_queue, user_name, text)
+            flow_name, text = await peek_flow_queue(ictx, flow_queue, user_name, text)
             remaining_flow_steps = flow_queue.qsize()
             if flow_embed_info:
                 flow_embed_info.description = flow_embed_info.description.replace("**Processing", ":white_check_mark: **")
