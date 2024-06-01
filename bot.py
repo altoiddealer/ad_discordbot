@@ -1594,6 +1594,8 @@ async def on_message(message: discord.Message):
 #################### QUEUED FROM ON MESSAGE #####################
 #################################################################
 async def on_message_task(ictx: CtxInteraction, source:str, text:str):
+    log.debug(f"on_message_task {len(bot_history.recent_messages.get('user',[]))}, {len(bot_history.recent_messages.get('llm',[]))}, {bot_history.recent_messages}")
+
     try:
         user_name = get_user_ctx_inter(ictx).display_name
         channel = ictx.channel
