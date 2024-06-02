@@ -391,7 +391,10 @@ class History:
 
     ##########
     # Messages
-    def new_message(self, name='', text='', role=None, author_id=None, save=True, **kw) -> HMessage:
+    def new_message(self, name='', text='', role=None, author_id=None, save=True, **kw) -> HMessage: 
+        # TODO maybe remove this in favor of creating messages from class
+        # that would allow message presets, such as AssistantHMessage, or FlowsHMessage
+        # and easier sorting with isinstance()
         message = HMessage(name=name, text=text, role=role, author_id=author_id, history=self, **kw)
         if save:
             self.append(message)
