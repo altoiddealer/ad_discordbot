@@ -4910,13 +4910,16 @@ class CustomHistoryManager(HistoryManager):
         # For this to work, make sure all ids start with ID_... edit the end as you wish.
         internal_id = id_.split('_',1)[0] 
         
+        # TODO users should not be digging in the internals, the name of the folders/files shouldn't matter
+        # But in the case you do want to add the channel/guild name to the folder 
+        # searching for folders could also be implemented.
         history_dir = self.get_history_dir_template().format(id=internal_id)
         if not os.path.isdir(history_dir):
             return
         
         # get latest valid history file
         for file in reversed(os.listdir(history_dir)):
-            return file
+            return os.path.join(history_dir, file)
             
             
     def get_history_for(self, id_: ChannelID=None, character=None, mode=None, fp=None) -> History:
