@@ -3,7 +3,8 @@ import asyncio
 import os
 import re
 from shutil import copyfile
-logging = get_logger(__name__)
+log = get_logger(__name__)
+logging = log
 
 task_semaphore = asyncio.Semaphore(1)
 
@@ -15,15 +16,15 @@ class SharedPath:
             src_path = os.path.join(src_dir, file)
             if os.path.exists(src_path):
                 copyfile(src_path, dest_path)
-                logging.info(f'Copied default user setting template "/{file}/" to "{root}".')
+                log.info(f'Copied default user setting template "/{file}/" to "{root}".')
             else:
-                logging.error(f'Required settings file "/{file}/" not found in "{root}" or "{src_dir}".')
+                log.error(f'Required settings file "/{file}/" not found in "{root}" or "{src_dir}".')
         return dest_path
 
     def init_shared_paths(root, dir, reason) -> str:
         path = os.path.join(root, dir)
         if not os.path.exists(path):
-            logging.info(f'Creating "/{dir}/" for {reason}.')
+            log.info(f'Creating "/{dir}/" for {reason}.')
         os.makedirs(path, exist_ok=True)
         return path
 

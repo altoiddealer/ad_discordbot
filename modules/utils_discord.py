@@ -1,5 +1,6 @@
 from ad_discordbot.modules.logs import import_track, log, get_logger; import_track(__file__, fp=True)
-logging = get_logger(__name__)
+log = get_logger(__name__)
+logging = log
 from ad_discordbot.modules.utils_shared import task_semaphore
 import discord
 from discord.ext import commands
@@ -19,7 +20,7 @@ async def ireply(ictx: 'CtxInteraction', process):
             await ictx.reply(f'Processing your {process} request', ephemeral=True, delete_after=3)
 
     except Exception as e:
-        logging.error(f"Error sending message response to user's interaction command: {e}")
+        log.error(f"Error sending message response to user's interaction command: {e}")
 
 
 
@@ -142,7 +143,7 @@ class SelectOptionsView(discord.ui.View):
         menu_ii += 1
         local_options = all_choices[max_items_per_menu*menu_ii: max_items_per_menu*(menu_ii+1)]
         if local_options and not self.warned:
-            logging.warning(f'Too many models, the menu will be truncated to the first {max_items_per_menu*max_menus}.')
+            log.warning(f'Too many models, the menu will be truncated to the first {max_items_per_menu*max_menus}.')
             self.warned = True
 
         # Remove Submit button if only one dropdown

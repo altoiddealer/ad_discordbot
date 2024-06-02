@@ -3,7 +3,8 @@
 
 
 from ad_discordbot.modules.logs import import_track, log, get_logger; import_track(__file__, fp=True)
-logging = get_logger(__name__)
+log = get_logger(__name__)
+logging = log
 import os
 from dataclasses import dataclass, field
 from dataclasses_json import dataclass_json, config
@@ -659,21 +660,21 @@ class HistoryManager:
         
         # Else import from given file if provided
         if history is None and fp is not None:
-            logging.debug(f'No channel {id_}, trying to load from file: {fp}')
+            log.debug(f'No channel {id_}, trying to load from file: {fp}')
             history = self.load_history_from_fp(fp=fp, id_=id_)
             
         # Else search for matching files.
         elif history is None and search:
-            logging.debug(f'No channel {id_}, Searching for file')
+            log.debug(f'No channel {id_}, Searching for file')
             fp = self.search_for_fp(id_)
             if fp:
-                logging.debug(f'Found: {fp}')
+                log.debug(f'Found: {fp}')
                 
                 history = self.load_history_from_fp(fp=fp, id_=id_)
             
         # Else 
         if history is None:
-            logging.debug(f'No history for channel {id_}, creating new')
+            log.debug(f'No history for channel {id_}, creating new')
             history = self.add_history(self.class_builder_history(self, id_))
 
         return history

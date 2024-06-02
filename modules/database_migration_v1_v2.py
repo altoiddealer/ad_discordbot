@@ -1,5 +1,6 @@
 from ad_discordbot.modules.logs import import_track, log, get_logger; import_track(__file__, fp=True)
-logging = get_logger(__name__)
+log = get_logger(__name__)
+logging = log
 from datetime import datetime, timedelta
 import sqlite3
 import os
@@ -11,13 +12,13 @@ class OldDatabase:
 
         if os.path.isfile('OUTDATED_bot_v1.db'):
             os.rename('OUTDATED_bot_v1.db', os.path.join(shared_path.dir_internal, 'OUTDATED_bot_v1.db'))
-            logging.info('Moved old DB file to internal')
+            log.info('Moved old DB file to internal')
 
         if not os.path.isfile('bot.db'):
             return
 
-        logging.warning('Old bot.db file exists')
-        logging.info('Migrating old database to new bot_database_v2.yaml')
+        log.warning('Old bot.db file exists')
+        log.info('Migrating old database to new bot_database_v2.yaml')
         os.rename('bot.db', 'OUTDATED_bot_v1.db')
 
         self.first_run = self.initialize_first_run()
@@ -41,7 +42,7 @@ class OldDatabase:
 
                 return row[0]
         except Exception as e:
-            logging.error(f"Error initializing {location}: {e}")
+            log.error(f"Error initializing {location}: {e}")
 
     def initialize_first_run(self):
         with sqlite3.connect('OUTDATED_bot_v1.db') as conn:
@@ -77,7 +78,7 @@ class OldDatabase:
             return ts
 
         except Exception as e:
-            logging.error(f"Error initializing {location}: {e}")
+            log.error(f"Error initializing {location}: {e}")
 
 
     def initialize_main_channels(self):
