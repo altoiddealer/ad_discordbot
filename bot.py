@@ -4855,7 +4855,7 @@ class CustomHistory(History):
         
         internal_history_path = os.path.join(history_dir, f'{self.fp_unique_id}.json')
         if not has_file_name:
-            log.info(f'Internal history file is being saved to: {internal_history_path}')
+            log.debug(f'Internal history file will be saved to: {internal_history_path}')
             
         return internal_history_path
     
