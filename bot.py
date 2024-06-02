@@ -4919,7 +4919,7 @@ class CustomHistoryManager(HistoryManager):
     def get_history_for(self, id_: ChannelID=None, character=None, mode=None, fp=None) -> History:
         state_dict = bot_settings.settings['llmstate']['state']
         mode = mode or state_dict['mode']
-        character = character or state_dict["character_menu"]
+        character = character or state_dict["character_menu"] or 'unknown_character'
         
         search = True
         if self.change_char_history_method == 'new':
