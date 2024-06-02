@@ -525,7 +525,7 @@ async def auto_update_imgmodel_task(mode, duration):
             async with task_semaphore:
                 # offload to ai_gen queue
                 params = {'imgmodel': selected_imgmodel}
-                await change_imgmodel_task('Automatically', channel=None, params=params, i=None)
+                await change_imgmodel_task('Automatically', channel=None, params=params, ictx=None)
                 log.info("Automatically updated imgmodel settings")
 
         except Exception as e:
