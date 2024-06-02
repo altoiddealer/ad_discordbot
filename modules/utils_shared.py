@@ -49,7 +49,7 @@ class SharedPath:
     tags = init_user_config_files(dir_root, templates, 'dict_tags.yaml')
 
     # Wildcards
-    dir_wildcards = init_shared_paths(dir_root, 'wildcards', "wildcard files for Dynamic Prompting feature. Refer to the bot's wiki on GitHub for more information.")
+    dir_wildcards = init_shared_paths(dir_root, 'wildcards', "wildcard files for Dynamic Prompting feature. Refer to the bot's wiki on GitHub for more information")
 
 shared_path = SharedPath()
 
