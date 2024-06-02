@@ -1,5 +1,6 @@
 from ad_discordbot.modules.logs import import_track, log, get_logger; import_track(__file__, fp=True)
-logging = get_logger(__name__)
+log = get_logger(__name__)
+logging = log
 from ad_discordbot.modules.utils_files import load_file, save_yaml_file
 import time
 
@@ -108,10 +109,10 @@ class BaseFileMemory:
             return
 
         if os.path.isfile(self._fp):
-            logging.warning(f'File at "{self._fp}" already exists, renaming.')
+            log.warning(f'File at "{self._fp}" already exists, renaming.')
             os.rename(self._fp, make_fp_unique(self._fp))
 
-        logging.info(f'Migrating file to "{self._fp}"')
+        log.info(f'Migrating file to "{self._fp}"')
         os.rename(from_fp, self._fp)
         self._did_migration = True
 
@@ -124,11 +125,11 @@ class BaseFileMemory:
         if version == self._latest_version:
             return data
 
-        logging.debug(f'Upgrading "{self._fp}"')
+        log.debug(f'Upgrading "{self._fp}"')
 
         for upgrade in range(version, self._latest_version):
             upgrade += 1
-            logging.debug(f'Upgrading "{self._fp}" to v{upgrade}')
+            log.debug(f'Upgrading "{self._fp}" to v{upgrade}')
 
             func = f'_upgrade_to_v{upgrade}'
             if not hasattr(self, func):

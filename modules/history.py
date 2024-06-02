@@ -3,7 +3,8 @@
 
 
 from ad_discordbot.modules.logs import import_track, log, get_logger; import_track(__file__, fp=True)
-logging = get_logger(__name__)
+log = get_logger(__name__)
+logging = log
 import os
 from dataclasses import dataclass, field
 from dataclasses_json import dataclass_json, config
@@ -391,7 +392,10 @@ class History:
 
     ##########
     # Messages
-    def new_message(self, name='', text='', role=None, author_id=None, save=True, **kw) -> HMessage:
+    def new_message(self, name='', text='', role=None, author_id=None, save=True, **kw) -> HMessage: 
+        # TODO maybe remove this in favor of creating messages from class
+        # that would allow message presets, such as AssistantHMessage, or FlowsHMessage
+        # and easier sorting with isinstance()
         message = HMessage(name=name, text=text, role=role, author_id=author_id, history=self, **kw)
         if save:
             self.append(message)
@@ -522,9 +526,7 @@ class History:
         return self
     
     
-    async def save(self, fp=None, modify_fp=False, timeout=10, force=False):
-        if fp is not None and modify_fp:
-            fp = self.manager.modify_saved_path(fp, self.id)
+    async def save(self, fp=None, timeout=30, force=False):
         self.fp = fp or self.fp
         
         delta = self.last_save_delta()
@@ -540,9 +542,7 @@ class History:
         return False
     
     
-    def save_sync(self, fp=None, modify_fp=False, force=False):
-        if fp is not None and modify_fp:
-            fp = self.manager.modify_saved_path(fp, self.id)
+    def save_sync(self, fp=None, force=False):
         self.fp = fp or self.fp
         
         if self.event_save.is_set() or force:
@@ -610,24 +610,6 @@ class HistoryManager:
     # uuid: str                               = field(default_factory=get_uuid_hex, init=False)
     class_builder_history: type             = field(default=History)
 
-
-    def _get_channel_id(self, id_: ChannelID) -> ChannelID:
-        if self.per_channel_history and id_ is None:
-            raise Exception(f'Channel id is None and multi channel history enabled.')
-        
-        if not self.per_channel_history:
-            return '0'
-        
-        return id_
-    
-    def modify_saved_path(self, fp, id_: ChannelID=None):
-        id_ = self._get_channel_id(id_)
-        # if not id_:
-        #     return fp
-        
-        path, ext = fp.rsplit('.',1)
-        return f'{path}.{id_}.{ext}'
-    
     
     def search_for_fp(self, id_:ChannelID):
         return
@@ -646,14 +628,14 @@ class HistoryManager:
         return self
     
     
-    async def save_all(self, modify_fp=False, force=False):
+    async def save_all(self, force=False):
         for history in self._histories.values():
-            await history.save(modify_fp=modify_fp, timeout=0, force=force)
+            await history.save(timeout=0, force=force)
         return self
     
-    def save_all_sync(self, modify_fp=False, force=False):
+    def save_all_sync(self, force=False):
         for history in self._histories.values():
-            history.save_sync(modify_fp=modify_fp, force=force)
+            history.save_sync(force=force)
         return self
     
 
@@ -669,32 +651,30 @@ class HistoryManager:
         return self.class_builder_history.load_from(self, fp=fp, id_=id_)
     
 
-    def get_history_for(self, id_: ChannelID=None, fp=None, modify_fp=False, search=False) -> History:
-        id_ = self._get_channel_id(id_)
-
+    def get_history_for(self, id_: ChannelID=None, fp=None, search=False) -> History:
+        if id_ is None:
+            raise Exception('ID must be set, please create a default ID in subclass.')
+        
         # Check if history already loaded
         history = self._histories.get(id_)
         
         # Else import from given file if provided
         if history is None and fp is not None:
-            if modify_fp:
-                fp = self.modify_saved_path(fp, id_)
-            
-            logging.debug(f'No channel {id_}, trying to load from file: {fp}')
+            log.debug(f'No channel {id_}, trying to load from file: {fp}')
             history = self.load_history_from_fp(fp=fp, id_=id_)
             
         # Else search for matching files.
         elif history is None and search:
-            logging.debug(f'No channel {id_}, Searching for file')
+            log.debug(f'No channel {id_}, Searching for file')
             fp = self.search_for_fp(id_)
             if fp:
-                logging.debug(f'Found: {fp}')
+                log.debug(f'Found: {fp}')
                 
                 history = self.load_history_from_fp(fp=fp, id_=id_)
             
         # Else 
         if history is None:
-            logging.debug(f'No history for channel {id_}, creating new')
+            log.debug(f'No history for channel {id_}, creating new')
             history = self.add_history(self.class_builder_history(self, id_))
 
         return history
