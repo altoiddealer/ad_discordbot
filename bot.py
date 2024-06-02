@@ -2162,6 +2162,7 @@ async def send_char_greeting_or_history(ictx: CtxInteraction, char_name:str):
                 message = f'**{char_name}** has entered the chat"'
         await send_long_message(channel, message)
     except Exception as e:
+        print(traceback.format_exc())
         logging.error(f'An error occurred while sending greeting or history for "{char_name}": {e}')
 
 async def announce_changes(ictx: CtxInteraction, change_label:str, change_name:str):
@@ -4888,6 +4889,7 @@ class CustomHistory(History):
             last_message:HMessage = self[-1]
             previous_message = last_message.reply_to
             return previous_message, last_message
+        return None, None
     
         
 class CustomHistoryManager(HistoryManager):
