@@ -35,6 +35,8 @@ class SharedPath:
     starboard = os.path.join(dir_internal, 'starboard_messages.yaml')
     database = os.path.join(dir_internal, 'database.yaml')
     statistics = os.path.join(dir_internal, 'statistics.yaml')
+    
+    dir_history = init_shared_paths(dir_internal, 'history', 'storing internal history states')
 
     # Configs
     templates = os.path.join(dir_root, 'settings_templates')

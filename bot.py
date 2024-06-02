@@ -4843,37 +4843,26 @@ class CustomHistory(History):
         return new
     
     def _internal_pre_save(self):
-        state_dict = bot_settings.settings['llmstate']['state']
-        mode = state_dict['mode']
-        character_menu = state_dict["character_menu"]
-        
         has_file_name = self.fp_unique_id
         if not self.fp_unique_id:
-            if self.manager.per_channel_history:
-                self.fp_unique_id = f"{datetime.now().strftime('%Y%m%d-%H-%M-%S')}_channel"
-            else:
-                self.fp_unique_id = datetime.now().strftime('%Y%m%d-%H-%M-%S')
+            self.fp_unique_id = datetime.now().strftime('%Y%m%d-%H-%M-%S')
     
-        internal_history_path = str(get_history_file_path(self.fp_unique_id, character_menu, mode))
-        os.makedirs(os.path.dirname(internal_history_path), exist_ok=True)
+        internal_id = self.id.split('_',1)[0] 
+        history_dir = self.manager.get_history_dir_template().format(id=internal_id)
+        os.makedirs(history_dir, exist_ok=True)
         
-        return internal_history_path, has_file_name, character_menu, mode
-    
-    def _internal_post_save(self, has_file_name, character_menu, mode):
+        internal_history_path = os.path.join(history_dir, f'{self.fp_unique_id}.json')
         if not has_file_name:
-            logging.info(f'''Chat history will be saved to "/logs/{mode}/{character_menu}/{self.fp_unique_id}.json"''')
+            logging.info(f'Internal history file is being saved to: {internal_history_path}')
             
-        save_history(self.render_to_tgwui(), self.fp_unique_id, character_menu, mode)
-        logging.debug('Finished saving chat history and internal history.')
+        return internal_history_path
     
-    async def save(self, fp=None, modify_fp=False, timeout=10, force=False):
+    async def save(self, fp=None, timeout=30, force=False):
         try:
-            internal_history_path, has_file_name, character_menu, mode = self._internal_pre_save()
-            status = await super().save(fp=internal_history_path, modify_fp=True, timeout=timeout, force=force)
+            internal_history_path = self._internal_pre_save()
+            status = await super().save(fp=internal_history_path, timeout=timeout, force=force)
             if not status: # don't bother saving if nothing changed
                 return False
-            
-            self._internal_post_save(has_file_name, character_menu, mode)
             return status
 
         except Exception as e:
@@ -4881,14 +4870,12 @@ class CustomHistory(History):
             logging.critical(e)
             
             
-    def save_sync(self, fp=None, modify_fp=False, force=False):
+    def save_sync(self, fp=None, force=False):
         try:
-            internal_history_path, has_file_name, character_menu, mode = self._internal_pre_save()
-            status = super().save_sync(fp=internal_history_path, modify_fp=True, force=force)
+            internal_history_path = self._internal_pre_save()
+            status = super().save_sync(fp=internal_history_path, force=force)
             if not status: # don't bother saving if nothing changed
                 return False
-            
-            self._internal_post_save(has_file_name, character_menu, mode)
             return status
 
         except Exception as e:
@@ -4904,24 +4891,35 @@ class CustomHistory(History):
     
         
 class CustomHistoryManager(HistoryManager):
-    def search_for_fp(self, id_:ChannelID):
-        state_dict = bot_settings.settings['llmstate']['state']
-        state = {'character_menu': state_dict['character_menu'], 'mode': state_dict['mode']}
-        unique_ids: list[str] = find_all_histories(state)
-        
-        # get latest valid history file
-        for i in unique_ids:
-            internal_history_path = str(get_history_file_path(i, state['character_menu'], state['mode']))
-            internal_history_path = self.modify_saved_path(internal_history_path, id_)
-            
-            if os.path.isfile(internal_history_path):
-                return internal_history_path
-            
-            
-    def get_history_for(self, id_: ChannelID=None, fp=None, modify_fp=False) -> History:
+    def get_history_dir_template(self):
         state_dict = bot_settings.settings['llmstate']['state']
         mode = state_dict['mode']
-        character_menu = state_dict["character_menu"]
+        character = state_dict["character_menu"]
+        
+        history_dir = os.path.join(shared_path.dir_history, '{id}', f'{character}_{mode}')
+        return history_dir
+        
+    
+    def search_for_fp(self, id_:ChannelID):
+        # Note: this is an internal function part of get_history_for
+
+        # get the first item split by _
+        # For this to work, make sure all ids start with ID_... edit the end as you wish.
+        internal_id = id_.split('_',1)[0] 
+        
+        history_dir = self.get_history_dir_template().format(id=internal_id)
+        if not os.path.isdir(history_dir):
+            return
+        
+        # get latest valid history file
+        for file in reversed(os.listdir(history_dir)):
+            return file
+            
+            
+    def get_history_for(self, id_: ChannelID=None, character=None, mode=None, fp=None) -> History:
+        state_dict = bot_settings.settings['llmstate']['state']
+        mode = mode or state_dict['mode']
+        character = character or state_dict["character_menu"]
         
         search = True
         if self.change_char_history_method == 'new':
@@ -4930,7 +4928,10 @@ class CustomHistoryManager(HistoryManager):
         # TODO if there's a setting about keeping history between characters, maybe duplicating would be better?
         # or just edit the ID here to match both
         
-        history = super().get_history_for(f'{id_}_{character_menu}_{mode}', fp=fp, modify_fp=modify_fp, search=search)
+        if not self.per_channel_history:
+            id_ = 'global'
+        
+        history = super().get_history_for(f'{id_}_{character}_{mode}', fp=fp, search=search)
         return history
 
         
