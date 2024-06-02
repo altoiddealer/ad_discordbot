@@ -360,7 +360,7 @@ class History:
 
     def pop(self, index=-1):
         self.event_save.set()
-        return self._items.pop(index=index)
+        return self._items.pop(index)
 
 
     def __iter__(self):
