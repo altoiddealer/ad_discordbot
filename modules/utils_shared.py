@@ -24,7 +24,7 @@ class SharedPath:
     def init_shared_paths(root, dir, reason) -> str:
         path = os.path.join(root, dir)
         if not os.path.exists(path):
-            log.info(f'Creating "/{dir}/" for {reason}.')
+            log.info(f'Creating "{path}" for {reason}.')
         os.makedirs(path, exist_ok=True)
         return path
 
