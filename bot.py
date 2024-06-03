@@ -4986,19 +4986,10 @@ import atexit
 import signal
 
 
-async def async_exit_handler():
-    log.info('Running cleanup tasks:')
-    await bot_history.save_all()
-    log.info('Done')
-    await asyncio.sleep(1)
-
-
 def exit_handler():
-    try:
-        asyncio.run(async_exit_handler())
-    except Exception as e:
-        print(traceback.format_exc())
-        log.error(f"Exception during async exit handling: {e}")
+    log.info('Running cleanup tasks:')
+    bot_history.save_all_sync()
+    log.info('Done')
 
 
 def kill_handler(signum, frame):
