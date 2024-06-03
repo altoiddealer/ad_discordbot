@@ -45,7 +45,7 @@ from ad_discordbot.modules.utils_misc import fix_dict, update_dict, sum_update_d
 from ad_discordbot.modules.utils_discord import ireply, send_long_message, SelectedListItem, SelectOptionsView, CtxInteraction, get_user_ctx_inter
 from ad_discordbot.modules.utils_files import load_file, merge_base, save_yaml_file
 from ad_discordbot.modules.utils_aspect_ratios import round_to_precision, res_to_model_fit, dims_from_ar, avg_from_dims, get_aspect_ratio_parts, calculate_aspect_ratio_sizes
-from ad_discordbot.modules.history import HistoryManager, History, HMessage
+from ad_discordbot.modules.history import HistoryManager, History, HMessage, cnf
 
 # Databases
 bot_active_settings = ActiveSettings()
@@ -1663,6 +1663,7 @@ async def on_message_task(ictx: CtxInteraction, source:str, text:str):
             await img_gen_task(source, text, params, ictx, tags)
 
     except Exception as e:
+        print(traceback.format_exc())
         log.error(f"An error occurred processing on_message request: {e}")
 
 async def hybrid_llm_img_gen(ictx: CtxInteraction, source:str, text:str, tags:dict, llm_payload:dict, params:dict):
@@ -4832,39 +4833,56 @@ class Settings:
 @dataclass_json
 @dataclass
 class CustomHistory(History):
+    manager: Optional['CustomHistoryManager'] = field(metadata=cnf(dont_save=True))
     fp_unique_id: Optional[str] = field(default=None)
+    fp_character: Optional[str] = field(default=None)
+    fp_mode: Optional[str] = field(default=None)
+    fp_internal_id: Optional[str] = field(default=None)
+    
+    _first_save_debug: bool = field(default=True, metadata=cnf(dont_save=True))
+    
     
     def __copy__(self):
         new = super().__copy__()
         new.fp_unique_id = self.fp_unique_id
+        new.fp_character = self.fp_character
+        new.fp_mode = self.fp_mode
+        new.fp_internal_id = self.fp_internal_id
         return new
+    
     
     def fresh(self):
         new = super().fresh()
-        new.fp_unique_id = None
+        new.fp_unique_id = None # only reset time to create a new file in the same dir.
         return new
     
-    def _internal_pre_save(self):
+    
+    def set_save_info(self, internal_id, character, mode):
+        self.fp_character = character
+        self.fp_mode = mode
+        self.fp_internal_id = internal_id
+        
         has_file_name = self.fp_unique_id
         if not self.fp_unique_id:
             self.fp_unique_id = datetime.now().strftime('%Y%m%d-%H-%M-%S')
-    
-        internal_id = self.id.split('_',1)[0] 
-        history_dir = self.manager.get_history_dir_template().format(id=internal_id)
-        os.makedirs(history_dir, exist_ok=True)
+
+        history_dir = self.manager.history_dir_template.format(character=self.fp_character, mode=self.fp_mode, id=self.fp_internal_id)
+        self.fp = os.path.join(history_dir, f'{self.fp_unique_id}.json')
         
-        internal_history_path = os.path.join(history_dir, f'{self.fp_unique_id}.json')
         if not has_file_name:
-            log.debug(f'Internal history file will be saved to: {internal_history_path}')
-            
-        return internal_history_path
+            log.debug(f'Internal history file will be saved to: {self.fp}')
     
-    async def save(self, fp=None, timeout=30, force=False):
+    
+    async def save(self, fp=None, timeout=None, force=False, force_tgwui=False):
+        timeout = timeout or self.manager.save_interval
         try:
-            internal_history_path = self._internal_pre_save()
-            status = await super().save(fp=internal_history_path, timeout=timeout, force=force)
+            status = await super().save(fp=fp, timeout=timeout, force=force)
+            self._save_for_tgwui(status, force=force_tgwui)
+            
             if not status: # don't bother saving if nothing changed
                 return False
+            
+            self._first_save_debug = False
             return status
 
         except Exception as e:
@@ -4872,18 +4890,28 @@ class CustomHistory(History):
             log.critical(e)
             
             
-    def save_sync(self, fp=None, force=False):
+    def save_sync(self, fp=None, force=False, force_tgwui=False):
         try:
-            internal_history_path = self._internal_pre_save()
-            status = super().save_sync(fp=internal_history_path, force=force)
+            status = super().save_sync(fp=fp, force=force)
+            self._save_for_tgwui(status, force=force_tgwui)
+            
             if not status: # don't bother saving if nothing changed
                 return False
+            
+            self._first_save_debug = False
             return status
 
         except Exception as e:
             print(traceback.format_exc())
             log.critical(e)
-    
+            
+            
+    def _save_for_tgwui(self, status, force=False):
+        if (status and self.manager.export_for_tgwui) or force:
+            save_history(self.render_to_tgwui(), f'{self.fp_unique_id}_{self.fp_internal_id}', self.fp_character, self.fp_mode)
+            if self._first_save_debug:
+                log.debug(f'''TGWUI chat history saved to "/logs/{self.fp_mode}/{self.fp_character}/{self.fp_unique_id}_{self.fp_internal_id}.json"''')
+        
     
     def last_exchange(self):
         if not self.empty:
@@ -4892,15 +4920,18 @@ class CustomHistory(History):
             return previous_message, last_message
         return None, None
     
-        
+
+@dataclass
 class CustomHistoryManager(HistoryManager):
-    def get_history_dir_template(self):
+    history_dir_template: str = field(default=os.path.join(shared_path.dir_history, '{id}', '{character}_{mode}'), init=False)
+    
+    
+    def get_history_dir_template(self, id_):
         state_dict = bot_settings.settings['llmstate']['state']
         mode = state_dict['mode']
         character = state_dict["character_menu"]
         
-        history_dir = os.path.join(shared_path.dir_history, '{id}', f'{character}_{mode}')
-        return history_dir
+        return self.history_dir_template.format(character=character, mode=mode, id=id_)
         
     
     def search_for_fp(self, id_:ChannelID):
@@ -4913,7 +4944,10 @@ class CustomHistoryManager(HistoryManager):
         # TODO users should not be digging in the internals, the name of the folders/files shouldn't matter
         # But in the case you do want to add the channel/guild name to the folder 
         # searching for folders could also be implemented.
-        history_dir = self.get_history_dir_template().format(id=internal_id)
+        
+        # TODO I don't really like this because it wont enable per channel characters easily later on.
+        # should add a **search_params to pass down to enable
+        history_dir = self.get_history_dir_template(internal_id)
         if not os.path.isdir(history_dir):
             return
         
@@ -4937,14 +4971,14 @@ class CustomHistoryManager(HistoryManager):
         if not self.per_channel_history:
             id_ = 'global'
         
-        history = super().get_history_for(f'{id_}_{character}_{mode}', fp=fp, search=search)
+        history:CustomHistory = super().get_history_for(f'{id_}_{character}_{mode}', fp=fp, search=search)
+        history.set_save_info(internal_id=id_, character=character, mode=mode)
         return history
 
         
 bot_behavior = Behavior() # needs to be loaded before settings
 bot_settings = Settings(bot_behavior=bot_behavior)
 bot_history = CustomHistoryManager(class_builder_history=CustomHistory, **config.get('textgenwebui', {}).get('chat_history', {}))
-
 
 
 import sys

@@ -40,11 +40,12 @@ textgenwebui:
   chat_history:
     limit_history: true                 # Recommended to keep as true. This will limit the stored history to roughly the current 'truncation_length' (more than enough retained). You may have performance issues if set to false.
     autosave_history: false             # Set this value to true to continuously save history. Use '/save_conversation' to manually save your conversation.
+    export_for_tgwui: true              # Defines if your history save can be later imported into standalone text-generation-webui.
     autoload_history: false             # Set to true if you want the character to load with the most recently saved chat history.
     change_char_history_method: new     # 'new' - start new history; 'keep' - retain history for next character (only applicable if 'autoload_history: true')
     greeting_or_history: history        # 'history' - Sends copy of most recent message exchange whenever history is loaded; 'greeting' - Only send character's greeting
     per_channel_history: true           # If true, each channel will have its own chat history. Log files will not be compatible with text-generation-webui unless processed by .bat in '/utils/'
-    save_interval: 30                   # In seconds, as these files could get really big, lets batch multiple replies into single commits instead.
+    save_interval: 300                  # In seconds, as these files could get really big, lets batch multiple replies into single commits instead.
 
   # Supported TTS Clients: 'alltalk_tts', 'coqui_tts', 'silero_tts', and 'elevenlabs_tts' have been tested. Other tts extensions may work.
   # REQUIRES: 'pip install pynacl' in textgen-webui venv for bot to join a voice channel

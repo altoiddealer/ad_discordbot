@@ -296,7 +296,7 @@ class History:
     manager: Optional['HistoryManager'] = field(metadata=cnf(dont_save=True))
     id: ChannelID
     
-    fp: Optional[str]                   = field(default=None) # TODO just set this on load when found correct file.
+    fp: Optional[str]                   = field(default=None, metadata=cnf(dont_save=True)) # TODO just set this on load when found correct file.
 
     _last: dict[UserID, HMessage]       = field(default_factory=dict, init=False, metadata=cnf(dont_save=True))
     _items: list[HMessage]              = field(default_factory=list, init=False, metadata=cnf(dont_save=True))
@@ -600,11 +600,12 @@ class History:
 class HistoryManager:
     limit_history: bool                     = field(default=True)
     autosave_history: bool                  = field(default=False)
+    export_for_tgwui: bool                  = field(default=True)
     autoload_history: bool                  = field(default=False)
     change_char_history_method: str         = field(default='new')
     greeting_or_history: str                = field(default='history')
     per_channel_history: bool               = field(default=True)
-    save_interval:int                       = field(default=30)
+    save_interval:int                       = field(default=300)
 
     _histories: dict[ChannelID, History]    = field(default_factory=dict)
     # uuid: str                               = field(default_factory=get_uuid_hex, init=False)
