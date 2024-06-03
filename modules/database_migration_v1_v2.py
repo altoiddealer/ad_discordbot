@@ -1,10 +1,10 @@
-from ad_discordbot.modules.logs import import_track, log, get_logger; import_track(__file__, fp=True)
+from modules.logs import import_track, log, get_logger; import_track(__file__, fp=True)
 log = get_logger(__name__)
 logging = log
 from datetime import datetime, timedelta
 import sqlite3
 import os
-from ad_discordbot.modules.utils_shared import shared_path
+from modules.utils_shared import shared_path
 
 class OldDatabase:
     def __init__(self):

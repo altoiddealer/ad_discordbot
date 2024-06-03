@@ -2,7 +2,7 @@
 # https://github.com/Artificiangel/llm-history-manager.git for future updates
 
 
-from ad_discordbot.modules.logs import import_track, log, get_logger; import_track(__file__, fp=True)
+from modules.logs import import_track, log, get_logger; import_track(__file__, fp=True)
 log = get_logger(__name__)
 logging = log
 import os
@@ -10,12 +10,12 @@ from dataclasses import dataclass, field
 from dataclasses_json import dataclass_json, config
 import time
 from typing import Optional
-from ad_discordbot.modules.typing import ChannelID, UserID, MessageID, CtxInteraction
+from modules.typing import ChannelID, UserID, MessageID, CtxInteraction
 from typing import Union
 import copy
 from uuid import uuid4
 import json
-from ad_discordbot.modules.utils_discord import get_message_ctx_inter, get_user_ctx_inter
+from modules.utils_discord import get_message_ctx_inter, get_user_ctx_inter
 import asyncio
 from typing import (
     Any,
@@ -605,7 +605,6 @@ class HistoryManager:
     change_char_history_method: str         = field(default='new')
     greeting_or_history: str                = field(default='history')
     per_channel_history: bool               = field(default=True)
-    save_interval:int                       = field(default=300)
 
     _histories: dict[ChannelID, History]    = field(default_factory=dict)
     # uuid: str                               = field(default_factory=get_uuid_hex, init=False)

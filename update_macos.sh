@@ -17,9 +17,6 @@ fi
 # Set the working directory
 WORKING_DIR=$(pwd)
 
-# Print the working directory for debugging
-echo "Current working directory: $WORKING_DIR"
-
 # Step 3: Execute the existing Miniconda activation script
 
 cd "$(dirname "${BASH_SOURCE[0]}")"

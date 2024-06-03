@@ -1,4 +1,4 @@
-from ad_discordbot.modules.logs import import_track, log, get_logger; import_track(__file__, fp=True)
+from modules.logs import import_track, log, get_logger; import_track(__file__, fp=True)
 logging = get_logger(__name__)
 
 # Adds missing keys/values

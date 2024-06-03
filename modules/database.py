@@ -1,12 +1,12 @@
-from ad_discordbot.modules.logs import import_track, log, get_logger; import_track(__file__, fp=True)
+from modules.logs import import_track, log, get_logger; import_track(__file__, fp=True)
 log = get_logger(__name__)
 logging = log
-from ad_discordbot.modules.utils_files import load_file, save_yaml_file
+from modules.utils_files import load_file, save_yaml_file
 import time
 
-from ad_discordbot.modules.database_migration_v1_v2 import OldDatabase
-from ad_discordbot.modules.utils_shared import shared_path
-from ad_discordbot.modules.utils_files import make_fp_unique
+from modules.database_migration_v1_v2 import OldDatabase
+from modules.utils_shared import shared_path
+from modules.utils_files import make_fp_unique
 import os
 
 class BaseFileMemory:

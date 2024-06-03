@@ -1,4 +1,4 @@
-from ad_discordbot.modules.logs import import_track, log, get_logger; import_track(__file__, fp=True)
+from modules.logs import import_track, log, get_logger; import_track(__file__, fp=True)
 import asyncio
 import os
 import re
@@ -28,7 +28,8 @@ class SharedPath:
         os.makedirs(path, exist_ok=True)
         return path
 
-    dir_root = 'ad_discordbot'
+    dir_tgwui = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))) # Up two directory levels from here
+    dir_root = os.path.join(dir_tgwui, 'ad_discordbot')
 
     # Internal
     dir_internal = init_shared_paths(dir_root, 'internal', 'persistent settings not intended to be modified by users')
@@ -49,7 +50,7 @@ class SharedPath:
     tags = init_user_config_files(dir_root, templates, 'dict_tags.yaml')
 
     # Wildcards
-    dir_wildcards = init_shared_paths(dir_root, 'wildcards', "wildcard files for Dynamic Prompting feature. Refer to the bot's wiki on GitHub for more information")
+    dir_wildcards = init_shared_paths(dir_root, 'wildcards', "wildcard files for Dynamic Prompting feature. Refer to the bot's wiki on GitHub for more information.")
 
 shared_path = SharedPath()
 

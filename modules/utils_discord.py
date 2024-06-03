@@ -1,15 +1,15 @@
-from ad_discordbot.modules.logs import import_track, log, get_logger; import_track(__file__, fp=True)
+from modules.logs import import_track, log, get_logger; import_track(__file__, fp=True)
 log = get_logger(__name__)
 logging = log
-from ad_discordbot.modules.utils_shared import task_semaphore
+from modules.utils_shared import task_semaphore
 import discord
 from discord.ext import commands
 from typing import Union
-from ad_discordbot.modules.typing import CtxInteraction
+from modules.typing import CtxInteraction
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from ad_discordbot.modules.history import HistoryManager, History, HMessage
+    from modules.history import HistoryManager, History, HMessage
 
 # Send message response to user's interaction command
 async def ireply(ictx: 'CtxInteraction', process):

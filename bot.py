@@ -1,4 +1,4 @@
-from ad_discordbot.modules.logs import import_track, log, get_logger, log_file_handler, log_file_formatter; import_track(__file__, fp=True)
+from modules.logs import import_track, log, get_logger, log_file_handler, log_file_formatter; import_track(__file__, fp=True)
 log = get_logger(__name__)
 logging = log
 import logging as _logging
@@ -33,19 +33,19 @@ import copy
 from shutil import copyfile
 import sys
 import traceback
-from ad_discordbot.modules.typing import ChannelID, UserID, MessageID, CtxInteraction
+from modules.typing import ChannelID, UserID, MessageID, CtxInteraction
 
 from typing import Union
 
 sys.path.append("ad_discordbot")
 
-from ad_discordbot.modules.database import Database, ActiveSettings, Config, StarBoard, Statistics
-from ad_discordbot.modules.utils_shared import task_semaphore, shared_path, patterns
-from ad_discordbot.modules.utils_misc import fix_dict, update_dict, sum_update_dict, update_dict_matched_keys, format_time
-from ad_discordbot.modules.utils_discord import ireply, send_long_message, SelectedListItem, SelectOptionsView, CtxInteraction, get_user_ctx_inter
-from ad_discordbot.modules.utils_files import load_file, merge_base, save_yaml_file
-from ad_discordbot.modules.utils_aspect_ratios import round_to_precision, res_to_model_fit, dims_from_ar, avg_from_dims, get_aspect_ratio_parts, calculate_aspect_ratio_sizes
-from ad_discordbot.modules.history import HistoryManager, History, HMessage, cnf
+from modules.database import Database, ActiveSettings, Config, StarBoard, Statistics
+from modules.utils_shared import task_semaphore, shared_path, patterns
+from modules.utils_misc import fix_dict, update_dict, sum_update_dict, update_dict_matched_keys, format_time
+from modules.utils_discord import ireply, send_long_message, SelectedListItem, SelectOptionsView, CtxInteraction, get_user_ctx_inter
+from modules.utils_files import load_file, merge_base, save_yaml_file
+from modules.utils_aspect_ratios import round_to_precision, res_to_model_fit, dims_from_ar, avg_from_dims, get_aspect_ratio_parts, calculate_aspect_ratio_sizes
+from modules.history import HistoryManager, History, HMessage, cnf
 
 # Databases
 bot_active_settings = ActiveSettings()
@@ -275,6 +275,7 @@ else:
     textgenwebui_enabled = config['textgenwebui'].get('enabled', True)
 
 if textgenwebui_enabled:
+    sys.path.append(shared_path.dir_tgwui)
     import modules.extensions as extensions_module
     from modules.chat import chatbot_wrapper, load_character, save_history, get_history_file_path, find_all_histories
     from modules import shared
@@ -289,14 +290,16 @@ if textgenwebui_enabled:
 def init_textgenwebui_settings():
     # Loading custom settings
     settings_file = None
+    tgwui_settings_json = os.path.join(shared_path.dir_tgwui, "settings.json")
+    tgwui_settings_yaml = os.path.join(shared_path.dir_tgwui, "settings.yaml")
     # Check if a settings file is provided and exists
     if shared.args.settings is not None and Path(shared.args.settings).exists():
         settings_file = Path(shared.args.settings)
     # Check if settings file exists
-    elif Path("settings.json").exists():
-        settings_file = Path("settings.json")
-    elif Path("settings.yaml").exists():
-        settings_file = Path("settings.yaml")
+    elif Path(tgwui_settings_json).exists():
+        settings_file = Path(tgwui_settings_json)
+    elif Path(tgwui_settings_yaml).exists():
+        settings_file = Path(tgwui_settings_yaml)
     if settings_file is not None:
         log.info(f"Loading text-generation-webui settings from {settings_file}...")
         file_contents = open(settings_file, 'r', encoding='utf-8').read()
@@ -1455,7 +1458,7 @@ async def init_llm_payload(ictx: CtxInteraction, user_name:str, text:str) -> dic
     return llm_payload
 
 def get_wildcard_value(matched_text, dir_path=None):
-    dir_path = dir_path or os.path.join('ad_discordbot', 'wildcards')
+    dir_path = dir_path or shared_path.dir_wildcards
     selected_option = None
     search_phrase = matched_text[2:] if matched_text.startswith('##') else matched_text
     search_path = f"{search_phrase}.txt"
@@ -1493,7 +1496,7 @@ def get_wildcard_value(matched_text, dir_path=None):
             # Get the last component of the nested directory path
             search_phrase = os.path.split(nested_dir)[-1]
             # Remove the last component from the nested directory path
-            nested_dir = os.path.join('ad_discordbot', 'wildcards', os.path.dirname(nested_dir))
+            nested_dir = os.path.join(shared_path.dir_wildcards, os.path.dirname(nested_dir))
             # Recursively check filenames in the nested directory
             selected_option = get_wildcard_value(search_phrase, nested_dir)
     return selected_option
@@ -1546,8 +1549,7 @@ def get_braces_value(matched_text):
         wildcard_match = patterns.wildcard.search(option)
         if wildcard_match:
             wildcard_phrase = wildcard_match.group()
-            dir_path = os.path.join('ad_discordbot', 'wildcards')
-            wildcard_value = get_wildcard_value(matched_text=wildcard_phrase, dir_path=dir_path)
+            wildcard_value = get_wildcard_value(matched_text=wildcard_phrase, dir_path=shared_path.dir_wildcards)
             if wildcard_value:
                 chosen_options[index] = wildcard_value
     chosen_options = [option for option in chosen_options if option is not None]
@@ -2566,11 +2568,11 @@ async def process_image_gen(img_payload:dict, channel, params:dict):
         bot_will_do = params.get('bot_will_do', {})
         img_censoring = params.get('img_censoring', 0)
         endpoint = params.get('endpoint', '/sdapi/v1/txt2img')
-        default_save_path = os.path.join('ad_discordbot', 'sd_outputs')
+        default_save_path = os.path.join(shared_path.dir_root, 'sd_outputs')
         sd_output_dir = params.get('sd_output_dir', default_save_path)
         # Ensure the necessary directories exist
         os.makedirs(sd_output_dir, exist_ok=True)
-        temp_dir = os.path.join('ad_discordbot', 'user_images', '__temp')
+        temp_dir = os.path.join(shared_path.dir_root, 'user_images', '__temp')
         os.makedirs(temp_dir, exist_ok=True)
         # Generate images, save locally
         images = await sd_img_gen(channel, temp_dir, img_payload, endpoint)
@@ -2858,7 +2860,7 @@ def get_image_tag_args(extension, value, key=None, set_dir=None):
     image_file_path = ''
     method = ''
     try:
-        home_path = os.path.join('ad_discordbot', 'user_images')
+        home_path = os.path.join(shared_path.dir_root, 'user_images')
         full_path = os.path.join(home_path, value)
         # If value contains valid image extension
         if any(ext in value for ext in (".txt", ".png", ".jpg")): # extension included in value
@@ -3877,7 +3879,7 @@ if textgenwebui_enabled:
 async def load_character_data(char_name):
     char_data = None
     for ext in ['.yaml', '.yml', '.json']:
-        character_file = os.path.join("characters", f"{char_name}{ext}")
+        character_file = os.path.join(shared_path.dir_tgwui, "characters", f"{char_name}{ext}")
         if os.path.exists(character_file):
             char_data = load_file(character_file)
             if char_data is None:
@@ -3978,8 +3980,7 @@ async def update_client_profile(char_name, channel=None):
         elif all(guild.get_member(client.user.id).display_name == char_name for guild in client.guilds):
             return
         avatar = None
-        folder = 'characters'
-        picture_path = os.path.join(folder, f'{char_name}.png')
+        picture_path = os.path.join(shared_path.dir_tgwui, 'characters', f'{char_name}.png')
         if os.path.exists(picture_path):
             with open(picture_path, 'rb') as f:
                 avatar = f.read()
@@ -4031,8 +4032,9 @@ async def process_character(ctx, selected_character_value):
 def get_all_characters():
     all_characters = []
     filtered_characters = []
+    characters_path = os.path.join(shared_path.dir_tgwui, "characters")
     try:
-        for file in sorted(Path("characters").glob("*")):
+        for file in sorted(Path(characters_path).glob("*")):
             if file.suffix in [".json", ".yml", ".yaml"]:
                 character = {}
                 character['name'] = file.stem
@@ -4874,8 +4876,7 @@ class CustomHistory(History):
             log.debug(f'Internal history file will be saved to: {self.fp}')
     
     
-    async def save(self, fp=None, timeout=None, force=False, force_tgwui=False):
-        timeout = timeout or self.manager.save_interval
+    async def save(self, fp=None, timeout=300, force=False, force_tgwui=False):
         try:
             status = await super().save(fp=fp, timeout=timeout, force=force)
             self._save_for_tgwui(status, force=force_tgwui)
@@ -4983,7 +4984,6 @@ bot_history = CustomHistoryManager(class_builder_history=CustomHistory, **config
 
 
 import sys
-import atexit
 import signal
 
 
@@ -5010,7 +5010,6 @@ def on_window_close(ctrl_type):
     return False
 
 
-# atexit.register(exit_handler)
 if sys.platform == "win32":
     import win32api
     win32api.SetConsoleCtrlHandler(on_window_close, True)
@@ -5034,11 +5033,4 @@ discord.utils.setup_logging(
             level=_logging.INFO,
             root=False,
         )
-# try:
 asyncio.run(runner())
-# except KeyboardInterrupt:
-#     log.info(f'Received signal to terminate and event loop.')
-#     kill_handler()
-# finally:
-#     log.info(f'Loop closed')
-#     # The loop is closed now, can't use await anymore

@@ -1,4 +1,4 @@
-from ad_discordbot.modules.logs import import_track, log, get_logger; import_track(__file__, fp=True)
+from modules.logs import import_track, log, get_logger; import_track(__file__, fp=True)
 from math import sqrt
 log = get_logger(__name__)
 logging = log

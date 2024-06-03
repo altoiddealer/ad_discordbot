@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+
+config.yaml
+dict_base_settings.yaml
+dict_cmdoptions.yaml
+dict_imgmodels.yaml
+dict_tags.yaml
+CMD_FLAGS.txt
+
+internal/database.yaml
+internal/history/*
+sd_outputs/*
