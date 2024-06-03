@@ -4985,16 +4985,51 @@ import sys
 import atexit
 import signal
 
+
+async def async_exit_handler():
+    log.info('Running cleanup tasks:')
+    await bot_history.save_all()
+    log.info('Done')
+    await asyncio.sleep(1)
+
+
 def exit_handler():
-    bot_history.save_all_sync()
-    log.info('Saved all histories')
+    try:
+        asyncio.run(async_exit_handler())
+    except Exception as e:
+        print(traceback.format_exc())
+        log.error(f"Exception during async exit handling: {e}")
 
-def kill_handler(*args):
+
+def kill_handler(signum, frame):
+    log.debug(f"Signal {signum} received, initiating shutdown...")
+    exit_handler()
     sys.exit(0)
+    
+    
+def kill_handler_windows(signum, frame):
+    log.debug(f"Signal {signum} received, initiating shutdown...")
+    sys.exit(0)
+    
+    
+def on_window_close(ctrl_type):
+    log.debug(f"Console window is closing, (signal {ctrl_type})")
+    exit_handler()
+    return False
 
-atexit.register(exit_handler)
-signal.signal(signal.SIGINT, kill_handler)
-signal.signal(signal.SIGTERM, kill_handler)
+
+# atexit.register(exit_handler)
+if sys.platform == "win32":
+    import win32api
+    win32api.SetConsoleCtrlHandler(on_window_close, True)
+    
+    signal.signal(signal.SIGINT, kill_handler_windows)
+    signal.signal(signal.SIGTERM, kill_handler_windows)
+    
+else:
+    signal.signal(signal.SIGINT, kill_handler)
+    signal.signal(signal.SIGTERM, kill_handler)
+
 
 # Manually start the bot so we can catch keyboard interupts
 async def runner():
@@ -5011,7 +5046,7 @@ discord.utils.setup_logging(
 asyncio.run(runner())
 # except KeyboardInterrupt:
 #     log.info(f'Received signal to terminate and event loop.')
-
+#     kill_handler()
 # finally:
 #     log.info(f'Loop closed')
 #     # The loop is closed now, can't use await anymore
