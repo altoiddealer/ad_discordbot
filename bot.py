@@ -518,7 +518,7 @@ async def auto_update_imgmodel_task(mode, duration):
             async with task_semaphore:
                 # offload to ai_gen queue
                 params = {'imgmodel': selected_imgmodel}
-                await change_imgmodel_task('Automatically', channel=None, params=params, i=None)
+                await change_imgmodel_task('Automatically', channel=None, params=params, ictx=None)
                 logging.info("Automatically updated imgmodel settings")
 
         except Exception as e:
@@ -654,7 +654,7 @@ async def on_ready():
             if bot_history.autoload_history and (bot_history.change_char_history_method == 'keep'):
                 bot_history.load_bot_history()
             else:
-                await bot_history.reset_session_history()
+                bot_history.reset_session_history()
         # Create background task processing queue
         client.loop.create_task(process_tasks_in_background())
         # Start background task to sync the discord client tree
@@ -977,30 +977,31 @@ async def process_llm_payload_tags(ictx: CtxInteraction, llm_payload:dict, llm_p
         user_name = get_user_ctx_inter(ictx).display_name
         char_params = {}
         flow = mods.get('flow', None)
-        save_to_history = mods.get('save_to_history', None)
         load_history = mods.get('load_history', None)
         param_variances = mods.get('param_variances', {})
         state = mods.get('state', {})
+        prefix_context = mods.get('prefix_context', None)
+        suffix_context = mods.get('suffix_context', None)
         change_character = mods.get('change_character', None)
         swap_character = mods.get('swap_character', None)
         change_llmmodel = mods.get('change_llmmodel', None)
         swap_llmmodel = mods.get('swap_llmmodel', None)
-        send_user_image = mods.get('send_user_image', [])
         # Flow handling
         if flow is not None and not flow_event.is_set():
             await build_flow_queue(flow)
         # History handling
-        if save_to_history is not None:
-            llm_payload['save_to_history'] = save_to_history # Save this interaction to history (True/False)
         if load_history is not None:
+            chankey = str(ictx.channel.id)
             if load_history < 0:
-                llm_payload['state']['history'] = {'internal': [], 'visible': []} # No history
+                llm_payload['state']['history']['internal'] = []
+                llm_payload['state']['history']['visible'] = []
                 logging.info("[TAGS] History is being ignored")
             elif load_history > 0:
+                i_list, v_list = bot_history.get_history_iv_lists_keys(chankey)
                 # Calculate the number of items to retain (up to the length of session_history)
-                num_to_retain = min(load_history, len(bot_history.session_history["internal"]))
-                llm_payload['state']['history']['internal'] = bot_history.session_history['internal'][-num_to_retain:]
-                llm_payload['state']['history']['visible'] = bot_history.session_history['visible'][-num_to_retain:]
+                num_to_retain = min(load_history, len(i_list))
+                llm_payload['state']['history']['internal'] = i_list[-num_to_retain:]
+                llm_payload['state']['history']['visible'] = v_list[-num_to_retain:]
                 logging.info(f'[TAGS] History is being limited to previous {load_history} exchanges')
         if param_variances:
             processed_params = process_param_variances(param_variances)
@@ -1009,6 +1010,17 @@ async def process_llm_payload_tags(ictx: CtxInteraction, llm_payload:dict, llm_p
         if state:
             update_dict(llm_payload['state'], state)
             logging.info(f'[TAGS] LLM State was modified')
+        # Context insertions
+        if prefix_context:
+            prefix_str = "\n".join(str(item) for item in prefix_context)
+            if prefix_str:
+                llm_payload['state']['context'] = f"{prefix_str}\n{llm_payload['state']['context']}"
+                logging.info(f'[TAGS] Prefixed context with text.')
+        if suffix_context:
+            suffix_str = "\n".join(str(item) for item in suffix_context)
+            if suffix_str:
+                llm_payload['state']['context'] = f"{llm_payload['state']['context']}\n{suffix_str}"
+                logging.info(f'[TAGS] Suffixed context with text.')
         # Character handling
         char_params = change_character or swap_character or {} # 'character_change' will trump 'character_swap'
         if char_params:
@@ -1040,16 +1052,12 @@ async def process_llm_payload_tags(ictx: CtxInteraction, llm_payload:dict, llm_p
                 else:
                     logging.info(f'[TAGS] {verb} LLM Model: {model_change}')
                     params['llmmodel'] = {'llmmodel_name': params, 'mode': mode, 'verb': verb}
-        # Send User Image handling
-        if send_user_image:
-            params['send_user_image'] = send_user_image
-            logging.info(f"[TAGS] Sending user image{'s' if len(send_user_image) > 1 else ''}")
         return llm_payload, llm_prompt, params
     except Exception as e:
         logging.error(f"Error processing LLM tags: {e}")
         return llm_payload, llm_prompt, {}
 
-def collect_llm_tag_values(tags):
+def collect_llm_tag_values(tags, params):
     llm_payload_mods = {}
     formatting = {}
     try:
@@ -1057,8 +1065,8 @@ def collect_llm_tag_values(tags):
             # Values that will only apply from the first tag matches
             if 'flow' in tag and not llm_payload_mods.get('flow'):
                 llm_payload_mods['flow'] = tag.pop('flow')
-            if 'save_history' in tag and not llm_payload_mods.get('save_to_history'):
-                llm_payload_mods['save_to_history'] = bool(tag.pop('save_history'))
+            if 'save_history' in tag and not params.get('save_to_history'):
+                params['save_to_history'] = bool(tag.pop('save_history'))
             if 'load_history' in tag and not llm_payload_mods.get('load_history'):
                 llm_payload_mods['load_history'] = int(tag.pop('load_history'))
                 
@@ -1075,12 +1083,19 @@ def collect_llm_tag_values(tags):
                 llm_payload_mods['swap_llmmodel'] = str(tag.pop('swap_llmmodel'))
                 
             # Values that may apply repeatedly
+            if 'prefix_context' in tag:
+                llm_payload_mods.setdefault('prefix_context', [])
+                llm_payload_mods['prefix_context'].append(tag.pop('prefix_context'))
+            if 'suffix_context' in tag:
+                llm_payload_mods.setdefault('suffix_context', [])
+                llm_payload_mods['suffix_context'].append(tag.pop('suffix_context'))
             if 'send_user_image' in tag:
                 user_image_file = tag.pop('send_user_image')
                 user_image_args = get_image_tag_args('User image', str(user_image_file), key=None, set_dir=None)
                 user_image = discord.File(user_image_args)
-                llm_payload_mods.setdefault('send_user_image', [])
-                llm_payload_mods['send_user_image'].append(user_image)
+                params.setdefault('send_user_image', [])
+                params['send_user_image'].append(user_image)
+                logging.info(f'[TAGS] Sending user image.')
             if 'format_prompt' in tag:
                 formatting.setdefault('format_prompt', [])
                 formatting['format_prompt'].append(str(tag.pop('format_prompt')))
@@ -1104,10 +1119,9 @@ def collect_llm_tag_values(tags):
                     llm_payload_mods['state'].update(state) # Allow multiple to accumulate.
                 except:
                     logging.warning("Error processing a matched 'state' tag; ensure it is a dictionary.")
-        return llm_payload_mods, formatting
     except Exception as e:
         logging.error(f"Error collecting LLM tag values: {e}")
-        return llm_payload_mods, formatting
+    return llm_payload_mods, formatting, params
 
 def process_tag_insertions(prompt:str, tags:dict):
     try:
@@ -1415,8 +1429,7 @@ async def init_llm_payload(ictx: CtxInteraction, user_name:str, text:str) -> dic
     llm_payload['state']['name2_instruct'] = name2
     llm_payload['state']['character_menu'] = name2
     llm_payload['state']['context'] = context
-    llm_payload['save_to_history'] = True
-    ictx_history = await bot_history.get_channel_history(ictx)
+    ictx_history = bot_history.get_channel_history(ictx)
     llm_payload['state']['history'] = ictx_history
     return llm_payload
 
@@ -1616,7 +1629,7 @@ async def on_message_task(ictx: CtxInteraction, source:str, text:str):
             # apply tags to prompt
             llm_prompt, tags = process_tag_insertions(llm_prompt, tags)
             # collect matched tag values
-            llm_payload_mods, formatting = collect_llm_tag_values(tags)
+            llm_payload_mods, formatting, params = collect_llm_tag_values(tags, params)
             # apply tags relevant to LLM payload
             llm_payload, llm_prompt, params = await process_llm_payload_tags(ictx, llm_payload, llm_prompt, llm_payload_mods, params)
             # apply formatting tags to LLM prompt
@@ -1676,7 +1689,7 @@ async def hybrid_llm_img_gen(ictx: CtxInteraction, source:str, text:str, tags:di
             if (not bot_will_do['should_send_text']) or (voice_client and (voice_client != ictx.guild.voice_client) and int(tts_settings.get('play_mode', 0)) == 0):
                 tts_sw = await toggle_tts(toggle='off')
             # generate text with text-gen-webui
-            last_resp, tts_resp = await llm_gen(llm_payload, ictx, tts_sw)
+            last_resp, tts_resp = await llm_gen(llm_payload, source, params, ictx, tts_sw)
             # If no text was generated, treat user input at the response
             if last_resp is not None:
                 logging.info("reply sent: \"" + user_name + ": {'text': '" + llm_payload["text"] + "', 'response': '" + last_resp + "'}\"")
@@ -1800,7 +1813,7 @@ async def toggle_tts(toggle='on', tts_sw=None):
     return None
 
 # Send LLM Payload - get response
-async def llm_gen(llm_payload:dict, i=None, tts_sw=None):
+async def llm_gen(llm_payload:dict, source:str, params:dict={}, i=None, tts_sw=None):
     try:
         if shared.model_name == 'None':
             return None, None
@@ -1832,9 +1845,9 @@ async def llm_gen(llm_payload:dict, i=None, tts_sw=None):
         # Offload the synchronous task to a separate thread using run_in_executor
         last_resp, tts_resp = await loop.run_in_executor(None, process_responses)
 
-        if last_resp:
+        if last_resp and source != 'speak':
             update_llm_gen_statistics(last_resp) # Update statistics
-            save_to_history = llm_payload.get('save_to_history', True)
+            save_to_history = params.get('save_to_history', True)
             bot_history.manage_history(prompt=llm_payload['text'], reply=last_resp, save_to_history=save_to_history, chankey=str(i.channel.id))
 
         # Toggle TTS back on if it was toggled off
@@ -1855,7 +1868,7 @@ async def cont_regen_task(inter:discord.Interaction, source:str, text:str, messa
         channel = inter.channel
         system_embed = None
         llm_payload = await init_llm_payload(inter, user_name, text)
-        llm_payload['save_to_history'] = False
+        params = {'save_to_history': False}
         if source == 'cont':
             cmd = 'Continuing'
             llm_payload['_continue'] = True
@@ -1877,7 +1890,7 @@ async def cont_regen_task(inter:discord.Interaction, source:str, text:str, messa
         if voice_client and (voice_client != inter.guild.voice_client) and int(tts_settings.get('play_mode', 0)) == 0:
             tts_sw = await toggle_tts(toggle='off')
         # generate text with text-gen-webui
-        last_resp, tts_resp = await llm_gen(llm_payload, inter, tts_sw)
+        last_resp, tts_resp = await llm_gen(llm_payload, source, params, inter, tts_sw)
         if system_embed:
             await system_embed.delete()
         if last_resp is None:
@@ -1919,10 +1932,10 @@ async def speak_task(ctx: commands.Context, text:str, params:dict):
         llm_payload['_continue'] = True
         llm_payload['state']['max_new_tokens'] = 1
         llm_payload['state']['history'] = {'internal': [[text, text]], 'visible': [[text, text]]}
-        llm_payload['save_to_history'] = False
+        params['save_to_history'] = False
         tts_args = params.get('tts_args', {})
         await update_extensions(tts_args)
-        _, tts_resp = await llm_gen(llm_payload)
+        _, tts_resp = await llm_gen(llm_payload, 'speak', params)
         if system_embed:
             await system_embed.delete()
         if tts_resp is None:
@@ -2142,9 +2155,9 @@ async def change_char_task(ictx: CtxInteraction, source:str, params:dict):
             bot_history.load_bot_history()
         else:
             if source == 'reset':
-                await bot_history.reset_session_history(ictx)
+                bot_history.reset_session_history(ictx)
             else:
-                await bot_history.reset_session_history()
+                bot_history.reset_session_history()
         if change_embed:
             await change_embed.delete()
             # Send embeds to announcement channels
@@ -2222,12 +2235,6 @@ async def format_next_flow(next_flow, user_name:str, text:str):
     flow_name = ''
     formatted_flow_tags = {}
     for key, value in next_flow.items():
-        # see if any tag values have dynamic formatting (user prompt, LLM reply, etc)
-        if isinstance(value, str):
-            formatted_value = format_prompt_with_recent_output(user_name, value)       # output will be a string
-            if formatted_value != value:                                        # if the value changed,
-                formatted_value = parse_tag_from_text_value(formatted_value)    # convert new string to correct value type
-            formatted_flow_tags[key] = formatted_value
         # get name for message embed
         if key == 'flow_step':
             flow_name = f": {value}"
@@ -2235,6 +2242,12 @@ async def format_next_flow(next_flow, user_name:str, text:str):
         elif key == 'format_prompt':
             formatting = {'format_prompt': [value]}
             text = process_tag_formatting(user_name, text, formatting)
+        # see if any tag values have dynamic formatting (user prompt, LLM reply, etc)
+        elif key != 'format_prompt' and isinstance(value, str):
+            formatted_value = format_prompt_with_recent_output(user_name, value)       # output will be a string
+            if formatted_value != value:                                        # if the value changed,
+                formatted_value = parse_tag_from_text_value(formatted_value)    # convert new string to correct value type
+            formatted_flow_tags[key] = formatted_value
         # apply wildcards
         text = await dynamic_prompting(user_name, text, i=None)
     next_flow.update(formatted_flow_tags) # commit updates
@@ -2490,7 +2503,7 @@ async def sd_img_gen(channel, temp_dir:str, img_payload:dict, endpoint:str):
 async def process_image_gen(img_payload:dict, channel, params:dict):
     try:
         bot_will_do = params.get('bot_will_do', {})
-        censor_mode = params.get('censor_mode', 0)
+        img_censoring = params.get('img_censoring', 0)
         endpoint = params.get('endpoint', '/sdapi/v1/txt2img')
         default_save_path = os.path.join('ad_discordbot', 'sd_outputs')
         sd_output_dir = params.get('sd_output_dir', default_save_path)
@@ -2505,7 +2518,7 @@ async def process_image_gen(img_payload:dict, channel, params:dict):
         # Send images to discord
         # If the censor mode is 1 (blur), prefix the image file with "SPOILER_"
         file_prefix = 'temp_img_'
-        if censor_mode == 1:
+        if img_censoring == 1:
             file_prefix = 'SPOILER_temp_img_'
         image_files = [discord.File(f'{temp_dir}/temp_img_{idx}.png', filename=f'{file_prefix}{idx}.png') for idx in range(len(images))]
         if bot_will_do['should_send_image']:
@@ -2848,10 +2861,7 @@ def get_image_tag_args(extension, value, key=None, set_dir=None):
 
 async def process_img_payload_tags(img_payload:dict, mods:dict, params:dict):
     try:
-        default_save_path = os.path.join('ad_discordbot', 'sd_outputs')
-        params['sd_output_dir'] = mods.pop('sd_output_dir', default_save_path)
         flow = mods.pop('flow', None)
-        img_censoring = mods.pop('img_censoring', None)
         change_imgmodel = mods.pop('change_imgmodel', None)
         swap_imgmodel = mods.pop('swap_imgmodel', None)
         payload = mods.pop('payload', None)
@@ -2863,16 +2873,11 @@ async def process_img_payload_tags(img_payload:dict, mods:dict, params:dict):
         reactor = mods.pop('reactor', {})
         img2img = mods.pop('img2img', {})
         img2img_mask = mods.pop('img2img_mask', {})
-        send_user_image = mods.pop('send_user_image', [])
         # Process the tag matches
-        if flow or img_censoring or change_imgmodel or swap_imgmodel or payload or aspect_ratio or param_variances or controlnet or forge_couple or layerdiffuse or reactor or img2img or img2img_mask or send_user_image:
+        if flow or change_imgmodel or swap_imgmodel or payload or aspect_ratio or param_variances or controlnet or forge_couple or layerdiffuse or reactor or img2img or img2img_mask:
             # Flow handling
             if flow is not None and not flow_event.is_set():
                 await build_flow_queue(flow)
-            # Img censoring handling
-            if img_censoring and img_censoring > 0:
-                params['censor_mode'] = int(img_censoring)
-                logging.info(f"[TAGS] Censoring: {'Image Blurred' if img_censoring == 1 else 'Generation Blocked'}")
             # Imgmodel handling
             new_imgmodel = change_imgmodel or swap_imgmodel or None
             if new_imgmodel:
@@ -2933,14 +2938,11 @@ async def process_img_payload_tags(img_payload:dict, mods:dict, params:dict):
                     img_payload['alwayson_scripts']['reactor']['args']['save_original'] = True
             # Img2Img handling
             if img2img:
-                img_payload['init_images'] = [img2img]
+                img_payload['init_images'] = [str(img2img)]
                 params['endpoint'] = '/sdapi/v1/img2img'
             # Inpaint Mask handling
             if img2img_mask:
                 img_payload['mask'] = str(img2img_mask)
-            # Send User Image handling
-            if send_user_image:
-                logging.info(f"[TAGS] Sending user image{'s' if len(send_user_image) > 1 else ''}")
         return img_payload, params
     except Exception as e:
         logging.error(f"Error processing Img tags: {e}")
@@ -3019,7 +3021,7 @@ def collect_img_extension_mods(mods):
             logging.error(f"Error collecting ReActor tag values: {e}")
     return mods
 
-def collect_img_tag_values(tags):
+def collect_img_tag_values(tags, params):
     img_payload_mods = {}
     payload_order_hack = {}
     controlnet_args = {}
@@ -3027,7 +3029,7 @@ def collect_img_tag_values(tags):
     layerdiffuse_args = {}
     reactor_args = {}
     extensions = config.get('sd', {}).get('extensions', {})
-    accept_only_first = ['sd_output_dir', 'flow', 'img_censoring', 'aspect_ratio', 'img2img', 'img2img_mask']
+    accept_only_first = ['flow', 'aspect_ratio', 'img2img', 'img2img_mask']
     try:
         for tag in tags['matches']:
             if isinstance(tag, tuple):
@@ -3036,6 +3038,11 @@ def collect_img_tag_values(tags):
                 # Accept only the first occurance
                 if key in accept_only_first and not img_payload_mods.get(key):
                     img_payload_mods[key] = value
+                elif key == 'sd_output_dir' and not params.get('sd_output_dir'):
+                    params['sd_output_dir'] = str(value)
+                elif key == 'img_censoring' and not params.get('img_censoring'):
+                    params['img_censoring'] = int(value)
+                    logging.info(f"[TAGS] Censoring: {'Image Blurred' if value == 1 else 'Generation Blocked'}")
                 # Accept only first 'change' or 'swap'
                 elif key == 'change_imgmodel' or key == 'swap_imgmodel' and not (img_payload_mods.get('change_imgmodel') or img_payload_mods.get('swap_imgmodel')):
                     img_payload_mods[key] = str(value)
@@ -3092,7 +3099,10 @@ def collect_img_tag_values(tags):
                 elif key == 'send_user_image':
                     user_image_args = get_image_tag_args('User image', str(value), key=None, set_dir=None)
                     user_image = discord.File(user_image_args)
-                    img_payload_mods['send_user_image'].append(user_image)
+                    user_image = discord.File(user_image_args)
+                    params.setdefault('send_user_image', [])
+                    params['send_user_image'].append(user_image)
+                    logging.info(f'[TAGS] Sending user image.')
         # Add the collected SD WebUI extension args to the img_payload_mods dict
         if controlnet_args:
             img_payload_mods.setdefault('controlnet', [])
@@ -3112,10 +3122,9 @@ def collect_img_tag_values(tags):
             img_payload_mods['reactor'].update(reactor_args)
 
         img_payload_mods = collect_img_extension_mods(img_payload_mods)
-        return img_payload_mods
     except Exception as e:
         logging.error(f"Error collecting Img tag values: {e}")
-        return tags
+    return img_payload_mods, params
 
 def init_img_payload(img_prompt:str, neg_prompt:str) -> dict:
     try:
@@ -3166,7 +3175,7 @@ async def img_gen_task(source:str, img_prompt:str, params:dict, ictx:CtxInteract
     user_name = get_user_ctx_inter(ictx).display_name or None
     channel = ictx.channel
     bot_will_do = params.get('bot_will_do', {})
-    censor_mode = params.get('censor_mode', 0)
+    img_censoring = params.get('img_censoring', 0)
     try:
         check_key = bot_settings.settings['imgmodel'].get('override_settings', {}) or bot_settings.settings['imgmodel'].get('payload', {}).get('override_settings', {})
         if check_key.get('sd_model_checkpoint', '') == 'None': # Model currently unloaded
@@ -3180,12 +3189,12 @@ async def img_gen_task(source:str, img_prompt:str, params:dict, ictx:CtxInteract
         neg_prompt = params.get('neg_prompt', '')
         img_payload = init_img_payload(img_prompt, neg_prompt)
         # collect matched tag values
-        img_payload_mods = collect_img_tag_values(tags)
+        img_payload_mods, params = collect_img_tag_values(tags, params)
         send_user_image = img_payload_mods.pop('send_user_image', [])
         # Apply tags relevant to Img gen
         img_payload, params = await process_img_payload_tags(img_payload, img_payload_mods, params)
         # Check censoring
-        if censor_mode == 2:
+        if img_censoring == 2:
             if img_send_embed_info:
                 img_send_embed_info.title = "Image prompt was flagged as inappropriate."
                 img_send_embed_info.description = ""
@@ -3758,7 +3767,7 @@ if textgenwebui_enabled:
         try:
             shared.stop_everything = True
             await ireply(ctx, 'character reset') # send a response msg to the user
-            await bot_history.reset_session_history(ctx)
+            bot_history.reset_session_history(ctx)
 
             async with task_semaphore:
                 # offload to ai_gen queue
@@ -4873,28 +4882,42 @@ class History:
                     v_list.append([prompt, reply])
         #TODO return prompt
 
-    # Gets list keys to simplify code in further steps
-    def get_history_lists_keys(self, chankey:str=None):
-        # If per-channel history
+    def get_history_iv_lists_keys(self, chankey:str = None):
         if self.per_channel_history_enabled:
             # internal and visible lists
             i_list = self.session_history.setdefault(chankey, {}).setdefault('internal', [])
             v_list = self.session_history[chankey].setdefault('visible', [])
-            # user and llm lists
-            u_list = self.recent_messages.setdefault(chankey, {}).setdefault('user', [])
-            l_list = self.recent_messages[chankey].setdefault('llm', [])
-            # collected prompts lists
-            cp_list = self.collected_prompts.setdefault(chankey, [])
-        # If only one history
         else:
             # internal and visible lists
             i_list = self.session_history.setdefault('internal', [])
             v_list = self.session_history.setdefault('visible', [])
+        return i_list, v_list
+
+    def get_history_ul_lists_keys(self, chankey:str = None):
+        if self.per_channel_history_enabled:
+            # user and llm lists
+            u_list = self.recent_messages.setdefault(chankey, {}).setdefault('user', [])
+            l_list = self.recent_messages[chankey].setdefault('llm', [])
+        else:
             # user and llm lists
             u_list = self.recent_messages.setdefault('user', [])
             l_list = self.recent_messages.setdefault('llm', [])
+        return u_list, l_list
+
+    def get_history_cp_list_key(self, chankey:str = None):
+        if self.per_channel_history_enabled:
+            # collected prompts lists
+            cp_list = self.collected_prompts.setdefault(chankey, [])
+        else:
             # collected prompts lists
             cp_list = self.collected_prompts
+        return cp_list
+
+    def get_history_lists_keys(self, chankey:str = None):
+        i_list, v_list = self.get_history_iv_lists_keys(chankey)
+        u_list, l_list = self.get_history_ul_lists_keys(chankey)
+        cp_list = self.get_history_cp_list_key(chankey)
+
         return i_list, v_list, u_list, l_list, cp_list
 
     # Retain most recent elements or characters from user prompts and bot replies (mainly for Flows feature)
@@ -4929,46 +4952,58 @@ class History:
         if self.autosave_history:
             self.save_bot_history()
 
-    async def get_channel_history(self, ictx=None):
+    def set_history_key_defaults(self, ictx=None):
+        # If per-channel history
+        if self.per_channel_history_enabled and ictx:
+            chkey = str(ictx.channel.id)
+            self.session_history[chkey] = {
+                'guild_name': str(ictx.guild),
+                'channel_name': str(ictx.channel),
+                'internal': [],
+                'visible': []
+                }
+            self.collected_prompts[chkey] = []
+        # If only one history
+        else:
+            self.session_history = {'internal': [], 'visible': []}
+            self.collected_prompts = []
+
+    def get_channel_history(self, ictx=None):
         # If per-channel history
         if self.per_channel_history_enabled:
             chkey = str(ictx.channel.id)
             if not self.session_history.get(chkey):
-                self.session_history[chkey] = {
-                    'guild_name': str(ictx.guild),
-                    'channel_name': str(ictx.channel),
-                    'internal': [],
-                    'visible': []
-                    }
+                self.set_history_key_defaults(ictx)
             return self.session_history[chkey]
         # If only one history
         else:
             if not self.session_history:
-                self.session_history = {'internal': [], 'visible': []}
+                self.set_history_key_defaults()
             return self.session_history
 
-    async def reset_session_history(self, ictx=None):
+    def reset_session_history(self, ictx=None):
         # If per-channel history
         if self.per_channel_history_enabled:
             # if no interaction, all history will be reset
             if ictx:
+                chkey = str(ictx.channel.id)
                 guild_chan = f'{ictx.guild} - {ictx.channel}'
                 logging.info(f"Starting new conversation in: {guild_chan}.")
                 # If channel has history
-                if self.session_history.get(ictx.channel.id):
-                    self.session_history[ictx.channel.id]['internal'] = []
-                    self.session_history[ictx.channel.id]['visible'] = []
+                if self.session_history.get(chkey):
+                    self.set_history_key_defaults(ictx)
                 # if channel does not have history
                 else:
-                    await self.get_channel_history(ictx) # will initialize a fresh channel key
+                    self.get_channel_history(ictx) # will initialize channel keys
                 return
             else:
                 logging.info("Starting new conversation in all channels.")
         # If only one history
         else:
             logging.info("Starting new conversation.")
-        # empty dictionary = all history is reset
+        # Reset everything
         self.session_history = {}
+        self.collected_prompts = {}
 
 bot_behavior = Behavior() # needs to be loaded before settings
 bot_settings = Settings(bot_behavior=bot_behavior)

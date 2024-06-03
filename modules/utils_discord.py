@@ -171,7 +171,6 @@ CtxInteraction = Union[commands.Context, discord.Interaction, discord.Message]
 def get_user_ctx_inter(ictx: CtxInteraction) -> Union[discord.User, discord.Member]:
     # Found instances of "i" with \((self, )?i[^a-z_\)]
     if isinstance(ictx, discord.Interaction):
-        log.debug(f'Test for Kat (Reality): We reached interaction.user!')
         return ictx.user
     
     return ictx.author
