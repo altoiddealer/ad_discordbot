@@ -62,7 +62,7 @@ log.addHandler(console_handler)
 
 
 logging.getLogger('asyncio').setLevel(logging.WARNING)
-log_file_handler, log_file_formatter = add_file_handler(fp=os.path.join('ad_discordbot','discord.log'), mode='w')
+log_file_handler, log_file_formatter = add_file_handler(fp='discord.log', mode='w')
 
 
 ################

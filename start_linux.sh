@@ -1,13 +1,6 @@
 #!/bin/bash
 
-# Step 1: Perform git pull
-git pull
-if [ $? -ne 0 ]; then
-    echo "Failed to pull from the repository."
-    exit 1
-fi
-
-# Step 2: Go up one directory level
+# Go up one directory level
 cd ..
 if [ $? -ne 0 ]; then
     echo "Failed to navigate to the parent directory."
@@ -17,7 +10,7 @@ fi
 # Set the working directory
 WORKING_DIR=$(pwd)
 
-# Step 3: Execute the existing Miniconda activation script
+# Execute the existing Miniconda activation script
 
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
@@ -54,11 +47,35 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
-# Step 4: Install dependencies
-pip install -r ad_discordbot/requirements.txt
-if [ $? -ne 0 ]; then
-    echo "Failed to install dependencies."
+# Check if bot.py is in the root directory
+if [ -f "bot.py" ]; then
+    echo "bot.py found in the root directory."
+    echo "bot.py is now expected to be in the ad_discordbot directory."
+    echo "Please move bot.py to the ad_discordbot directory and try again."
     exit 1
 fi
 
-echo "ad_discordbot has been updated."
+# Read command flags from CMD_FLAGS.txt
+CMD_FLAGS_FILE="$WORKING_DIR/ad_discordbot/CMD_FLAGS.txt"
+if [ ! -f "$CMD_FLAGS_FILE" ]; then
+    echo "CMD_FLAGS.txt is not found."
+else
+    # Read each line from CMD_FLAGS.txt, skipping comments
+    CMD_FLAGS=$(grep -v '^#' "$CMD_FLAGS_FILE")
+    if [ -z "$CMD_FLAGS" ]; then
+        echo "CMD_FLAGS.txt is empty."
+    fi
+fi
+
+# Launch ad_discordbot with flags from CMD_FLAGS.txt
+BOT_SCRIPT="$WORKING_DIR/ad_discordbot/bot.py"
+if [ ! -f "$BOT_SCRIPT" ]; then
+    echo "bot.py not found in the ad_discordbot directory."
+    exit 1
+fi
+
+python "$BOT_SCRIPT" $CMD_FLAGS
+if [ $? -ne 0 ]; then
+    echo "bot.py execution failed"
+    exit 1
+fi

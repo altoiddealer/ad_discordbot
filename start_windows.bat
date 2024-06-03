@@ -1,14 +1,6 @@
 @echo off
 
-REM Step 1: Perform git pull
-git pull
-if %errorlevel% neq 0 (
-    echo Failed to pull from the repository.
-    pause
-    exit /b %errorlevel%
-)
-
-REM Step 2: Go up one directory level
+REM Go up one directory level
 cd ..
 if %errorlevel% neq 0 (
     echo Failed to navigate to the parent directory.
@@ -69,18 +61,40 @@ if %errorlevel% neq 0 (
     goto end
 )
 
-REM Step 4: Install dependencies
-pip install -r ad_discordbot\requirements.txt
-if %errorlevel% neq 0 (
-    echo Failed to install dependencies.
+REM Check if bot.py is in the root directory
+if exist "bot.py" (
+    echo bot.py found in the root directory.
+    echo bot.py is now expected to be in the ad_discordbot directory.
+    echo Please move bot.py to the ad_discordbot directory and try again.
     pause
     goto end
 )
 
-echo ad_discordbot has been updated.
+REM Read command flags from CMD_FLAGS.txt
+set "CMD_FLAGS="
+if not exist "ad_discordbot\CMD_FLAGS.txt" (
+    echo CMD_FLAGS.txt is not found.
+) else (
+    for /f "usebackq delims=" %%i in ("ad_discordbot\CMD_FLAGS.txt") do (
+        rem Check if the line is not empty and doesn't start with #
+        echo %%i | findstr /r "^#" > nul
+        if errorlevel 1 (
+            set "CMD_FLAGS=%%i"
+            goto flags_found
+        )
+    )
+    echo CMD_FLAGS.txt contains only comments or is empty.
+)
 
-REM Enter commands
-cmd /k "%*"
+:flags_found
+
+REM Launch ad_discordbot with flags from CMD_FLAGS.txt
+python ad_discordbot\bot.py %CMD_FLAGS%
+if %errorlevel% neq 0 (
+    echo bot.py execution failed
+    pause
+    goto end
+)
 
 :end
 pause
