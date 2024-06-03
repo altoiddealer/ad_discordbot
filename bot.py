@@ -4873,7 +4873,8 @@ class CustomHistory(History):
             log.debug(f'Internal history file will be saved to: {self.fp}')
     
     
-    async def save(self, fp=None, timeout=30, force=False, force_tgwui=False):
+    async def save(self, fp=None, timeout=None, force=False, force_tgwui=False):
+        timeout = timeout or self.manager.save_interval
         try:
             status = await super().save(fp=fp, timeout=timeout, force=force)
             self._save_for_tgwui(status, force=force_tgwui)

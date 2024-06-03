@@ -605,7 +605,7 @@ class HistoryManager:
     change_char_history_method: str         = field(default='new')
     greeting_or_history: str                = field(default='history')
     per_channel_history: bool               = field(default=True)
-    save_interval:int                       = field(default=30)
+    save_interval:int                       = field(default=300)
 
     _histories: dict[ChannelID, History]    = field(default_factory=dict)
     # uuid: str                               = field(default_factory=get_uuid_hex, init=False)
