@@ -24,6 +24,17 @@
 <details>
   <summary>click to expand</summary>
 
+   **06/04/2024:** Launchers! Updaters! New History Manager!
+
+   Shoutout to @Artificiangel who coded an **amazing** new History Manager. Great new features are coming!
+
+    - We now have launcher and updater scripts (...look familiar?)
+    - New CMD_FLAGS.txt to add your custom launch flags (...look familiar?)
+    - bot.py no longer has to be moved! Correct location is now in main 'ad_discordbot' folder
+    - New history manager is much more flexible and unlocks new possibilities
+
+  ---
+
    **05/28/2024:** Per-Channel History!
 
     - New setting 'per_channel_history' enables all channels to have their own chat history.
@@ -278,16 +289,9 @@
    git clone https://github.com/altoiddealer/ad_discordbot
    ```
 
-4. Move **bot.py** out of **/ad_discordbot/** -> into **/text-generation-webui/**
+4. **Run the updater** for your OS (**ex: update_windows.bat**) which will install requirements:
 
-   `/text-generation-webui/bot.py`
-
-   `/text-generation-webui/ad_discordbot/(remaining files)`
-
-5. **Run the .cmd file** in text-generation-webui directory (**ex: cmd_windows.bat**), and performing the following commands:
-   ```
-   pip install -r ad_discordbot\requirements.txt
-   ```
+5. **Run the launcher** for your OS (**ex: start_windows.bat**)
 
 6. **Enter your bot token (from Step 2) into the CMD window**
 
@@ -305,16 +309,16 @@
 
 ### Running the bot
 
-1. **Run the .cmd file** in text-generation-webui directory (**ex: cmd_windows.bat**)
+1. **Run the launcher** for your OS (**ex: start_windows.bat**)
+
+  - **Optionally** add launch flags to **CMD_FLAGS.txt**
+
+   **EXAMPLE CMD Flags:**
    ```
-   python bot.py (args)
+    --loader exllama --model airoboros-l2-13b-gpt4-2.0-GPTQ
    ```
 
-   **EXAMPLE LAUNCH COMMAND:**
-   ```
-   python bot.py --loader exllama --model airoboros-l2-13b-gpt4-2.0-GPTQ
-   ```
-2. Use [command](https://github.com/altoiddealer/ad_discordbot/wiki/commands) **/character** to choose a character.
+2. In Discord UI, use [command](https://github.com/altoiddealer/ad_discordbot/wiki/commands) **/character** to choose a character.
 
 ---
 
@@ -363,32 +367,21 @@
    pip install -r extensions\coqui_tts\requirements.txt
    ```
 
-5. Ensure that your bot has sufficient permissions to use the Voice channel and/or upload files (From your bot invite/Discord Developer portal, and your Discord server/channel settings)
+3. Ensure that your bot has sufficient permissions to use the Voice channel and/or upload files (From your bot invite/Discord Developer portal, and your Discord server/channel settings)
 
-6. Configure **config.yaml** in the section **discord** > **tts_settings**
+4. Configure **config.yaml** in the section **discord** > **tts_settings**
 
-7. If necessary, model file(s) should download on first launch of the bot.  If not, then first launch textgen-webui normally and enable the extension.
+5. If necessary, model file(s) should download on first launch of the bot.  If not, then first launch textgen-webui normally and enable the extension.
 
-8. **Your characters can have their own settings including voices!  See example character M1nty for usage**
+6. **Your characters can have their own settings including voices!  See example character M1nty for usage**
 
 ---
 
 ## Updating
 
-1. **Open a cmd window** in **/ad_discordbot/** and **git pull**
-   ```
-   git pull
-   ```
+1. **Run the launcher** for your OS (**ex: start_windows.bat**)
 
-2. **IF bot.py has changed:**
-
-   Copy and Replace **bot.py** -> into the directory **/text-generation-webui/** (*overwriting old version*)
-
-   `.../text-generation-webui/bot.py`
-
-   /text-generation-webui/ad_discordbot/(remaining files)
-
-3. **IF other files have changed ('config.yaml', 'dict_X.yaml', etc:**
+2. **IF settings template files have changed ('config.yaml', 'dict_X.yaml', etc:**
 
    **The bot should continue functioning, but you may miss out on new features until migrating new settings to your existing settings**
    - migrate the changes from the files in **`settings_templates`** into your settings,
