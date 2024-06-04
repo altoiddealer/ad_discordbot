@@ -1,11 +1,13 @@
-from ad_discordbot.modules.logs import import_track, log, get_logger; import_track(__file__, fp=True)
-logging = get_logger(__name__)
-from ad_discordbot.modules.utils_files import load_file, save_yaml_file
+from modules.logs import import_track, log, get_logger; import_track(__file__, fp=True)
+log = get_logger(__name__)
+logging = log
+from modules.utils_files import load_file, save_yaml_file
+from datetime import timedelta
 import time
 
-from ad_discordbot.modules.database_migration_v1_v2 import OldDatabase
-from ad_discordbot.modules.utils_shared import shared_path
-from ad_discordbot.modules.utils_files import make_fp_unique
+from modules.database_migration_v1_v2 import OldDatabase
+from modules.utils_shared import shared_path
+from modules.utils_files import make_fp_unique
 import os
 
 class BaseFileMemory:
@@ -108,10 +110,10 @@ class BaseFileMemory:
             return
 
         if os.path.isfile(self._fp):
-            logging.warning(f'File at "{self._fp}" already exists, renaming.')
+            log.warning(f'File at "{self._fp}" already exists, renaming.')
             os.rename(self._fp, make_fp_unique(self._fp))
 
-        logging.info(f'Migrating file to "{self._fp}"')
+        log.info(f'Migrating file to "{self._fp}"')
         os.rename(from_fp, self._fp)
         self._did_migration = True
 
@@ -124,11 +126,11 @@ class BaseFileMemory:
         if version == self._latest_version:
             return data
 
-        logging.debug(f'Upgrading "{self._fp}"')
+        log.debug(f'Upgrading "{self._fp}"')
 
         for upgrade in range(version, self._latest_version):
             upgrade += 1
-            logging.debug(f'Upgrading "{self._fp}" to v{upgrade}')
+            log.debug(f'Upgrading "{self._fp}" to v{upgrade}')
 
             func = f'_upgrade_to_v{upgrade}'
             if not hasattr(self, func):
@@ -178,7 +180,7 @@ class Database(BaseFileMemory):
     def load_defaults(self, data: dict):
         self.first_run = data.pop('first_run', True)
         self.last_character = data.pop('last_character', None)
-        self.last_change = data.pop('last_change', time.time())
+        self.last_change = data.pop('last_change', (time.time() - timedelta(minutes=10).seconds))
         self.last_user_msg = data.pop('last_user_msg', {})
         self.announce_channels = data.pop('announce_channels', [])
         self.main_channels = data.pop('main_channels', [])

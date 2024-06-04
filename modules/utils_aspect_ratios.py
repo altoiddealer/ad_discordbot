@@ -1,6 +1,7 @@
-from ad_discordbot.modules.logs import import_track, log, get_logger; import_track(__file__, fp=True)
+from modules.logs import import_track, log, get_logger; import_track(__file__, fp=True)
 from math import sqrt
-logging = get_logger(__name__)
+log = get_logger(__name__)
+logging = log
 
 def round_to_precision(val, prec):
     return round(val / prec) * prec
@@ -34,7 +35,7 @@ def get_aspect_ratio_parts(ratio):
         ratio_parts = tuple(map(int, ratio.replace(':', '/').split('/')))
         return ratio_parts[0], ratio_parts[1]
     except Exception as e:
-        logging.error(f'Could not split ratio "{ratio}" into parts: {e}')
+        log.error(f'Could not split ratio "{ratio}" into parts: {e}')
         return None, None
 
 def calculate_aspect_ratio_sizes(avg, aspect_ratios):
@@ -51,5 +52,5 @@ def calculate_aspect_ratio_sizes(avg, aspect_ratios):
             size_name = f"{w} x {h} ({ratio} {aspect_type})"
             ratio_options.append({'name': size_name, 'width': w, 'height': h})
     except Exception as e:
-        logging.error(f'Error while calculating aspect ratio sizes for "/image" cmd: {e}')
+        log.error(f'Error while calculating aspect ratio sizes for "/image" cmd: {e}')
     return ratio_options

@@ -1,9 +1,10 @@
-from ad_discordbot.modules.logs import import_track, log, get_logger; import_track(__file__, fp=True)
+from modules.logs import import_track, log, get_logger; import_track(__file__, fp=True)
 import asyncio
 import os
 import re
 from shutil import copyfile
-logging = get_logger(__name__)
+log = get_logger(__name__)
+logging = log
 
 task_semaphore = asyncio.Semaphore(1)
 
@@ -15,19 +16,20 @@ class SharedPath:
             src_path = os.path.join(src_dir, file)
             if os.path.exists(src_path):
                 copyfile(src_path, dest_path)
-                logging.info(f'Copied default user setting template "/{file}/" to "{root}".')
+                log.info(f'Copied default user setting template "/{file}/" to "{root}".')
             else:
-                logging.error(f'Required settings file "/{file}/" not found in "{root}" or "{src_dir}".')
+                log.error(f'Required settings file "/{file}/" not found in "{root}" or "{src_dir}".')
         return dest_path
 
     def init_shared_paths(root, dir, reason) -> str:
         path = os.path.join(root, dir)
         if not os.path.exists(path):
-            logging.info(f'Creating "/{dir}/" for {reason}.')
+            log.info(f'Creating "{path}" for {reason}.')
         os.makedirs(path, exist_ok=True)
         return path
 
-    dir_root = 'ad_discordbot'
+    dir_tgwui = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))) # Up two directory levels from here
+    dir_root = os.path.join(dir_tgwui, 'ad_discordbot')
 
     # Internal
     dir_internal = init_shared_paths(dir_root, 'internal', 'persistent settings not intended to be modified by users')
@@ -35,6 +37,8 @@ class SharedPath:
     starboard = os.path.join(dir_internal, 'starboard_messages.yaml')
     database = os.path.join(dir_internal, 'database.yaml')
     statistics = os.path.join(dir_internal, 'statistics.yaml')
+    
+    dir_history = init_shared_paths(dir_internal, 'history', 'storing internal history states')
 
     # Configs
     templates = os.path.join(dir_root, 'settings_templates')

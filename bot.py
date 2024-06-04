@@ -1,6 +1,11 @@
-from ad_discordbot.modules.logs import import_track, log, get_logger, log_file_handler, log_file_formatter; import_track(__file__, fp=True)
-logging = get_logger(__name__)
+from modules.logs import import_track, log, get_logger, log_file_handler, log_file_formatter; import_track(__file__, fp=True)
+log = get_logger(__name__)
+logging = log
+import logging as _logging
 from datetime import datetime, timedelta
+from dataclasses import dataclass, field
+from dataclasses_json import dataclass_json, config
+from typing import Optional
 from pathlib import Path
 import asyncio
 import random
@@ -28,17 +33,19 @@ import copy
 from shutil import copyfile
 import sys
 import traceback
+from modules.typing import ChannelID, UserID, MessageID, CtxInteraction
 
 from typing import Union
 
 sys.path.append("ad_discordbot")
 
-from ad_discordbot.modules.database import Database, ActiveSettings, Config, StarBoard, Statistics
-from ad_discordbot.modules.utils_shared import task_semaphore, shared_path, patterns
-from ad_discordbot.modules.utils_misc import fix_dict, update_dict, sum_update_dict, update_dict_matched_keys, format_time
-from ad_discordbot.modules.utils_discord import ireply, send_long_message, SelectedListItem, SelectOptionsView, CtxInteraction, get_user_ctx_inter
-from ad_discordbot.modules.utils_files import load_file, merge_base, save_yaml_file
-from ad_discordbot.modules.utils_aspect_ratios import round_to_precision, res_to_model_fit, dims_from_ar, avg_from_dims, get_aspect_ratio_parts, calculate_aspect_ratio_sizes
+from modules.database import Database, ActiveSettings, Config, StarBoard, Statistics
+from modules.utils_shared import task_semaphore, shared_path, patterns
+from modules.utils_misc import fix_dict, update_dict, sum_update_dict, update_dict_matched_keys, format_time
+from modules.utils_discord import ireply, send_long_message, SelectedListItem, SelectOptionsView, CtxInteraction, get_user_ctx_inter
+from modules.utils_files import load_file, merge_base, save_yaml_file
+from modules.utils_aspect_ratios import round_to_precision, res_to_model_fit, dims_from_ar, avg_from_dims, get_aspect_ratio_parts, calculate_aspect_ratio_sizes
+from modules.history import HistoryManager, History, HMessage, cnf
 
 # Databases
 bot_active_settings = ActiveSettings()
@@ -87,14 +94,14 @@ if not bot_token:
     bot_token = (input().strip())
     print()
     if bot_token == '0':
-        logging.error("Discord bot token is required. Exiting.")
+        log.error("Discord bot token is required. Exiting.")
         sys.exit(2)
     elif bot_token:
         config['discord']['TOKEN'] = bot_token
         config.save()
-        logging.info("Discord bot token saved to 'config.yaml'")
+        log.info("Discord bot token saved to 'config.yaml'")
     else:
-        logging.error("Discord bot token is required. Exiting.")
+        log.error("Discord bot token is required. Exiting.")
         sys.exit(2)
 
 os.environ['GRADIO_ANALYTICS_ENABLED'] = 'False'
@@ -176,20 +183,20 @@ if sd_enabled:
                            bot_settings.imgmodel.refresh_enabled_extensions()
                         return r
                     else:
-                        logging.error(f'{SD_URL}{endpoint} response: {response.status} "{response.reason}"')
+                        log.error(f'{SD_URL}{endpoint} response: {response.status} "{response.reason}"')
                         if retry and response.status in [408, 500]:
-                            logging.info("Retrying the request in 3 seconds...")
+                            log.info("Retrying the request in 3 seconds...")
                             await asyncio.sleep(3)
                             return await sd_api(endpoint, method, json, retry=False)
 
         except aiohttp.client.ClientConnectionError:
-            logging.warning(f'Failed to connect to: "{SD_URL}{endpoint}", offline?')
+            log.warning(f'Failed to connect to: "{SD_URL}{endpoint}", offline?')
 
         except Exception as e:
             if endpoint == '/sdapi/v1/server-restart' or endpoint == '/sdapi/v1/progress':
                 return None
             else:
-                logging.error(f'Error getting data from "{SD_URL}{endpoint}": {e}')
+                log.error(f'Error getting data from "{SD_URL}{endpoint}": {e}')
                 traceback.print_exc()
                 return e
 
@@ -208,7 +215,7 @@ if sd_enabled:
             else:
                 SD_CLIENT = 'SD WebUI'
         except Exception as e:
-            logging.error(f"Error getting SD sysinfo API: {e}")
+            log.error(f"Error getting SD sysinfo API: {e}")
             SD_CLIENT = None
         
     # Set Stable Diffusion client name to use in messages, warnings, etc
@@ -226,7 +233,7 @@ if sd_enabled:
                 system_embed_info.title = title
                 system_embed_info.description = f'Attempting to re-establish connection in 5 seconds (Attempt 1 of 10)'
                 system_embed = await ctx.send(embed=system_embed_info)
-            logging.info(title)
+            log.info(title)
             response = None
             retry = 1
             while response is None and retry < 11:
@@ -242,32 +249,33 @@ if sd_enabled:
                     system_embed_info.title = title
                     system_embed_info.description = f"Connection re-established after {retry} out of 10 attempts."
                     if system_embed: system_embed = await system_embed.edit(embed=system_embed_info)
-                logging.info(title)
+                log.info(title)
             else:
                 title = f"{SD_CLIENT} server unresponsive after Restarting."
                 if system_embed_info:
                     system_embed_info.title = title
                     system_embed_info.description = f"Connection was not re-established after 10 attempts."
                     if system_embed: system_embed = await system_embed.edit(embed=system_embed_info)
-                logging.error(title)
+                log.error(title)
         except Exception as e:
-            logging.error(f"Error resetting the {SD_CLIENT} server: {e}")
+            log.error(f"Error resetting the {SD_CLIENT} server: {e}")
 
     if SD_CLIENT:
-        logging.info(f"Initializing with SD WebUI enabled: '{SD_CLIENT}'")
+        log.info(f"Initializing with SD WebUI enabled: '{SD_CLIENT}'")
     else:
-        logging.info(f"SD WebUI currently offline. Image commands/features will function when client is active and accessible via API.'")
+        log.info(f"SD WebUI currently offline. Image commands/features will function when client is active and accessible via API.'")
 
 #################################################################
 ##################### TEXTGENWEBUI STARTUP ######################
 #################################################################
 if not 'textgenwebui' in config:
-    logging.warning("'config.yaml' is missing a new dictionary 'textgenwebui'. Enabling TGWUI by default.")
+    log.warning("'config.yaml' is missing a new dictionary 'textgenwebui'. Enabling TGWUI by default.")
     textgenwebui_enabled = True
 else:
     textgenwebui_enabled = config['textgenwebui'].get('enabled', True)
 
 if textgenwebui_enabled:
+    sys.path.append(shared_path.dir_tgwui)
     import modules.extensions as extensions_module
     from modules.chat import chatbot_wrapper, load_character, save_history, get_history_file_path, find_all_histories
     from modules import shared
@@ -282,16 +290,18 @@ if textgenwebui_enabled:
 def init_textgenwebui_settings():
     # Loading custom settings
     settings_file = None
+    tgwui_settings_json = os.path.join(shared_path.dir_tgwui, "settings.json")
+    tgwui_settings_yaml = os.path.join(shared_path.dir_tgwui, "settings.yaml")
     # Check if a settings file is provided and exists
     if shared.args.settings is not None and Path(shared.args.settings).exists():
         settings_file = Path(shared.args.settings)
     # Check if settings file exists
-    elif Path("settings.json").exists():
-        settings_file = Path("settings.json")
-    elif Path("settings.yaml").exists():
-        settings_file = Path("settings.yaml")
+    elif Path(tgwui_settings_json).exists():
+        settings_file = Path(tgwui_settings_json)
+    elif Path(tgwui_settings_yaml).exists():
+        settings_file = Path(tgwui_settings_yaml)
     if settings_file is not None:
-        logging.info(f"Loading text-generation-webui settings from {settings_file}...")
+        log.info(f"Loading text-generation-webui settings from {settings_file}...")
         file_contents = open(settings_file, 'r', encoding='utf-8').read()
         new_settings = json.loads(file_contents) if settings_file.suffix == "json" else yaml.safe_load(file_contents)
         shared.settings.update(new_settings)
@@ -308,21 +318,21 @@ def load_extensions(extensions, available_extensions):
             if name != 'api':
                 if not bot_database.was_warned(name):
                     bot_database.update_was_warned(name)
-                    logging.info(f'Loading the extension "{name}"')
+                    log.info(f'Loading the extension "{name}"')
             try:
                 try:
                     exec(f"import extensions.{name}.script")
                 except ModuleNotFoundError:
-                    logging.error(f"Could not import the requirements for '{name}'. Make sure to install the requirements for the extension.\n\nLinux / Mac:\n\npip install -r extensions/{name}/requirements.txt --upgrade\n\nWindows:\n\npip install -r extensions\\{name}\\requirements.txt --upgrade\n\nIf you used the one-click installer, paste the command above in the terminal window opened after launching the cmd script for your OS.")
+                    log.error(f"Could not import the requirements for '{name}'. Make sure to install the requirements for the extension.\n\nLinux / Mac:\n\npip install -r extensions/{name}/requirements.txt --upgrade\n\nWindows:\n\npip install -r extensions\\{name}\\requirements.txt --upgrade\n\nIf you used the one-click installer, paste the command above in the terminal window opened after launching the cmd script for your OS.")
                     raise
                 extension = getattr(extensions, name).script
                 extensions_module.apply_settings(extension, name)
                 if hasattr(extension, "setup"):
-                    logging.warning(f'Extension "{name}" is hasattr "setup". Skipping...')
+                    log.warning(f'Extension "{name}" is hasattr "setup". Skipping...')
                     continue
                 extensions_module.state[name] = [True, index]
             except:
-                logging.error(f'Failed to load the extension "{name}".')
+                log.error(f'Failed to load the extension "{name}".')
 
 tts_settings = {}
 try:
@@ -360,7 +370,7 @@ def init_textgenwebui_extensions():
     tts_lang_key = None
     if tts_client:
         if tts_client not in supported_tts_clients:
-            logging.warning(f'tts client "{tts_client}" is not yet confirmed to be work. The "/speak" command will not be registered. List of supported tts_clients: {supported_tts_clients}')
+            log.warning(f'tts client "{tts_client}" is not yet confirmed to be work. The "/speak" command will not be registered. List of supported tts_clients: {supported_tts_clients}')
 
         tts_api_key = tts_settings.get('api_key', None)
         if tts_client == 'alltalk_tts':
@@ -397,9 +407,9 @@ def init_textgenwebui_llmmodels():
         shared.model_name = all_llmmodels[0]
 
     # Select the model from a command-line menu
-    elif shared.args.model_menu:
+    else:
         if len(all_llmmodels) == 0:
-            logging.error("No LLM models are available! Please download at least one.")
+            log.error("No LLM models are available! Please download at least one.")
             sys.exit(0)
         else:
             print('The following LLM models are available:\n')
@@ -411,6 +421,7 @@ def init_textgenwebui_llmmodels():
             print()
 
         shared.model_name = all_llmmodels[i]
+        print(f'Loading {shared.model_name}.\nTo skip model selection, use "--model" in "CMD_FLAGS.txt".')
 
 # Check user settings (models/config-user.yaml) to determine loader
 def get_llm_model_loader(model):
@@ -454,7 +465,7 @@ async def load_llm_model(loader=None):
             if shared.args.lora:
                 add_lora_to_model(shared.args.lora)
     except Exception as e:
-        logging.error(f"An error occurred while loading LLM Model: {e}")
+        log.error(f"An error occurred while loading LLM Model: {e}")
 
 if textgenwebui_enabled:
     init_textgenwebui_settings()
@@ -500,11 +511,11 @@ async def auto_select_imgmodel(current_imgmodel_name, mode='random'):
                 return all_imgmodels[next_index]
 
             else:
-                logging.info("The previous imgmodel name was not matched in list of fetched imgmodels, so cannot 'cycle'. New imgmodel was instead picked at random.")
+                log.info("The previous imgmodel name was not matched in list of fetched imgmodels, so cannot 'cycle'. New imgmodel was instead picked at random.")
                 return random.choice(all_imgmodels) # If no image model set yet, select randomly
 
     except Exception as e:
-        logging.error(f"Error automatically selecting image model: {e}")
+        log.error(f"Error automatically selecting image model: {e}")
 
 # Task to auto-select an imgmodel at user defined interval
 async def auto_update_imgmodel_task(mode, duration):
@@ -519,10 +530,10 @@ async def auto_update_imgmodel_task(mode, duration):
                 # offload to ai_gen queue
                 params = {'imgmodel': selected_imgmodel}
                 await change_imgmodel_task('Automatically', channel=None, params=params, ictx=None)
-                logging.info("Automatically updated imgmodel settings")
+                log.info("Automatically updated imgmodel settings")
 
         except Exception as e:
-            logging.error(f"Error automatically updating image model: {e}")
+            log.error(f"Error automatically updating image model: {e}")
         #await asyncio.sleep(duration)
 
 imgmodel_update_task = None # Global variable allows process to be cancelled and restarted (reset sleep timer)
@@ -535,7 +546,7 @@ if sd_enabled:
         if imgmodel_update_task and not imgmodel_update_task.done():
             imgmodel_update_task.cancel()
             await ctx.send("Auto-change Imgmodels task was cancelled.", ephemeral=True, delete_after=5)
-            logging.info("Auto-change Imgmodels task was cancelled via '/toggle_auto_change_imgmodels_task'")
+            log.info("Auto-change Imgmodels task was cancelled via '/toggle_auto_change_imgmodels_task'")
             
         else:
             await bg_task_queue.put(start_auto_change_imgmodels())
@@ -551,9 +562,9 @@ async def start_auto_change_imgmodels():
         frequency = auto_change_settings.get('frequency', 1.0)
         duration = frequency*3600 # 3600 = 1 hour
         imgmodel_update_task = client.loop.create_task(auto_update_imgmodel_task(mode, duration))
-        logging.info(f"Auto-change Imgmodels task was started (Mode: '{mode}', Frequency: {frequency} hours).")
+        log.info(f"Auto-change Imgmodels task was started (Mode: '{mode}', Frequency: {frequency} hours).")
     except Exception as e:
-        logging.error(f"Error starting auto-change Img models task: {e}")
+        log.error(f"Error starting auto-change Img models task: {e}")
 
 # Try getting a valid character file source
 def get_character():
@@ -568,22 +579,22 @@ def get_character():
             ]
             char_name = None
             for try_source in sources:
-                logging.info(f'Trying to load character "{try_source}"...')
+                log.info(f'Trying to load character "{try_source}"...')
                 try:
                     _, char_name, _, _, _ = load_character(try_source, '', '')
                     if char_name:
-                        logging.info(f'Initializing with character "{try_source}". Use "/character" for changing characters.')
+                        log.info(f'Initializing with character "{try_source}". Use "/character" for changing characters.')
                         source = try_source
                         break  # Character loaded successfully, exit the loop
                 except Exception as e:
-                    logging.error(f"Error loading character for chat mode: {e}")
+                    log.error(f"Error loading character for chat mode: {e}")
             if not char_name:
-                logging.error(f"Character not found in '/characters'. Tried files: {sources}")
+                log.error(f"Character not found in '/characters'. Tried files: {sources}")
                 return None # return nothing because no character files exist anyway
         # Load character, but don't save it's settings to activesettings (Only user actions will result in modifications)
         return source
     except Exception as e:
-        logging.error(f"Error trying to load character data: {e}")
+        log.error(f"Error trying to load character data: {e}")
         return None
 
 # If first time bot script is run
@@ -595,19 +606,19 @@ async def first_run():
                 default_channel = text_channels[0]  # Get the first text channel of the guild
                 await default_channel.send(embed=system_embed_info)
                 break  # Exit the loop after sending the message to the first guild
-        logging.info('Welcome to ad_discordbot! Use "/helpmenu" to see main commands. (https://github.com/altoiddealer/ad_discordbot) for more info.')
+        log.info('Welcome to ad_discordbot! Use "/helpmenu" to see main commands. (https://github.com/altoiddealer/ad_discordbot) for more info.')
     except Exception as e:
         if str(e).startswith("403"):
-            logging.warning("The bot tried to send a welcome message, but probably does not have access/permissions to your default channel (probably #General)")
+            log.warning("The bot tried to send a welcome message, but probably does not have access/permissions to your default channel (probably #General)")
         else:
-            logging.error(f"An error occurred while welcoming user to the bot: {e}")
+            log.error(f"An error occurred while welcoming user to the bot: {e}")
     finally:
         bot_database.set('first_run', False)
 
 # Unpack tag presets and add global tag keys
 async def update_tags(tags:list) -> list:
     if not isinstance(tags, list):
-        logging.warning(f'''One or more "tags" are improperly formatted. Please ensure each tag is formatted as a list item designated with a hyphen (-)''')
+        log.warning(f'''One or more "tags" are improperly formatted. Please ensure each tag is formatted as a list item designated with a hyphen (-)''')
         return tags
     try:
         tags_data = load_file(shared_path.tags, {})
@@ -634,7 +645,7 @@ async def update_tags(tags:list) -> list:
         return updated_tags
 
     except Exception as e:
-        logging.error(f"Error loading tag presets: {e}")
+        log.error(f"Error loading tag presets: {e}")
         return tags
 
 #################################################################
@@ -650,11 +661,7 @@ async def on_ready():
             char_name = get_character() # Try loading character data regardless of mode (chat/instruct)
             if char_name:
                 await character_loader(char_name)
-            # Load history or set empty history
-            if bot_history.autoload_history and (bot_history.change_char_history_method == 'keep'):
-                bot_history.load_bot_history()
-            else:
-                bot_history.reset_session_history()
+                
         # Create background task processing queue
         client.loop.create_task(process_tasks_in_background())
         # Start background task to sync the discord client tree
@@ -664,9 +671,12 @@ async def on_ready():
             imgmodels_data = load_file(shared_path.img_models, {})
             if imgmodels_data and imgmodels_data.get('settings', {}).get('auto_change_imgmodels', {}).get('enabled', False):
                 await bg_task_queue.put(start_auto_change_imgmodels())
-        logging.info("Bot is ready")
+        log.info("----------------------------------------------")
+        log.info("                Bot is ready")
+        log.info("    Use Ctrl+C to shutdown the bot cleanly")
+        log.info("----------------------------------------------")
     except Exception as e:
-        logging.error(f"Error with on_ready: {e}")
+        log.error(f"Error with on_ready: {e}")
         traceback.print_exc()
 
 #################################################################
@@ -728,9 +738,9 @@ async def post_active_settings():
             # Send the entire settings content as a single message
             await send_long_message(target_channel, f"Current settings:\n```yaml\n{settings_content}\n```")
         else:
-            logging.error(f"Target channel with ID {target_channel_id} not found.")
+            log.error(f"Target channel with ID {target_channel_id} not found.")
     else:
-        logging.warning("Channel ID must be specified in config.yaml")
+        log.warning("Channel ID must be specified in config.yaml")
 
 #################################################################
 ######################## TTS PROCESSING #########################
@@ -747,22 +757,22 @@ async def voice_channel(vc_setting):
                     voice_channel = client.get_channel(tts_settings['voice_channel'])
                     voice_client = await voice_channel.connect()
                 else:
-                    logging.warning(f'Bot launched with {tts_client}, but no voice channel is specified in config.yaml')
+                    log.warning(f'Bot launched with {tts_client}, but no voice channel is specified in config.yaml')
             else:
                 if not bot_database.was_warned('char_tts'):
                     bot_database.update_was_warned('char_tts')
-                    logging.warning(f'Character "use_voice_channel" = True, and "voice channel" is specified in config.yaml, but no "tts_client" is specified in config.yaml')
+                    log.warning(f'Character "use_voice_channel" = True, and "voice channel" is specified in config.yaml, but no "tts_client" is specified in config.yaml')
         except Exception as e:
-            logging.error(f"An error occurred while connecting to voice channel: {e}")
+            log.error(f"An error occurred while connecting to voice channel: {e}")
     # Stop voice client if explicitly deactivated in character settings
     if voice_client and voice_client.is_connected():
         try:
             if vc_setting is False:
-                logging.info("New context has setting to disconnect from voice channel. Disconnecting...")
+                log.info("New context has setting to disconnect from voice channel. Disconnecting...")
                 await voice_client.disconnect()
                 voice_client = None
         except Exception as e:
-            logging.error(f"An error occurred while disconnecting from voice channel: {e}")
+            log.error(f"An error occurred while disconnecting from voice channel: {e}")
 
 last_extension_params = {}
 
@@ -787,17 +797,17 @@ async def update_extensions(params):
                 listed_param = last_extension_params[param]
                 shared.settings.update({'{}-{}'.format(param, key): value for key, value in listed_param.items()})
         else:
-            logging.warning(f'** No extension params for this character. Reloading extensions with initial values. **')
+            log.warning(f'** No extension params for this character. Reloading extensions with initial values. **')
         extensions_module.load_extensions(extensions_module.extensions, extensions_module.available_extensions)  # Load Extensions (again)
     except Exception as e:
-        logging.error(f"An error occurred while updating character extension settings: {e}")
+        log.error(f"An error occurred while updating character extension settings: {e}")
 
 queued_tts = []  # Keep track of queued tasks
 
 def after_playback(file, error):
     global queued_tts
     if error:
-        logging.info(f'Message from audio player: {error}, output: {error.stderr.decode("utf-8")}')
+        log.info(f'Message from audio player: {error}, output: {error.stderr.decode("utf-8")}')
     # Check save mode setting
     if int(tts_settings.get('save_mode', 0)) > 0:
         try:
@@ -814,7 +824,7 @@ def after_playback(file, error):
 async def play_in_voice_channel(file):
     global voice_client, queued_tts
     if voice_client is None:
-        logging.warning("**tts response detected, but bot is not connected to a voice channel.**")
+        log.warning("**tts response detected, but bot is not connected to a voice channel.**")
         return
     # Queue the task if audio is already playing
     if voice_client.is_playing():
@@ -825,26 +835,31 @@ async def play_in_voice_channel(file):
         voice_client.play(source, after=lambda e: after_playback(file, e))
 
 
-async def upload_tts_file(channel, tts_resp):
-    filename = os.path.basename(tts_resp)
+async def upload_tts_file(channel:discord.TextChannel, bot_message:HMessage):
+    file = bot_message.text_visible
+    filename = os.path.basename(file)
     mp3_filename = os.path.splitext(filename)[0] + '.mp3'
     
     bit_rate = int(tts_settings.get('mp3_bit_rate', 128))
     with io.BytesIO() as buffer:
-        audio = AudioSegment.from_wav(tts_resp)
+        audio = AudioSegment.from_wav(file)
         audio.export(buffer, format="mp3", bitrate=f"{bit_rate}k")
         mp3_file = File(buffer, filename=mp3_filename)
-        await channel.send(file=mp3_file)
+        
+        sent_message = await channel.send(file=mp3_file)
+        bot_message.update(audio_id=sent_message.id)
     
 
-async def process_tts_resp(channel, tts_resp, i=None):
+async def process_tts_resp(channel:discord.TextChannel, bot_message:HMessage):
     play_mode = int(tts_settings.get('play_mode', 0))
     # Upload to interaction channel
     if play_mode > 0:
-        await upload_tts_file(channel, tts_resp)
+        await upload_tts_file(channel, bot_message)
     # Play in voice channel
-    if play_mode != 1 and (voice_client == i.guild.voice_client):
-        await bg_task_queue.put(play_in_voice_channel(tts_resp)) # run task in background
+    if play_mode != 1 and (voice_client == channel.guild.voice_client):
+        await bg_task_queue.put(play_in_voice_channel(bot_message.text_visible)) # run task in background
+        
+    bot_message.update(spoken=True)
 
 #################################################################
 ########################### ON MESSAGE ##########################
@@ -875,7 +890,7 @@ def get_time(offset=0.0, time_format=None, date_format=None):
         new_date = current_time.strftime(date_format)
         return new_time, new_date
     except Exception as e:
-        logging.error(f"Error when getting date/time: {e}")
+        log.error(f"Error when getting date/time: {e}")
         return '', ''
 
 async def swap_llm_character(char_name:str, user_name:str, llm_payload:dict):
@@ -891,37 +906,43 @@ async def swap_llm_character(char_name:str, user_name:str, llm_payload:dict):
         llm_payload = await fix_llm_payload(llm_payload) # Add any missing required information
         return llm_payload
     except Exception as e:
-        logging.error(f"An error occurred while loading the file for swap_character: {e}")
+        log.error(f"An error occurred while loading the file for swap_character: {e}")
         return llm_payload
 
-def format_prompt_with_recent_output(user_name:str, prompt:str):
+def format_prompt_with_recent_output(ictx: CtxInteraction, user_name:str, prompt:str):
     try:
         formatted_prompt = prompt
         # Find all matches of {user_x} and {llm_x} in the prompt
         matches = patterns.recent_msg_roles.findall(prompt)
+        if matches:
+            local_history = bot_history.get_history_for(ictx.channel.id)
+            user_msgs = [user_msg.text for user_msg in local_history.role_messages('user')[-10:]][::-1]
+            llm_msgs = [llm_msg.text for llm_msg in local_history.role_messages('assistant')[-10:]][::-1]
+            recent_messages = {'user': user_msgs, 'llm': llm_msgs}
+            log.debug(f"format_prompt_with_recent_output {len(user_msgs)}, {len(llm_msgs)}, {repr(user_msgs[0])}, {repr(llm_msgs[0])}")
         # Iterate through the matches
         for match in matches:
             prefix, index = match
             index = int(index)
             if prefix in ['user', 'llm'] and 0 <= index <= 10:
-                message_list = bot_history.recent_messages[prefix]
+                message_list = recent_messages[prefix]
                 if not message_list or index >= len(message_list):
                     continue
                 matched_syntax = f"{prefix}_{index}"
                 formatted_prompt = formatted_prompt.replace(f"{{{matched_syntax}}}", message_list[index])
             elif prefix == 'history' and 0 <= index <= 10:
-                user_message = bot_history.recent_messages['user'][index] if index < len(bot_history.recent_messages['user']) else ''
-                llm_message = bot_history.recent_messages['llm'][index] if index < len(bot_history.recent_messages['llm']) else ''
+                user_message = recent_messages['user'][index] if index < len(recent_messages['user']) else ''
+                llm_message = recent_messages['llm'][index] if index < len(recent_messages['llm']) else ''
                 formatted_history = f'"{user_name}:" {user_message}\n"{bot_database.last_character}:" {llm_message}\n'
                 matched_syntax = f"{prefix}_{index}"
                 formatted_prompt = formatted_prompt.replace(f"{{{matched_syntax}}}", formatted_history)
         formatted_prompt = formatted_prompt.replace('{last_image}', '__temp/temp_img_0.png')
         return formatted_prompt
     except Exception as e:
-        logging.error(f'An error occurred while formatting prompt with recent messages: {e}')
+        log.error(f'An error occurred while formatting prompt with recent messages: {e}')
         return prompt
 
-def process_tag_formatting(user_name:str, prompt:str, formatting:dict):
+def process_tag_formatting(ictx, user_name:str, prompt:str, formatting:dict):
     try:
         updated_prompt = prompt
         format_prompt = formatting.get('format_prompt', [])
@@ -933,16 +954,16 @@ def process_tag_formatting(user_name:str, prompt:str, formatting:dict):
             for fmt_prompt in format_prompt:
                 updated_prompt = fmt_prompt.replace('{prompt}', updated_prompt)
         # format prompt with any defined recent messages
-        updated_prompt = format_prompt_with_recent_output(user_name, updated_prompt)
+        updated_prompt = format_prompt_with_recent_output(ictx, user_name, updated_prompt)
         # Format time if defined
         new_time, new_date = get_time(time_offset, time_format, date_format)
         updated_prompt = updated_prompt.replace('{time}', new_time)
         updated_prompt = updated_prompt.replace('{date}', new_date)
         if updated_prompt != prompt:
-            logging.info(f'Prompt was formatted: {updated_prompt}')
+            log.info(f'Prompt was formatted: {updated_prompt}')
         return updated_prompt
     except Exception as e:
-        logging.error(f"Error formatting LLM prompt: {e}")
+        log.error(f"Error formatting LLM prompt: {e}")
         return prompt
 
 async def build_flow_queue(input_flow):
@@ -970,7 +991,7 @@ async def build_flow_queue(input_flow):
         global flow_event
         flow_event.set() # flag that a flow is being processed. Check with 'if flow_event.is_set():'
     except Exception as e:
-        logging.error(f"Error building Flow: {e}")
+        log.error(f"Error building Flow: {e}")
 
 async def process_llm_payload_tags(ictx: CtxInteraction, llm_payload:dict, llm_prompt:str, mods:dict, params={}):
     try:
@@ -989,45 +1010,49 @@ async def process_llm_payload_tags(ictx: CtxInteraction, llm_payload:dict, llm_p
         # Flow handling
         if flow is not None and not flow_event.is_set():
             await build_flow_queue(flow)
+            
         # History handling
         if load_history is not None:
-            chankey = str(ictx.channel.id)
-            if load_history < 0:
+            if load_history <= 0:
                 llm_payload['state']['history']['internal'] = []
                 llm_payload['state']['history']['visible'] = []
-                logging.info("[TAGS] History is being ignored")
+                log.info("[TAGS] History is being ignored")
+                
             elif load_history > 0:
-                i_list, v_list = bot_history.get_history_iv_lists_keys(chankey)
-                # Calculate the number of items to retain (up to the length of session_history)
+                i_list, v_list = bot_history.get_history_for(ictx.channel.id).render_to_tgwui_tuple()
+
+                # Calculate the number of items to retain (up to the length of history)
                 num_to_retain = min(load_history, len(i_list))
                 llm_payload['state']['history']['internal'] = i_list[-num_to_retain:]
                 llm_payload['state']['history']['visible'] = v_list[-num_to_retain:]
-                logging.info(f'[TAGS] History is being limited to previous {load_history} exchanges')
+                log.info(f'[TAGS] History is being limited to previous {load_history} exchanges')
+                
+                
         if param_variances:
             processed_params = process_param_variances(param_variances)
-            logging.info(f'[TAGS] LLM Param Variances: {processed_params}')
+            log.info(f'[TAGS] LLM Param Variances: {processed_params}')
             sum_update_dict(llm_payload['state'], processed_params) # Updates dictionary while adding floats + ints
         if state:
             update_dict(llm_payload['state'], state)
-            logging.info(f'[TAGS] LLM State was modified')
+            log.info(f'[TAGS] LLM State was modified')
         # Context insertions
         if prefix_context:
             prefix_str = "\n".join(str(item) for item in prefix_context)
             if prefix_str:
                 llm_payload['state']['context'] = f"{prefix_str}\n{llm_payload['state']['context']}"
-                logging.info(f'[TAGS] Prefixed context with text.')
+                log.info(f'[TAGS] Prefixed context with text.')
         if suffix_context:
             suffix_str = "\n".join(str(item) for item in suffix_context)
             if suffix_str:
                 llm_payload['state']['context'] = f"{llm_payload['state']['context']}\n{suffix_str}"
-                logging.info(f'[TAGS] Suffixed context with text.')
+                log.info(f'[TAGS] Suffixed context with text.')
         # Character handling
         char_params = change_character or swap_character or {} # 'character_change' will trump 'character_swap'
         if char_params:
             # Error handling
             all_characters, _ = get_all_characters()
             if not any(char_params == char['name'] for char in all_characters):
-                logging.error(f'Character not found: {char_params}')
+                log.error(f'Character not found: {char_params}')
             else:
                 if char_params == change_character:
                     verb = 'Changing'
@@ -1036,25 +1061,25 @@ async def process_llm_payload_tags(ictx: CtxInteraction, llm_payload:dict, llm_p
                 else:
                     verb = 'Swapping'
                     llm_payload = await swap_llm_character(swap_character, user_name, llm_payload)
-                logging.info(f'[TAGS] {verb} Character: {char_params}')
+                log.info(f'[TAGS] {verb} Character: {char_params}')
         # LLM model handling
         model_change = change_llmmodel or swap_llmmodel or None # 'llmmodel_change' will trump 'llmmodel_swap'
         if model_change:
             if model_change == shared.model_name:
-                logging.info(f'[TAGS] LLM model was triggered to change, but it is the same as current ("{shared.model_name}").')
+                log.info(f'[TAGS] LLM model was triggered to change, but it is the same as current ("{shared.model_name}").')
             else:
                 mode = 'change' if model_change == change_llmmodel else 'swap'
                 verb = 'Changing' if mode == 'change' else 'Swapping'
                 # Error handling
                 all_llmmodels = utils.get_available_models()
                 if not any(model_change == model for model in all_llmmodels):
-                    logging.error(f'LLM model not found: {model_change}')
+                    log.error(f'LLM model not found: {model_change}')
                 else:
-                    logging.info(f'[TAGS] {verb} LLM Model: {model_change}')
+                    log.info(f'[TAGS] {verb} LLM Model: {model_change}')
                     params['llmmodel'] = {'llmmodel_name': params, 'mode': mode, 'verb': verb}
         return llm_payload, llm_prompt, params
     except Exception as e:
-        logging.error(f"Error processing LLM tags: {e}")
+        log.error(f"Error processing LLM tags: {e}")
         return llm_payload, llm_prompt, {}
 
 def collect_llm_tag_values(tags, params):
@@ -1095,7 +1120,7 @@ def collect_llm_tag_values(tags, params):
                 user_image = discord.File(user_image_args)
                 params.setdefault('send_user_image', [])
                 params['send_user_image'].append(user_image)
-                logging.info(f'[TAGS] Sending user image.')
+                log.info(f'[TAGS] Sending user image.')
             if 'format_prompt' in tag:
                 formatting.setdefault('format_prompt', [])
                 formatting['format_prompt'].append(str(tag.pop('format_prompt')))
@@ -1111,16 +1136,16 @@ def collect_llm_tag_values(tags, params):
                 try:
                     llm_payload_mods['param_variances'].update(llm_param_variances) # Allow multiple to accumulate.
                 except:
-                    logging.warning("Error processing a matched 'llm_param_variances' tag; ensure it is a dictionary.")
+                    log.warning("Error processing a matched 'llm_param_variances' tag; ensure it is a dictionary.")
             if 'state' in tag:
                 state = dict(tag.pop('state'))
                 llm_payload_mods.setdefault('state', {})
                 try:
                     llm_payload_mods['state'].update(state) # Allow multiple to accumulate.
                 except:
-                    logging.warning("Error processing a matched 'state' tag; ensure it is a dictionary.")
+                    log.warning("Error processing a matched 'state' tag; ensure it is a dictionary.")
     except Exception as e:
-        logging.error(f"Error collecting LLM tag values: {e}")
+        log.error(f"Error collecting LLM tag values: {e}")
     return llm_payload_mods, formatting, params
 
 def process_tag_insertions(prompt:str, tags:dict):
@@ -1141,7 +1166,7 @@ def process_tag_insertions(prompt:str, tags:dict):
                 insert_method = tag.pop('positive_prompt_method', 'after')  # Default to 'after'
                 join = tag.pop('img_text_joining', ' ')
             if insert_text is None:
-                logging.error(f"Error processing matched tag {item}. Skipping this tag.")
+                log.error(f"Error processing matched tag {item}. Skipping this tag.")
             else:
                 if insert_method == 'replace':
                     if insert_text == '':
@@ -1171,7 +1196,7 @@ def process_tag_insertions(prompt:str, tags:dict):
         tags['matches'] = updated_matches
         return prompt, tags
     except Exception as e:
-        logging.error(f"Error processing LLM prompt tags: {e}")
+        log.error(f"Error processing LLM prompt tags: {e}")
         return prompt, tags
 
 def process_tag_trumps(matches:list, trump_params:list=[]):
@@ -1196,12 +1221,12 @@ def process_tag_trumps(matches:list, trump_params:list=[]):
             else:
                 tag_dict = tag
             if any(trigger.strip().lower() == trump.strip().lower() for trigger in tag_dict.get('trigger', '').split(',') for trump in trump_params):
-                logging.info(f'''[TAGS] Tag with triggers "{tag_dict['trigger']}" was trumped by another tag.''')
+                log.info(f'''[TAGS] Tag with triggers "{tag_dict['trigger']}" was trumped by another tag.''')
             else:
                 untrumped_matches.append(tag)
         return untrumped_matches, trump_params
     except Exception as e:
-        logging.error(f"Error processing matched tags: {e}")
+        log.error(f"Error processing matched tags: {e}")
         return matches  # return original matches if error occurs
 
 def match_tags(search_text:str, tags:dict, phase='llm') -> dict:
@@ -1253,7 +1278,7 @@ def match_tags(search_text:str, tags:dict, phase='llm') -> dict:
         return updated_tags
 
     except Exception as e:
-        logging.error(f"Error matching tags: {e}")
+        log.error(f"Error matching tags: {e}")
         return tags
 
 def sort_tags(all_tags: list) -> Union[list, dict]:
@@ -1262,7 +1287,7 @@ def sort_tags(all_tags: list) -> Union[list, dict]:
         for tag in all_tags:
             if 'random' in tag:
                 if not isinstance(tag['random'], (int, float)):
-                    logging.error("Error: Value for 'random' in tags should be float value (ex: 0.8).")
+                    log.error("Error: Value for 'random' in tags should be float value (ex: 0.8).")
                     continue # Skip this tag
                 if not random.random() < tag['random']:
                     continue # Skip this tag
@@ -1270,11 +1295,11 @@ def sort_tags(all_tags: list) -> Union[list, dict]:
             if search_mode in sorted_tags['unmatched']:
                 sorted_tags['unmatched'][search_mode].append({k: v for k, v in tag.items() if k != 'search_mode'})
             else:
-                logging.warning(f"Ignoring unknown search_mode: {search_mode}")
+                log.warning(f"Ignoring unknown search_mode: {search_mode}")
         return sorted_tags
 
     except Exception as e:
-        logging.error(f"Error sorting tags: {e}")
+        log.error(f"Error sorting tags: {e}")
         return all_tags
 
 
@@ -1305,7 +1330,7 @@ async def expand_triggers(all_tags:list) -> list:
                 tag['trigger'] = _expand_value(tag['trigger'])
 
     except Exception as e:
-        logging.error(f"Error expanding tags: {e}")
+        log.error(f"Error expanding tags: {e}")
 
     return all_tags
 
@@ -1329,7 +1354,7 @@ def extract_value(value_str:str) -> Union[bool, int, float]:
                 return value_str
 
     except Exception as e:
-        logging.error(f"Error converting string to bool/int/float: {e}")
+        log.error(f"Error converting string to bool/int/float: {e}")
 
 def parse_tag_from_text_value(value_str:str) -> str:
     try:
@@ -1368,7 +1393,7 @@ def parse_tag_from_text_value(value_str:str) -> str:
                 return extract_value(value_str)
 
     except Exception as e:
-        logging.error(f"Error parsing nested value: {e}")
+        log.error(f"Error parsing nested value: {e}")
 
 def parse_key_pair_from_text(kv_pair):
     try:
@@ -1378,7 +1403,7 @@ def parse_key_pair_from_text(kv_pair):
         value = parse_tag_from_text_value(value_str)
         return key, value
     except Exception as e:
-        logging.error(f"Error parsing nested value: {e}")
+        log.error(f"Error parsing nested value: {e}")
 
 # Matches [[this:syntax]] and creates 'tags' from matches
 # Can handle any structure including dictionaries, lists, even nested sublists.
@@ -1395,10 +1420,10 @@ def get_tags_from_text(text):
                 tag_dict[key] = value
             tags_from_text.append(tag_dict)
         if tags_from_text:
-            logging.info(f"[TAGS] Tags from text: '{tags_from_text}'")
+            log.info(f"[TAGS] Tags from text: '{tags_from_text}'")
         return detagged_text, tags_from_text
     except Exception as e:
-        logging.error(f"Error getting tags from text: {e}")
+        log.error(f"Error getting tags from text: {e}")
         return text, []
 
 async def get_tags(text):
@@ -1414,14 +1439,14 @@ async def get_tags(text):
         sorted_tags = sort_tags(all_tags) # sort tags into phases (user / llm / userllm)
         return detagged_text, sorted_tags
     except Exception as e:
-        logging.error(f"Error getting tags: {e}")
+        log.error(f"Error getting tags: {e}")
         return text, []
 
 async def init_llm_payload(ictx: CtxInteraction, user_name:str, text:str) -> dict:
     llm_payload = copy.deepcopy(bot_settings.settings['llmstate'])
     llm_payload['text'] = text
     name1 = user_name
-    name2 = bot_settings.settings['llmcontext']['name']
+    name2 = bot_settings.name
     context = bot_settings.settings['llmcontext']['context']
     llm_payload['state']['name1'] = name1
     llm_payload['state']['name2'] = name2
@@ -1429,12 +1454,12 @@ async def init_llm_payload(ictx: CtxInteraction, user_name:str, text:str) -> dic
     llm_payload['state']['name2_instruct'] = name2
     llm_payload['state']['character_menu'] = name2
     llm_payload['state']['context'] = context
-    ictx_history = bot_history.get_channel_history(ictx)
+    ictx_history = bot_history.get_history_for(ictx.channel.id).render_to_tgwui()
     llm_payload['state']['history'] = ictx_history
     return llm_payload
 
 def get_wildcard_value(matched_text, dir_path=None):
-    dir_path = dir_path or os.path.join('ad_discordbot', 'wildcards')
+    dir_path = dir_path or shared_path.dir_wildcards
     selected_option = None
     search_phrase = matched_text[2:] if matched_text.startswith('##') else matched_text
     search_path = f"{search_phrase}.txt"
@@ -1472,7 +1497,7 @@ def get_wildcard_value(matched_text, dir_path=None):
             # Get the last component of the nested directory path
             search_phrase = os.path.split(nested_dir)[-1]
             # Remove the last component from the nested directory path
-            nested_dir = os.path.join('ad_discordbot', 'wildcards', os.path.dirname(nested_dir))
+            nested_dir = os.path.join(shared_path.dir_wildcards, os.path.dirname(nested_dir))
             # Recursively check filenames in the nested directory
             selected_option = get_wildcard_value(search_phrase, nested_dir)
     return selected_option
@@ -1525,8 +1550,7 @@ def get_braces_value(matched_text):
         wildcard_match = patterns.wildcard.search(option)
         if wildcard_match:
             wildcard_phrase = wildcard_match.group()
-            dir_path = os.path.join('ad_discordbot', 'wildcards')
-            wildcard_value = get_wildcard_value(matched_text=wildcard_phrase, dir_path=dir_path)
+            wildcard_value = get_wildcard_value(matched_text=wildcard_phrase, dir_path=shared_path.dir_wildcards)
             if wildcard_value:
                 chosen_options[index] = wildcard_value
     chosen_options = [option for option in chosen_options if option is not None]
@@ -1540,7 +1564,7 @@ async def dynamic_prompting(user_name:str, text:str, i=None):
     if not config.get('dynamic_prompting_enabled', True):
         if not bot_database.was_warned('dynaprompt'):
             bot_database.update_was_warned('dynaprompt')
-            logging.warning(f"'{shared_path.config}' is missing a new parameter 'dynamic_prompting_enabled'. Defaulting to 'True' (enabled) ")
+            log.warning(f"'{shared_path.config}' is missing a new parameter 'dynamic_prompting_enabled'. Defaulting to 'True' (enabled) ")
     if not dynamic_prompting:
         return text
 
@@ -1596,12 +1620,12 @@ async def on_message(message: discord.Message):
 
         async with task_semaphore:
             async with message.channel.typing():
-                logging.info(f'reply requested: {message.author.display_name} said: "{text}"')
+                log.info(f'reply requested: {message.author.display_name} said: "{text}"')
                 await on_message_task(message, 'on_message', text)
                 await run_flow_if_any(message, 'on_message', text)
 
     except Exception as e:
-        logging.error(f"An error occurred in on_message: {e}")
+        log.error(f"An error occurred in on_message: {e}")
 
 #################################################################
 #################### QUEUED FROM ON MESSAGE #####################
@@ -1631,7 +1655,7 @@ async def on_message_task(ictx: CtxInteraction, source:str, text:str):
             # apply tags relevant to LLM payload
             llm_payload, llm_prompt, params = await process_llm_payload_tags(ictx, llm_payload, llm_prompt, llm_payload_mods, params)
             # apply formatting tags to LLM prompt
-            llm_prompt = process_tag_formatting(user_name, llm_prompt, formatting)
+            llm_prompt = process_tag_formatting(ictx, user_name, llm_prompt, formatting)
             # offload to ai_gen queue
             llm_payload['text'] = llm_prompt
 
@@ -1642,7 +1666,8 @@ async def on_message_task(ictx: CtxInteraction, source:str, text:str):
             await img_gen_task(source, text, params, ictx, tags)
 
     except Exception as e:
-        logging.error(f"An error occurred processing on_message request: {e}")
+        print(traceback.format_exc())
+        log.error(f"An error occurred processing on_message request: {e}")
 
 async def hybrid_llm_img_gen(ictx: CtxInteraction, source:str, text:str, tags:dict, llm_payload:dict, params:dict):
     try:
@@ -1651,7 +1676,6 @@ async def hybrid_llm_img_gen(ictx: CtxInteraction, source:str, text:str, tags:di
         bot_will_do = params['bot_will_do']
         change_embed = None
         img_gen_embed = None
-        tts_resp = None
 
         # Check params to see if an LLM model change/swap was triggered by Tags
         llmmodel_params = params.get('llmmodel', {})
@@ -1679,7 +1703,7 @@ async def hybrid_llm_img_gen(ictx: CtxInteraction, source:str, text:str, tags:di
                 if not bot_database.was_warned('no_llmmodel'):
                     bot_database.update_was_warned('no_llmmodel')
                     await channel.send(f'(Cannot process text request: No LLM model is currently loaded. Use "/llmmodel" to load a model.)', delete_after=10)
-                    logging.warning(f'Bot tried to generate text for {user_name}, but no LLM model was loaded')
+                    log.warning(f'Bot tried to generate text for {user_name}, but no LLM model was loaded')
             # Check to apply Server Mode
             llm_payload = apply_server_mode(llm_payload, ictx)
             # Only generate TTS for the server conntected to Voice Channel
@@ -1687,13 +1711,16 @@ async def hybrid_llm_img_gen(ictx: CtxInteraction, source:str, text:str, tags:di
             if (not bot_will_do['should_send_text']) or (voice_client and (voice_client != ictx.guild.voice_client) and int(tts_settings.get('play_mode', 0)) == 0):
                 tts_sw = await toggle_tts(toggle='off')
             # generate text with text-gen-webui
-            last_resp, tts_resp = await llm_gen(llm_payload, source, params, ictx, tts_sw)
+            bot_message = await llm_gen(llm_payload, params, ictx, tts_sw)
+
+            if bot_message:
+                # Log message exchange
+                log.info(f'''{user_name}: "{llm_payload['text']}"''')
+                log.info(f'''{llm_payload['state']['name2']}: "{bot_message.text}"''')
             # If no text was generated, treat user input at the response
-            if last_resp is not None:
-                logging.info("reply sent: \"" + user_name + ": {'text': '" + llm_payload["text"] + "', 'response': '" + last_resp + "'}\"")
             else:
                 if bot_will_do['should_gen_image'] and sd_enabled:
-                    last_resp = text
+                    bot_message.update(text=text)
                 else:
                     return
 
@@ -1706,23 +1733,26 @@ async def hybrid_llm_img_gen(ictx: CtxInteraction, source:str, text:str, tags:di
 
         # process image generation (A1111 / Forge)
         if sd_enabled:
-            tags = match_img_tags(last_resp, tags)
+            tags = match_img_tags(bot_message.text, tags)
             bot_will_do = bot_should_do(tags, bot_will_do) # check for updates from tags
             if bot_will_do['should_gen_image']:
                 if img_gen_embed:
                     await img_gen_embed.delete()
                 params['bot_will_do'] = bot_will_do
-                await img_gen_task(source, last_resp, params, ictx, tags)
-        if tts_resp:
-            await process_tts_resp(channel, tts_resp, ictx)
-        mention_resp = update_mention(get_user_ctx_inter(ictx).mention, last_resp) # @mention non-consecutive users
+                await img_gen_task(source, bot_message.text, params, ictx, tags)
+        # Process any TTS response
+        if bot_message.text_visible:
+            await process_tts_resp(channel, bot_message)
+        # @mention non-consecutive users
+        mention_resp = update_mention(get_user_ctx_inter(ictx).mention, bot_message.text)
         if bot_will_do['should_send_text']:
-            await send_long_message(channel, mention_resp)
+            await send_long_message(channel, mention_resp, bot_message=bot_message)
+
         if send_user_image:
             await channel.send(file=send_user_image) if len(send_user_image) == 1 else await channel.send(files=send_user_image)
         return
     except Exception as e:
-        logging.error(f'An error occurred while processing "{source}" request: {e}')
+        log.error(f'An error occurred while processing "{source}" request: {e}')
         if img_gen_embed_info:
             img_gen_embed_info.title = f'An error occurred while processing "{source}" request'
             img_gen_embed_info.description = e
@@ -1758,7 +1788,7 @@ def update_llm_gen_statistics(last_resp:str):
         bot_statistics.llm['tokens_per_sec_avg'] = round((total_tokens/total_time), 4)
         bot_statistics.save()
     except Exception as e:
-        logging.error(f'An error occurred while saving LLM gen statistics: {e}')
+        log.error(f'An error occurred while saving LLM gen statistics: {e}')
 
 # Add guild data
 def apply_server_mode(llm_payload:dict, i=None):
@@ -1768,7 +1798,7 @@ def apply_server_mode(llm_payload:dict, i=None):
             llm_payload['state']['name1'] = name1
             llm_payload['state']['name1_instruct'] = name1
         except Exception as e:
-            logging.error(f'An error occurred while applying Server Mode: {e}')
+            log.error(f'An error occurred while applying Server Mode: {e}')
     return llm_payload
 
 # Add dynamic stopping strings
@@ -1791,7 +1821,7 @@ def extra_stopping_strings(llm_payload:dict):
             stopping_strings = stopping_strings.replace("name2", name2_value)
         llm_payload['state']['stopping_strings'] = stopping_strings
     except Exception as e:
-        logging.error(f'An error occurred while updating stopping strings: {e}')
+        log.error(f'An error occurred while updating stopping strings: {e}')
     return llm_payload
 
 # Only generate TTS for the server conntected to Voice Channel
@@ -1807,17 +1837,27 @@ async def toggle_tts(toggle='on', tts_sw=None):
             extensions[tts_client]['activate'] = True
             await update_extensions(extensions)
     except Exception as e:
-        logging.error(f'An error occurred while toggling the TTS on/off in llm_gen(): {e}')
+        log.error(f'An error occurred while toggling the TTS on/off in llm_gen(): {e}')
     return None
 
 # Send LLM Payload - get response
-async def llm_gen(llm_payload:dict, source:str, params:dict={}, i=None, tts_sw=None):
+async def llm_gen(llm_payload:dict, params:dict={}, ictx=None, tts_sw=None) -> HMessage:
     try:
         if shared.model_name == 'None':
-            return None, None
+            return
         llm_payload = extra_stopping_strings(llm_payload)
-
         loop = asyncio.get_event_loop()
+        
+        save_to_history = params.get('save_to_history', True)
+        
+        # Add user message before processing bot reply.
+        # this gives time for other messages to pile up before the bot's as they do in actual chat.
+        user = get_user_ctx_inter(ictx)
+        local_history = bot_history.get_history_for(ictx.channel.id)
+        user_message = local_history.new_message(llm_payload['state']['name1'], llm_payload['text'], 'user', user.id)
+        if not save_to_history:
+            user_message.hidden = True
+            user_message.dont_save()
 
         # Store time for statistics
         bot_statistics._llm_gen_time_start_last = time.time()
@@ -1843,29 +1883,49 @@ async def llm_gen(llm_payload:dict, source:str, params:dict={}, i=None, tts_sw=N
         # Offload the synchronous task to a separate thread using run_in_executor
         last_resp, tts_resp = await loop.run_in_executor(None, process_responses)
 
-        if last_resp and source != 'speak':
+        
+        bot_message = local_history.new_message(bot_settings.name, last_resp, 'assistant', bot_settings._bot_id, text_visible=tts_resp)
+        bot_message.mark_as_reply_for(user_message)
+        if not save_to_history:
+            bot_message.hidden = True
+            bot_message.dont_save()
+            
+        if last_resp:
             update_llm_gen_statistics(last_resp) # Update statistics
-            save_to_history = params.get('save_to_history', True)
-            bot_history.manage_history(prompt=llm_payload['text'], reply=last_resp, save_to_history=save_to_history, chankey=str(i.channel.id))
+            truncation = int(bot_settings.settings['llmstate']['state']['truncation_length'] * 4) #approx tokens
+            bot_message.history.truncate(truncation)
+            client.loop.create_task(bot_message.history.save())
 
         # Toggle TTS back on if it was toggled off
         await toggle_tts(toggle='on', tts_sw=tts_sw)
 
-        return last_resp, tts_resp
+        return bot_message
+    
     except Exception as e:
-        logging.error(f'An error occurred in llm_gen(): {e}')
+        log.error(f'An error occurred in llm_gen(): {e}')
         if str(e).startswith('list index out of range'):
-            logging.warning(f'Note (this may not be the cause of error): "regen" and "continue" commands only work if bot sent message during current session.')
+            log.warning(f'Note (this may not be the cause of error): "regen" and "continue" commands only work if bot sent message during current session.')
         traceback.print_exc()
-        return None, None
+        return
 
-async def cont_regen_task(inter:discord.Interaction, source:str, text:str, message:discord.Message):
+async def cont_regen_task(inter:discord.Interaction, source:str, message:discord.Message, text:str=''):
     cmd = ''
     try:
         user_name = get_user_ctx_inter(inter).display_name # just incase this function is used elsewhere later
         channel = inter.channel
         system_embed = None
         llm_payload = await init_llm_payload(inter, user_name, text)
+        
+        history = bot_history.get_history_for(inter.channel.id)
+        target_message = history.search(lambda m: m.id == message.id)
+        if target_message:
+            log.warning(f'Failed to find message: {message}')
+            history = target_message.new_history_start_here() # use new_history_end_here if you want to regenerate a message in the middle.
+            
+        sliced_i, sliced_v = history.render_to_tgwui_tuple()
+        
+        llm_payload['state']['history']['internal'] = sliced_i
+        llm_payload['state']['history']['visible'] = sliced_v
         params = {'save_to_history': False}
         if source == 'cont':
             cmd = 'Continuing'
@@ -1875,7 +1935,7 @@ async def cont_regen_task(inter:discord.Interaction, source:str, text:str, messa
             llm_payload['regenerate'] = True
         if shared.model_name == 'None':
             await channel.send('(Cannot process text request: No LLM model is currently loaded. Use "/llmmodel" to load a model.)', delete_after=5)
-            logging.warning(f'{user_name} used {cmd} but no LLM model was loaded')
+            log.warning(f'{user_name} used {cmd} but no LLM model was loaded')
             return
         if system_embed_info:
             system_embed_info.title = f'{cmd} ... '
@@ -1888,25 +1948,34 @@ async def cont_regen_task(inter:discord.Interaction, source:str, text:str, messa
         if voice_client and (voice_client != inter.guild.voice_client) and int(tts_settings.get('play_mode', 0)) == 0:
             tts_sw = await toggle_tts(toggle='off')
         # generate text with text-gen-webui
-        last_resp, tts_resp = await llm_gen(llm_payload, source, params, inter, tts_sw)
+        bot_message = await llm_gen(llm_payload, params, inter, tts_sw)
+        
         if system_embed:
             await system_embed.delete()
-        if last_resp is None:
+            
+        if not bot_message:
             return
-        logging.info("reply sent: \"" + user_name + ": {'text': '" + llm_payload["text"] + "', 'response': '" + last_resp + "'}\"")
+
+        # Log message exchange
+        log.info(f'''{user_name}: "{llm_payload['text']}"''')
+        log.info(f'''{llm_payload['state']['name2']}: "{bot_message.text}"''')
+
         fetched_message = await channel.fetch_message(message)
         await fetched_message.delete()
-        if tts_resp:
-            await process_tts_resp(channel, tts_resp, inter)
+        
+        if bot_message.text_visible:
+            await process_tts_resp(channel, bot_message)
+            
         if source == 'regen':
             await inter.followup.send('__Regenerated text:__', silent=True)
-        await send_long_message(channel, last_resp)
+        await send_long_message(channel, bot_message.text, bot_message=bot_message)
+        
     except Exception as e:
         e_msg = f'An error occurred while processing "{cmd}"'
-        logging.error(f'{e_msg}: {e}')
+        log.error(f'{e_msg}: {e}')
         if str(e).startswith('cannot unpack non-iterable NoneType object'):
             none_msg = f'Error: {cmd} only works on messages sent from the bot during current session.'
-            logging.error(none_msg)
+            log.error(none_msg)
             await inter.followup.send(none_msg, silent=True)
         else:
             await inter.followup.send(e_msg, silent=True)
@@ -1920,7 +1989,7 @@ async def speak_task(ctx: commands.Context, text:str, params:dict):
         system_embed = None
         if shared.model_name == 'None':
             await channel.send('Cannot process "/speak" request: No LLM model is currently loaded. Use "/llmmodel" to load a model.)', delete_after=5)
-            logging.warning(f'Bot tried to generate tts for {user_name}, but no LLM model was loaded')
+            log.warning(f'Bot tried to generate tts for {user_name}, but no LLM model was loaded')
             return
         if system_embed_info:
             system_embed_info.title = f'{user_name} requested tts ... '
@@ -1933,12 +2002,12 @@ async def speak_task(ctx: commands.Context, text:str, params:dict):
         params['save_to_history'] = False
         tts_args = params.get('tts_args', {})
         await update_extensions(tts_args)
-        _, tts_resp = await llm_gen(llm_payload, 'speak', params)
+        bot_message = await llm_gen(llm_payload, params)
         if system_embed:
             await system_embed.delete()
-        if tts_resp is None:
+        if not bot_message:
             return
-        await process_tts_resp(channel, tts_resp, ctx)
+        await process_tts_resp(channel, bot_message)
         # remove api key (don't want to share this to the world!)
         for sub_dict in tts_args.values():
             if 'api_key' in sub_dict:
@@ -1950,7 +2019,7 @@ async def speak_task(ctx: commands.Context, text:str, params:dict):
         await update_extensions(bot_settings.settings['llmcontext'].get('extensions', {})) # Restore character specific extension settings
         if params.get('user_voice'): os.remove(params['user_voice'])
     except Exception as e:
-        logging.error(f"An error occurred while generating tts for '/speak': {e}")
+        log.error(f"An error occurred while generating tts for '/speak': {e}")
         if system_embed_info:
             system_embed_info.title = "An error occurred while generating tts for '/speak'"
             system_embed_info.description = e
@@ -2004,17 +2073,17 @@ async def change_imgmodel_task(user_name:str, channel, params:dict, ictx=None):
             await change_embed.delete()
             if bot_database.announce_channels:
                 # Send embeds to announcement channels
-                await bg_task_queue.put(announce_changes(ictx, 'Img model', imgmodel_name))
+                await bg_task_queue.put(announce_changes(ictx, 'changed Img model', imgmodel_name))
             else:
                 # Send change embed to interaction channel
                 change_embed_info.title = f"{user_name} changed Img model:"
                 change_embed_info.description = f'**{imgmodel_name}**'
                 change_embed = await channel.send(embed=change_embed_info)
-        logging.info(f"Image model changed to: {imgmodel_name}")
+        log.info(f"Image model changed to: {imgmodel_name}")
         if config['discord']['post_active_settings']['enabled']:
             await bg_task_queue.put(post_active_settings())
     except Exception as e:
-        logging.error(f"Error changing Img model: {e}")
+        log.error(f"Error changing Img model: {e}")
         traceback.print_exc()
         if change_embed_info:
             change_embed_info.title = "An error occurred while changing Img model"
@@ -2062,7 +2131,7 @@ async def change_llmmodel_task(ictx, params:dict):
                 await change_embed.delete()
                 # Send embeds to announcement channels
                 if bot_database.announce_channels:
-                    await bg_task_queue.put(announce_changes(ictx, 'LLM model', llmmodel_name))
+                    await bg_task_queue.put(announce_changes(ictx, 'changed LLM model', llmmodel_name))
                 else:
                     # Send change embed to interaction channel
                     if llmmodel_name == 'None':
@@ -2072,9 +2141,9 @@ async def change_llmmodel_task(ictx, params:dict):
                         change_embed_info.title = f"{user_name} changed LLM model:"
                         change_embed_info.description = f'**{llmmodel_name}**'
                     await channel.send(embed=change_embed_info)
-            logging.info(f"LLM model changed to: {llmmodel_name}")
+            log.info(f"LLM model changed to: {llmmodel_name}")
     except Exception as e:
-        logging.error(f"An error occurred while changing LLM Model from '/llmmodel': {e}")
+        log.error(f"An error occurred while changing LLM Model from '/llmmodel': {e}")
         traceback.print_exc()
         if change_embed_info:
             change_embed_info.title = "An error occurred while changing LLM model"
@@ -2091,11 +2160,9 @@ async def send_char_greeting_or_history(ictx: CtxInteraction, char_name:str):
         # Send message to channel
         message = ''
         if bot_history.greeting_or_history == 'history':
-            last_exchange = bot_history.session_history['visible'][-1] if bot_history.session_history.get('visible') else None
-            if last_exchange:
-                last_user_message = last_exchange[0]
-                last_assistant_message = last_exchange[1]
-                message = f'__**Last message exchange**__:\n>>> **User**: "{last_user_message}"\n **{bot_database.last_character}**: "{last_assistant_message}"'
+            last_user_message, last_bot_message = bot_history.get_history_for(ictx.channel.id).last_exchange()
+            if last_user_message:
+                message = f'__**Last message exchange**__:\n>>> **User**: "{last_user_message.text_visible}"\n **{bot_database.last_character}**: "{last_bot_message.text_visible}"'
         if not message:
             greeting = bot_settings.settings['llmcontext']['greeting']
             if greeting:
@@ -2105,11 +2172,12 @@ async def send_char_greeting_or_history(ictx: CtxInteraction, char_name:str):
                 message = f'**{char_name}** has entered the chat"'
         await send_long_message(channel, message)
     except Exception as e:
-        logging.error(f'An error occurred while sending greeting or history for "{char_name}": {e}')
+        print(traceback.format_exc())
+        log.error(f'An error occurred while sending greeting or history for "{char_name}": {e}')
 
 async def announce_changes(ictx: CtxInteraction, change_label:str, change_name:str):
     user_name = get_user_ctx_inter(ictx).display_name if ictx else 'Automatically'
-    change_embed_info.title = f"{user_name} changed {change_label}:"
+    change_embed_info.title = f"{user_name} {change_label}:"
     change_embed_info.description = f'**{change_name}**'
     try:
         # adjust delay depending on how many channels there are to prevent being rate limited
@@ -2128,16 +2196,19 @@ async def announce_changes(ictx: CtxInteraction, change_label:str, change_name:s
                 await channel.send(embed=change_embed_info)
             # Channel is in another server
             else:
-                change_embed_info.title = f"A user changed {change_label} in another bot server:"
+                change_embed_info.title = f"A user {change_label} in another bot server:"
                 await channel.send(embed=change_embed_info)
     except Exception as e:
-        logging.error(f'An error occurred while announcing changes to announce channels: {e}')
+        log.error(f'An error occurred while announcing changes to announce channels: {e}')
 
 async def change_char_task(ictx: CtxInteraction, source:str, params:dict):
     user_name = get_user_ctx_inter(ictx).display_name
     channel = ictx.channel
     change_embed = None
     try:
+
+        {'character': {'char_name': bot_database.last_character, 'verb': 'Resetting', 'mode': 'reset'}}
+
         char_params = params.get('character', {})
         char_name = char_params.get('char_name', {})
         verb = char_params.get('verb', 'Changing')
@@ -2147,30 +2218,32 @@ async def change_char_task(ictx: CtxInteraction, source:str, params:dict):
             change_embed_info.description = f'{user_name} requested character {mode}: "{char_name}"'
             change_embed = await channel.send(embed=change_embed_info)
         # Change character
-        await change_character(char_name, channel, source)
+        await change_character(char_name, channel)
         # Set history
-        if bot_history.autoload_history and (bot_history.change_char_history_method == 'keep' and source != 'reset'):
-            bot_history.load_bot_history()
-        else:
-            if source == 'reset':
-                bot_history.reset_session_history(ictx)
+        if not bot_history.autoload_history or bot_history.change_char_history_method == 'new': # if we don't keep history...
+            # create a clone with same settings but empty, and replace it in the manager
+            history = bot_history.get_history_for(ictx.channel.id, cached_only=True)
+            if history is None:
+                bot_history.new_history_for(ictx.channel.id)
             else:
-                bot_history.reset_session_history()
+                history.fresh().replace()
+
         if change_embed:
             await change_embed.delete()
+            change_message = 'reset the conversation' if mode == 'reset' else 'changed character'
             # Send embeds to announcement channels
             if bot_database.announce_channels:
-                await bg_task_queue.put(announce_changes(ictx, 'character', char_name))
+                await bg_task_queue.put(announce_changes(ictx, change_message, char_name))
+            # Send change embed to interaction channel
             else:
-                # Send change embed to interaction channel
-                change_embed_info.title = f"{user_name} changed character:"
                 change_embed_info.description = f'**{char_name}**'
+                change_embed_info.title = f"{user_name} {change_message}:"
                 await channel.send(embed=change_embed_info)
-        if not bot_history.per_channel_history_enabled:
+        if not bot_history.per_channel_history:
             await send_char_greeting_or_history(ictx, char_name)
-        logging.info(f"Character loaded: {char_name}")
+        log.info(f"Character loaded: {char_name}")
     except Exception as e:
-        logging.error(f'An error occurred while loading character for "{source}": {e}')
+        log.error(f'An error occurred while loading character for "{source}": {e}')
         if change_embed_info:
             change_embed_info.title = "An error occurred while loading character"
             change_embed_info.description = e
@@ -2208,7 +2281,7 @@ def bot_should_do(tags={}, prior_set={}):
             bot_will_do['should_gen_image'] = False
             bot_will_do['should_send_image'] = False
     except Exception as e:
-        logging.error(f"An error occurred while checking if bot should do '{key}': {e}")
+        log.error(f"An error occurred while checking if bot should do '{key}': {e}")
     return bot_will_do
 
 # For @ mentioning users who were not last replied to
@@ -2229,7 +2302,7 @@ flow_queue = asyncio.Queue()
 #################################################################
 ########################## QUEUED FLOW ##########################
 #################################################################
-async def format_next_flow(next_flow, user_name:str, text:str):
+async def format_next_flow(ictx, next_flow, user_name:str, text:str):
     flow_name = ''
     formatted_flow_tags = {}
     for key, value in next_flow.items():
@@ -2239,10 +2312,10 @@ async def format_next_flow(next_flow, user_name:str, text:str):
         # format prompt before feeding it back into on_message_task()
         elif key == 'format_prompt':
             formatting = {'format_prompt': [value]}
-            text = process_tag_formatting(user_name, text, formatting)
+            text = process_tag_formatting(ictx, user_name, text, formatting)
         # see if any tag values have dynamic formatting (user prompt, LLM reply, etc)
-        elif key != 'format_prompt' and isinstance(value, str):
-            formatted_value = format_prompt_with_recent_output(user_name, value)       # output will be a string
+        elif isinstance(value, str):
+            formatted_value = format_prompt_with_recent_output(ictx, user_name, value)       # output will be a string
             if formatted_value != value:                                        # if the value changed,
                 formatted_value = parse_tag_from_text_value(formatted_value)    # convert new string to correct value type
             formatted_flow_tags[key] = formatted_value
@@ -2252,14 +2325,14 @@ async def format_next_flow(next_flow, user_name:str, text:str):
     return flow_name, text
 
 # function to get a copy of the next queue item while maintaining the original queue
-async def peek_flow_queue(queue, user_name:str, text:str):
+async def peek_flow_queue(ictx, queue, user_name:str, text:str):
     temp_queue = asyncio.Queue()
     total_queue_size = queue.qsize()
     first_flow = None
     while queue.qsize() > 0:
         if queue.qsize() == total_queue_size:
             item = await queue.get()
-            flow_name, formatted_text = await format_next_flow(item, user_name, text)
+            flow_name, formatted_text = await format_next_flow(ictx, item, user_name, text)
         else:
             item = await queue.get()
         await temp_queue.put(item)
@@ -2281,7 +2354,7 @@ async def flow_task(ictx: CtxInteraction, source:str, text:str):
             flow_embed_info.description = ''
             flow_embed = await channel.send(embed=flow_embed_info)
         while flow_queue.qsize() > 0:   # flow_queue items are removed in get_tags()
-            flow_name, text = await peek_flow_queue(flow_queue, user_name, text)
+            flow_name, text = await peek_flow_queue(ictx, flow_queue, user_name, text)
             remaining_flow_steps = flow_queue.qsize()
             if flow_embed_info:
                 flow_embed_info.description = flow_embed_info.description.replace("**Processing", ":white_check_mark: **")
@@ -2295,7 +2368,7 @@ async def flow_task(ictx: CtxInteraction, source:str, text:str):
         flow_event.clear()              # flag that flow is no longer processing
         flow_queue.task_done()          # flow queue task is complete
     except Exception as e:
-        logging.error(f"An error occurred while processing a Flow: {e}")
+        log.error(f"An error occurred while processing a Flow: {e}")
         if flow_embed_info:
             flow_embed_info.title = "An error occurred while processing a Flow"
             flow_embed_info.description = e
@@ -2317,10 +2390,10 @@ async def sd_online(channel: discord.TextChannel):
     try:
         r = requests.get(f'{SD_URL}/')
         status = r.raise_for_status()
-        #logging.info(status)
+        #log.info(status)
         return True
     except Exception as exc:
-        logging.warning(exc)
+        log.warning(exc)
         if channel and system_embed_info:
             system_embed_info.title = f"{SD_CLIENT} api is not running at {SD_URL}"
             system_embed_info.description = f"Launch {SD_CLIENT} with `--api --listen` commandline arguments\nRead more [here](https://github.com/AUTOMATIC1111/stable-diffusion-webui/wiki/API)"
@@ -2328,7 +2401,7 @@ async def sd_online(channel: discord.TextChannel):
         return False
 
 async def sd_progress_warning(img_gen_embed):
-    logging.error('Reached maximum retry limit')
+    log.error('Reached maximum retry limit')
     if img_gen_embed:
         img_gen_embed_info.title = f'Error getting progress response from {SD_CLIENT}.'
         img_gen_embed_info.description = 'Image generation will continue, but progress will not be tracked.'
@@ -2347,7 +2420,7 @@ async def fetch_progress(session):
         async with session.get(f'{SD_URL}/sdapi/v1/progress') as progress_response:
             return await progress_response.json()
     except aiohttp.ClientError as e:
-        logging.warning(f'Failed to fetch progress: {e}')
+        log.warning(f'Failed to fetch progress: {e}')
         return None
 
 async def check_sd_progress(channel, session):
@@ -2362,7 +2435,7 @@ async def check_sd_progress(channel, session):
             progress_data = await fetch_progress(session)
             if progress_data and progress_data['progress'] != 0:
                 break
-            logging.warning(f'Waiting for progress response from {SD_CLIENT}, retrying in 1 second (attempt {retry_count + 1}/5)')
+            log.warning(f'Waiting for progress response from {SD_CLIENT}, retrying in 1 second (attempt {retry_count + 1}/5)')
             await asyncio.sleep(1)
             retry_count += 1
         else:
@@ -2384,7 +2457,7 @@ async def check_sd_progress(channel, session):
                     if img_gen_embed: await img_gen_embed.edit(embed=img_gen_embed_info)
                     await asyncio.sleep(1)
                 else:
-                    logging.warning(f'Connection closed with {SD_CLIENT}, retrying in 1 second (attempt {retry_count + 1}/5)')
+                    log.warning(f'Connection closed with {SD_CLIENT}, retrying in 1 second (attempt {retry_count + 1}/5)')
                     await asyncio.sleep(1)
                     retry_count += 1
             else:
@@ -2392,7 +2465,7 @@ async def check_sd_progress(channel, session):
                 return
         if img_gen_embed: await img_gen_embed.delete()
     except Exception as e:
-        logging.error(f'Error tracking {SD_CLIENT} image generation progress: {e}')
+        log.error(f'Error tracking {SD_CLIENT} image generation progress: {e}')
 
 async def track_progress(channel):
     if img_gen_embed_info:
@@ -2409,7 +2482,7 @@ async def layerdiffuse_hack(temp_dir, img_payload, images, pnginfo):
                 ld_output = images.pop(i)
                 break
         if ld_output is None:
-            logging.warning("Failed to find layerdiffuse output image")
+            log.warning("Failed to find layerdiffuse output image")
             return images
         # Workaround for layerdiffuse PNG infoReActor + layerdiffuse combination
         reactor = img_payload['alwayson_scripts'].get('reactor', {})
@@ -2424,7 +2497,7 @@ async def layerdiffuse_hack(temp_dir, img_payload, images, pnginfo):
         images[0] = img0 # Update images list
         return images
     except Exception as e:
-        logging.error(f'Error processing layerdiffuse images: {e}')
+        log.error(f'Error processing layerdiffuse images: {e}')
 
 async def apply_reactor_mask(temp_dir, images, pnginfo, reactor_mask):
     try:
@@ -2437,7 +2510,7 @@ async def apply_reactor_mask(temp_dir, images, pnginfo, reactor_mask):
         images[0] = orig_image                                          # Replace first image in images list
         return images
     except Exception as e:
-        logging.error(f'Error masking ReActor output images: {e}')
+        log.error(f'Error masking ReActor output images: {e}')
 
 async def save_images_and_return(temp_dir, img_payload, endpoint):
     images = []
@@ -2462,7 +2535,7 @@ async def save_images_and_return(temp_dir, img_payload, endpoint):
             image.save(f'{temp_dir}/temp_img_{i}.png', pnginfo=pnginfo) # save image to temp directory
             images.append(image) # collect a list of PIL images
     except Exception as e:
-        logging.error(f'Error processing images: {e}')
+        log.error(f'Error processing images: {e}')
         traceback.print_exc()
         return [], e
     return images, pnginfo
@@ -2495,7 +2568,7 @@ async def sd_img_gen(channel, temp_dir:str, img_payload:dict, endpoint:str):
             images = await layerdiffuse_hack(temp_dir, img_payload, images, pnginfo)
         return images
     except Exception as e:
-        logging.error(f'Error processing images in {SD_CLIENT} API module: {e}')
+        log.error(f'Error processing images in {SD_CLIENT} API module: {e}')
         return []
 
 async def process_image_gen(img_payload:dict, channel, params:dict):
@@ -2503,11 +2576,11 @@ async def process_image_gen(img_payload:dict, channel, params:dict):
         bot_will_do = params.get('bot_will_do', {})
         img_censoring = params.get('img_censoring', 0)
         endpoint = params.get('endpoint', '/sdapi/v1/txt2img')
-        default_save_path = os.path.join('ad_discordbot', 'sd_outputs')
+        default_save_path = os.path.join(shared_path.dir_root, 'sd_outputs')
         sd_output_dir = params.get('sd_output_dir', default_save_path)
         # Ensure the necessary directories exist
         os.makedirs(sd_output_dir, exist_ok=True)
-        temp_dir = os.path.join('ad_discordbot', 'user_images', '__temp')
+        temp_dir = os.path.join(shared_path.dir_root, 'user_images', '__temp')
         os.makedirs(temp_dir, exist_ok=True)
         # Generate images, save locally
         images = await sd_img_gen(channel, temp_dir, img_payload, endpoint)
@@ -2530,7 +2603,7 @@ async def process_image_gen(img_payload:dict, channel, params:dict):
         # for tempfile in os.listdir(temp_dir):
         #     os.remove(os.path.join(temp_dir, tempfile))
     except Exception as e:
-        logging.error(f"An error occurred when processing image generation: {e}")
+        log.error(f"An error occurred when processing image generation: {e}")
 
 def clean_img_payload(img_payload):
     try:
@@ -2591,7 +2664,7 @@ def clean_img_payload(img_payload):
                         # Extract the value (without leading space) and set it to the 'scheduler' key
                         img_payload['scheduler'] = value.strip()
                         if SD_CLIENT == 'A1111 SD WebUI':
-                            logging.warning(f'Img payload value "sampler_name": "{sampler_name}" is incompatible with current version of "{SD_CLIENT}". "{value}" must be omitted from "sampler_name", and instead used for the "scheduler" parameter. This is being corrected automatically. To avoid this warning, please update "sampler_name" parameter wherever present in your settings.')
+                            log.warning(f'Img payload value "sampler_name": "{sampler_name}" is incompatible with current version of "{SD_CLIENT}". "{value}" must be omitted from "sampler_name", and instead used for the "scheduler" parameter. This is being corrected automatically. To avoid this warning, please update "sampler_name" parameter wherever present in your settings.')
                             # Remove the matched part from sampler_name
                             start_index = sampler_name.lower().rfind(value)
                             fixed_sampler_name = sampler_name[:start_index].strip()
@@ -2599,7 +2672,7 @@ def clean_img_payload(img_payload):
                             bot_settings.settings['imgmodel']['payload']['sampler_name'] = fixed_sampler_name
                             bot_settings.settings['imgmodel']['payload']['scheduler'] = value.strip()
                         else:
-                            logging.warning(f'Img payload value "sampler_name": "{sampler_name}" may cause an error due to the scheduler ("{value}") being part of the value. The scheduler may be expected as a separate parameter in current version of "{SD_CLIENT}".')
+                            log.warning(f'Img payload value "sampler_name": "{sampler_name}" may cause an error due to the scheduler ("{value}") being part of the value. The scheduler may be expected as a separate parameter in current version of "{SD_CLIENT}".')
                         break
 
         # Delete all empty keys
@@ -2610,7 +2683,7 @@ def clean_img_payload(img_payload):
         for key in keys_to_delete:
             del img_payload[key]
     except Exception as e:
-        logging.error(f"An error occurred when cleaning img_payload: {e}")
+        log.error(f"An error occurred when cleaning img_payload: {e}")
     return img_payload
 
 def apply_loractl(tags):
@@ -2618,7 +2691,7 @@ def apply_loractl(tags):
         if SD_CLIENT != 'A1111 SD WebUI':
             if not bot_database.was_warned('loractl'):
                 bot_database.update_was_warned('loractl')
-                logging.warning(f'loractl is not known to be compatible with "{SD_CLIENT}". Not applying loractl...')
+                log.warning(f'loractl is not known to be compatible with "{SD_CLIENT}". Not applying loractl...')
             return tags
         scaling_settings = [v for k, v in config['sd'].get('extensions', {}).get('lrctl', {}).items() if 'scaling' in k]
         scaling_settings = scaling_settings if scaling_settings else ['']
@@ -2650,10 +2723,10 @@ def apply_loractl(tags):
                                     new_positive_prompt = positive_prompt.replace(lora_match, updated_lora_match)
                                     # Update the appropriate key in the tag dictionary
                                     tag[used_key] = new_positive_prompt
-                                    logging.info(f'''[TAGS] loractl applied: "{lora_match}" > "{updated_lora_match}"''')
+                                    log.info(f'''[TAGS] loractl applied: "{lora_match}" > "{updated_lora_match}"''')
         return tags
     except Exception as e:
-        logging.error(f"Error processing lrctl: {e}")
+        log.error(f"Error processing lrctl: {e}")
         return tags
 
 def apply_imgcmd_params(img_payload, params):
@@ -2675,7 +2748,7 @@ def apply_imgcmd_params(img_payload, params):
         if controlnet: img_payload['alwayson_scripts']['controlnet']['args'][0].update(controlnet)
         return img_payload
     except Exception as e:
-        logging.error(f"Error initializing img payload: {e}")
+        log.error(f"Error initializing img payload: {e}")
         return img_payload
 
 def process_img_prompt_tags(img_payload:dict, tags:dict) -> dict:
@@ -2687,7 +2760,7 @@ def process_img_prompt_tags(img_payload:dict, tags:dict) -> dict:
         for tag in matches:
             join = tag.get('img_text_joining', ' ')
             if 'imgtag_uninserted' in tag: # was flagged as a trigger match but not inserted
-                logging.info(f'''[TAGS] "{tag['matched_trigger']}" not found in the image prompt. Appending rather than inserting.''')
+                log.info(f'''[TAGS] "{tag['matched_trigger']}" not found in the image prompt. Appending rather than inserting.''')
                 updated_positive_prompt = updated_positive_prompt + ", " + tag['positive_prompt']
             if 'positive_prompt_prefix' in tag:
                 updated_positive_prompt = tag['positive_prompt_prefix'] + join + updated_positive_prompt
@@ -2706,7 +2779,7 @@ def process_img_prompt_tags(img_payload:dict, tags:dict) -> dict:
         img_payload['negative_prompt'] = updated_negative_prompt
 
     except Exception as e:
-        logging.error(f"Error processing Img prompt tags: {e}")
+        log.error(f"Error processing Img prompt tags: {e}")
 
     return img_payload
 
@@ -2718,7 +2791,7 @@ def random_value_from_range(value_range):
             value = random.uniform(start, end) if isinstance(start, float) or isinstance(end, float) else random.randint(start, end)
             value = round(value, num_digits)
             return value
-    logging.warning(f'Invalid value range "{value_range}". Defaulting to "0".')
+    log.warning(f'Invalid value range "{value_range}". Defaulting to "0".')
     return 0
 
 def convert_lists_to_tuples(dictionary:dict) -> dict:
@@ -2745,15 +2818,15 @@ def process_param_variances(param_variances: dict) -> dict:
                 elif all(isinstance(item, bool) for item in value):
                     processed_params[key] = random.choice(value)
                 else:
-                    logging.warning(f'Invalid params "{key}", "{value}" will not be applied.')
+                    log.warning(f'Invalid params "{key}", "{value}" will not be applied.')
                     processed_params.pop(key)  # Remove invalid key
             else:
-                logging.warning(f'Invalid params "{key}", "{value}" will not be applied.')
+                log.warning(f'Invalid params "{key}", "{value}" will not be applied.')
                 processed_params.pop(key)  # Remove invalid key
         return processed_params
 
     except Exception as e:
-        logging.error(f"Error processing param variances: {e}")
+        log.error(f"Error processing param variances: {e}")
         return {}
 
 def select_random_image_or_subdir(directory=None, root_dir=None, key=None):
@@ -2795,7 +2868,7 @@ def get_image_tag_args(extension, value, key=None, set_dir=None):
     image_file_path = ''
     method = ''
     try:
-        home_path = os.path.join('ad_discordbot', 'user_images')
+        home_path = os.path.join(shared_path.dir_root, 'user_images')
         full_path = os.path.join(home_path, value)
         # If value contains valid image extension
         if any(ext in value for ext in (".txt", ".png", ".jpg")): # extension included in value
@@ -2821,7 +2894,7 @@ def get_image_tag_args(extension, value, key=None, set_dir=None):
                     break  # Break the loop if an image is found and selected
                 else:
                     if not os.listdir(os_path):
-                        logging.warning(f'Valid file not found in a "{home_path}" or any subdirectories: "{value}"')
+                        log.warning(f'Valid file not found in a "{home_path}" or any subdirectories: "{value}"')
                         break  # Break the loop if no folders or images are found
         # If value does not specify an extension, but is also not a directory
         else:
@@ -2849,12 +2922,12 @@ def get_image_tag_args(extension, value, key=None, set_dir=None):
                     if not method: # will already have value if random img picked from dir
                         method = 'Image file'
         if method:
-            logging.info(f'[TAGS] {extension}: "{value}" ({method}).')
+            log.info(f'[TAGS] {extension}: "{value}" ({method}).')
             if method == 'Random from folder':
                 args['selected_folder'] = os.path.dirname(image_file_path)
         return args
     except Exception as e:
-        logging.error(f"[TAGS] Error processing {extension} tag: {e}")
+        log.error(f"[TAGS] Error processing {extension} tag: {e}")
         return {}
 
 async def process_img_payload_tags(img_payload:dict, mods:dict, params:dict):
@@ -2887,20 +2960,20 @@ async def process_img_payload_tags(img_payload:dict, mods:dict, params:dict):
                 current_imgmodel_name = bot_settings.settings['imgmodel'].get('imgmodel_name')
                 # Check if new model same as current model
                 if current_imgmodel_name == params['imgmodel'].get('imgmodel_name', ''):
-                    logging.info(f'[TAGS] Img model was triggered to change, but it is the same as current ("{current_imgmodel_name}").')
+                    log.info(f'[TAGS] Img model was triggered to change, but it is the same as current ("{current_imgmodel_name}").')
                 else:
                     params['imgmodel']['current_imgmodel_name'] = current_imgmodel_name
                     params['imgmodel']['current_sd_model_checkpoint'] = current_sd_model_checkpoint
                     params['imgmodel']['mode'] = 'change' if new_imgmodel == change_imgmodel else 'swap'
                     params['imgmodel']['verb'] = 'Changing' if params['imgmodel']['mode'] == 'change' else 'Swapping'
-                    logging.info(f'[TAGS] {params["imgmodel"]["verb"]} Img model: "{params["imgmodel"].get("imgmodel_name", "")}"')
+                    log.info(f'[TAGS] {params["imgmodel"]["verb"]} Img model: "{params["imgmodel"].get("imgmodel_name", "")}"')
             # Payload handling
             if payload:
                 if isinstance(payload, dict):
-                    logging.info(f"[TAGS] Updated payload: '{payload}'")
+                    log.info(f"[TAGS] Updated payload: '{payload}'")
                     update_dict(img_payload, payload)
                 else:
-                    logging.warning("A tag was matched with invalid 'payload'; must be a dictionary.")
+                    log.warning("A tag was matched with invalid 'payload'; must be a dictionary.")
             # Aspect Ratio
             if aspect_ratio:
                 try:
@@ -2908,13 +2981,13 @@ async def process_img_payload_tags(img_payload:dict, mods:dict, params:dict):
                     n, d = get_aspect_ratio_parts(aspect_ratio)
                     w, h = dims_from_ar(current_avg, n, d)
                     img_payload['width'], img_payload['height'] = w, h
-                    logging.info(f'[TAGS] Applied aspect ratio "{aspect_ratio}" (Width: "{w}", Height: "{h}").')
+                    log.info(f'[TAGS] Applied aspect ratio "{aspect_ratio}" (Width: "{w}", Height: "{h}").')
                 except:
                     pass
             # Param variances handling
             if param_variances:
                 processed_params = process_param_variances(param_variances)
-                logging.info(f"[TAGS] Applied Param Variances: '{processed_params}'")
+                log.info(f"[TAGS] Applied Param Variances: '{processed_params}'")
                 sum_update_dict(img_payload, processed_params)
             # Controlnet handling
             if controlnet and config['sd']['extensions'].get('controlnet_enabled', False):
@@ -2923,12 +2996,12 @@ async def process_img_payload_tags(img_payload:dict, mods:dict, params:dict):
             if forge_couple and config['sd']['extensions'].get('forgecouple_enabled', False):
                 img_payload['alwayson_scripts']['forge_couple']['args'].update(forge_couple)
                 img_payload['alwayson_scripts']['forge_couple']['args']['enable'] = True
-                logging.info(f"[TAGS] Enabled forge_couple: {forge_couple}")
+                log.info(f"[TAGS] Enabled forge_couple: {forge_couple}")
             # layerdiffuse handling
             if layerdiffuse and config['sd']['extensions'].get('layerdiffuse_enabled', False):
                 img_payload['alwayson_scripts']['layerdiffuse']['args'].update(layerdiffuse)
                 img_payload['alwayson_scripts']['layerdiffuse']['args']['enabled'] = True
-                logging.info(f"[TAGS] Enabled layerdiffuse: {layerdiffuse}")
+                log.info(f"[TAGS] Enabled layerdiffuse: {layerdiffuse}")
             # ReActor face swap handling
             if reactor and config['sd']['extensions'].get('reactor_enabled', False):
                 img_payload['alwayson_scripts']['reactor']['args'].update(reactor)
@@ -2943,7 +3016,7 @@ async def process_img_payload_tags(img_payload:dict, mods:dict, params:dict):
                 img_payload['mask'] = str(img2img_mask)
         return img_payload, params
     except Exception as e:
-        logging.error(f"Error processing Img tags: {e}")
+        log.error(f"Error processing Img tags: {e}")
         return img_payload, None
 
 # The methods of this function allow multiple extensions with an identical "select image from random folder" value to share the first selected folder.
@@ -2968,7 +3041,7 @@ def collect_img_extension_mods(mods):
                         if set_dir is None:
                             set_dir = img2img_mask_args.get('selected_folder', None)
         except Exception as e:
-            logging.error(f"Error collecting img2img tag values: {e}")
+            log.error(f"Error collecting img2img tag values: {e}")
     if controlnet:
         try:
             for idx, controlnet_item in enumerate(controlnet):
@@ -2999,7 +3072,7 @@ def collect_img_extension_mods(mods):
                                     set_dir = cnet_mask_args.get('selected_folder', None)
             mods['controlnet'] = controlnet
         except Exception as e:
-            logging.error(f"Error collecting ControlNet tag values: {e}")
+            log.error(f"Error collecting ControlNet tag values: {e}")
     if reactor:
         try:
             image = reactor.get('image', None)
@@ -3016,7 +3089,7 @@ def collect_img_extension_mods(mods):
                         if reactor_mask_args and set_dir is None:
                             set_dir = reactor_mask_args.get('selected_folder', None)
         except Exception as e:
-            logging.error(f"Error collecting ReActor tag values: {e}")
+            log.error(f"Error collecting ReActor tag values: {e}")
     return mods
 
 def collect_img_tag_values(tags, params):
@@ -3040,7 +3113,8 @@ def collect_img_tag_values(tags, params):
                     params['sd_output_dir'] = str(value)
                 elif key == 'img_censoring' and not params.get('img_censoring'):
                     params['img_censoring'] = int(value)
-                    logging.info(f"[TAGS] Censoring: {'Image Blurred' if value == 1 else 'Generation Blocked'}")
+                    if value != 0:
+                        log.info(f"[TAGS] Censoring: {'Image Blurred' if value == 1 else 'Generation Blocked'}")
                 # Accept only first 'change' or 'swap'
                 elif key == 'change_imgmodel' or key == 'swap_imgmodel' and not (img_payload_mods.get('change_imgmodel') or img_payload_mods.get('swap_imgmodel')):
                     img_payload_mods[key] = str(value)
@@ -3054,13 +3128,13 @@ def collect_img_tag_values(tags, params):
                         else:
                             img_payload_mods['payload'] = dict(value)
                     except:
-                        logging.warning("Error processing a matched 'payload' tag; ensure it is a dictionary.")
+                        log.warning("Error processing a matched 'payload' tag; ensure it is a dictionary.")
                 elif key == 'img_param_variances':
                     img_payload_mods.setdefault('param_variances', {})
                     try:
                         update_dict(img_payload_mods['param_variances'], dict(value))
                     except:
-                        logging.warning("Error processing a matched 'img_param_variances' tag; ensure it is a dictionary.")
+                        log.warning("Error processing a matched 'img_param_variances' tag; ensure it is a dictionary.")
                 # get any ControlNet extension params
                 elif key.startswith('controlnet') and extensions.get('controlnet_enabled'):
                     index = int(key[len('controlnet'):]) if key != 'controlnet' else 0  # Determine the index (cnet unit) for main controlnet args
@@ -3100,7 +3174,7 @@ def collect_img_tag_values(tags, params):
                     user_image = discord.File(user_image_args)
                     params.setdefault('send_user_image', [])
                     params['send_user_image'].append(user_image)
-                    logging.info(f'[TAGS] Sending user image.')
+                    log.info(f'[TAGS] Sending user image.')
         # Add the collected SD WebUI extension args to the img_payload_mods dict
         if controlnet_args:
             img_payload_mods.setdefault('controlnet', [])
@@ -3121,7 +3195,7 @@ def collect_img_tag_values(tags, params):
 
         img_payload_mods = collect_img_extension_mods(img_payload_mods)
     except Exception as e:
-        logging.error(f"Error collecting Img tag values: {e}")
+        log.error(f"Error collecting Img tag values: {e}")
     return img_payload_mods, params
 
 def init_img_payload(img_prompt:str, neg_prompt:str) -> dict:
@@ -3135,7 +3209,7 @@ def init_img_payload(img_prompt:str, neg_prompt:str) -> dict:
         return img_payload
 
     except Exception as e:
-        logging.error(f"Error initializing img payload: {e}")
+        log.error(f"Error initializing img payload: {e}")
 
 def match_img_tags(img_prompt:str, tags:dict) -> dict:
     try:
@@ -3165,7 +3239,7 @@ def match_img_tags(img_prompt:str, tags:dict) -> dict:
                 tags['unmatched']['userllm'].remove(tag)
 
     except Exception as e:
-        logging.error(f"Error matching tags for img phase: {e}")
+        log.error(f"Error matching tags for img phase: {e}")
 
     return tags
 
@@ -3178,7 +3252,7 @@ async def img_gen_task(source:str, img_prompt:str, params:dict, ictx:CtxInteract
         check_key = bot_settings.settings['imgmodel'].get('override_settings', {}) or bot_settings.settings['imgmodel'].get('payload', {}).get('override_settings', {})
         if check_key.get('sd_model_checkpoint', '') == 'None': # Model currently unloaded
             await channel.send("**Cannot process image request:** No Img model is currently loaded")
-            logging.warning(f'Bot tried to generate image for {user_name}, but no Img model was loaded')
+            log.warning(f'Bot tried to generate image for {user_name}, but no Img model was loaded')
         if not tags:
             img_prompt, tags = await get_tags(img_prompt)
             tags = match_img_tags(img_prompt, tags)
@@ -3236,7 +3310,7 @@ async def img_gen_task(source:str, img_prompt:str, params:dict, ictx:CtxInteract
             await change_imgmodel_task(user_name, channel, swap_params, ictx)
         return
     except Exception as e:
-        logging.error(f"An error occurred in img_gen_task(): {e}")
+        log.error(f"An error occurred in img_gen_task(): {e}")
 
 #################################################################
 ######################## /IMAGE COMMAND #########################
@@ -3269,7 +3343,7 @@ if sd_enabled:
             return size_choices, style_choices
 
         except Exception as e:
-            logging.error(f"An error occurred while building choices for /image: {e}")
+            log.error(f"An error occurred while building choices for /image: {e}")
 
     def get_current_avg_from_dims():
         w = bot_active_settings.get('imgmodel', {}).get('payload', {}).get('width', 512)
@@ -3295,7 +3369,7 @@ if sd_enabled:
             return size_options, style_options
 
         except Exception as e:
-            logging.error(f"An error occurred while building options for /image: {e}")
+            log.error(f"An error occurred while building options for /image: {e}")
 
     async def get_cnet_data() -> dict:
 
@@ -3306,7 +3380,7 @@ if sd_enabled:
                     if online: return True
                     else: return False
                 except:
-                    logging.warning(f"ControlNet is enabled in config.yaml, but was not responsive from {SD_CLIENT} API.")
+                    log.warning(f"ControlNet is enabled in config.yaml, but was not responsive from {SD_CLIENT} API.")
             return False
 
         filtered_cnet_data = {}
@@ -3325,7 +3399,7 @@ if sd_enabled:
             except:
                 cnet_online = await check_cnet_online()
                 if cnet_online:
-                    logging.warning("ControlNet is both enabled in config.yaml and detected. However, ad_discordbot relies on the '/controlnet/control_types' \
+                    log.warning("ControlNet is both enabled in config.yaml and detected. However, ad_discordbot relies on the '/controlnet/control_types' \
                         API endpoint which is missing. See here: (https://github.com/altoiddealer/ad_discordbot/wiki/troubleshooting).")
         return filtered_cnet_data
 
@@ -3456,7 +3530,7 @@ if sd_enabled:
                 try:
                     img2img_dict, endpoint, message = await process_image_img2img(img2img, img2img_dict, endpoint, message)
                 except Exception as e:
-                    logging.error(f"An error occurred while configuring Img2Img for /image command: {e}")
+                    log.error(f"An error occurred while configuring Img2Img for /image command: {e}")
             if img2img_mask:
                 if img2img:
                     attached_img2img_mask_img = await img2img_mask.read()
@@ -3479,7 +3553,7 @@ if sd_enabled:
                         cnetimage = base64.b64encode(attached_cnet_img).decode('utf-8')
                         cnet_dict['image'] = cnetimage
                     except:
-                        logging.error(f"Error decoding ControlNet input image for '/image' command: {e}")
+                        log.error(f"Error decoding ControlNet input image for '/image' command: {e}")
                     try:
                         # Ask user to select a Control Type
                         cnet_control_type_options = [discord.SelectOption(label=key, value=key) for key in cnet_data]
@@ -3494,7 +3568,7 @@ if sd_enabled:
                         await interaction.response.defer() # defer response for this interaction
                         await select_message.delete()
                     except Exception as e:
-                        logging.error(f"An error occurred while setting ControlNet Control Type in '/image' command: {e}")
+                        log.error(f"An error occurred while setting ControlNet Control Type in '/image' command: {e}")
                     # View containing Selects for ControlNet Module, Model, Start and End
                     class CnetControlView(discord.ui.View):
                         def __init__(self, cnet_data, selected_control_type):
@@ -3618,7 +3692,7 @@ if sd_enabled:
                                     value = float(value) if round_b else int(value)
                                     options_b.append(discord.SelectOption(label=str(value), value=str(value), default=index == default_b))
                             except:
-                                logging.error(f"Error building ControlNet options for '/image' command: {e}")
+                                log.error(f"Error building ControlNet options for '/image' command: {e}")
                                 return [discord.SelectOption(label='Not Applicable', value='64')], 'Not Applicable', [discord.SelectOption(label='Not Applicable', value='64')], 'Not Applicable'
                         return options_a, label_a, options_b, label_b
                     try:
@@ -3631,7 +3705,7 @@ if sd_enabled:
                         await view_message.delete()
                         options_a, label_a, options_b, label_b = make_cnet_options(selected_module)
                     except Exception as e:
-                        logging.error(f"An error occurred while configuring initial ControlNet options from '/image' command: {e}")
+                        log.error(f"An error occurred while configuring initial ControlNet options from '/image' command: {e}")
                     # View containing Selects for ControlNet Weight and Additional Options
                     class CnetOptionsView(discord.ui.View):
                         def __init__(self, options_a, label_a, options_b, label_b):
@@ -3669,26 +3743,26 @@ if sd_enabled:
                         cnet_dict.update(view.cnet_dict)
                         await view_message.delete()
                     except Exception as e:
-                        logging.error(f"An error occurred while configuring secondary ControlNet options from /image command: {e}")
+                        log.error(f"An error occurred while configuring secondary ControlNet options from /image command: {e}")
                     cnet_dict.update({'enabled': True, 'save_detected_map': True})
                     message += f" | **ControlNet:** (Module: {cnet_dict['module']}, Model: {cnet_dict['model']})"
                     return cnet_dict, message
                 try:
                     cnet_dict, message = await process_image_controlnet(cnet, cnet_dict, message)
                 except Exception as e:
-                    logging.error(f"An error occurred while configuring ControlNet for /image command: {e}")
+                    log.error(f"An error occurred while configuring ControlNet for /image command: {e}")
             params = {'neg_prompt': neg_style_prompt, 'size': size_dict, 'img2img': img2img_dict, 'face_swap': faceswapimg, 'controlnet': cnet_dict, 'endpoint': endpoint, 'message': message}
             await ireply(ctx, 'image') # send a response msg to the user
 
             async with task_semaphore:
                 async with ctx.channel.typing():
                     # offload to ai_gen queue
-                    logging.info(f'{ctx.author.display_name} used "/image": "{prompt}"')
+                    log.info(f'{ctx.author.display_name} used "/image": "{prompt}"')
                     await img_gen_task('image', prompt, params, ctx, tags={})
                     await run_flow_if_any(ctx, 'image', prompt)
 
         except Exception as e:
-            logging.error(f"An error occurred in image(): {e}")
+            log.error(f"An error occurred in image(): {e}")
             traceback.print_exc()
 
 #################################################################
@@ -3728,7 +3802,7 @@ async def announce(ctx: commands.Context):
         bot_database.save()
         await ctx.reply(action_message)
     except Exception as e:
-        logging.error(f"Error toggling announce channel setting: {e}")
+        log.error(f"Error toggling announce channel setting: {e}")
 
 @client.hybrid_command(description="Toggle current channel as main channel for bot to auto-reply without needing to be called")
 async def main(ctx: commands.Context):
@@ -3744,59 +3818,60 @@ async def main(ctx: commands.Context):
         bot_database.save()
         await ctx.reply(action_message)
     except Exception as e:
-        logging.error(f"Error toggling main channel setting: {e}")
+        log.error(f"Error toggling main channel setting: {e}")
 
 @client.hybrid_command(description="Update dropdown menus without restarting bot script.")
 async def sync(ctx: commands.Context):
     try:
         await ctx.reply('Syncing client tree. Note: Menus may not update instantly.', ephemeral=True, delete_after=10)
-        logging.info(f"{ctx.author.display_name} used '/sync' to sync the client.tree (refresh commands).")
+        log.info(f"{ctx.author.display_name} used '/sync' to sync the client.tree (refresh commands).")
         await bg_task_queue.put(client.tree.sync()) # Process this in the background
     except Exception as e:
-        logging.error(f"Error syncing client.tree with '/sync': {e}")
+        log.error(f"Error syncing client.tree with '/sync': {e}")
 
 #################################################################
 ######################### LLM COMMANDS ##########################
 #################################################################
 if textgenwebui_enabled:
-    # /reset command - Resets current character
+    # /reset_conversation command - Resets current character
     @client.hybrid_command(description="Reset the conversation with current character")
     async def reset_conversation(ctx: commands.Context):
         try:
             shared.stop_everything = True
-            await ireply(ctx, 'character reset') # send a response msg to the user
-            bot_history.reset_session_history(ctx)
+            await ireply(ctx, 'conversation reset') # send a response msg to the user
+            # Create a new instanec of the history and set it to active
+            bot_history.get_history_for(ctx.channel.id).fresh().replace()
 
             async with task_semaphore:
                 # offload to ai_gen queue
-                logging.info(f'{ctx.author.display_name} used "/reset": "{bot_database.last_character}"')
+                log.info(f'{ctx.author.display_name} used "/reset": "{bot_database.last_character}"')
                 params = {'character': {'char_name': bot_database.last_character, 'verb': 'Resetting', 'mode': 'reset'}}
                 await change_char_task(ctx, 'reset', params)
 
         except Exception as e:
-            logging.error(f"Error with /reset: {e}")
+            print(traceback.format_exc())
+            log.error(f"Error with /reset_conversation: {e}")
 
-    # /reset command - Resets current character
+    # /save_conversation command
     @client.hybrid_command(description="Saves the current conversation to a new file in text-generation-webui/logs/")
     async def save_conversation(ctx: commands.Context):
         try:
+            await bot_history.get_history_for(ctx.channel.id).save(timeout=0, force=True)
             await ctx.reply('Saved current conversation history', ephemeral=True)
-            bot_history.save_history()
+            
         except Exception as e:
-            logging.error(f"Error with /reset: {e}")
+            log.error(f"Error with /save_conversation: {e}")
 
     # Context menu command to Regenerate last reply
     @client.tree.context_menu(name="regenerate")
     async def regen_llm_gen(inter: discord.Interaction, message:discord.Message):
-        text = message.content
         await inter.response.defer(thinking=False)
 
         async with task_semaphore:
             async with inter.channel.typing():
                 # offload to ai_gen queue
-                logging.info(f'{inter.user.display_name} used "Regenerate"')
-                await cont_regen_task(inter, 'regen', text, message.id)
-                await run_flow_if_any(inter, 'regen', text)
+                log.info(f'{inter.user.display_name} used "Regenerate"')
+                await cont_regen_task(inter, 'regen', message)
 
     # Context menu command to Continue last reply
     @client.tree.context_menu(name="continue")
@@ -3807,14 +3882,13 @@ if textgenwebui_enabled:
         async with task_semaphore:
             async with inter.channel.typing():
                 # offload to ai_gen queue
-                logging.info(f'{inter.user.display_name} used "Continue"')
-                await cont_regen_task(inter, 'cont', text, message.id)
-                await run_flow_if_any(inter, 'cont', text)
+                log.info(f'{inter.user.display_name} used "Continue"')
+                await cont_regen_task(inter, 'cont', message, text)
 
 async def load_character_data(char_name):
     char_data = None
     for ext in ['.yaml', '.yml', '.json']:
-        character_file = os.path.join("characters", f"{char_name}{ext}")
+        character_file = os.path.join(shared_path.dir_tgwui, "characters", f"{char_name}{ext}")
         if os.path.exists(character_file):
             char_data = load_file(character_file)
             if char_data is None:
@@ -3824,18 +3898,18 @@ async def load_character_data(char_name):
             break  # Break the loop if data is successfully loaded
 
     if char_data is None:
-        logging.error(f"Failed to load data for: {char_name}, perhaps missing file?")
+        log.error(f"Failed to load data for: {char_name}, perhaps missing file?")
 
     return char_data
 
 # Collect character information
-async def character_loader(char_name, channel=None, source=None):
+async def character_loader(char_name, channel=None):
     try:
         # Get data using textgen-webui native character loading function
         _, name, _, greeting, context = load_character(char_name, '', '')
         missing_keys = [key for key, value in {'name': name, 'greeting': greeting, 'context': context}.items() if not value]
         if any (missing_keys):
-            logging.warning(f'Note that character "{char_name}" is missing the following info:"{missing_keys}".')
+            log.warning(f'Note that character "{char_name}" is missing the following info:"{missing_keys}".')
         textgen_data = {'name': name, 'greeting': greeting, 'context': context}
         # Check for extra bot data
         char_data = await load_character_data(char_name)
@@ -3871,7 +3945,7 @@ async def character_loader(char_name, channel=None, source=None):
         update_dict(state_dict, dict(char_llmstate))
         bot_behavior.update_behavior(dict(char_behavior))
         # Print mode in cmd
-        logging.info(f"Initializing in {state_dict['mode']} mode")
+        log.info(f"Initializing in {state_dict['mode']} mode")
         # Check for any char defined or model defined instruct_template
         update_instruct = char_instruct or instruction_template_str or None # 'instruction_template_str' is global variable
         if update_instruct:
@@ -3886,7 +3960,7 @@ async def character_loader(char_name, channel=None, source=None):
         bot_active_settings['llmstate']['state'] = char_llmstate
         bot_active_settings.save()
     except Exception as e:
-        logging.error(f"Error loading character. Check spelling and file structure. Use bot cmd '/character' to try again. {e}")
+        log.error(f"Error loading character. Check spelling and file structure. Use bot cmd '/character' to try again. {e}")
 
 # Task to manage discord profile updates
 delayed_profile_update_task = None
@@ -3900,10 +3974,10 @@ async def delayed_profile_update(username, avatar, remaining_cooldown):
                 await client_member.edit(nick=username)
         if avatar:
             await client.user.edit(avatar=avatar)
-        logging.info(f"Updated discord client profile (Username: {username}; Avatar: {'Updated' if avatar else 'Unchanged'}).\n Profile can be updated again in 10 minutes.")
+        log.info(f"Updated discord client profile (Username: {username}; Avatar: {'Updated' if avatar else 'Unchanged'}).\n Profile can be updated again in 10 minutes.")
         bot_database.set('last_change', time.time())  # Store the current time in bot_database_v2.yaml
     except Exception as e:
-        logging.error(f"Error while changing character username or avatar: {e}")
+        log.error(f"Error while changing character username or avatar: {e}")
 
 async def update_client_profile(char_name, channel=None):
     try:
@@ -3915,8 +3989,7 @@ async def update_client_profile(char_name, channel=None):
         elif all(guild.get_member(client.user.id).display_name == char_name for guild in client.guilds):
             return
         avatar = None
-        folder = 'characters'
-        picture_path = os.path.join(folder, f'{char_name}.png')
+        picture_path = os.path.join(shared_path.dir_tgwui, 'characters', f'{char_name}.png')
         if os.path.exists(picture_path):
             with open(picture_path, 'rb') as f:
                 avatar = f.read()
@@ -3931,22 +4004,22 @@ async def update_client_profile(char_name, channel=None):
             seconds = int(remaining_cooldown)
             if channel:
                 await channel.send(f'**Due to Discord limitations, character name/avatar will update in {seconds} seconds.**', delete_after=10)
-            logging.info(f"Due to Discord limitations, character name/avatar will update in {remaining_cooldown} seconds.")
+            log.info(f"Due to Discord limitations, character name/avatar will update in {remaining_cooldown} seconds.")
             delayed_profile_update_task = asyncio.create_task(delayed_profile_update(char_name, avatar, seconds))
     except Exception as e:
-        logging.error(f"An error occurred while updating Discord profile: {e}")
+        log.error(f"An error occurred while updating Discord profile: {e}")
 
 # Apply character changes
-async def change_character(char_name, channel, source):
+async def change_character(char_name, channel):
     try:
         # Load the character
-        await character_loader(char_name, channel, source)
+        await character_loader(char_name, channel)
         # Update all settings
         bot_settings.update_settings()
         await bot_settings.update_base_tags()
     except Exception as e:
         await channel.send(f"An error occurred while changing character: {e}")
-        logging.error(f"An error occurred while changing character: {e}")
+        log.error(f"An error occurred while changing character: {e}")
 
 async def process_character(ctx, selected_character_value):
     try:
@@ -3958,18 +4031,19 @@ async def process_character(ctx, selected_character_value):
 
         async with task_semaphore:
             # offload to ai_gen queue
-            logging.info(f'{ctx.author.display_name} used "/character": "{char_name}"')
+            log.info(f'{ctx.author.display_name} used "/character": "{char_name}"')
             params = {'character': {'char_name': char_name, 'verb': 'Changing', 'mode': 'change'}}
             await change_char_task(ctx, 'character', params)
 
     except Exception as e:
-        logging.error(f"Error processing selected character from /character command: {e}")
+        log.error(f"Error processing selected character from /character command: {e}")
 
 def get_all_characters():
     all_characters = []
     filtered_characters = []
+    characters_path = os.path.join(shared_path.dir_tgwui, "characters")
     try:
-        for file in sorted(Path("characters").glob("*")):
+        for file in sorted(Path(characters_path).glob("*")):
             if file.suffix in [".json", ".yml", ".yaml"]:
                 character = {}
                 character['name'] = file.stem
@@ -3984,7 +4058,7 @@ def get_all_characters():
                     filtered_characters.append(character)
 
     except Exception as e:
-        logging.error(f"An error occurred while getting all characters: {e}")
+        log.error(f"An error occurred while getting all characters: {e}")
     return all_characters, filtered_characters
 
 if textgenwebui_enabled:
@@ -4010,7 +4084,7 @@ if textgenwebui_enabled:
             else:
                 await ctx.send('There are no characters available', ephemeral=True)
         except Exception as e:
-            logging.error(f"An error occurred while selecting a Character from '/characters' command: {e}")
+            log.error(f"An error occurred while selecting a Character from '/characters' command: {e}")
 
 #################################################################
 ####################### /IMGMODEL COMMAND #######################
@@ -4032,7 +4106,7 @@ async def filter_imgmodels(imgmodels:list) -> list:
         return imgmodels
 
     except Exception as e:
-        logging.error(f"Error filtering image model list: {e}")
+        log.error(f"Error filtering image model list: {e}")
 
 # Get current list of imgmodels from API
 async def fetch_imgmodels() -> list:
@@ -4048,7 +4122,7 @@ async def fetch_imgmodels() -> list:
         return imgmodels
 
     except Exception as e:
-        logging.error(f"Error fetching image models: {e}")
+        log.error(f"Error fetching image models: {e}")
         return []
 
 # Check filesize/filters with selected imgmodel to assume resolution / tags
@@ -4065,7 +4139,7 @@ async def guess_model_data(selected_imgmodel, presets):
             # no guessing needed for exact match
             exact_match = preset.pop('exact_match', '')
             if exact_match and selected_imgmodel.get('imgmodel_name') == exact_match:
-                logging.info(f'Applying exact match imgmodel preset for "{exact_match}".')
+                log.info(f'Applying exact match imgmodel preset for "{exact_match}".')
                 return preset
             # score presets by how close they match the selected imgmodel
             filter_list = preset.pop('filter', [])
@@ -4089,7 +4163,7 @@ async def guess_model_data(selected_imgmodel, presets):
         matched_preset = match_counts[0][0] if match_counts else ''
         return matched_preset
     except Exception as e:
-        logging.error(f"Error guessing selected imgmodel data: {e}")
+        log.error(f"Error guessing selected imgmodel data: {e}")
 
 async def change_imgmodel(selected_imgmodel:dict):
     # Merge selected imgmodel/tag data with base settings
@@ -4121,7 +4195,7 @@ async def change_imgmodel(selected_imgmodel:dict):
             selected_imgmodel_tags = await update_tags(selected_imgmodel_tags)
             return selected_imgmodel, selected_imgmodel_name, selected_imgmodel_tags
         except Exception as e:
-            logging.error(f"Error merging selected imgmodel data with base imgmodel data: {e}")
+            log.error(f"Error merging selected imgmodel data with base imgmodel data: {e}")
             return {}
 
     # Save new Img model data
@@ -4151,7 +4225,7 @@ async def change_imgmodel(selected_imgmodel:dict):
             if current_avg != new_avg:
                 await bg_task_queue.put(update_size_options(new_avg))
         except Exception as e:
-            logging.error(f"Error updating settings with the selected imgmodel data: {e}")
+            log.error(f"Error updating settings with the selected imgmodel data: {e}")
 
     selected_imgmodel, selected_imgmodel_name, selected_imgmodel_tags = await merge_new_imgmodel_data(selected_imgmodel)
     await save_new_imgmodel_settings(selected_imgmodel, selected_imgmodel_tags)
@@ -4178,11 +4252,11 @@ async def get_selected_imgmodel_data(selected_imgmodel_value:str) -> dict:
                 }
                 break
         if not selected_imgmodel:
-            logging.error(f'Img model not found: {selected_imgmodel_value}')
+            log.error(f'Img model not found: {selected_imgmodel_value}')
         return selected_imgmodel
 
     except Exception as e:
-        logging.error(f"Error getting selected imgmodel data: {e}")
+        log.error(f"Error getting selected imgmodel data: {e}")
         return {}
 
 async def process_imgmodel(ctx, selected_imgmodel_value):
@@ -4194,13 +4268,13 @@ async def process_imgmodel(ctx, selected_imgmodel_value):
 
         async with task_semaphore:
             # offload to ai_gen queue
-            logging.info(f'{ctx.author.display_name} used "/imgmodel": "{selected_imgmodel_value}"')
+            log.info(f'{ctx.author.display_name} used "/imgmodel": "{selected_imgmodel_value}"')
             params = {}
             params['imgmodel'] = await get_selected_imgmodel_data(selected_imgmodel_value) # {sd_model_checkpoint, imgmodel_name, filename}
             await change_imgmodel_task(ctx.author.display_name, ctx.channel, params, ctx)
 
     except Exception as e:
-        logging.error(f"Error processing selected imgmodel from /imgmodel command: {e}")
+        log.error(f"Error processing selected imgmodel from /imgmodel command: {e}")
 
 if sd_enabled:
 
@@ -4227,7 +4301,7 @@ if sd_enabled:
             else:
                 await ctx.send('There are no Img models available', ephemeral=True)
         except Exception as e:
-            logging.error(f"An error occurred while selecting an Img model from '/imgmodel' command: {e}")
+            log.error(f"An error occurred while selecting an Img model from '/imgmodel' command: {e}")
 
 #################################################################
 ####################### /LLMMODEL COMMAND #######################
@@ -4242,12 +4316,12 @@ async def process_llmmodel(ctx, selected_llmmodel):
 
         async with task_semaphore:
             # offload to ai_gen queue
-            logging.info(f'{ctx.author.display_name} used "/llmmodel": "{selected_llmmodel}"')
+            log.info(f'{ctx.author.display_name} used "/llmmodel": "{selected_llmmodel}"')
             params = {'llmmodel': {'llmmodel_name': selected_llmmodel, 'verb': 'Changing', 'mode': 'change'}}
             await change_llmmodel_task(ctx, params)
 
     except Exception as e:
-        logging.error(f"Error processing /llmmodel command: {e}")
+        log.error(f"Error processing /llmmodel command: {e}")
 
 if textgenwebui_enabled:
 
@@ -4272,7 +4346,7 @@ if textgenwebui_enabled:
             else:
                 await ctx.send('There are no LLM models available', ephemeral=True)
         except Exception as e:
-            logging.error(f"An error occurred while selecting an LLM model from '/llmmodel' command: {e}")
+            log.error(f"An error occurred while selecting an LLM model from '/llmmodel' command: {e}")
 
 #################################################################
 ####################### /SPEAK COMMAND #######################
@@ -4293,7 +4367,7 @@ async def process_speak_silero_non_eng(ctx: commands.Context, lang):
             await ctx.send(f'Could not determine the correct voice and model ID for language "{lang}". Defaulting to English.', ephemeral=True)
             tts_args = {'silero_tts': {'language': 'English', 'speaker': 'en_1'}}
     except Exception as e:
-        logging.error(f"Error processing non-English voice for silero_tts: {e}")
+        log.error(f"Error processing non-English voice for silero_tts: {e}")
         await ctx.send(f"Error processing non-English voice for silero_tts: {e}", ephemeral=True)
     return tts_args
 
@@ -4322,7 +4396,7 @@ async def process_speak_args(ctx: commands.Context, selected_voice=None, lang=No
             await ctx.send("No voice was selected or provided, and a default voice was not found. Request will probably fail...", ephemeral=True)
         return tts_args
     except Exception as e:
-        logging.error(f"Error processing tts options: {e}")
+        log.error(f"Error processing tts options: {e}")
         await ctx.send(f"Error processing tts options: {e}", ephemeral=True)
 
 async def convert_and_resample_mp3(ctx, mp3_file, output_directory=None):
@@ -4336,10 +4410,10 @@ async def convert_and_resample_mp3(ctx, mp3_file, output_directory=None):
         wav_filename = os.path.splitext(os.path.basename(mp3_file))[0] + '.wav'
         wav_path = f"{output_directory}/{wav_filename}"
         audio.export(wav_path, format="wav")
-        logging.info(f'User provided file "{mp3_file}" was converted to .wav for "/speak" command')
+        log.info(f'User provided file "{mp3_file}" was converted to .wav for "/speak" command')
         return wav_path
     except Exception as e:
-        logging.error(f"Error converting user's .mp3 to .wav: {e}")
+        log.error(f"Error converting user's .mp3 to .wav: {e}")
         await ctx.send("An error occurred while processing the voice file.", ephemeral=True)
     finally:
         if mp3_file: os.remove(mp3_file)
@@ -4374,7 +4448,7 @@ async def process_user_voice(ctx: commands.Context, voice_input=None):
                 if user_voice: os.remove(user_voice)
         return user_voice
     except Exception as e:
-        logging.error(f"Error processing user provided voice file: {e}")
+        log.error(f"Error processing user provided voice file: {e}")
         await ctx.send("An error occurred while processing the voice file.", ephemeral=True)
 
 async def process_speak(ctx: commands.Context, input_text, selected_voice=None, lang=None, voice_input=None):
@@ -4386,13 +4460,13 @@ async def process_speak(ctx: commands.Context, input_text, selected_voice=None, 
         async with task_semaphore:
             async with ctx.channel.typing():
                 # offload to ai_gen queue
-                logging.info(f'{ctx.author.display_name} used "/speak": "{input_text}"')
+                log.info(f'{ctx.author.display_name} used "/speak": "{input_text}"')
                 params = {'tts_args': tts_args, 'user_voice': user_voice}
                 await speak_task(ctx, input_text, params)
                 await run_flow_if_any(ctx, 'speak', input_text)
 
     except Exception as e:
-        logging.error(f"Error processing tts request: {e}")
+        log.error(f"Error processing tts request: {e}")
         await ctx.send(f"Error processing tts request: {e}", ephemeral=True)
 
 async def fetch_speak_options():
@@ -4408,11 +4482,11 @@ async def fetch_speak_options():
             all_voices = get_available_voices()
         elif tts_client == 'silero_tts':
             lang_list = ['English', 'Spanish', 'French', 'German', 'Russian', 'Tatar', 'Ukranian', 'Uzbek', 'English (India)', 'Avar', 'Bashkir', 'Bulgarian', 'Chechen', 'Chuvash', 'Kalmyk', 'Karachay-Balkar', 'Kazakh', 'Khakas', 'Komi-Ziryan', 'Mari', 'Nogai', 'Ossetic', 'Tuvinian', 'Udmurt', 'Yakut']
-            logging.warning('''There's too many Voice/language permutations to make them all selectable in "/speak" command. Loading a bunch of English options. Non-English languages will automatically play using respective default speaker.''')
+            log.warning('''There's too many Voice/language permutations to make them all selectable in "/speak" command. Loading a bunch of English options. Non-English languages will automatically play using respective default speaker.''')
             all_voices = [f"en_{index}" for index in range(1, 76)] # will just include English voices in select menus. Other languages will use defaults.
         elif tts_client == 'elevenlabs_tts':
             lang_list = ['English', 'German', 'Polish', 'Spanish', 'Italian', 'French', 'Portuegese', 'Hindi', 'Arabic']
-            logging.info('''Getting list of available voices for elevenlabs_tts for "/speak" command...''')
+            log.info('''Getting list of available voices for elevenlabs_tts for "/speak" command...''')
             from extensions.elevenlabs_tts.script import refresh_voices, update_api_key
             if tts_api_key:
                 update_api_key(tts_api_key)
@@ -4420,7 +4494,7 @@ async def fetch_speak_options():
         all_voices.sort() # Sort alphabetically
         return lang_list, all_voices
     except Exception as e:
-        logging.error(f"Error building options for '/speak' command: {e}")
+        log.error(f"Error building options for '/speak' command: {e}")
 
 if textgenwebui_enabled and tts_client and tts_client in supported_tts_clients:
     lang_list, all_voices = asyncio.run(fetch_speak_options())
@@ -4441,7 +4515,7 @@ if textgenwebui_enabled and tts_client and tts_client in supported_tts_clients:
                 voice_options2_label = f'{voice_options2_label}_2'
             if len(all_voices) > 75:
                 all_voices = all_voices[:75]
-                logging.warning("'/speak' command only allows up to 75 voices. Some voices were omitted.")
+                log.warning("'/speak' command only allows up to 75 voices. Some voices were omitted.")
     if lang_list: lang_options = [app_commands.Choice(name=lang, value=lang) for lang in lang_list]
     else: lang_options = [app_commands.Choice(name='English', value='English')] # Default to English
 
@@ -4606,26 +4680,26 @@ class ImgModel:
                 'enabled': False, 'image': None, 'mask_image': None, 'model': 'None', 'module': 'None', 'weight': 1.0, 'processor_res': 64, 'pixel_perfect': True,
                 'guidance_start': 0.0, 'guidance_end': 1.0, 'threshold_a': 64, 'threshold_b': 64, 'control_mode': 0, 'resize_mode': 1, 'lowvram': False, 'save_detected_map': False}]}
             if SD_CLIENT:
-                logging.info(f'"ControlNet" extension support is enabled and active.')
+                log.info(f'"ControlNet" extension support is enabled and active.')
         # Initialize Forge Couple defaults
         if extensions.get('forgecouple_enabled'):
             self.payload['alwayson_scripts']['forge_couple'] = {'args': {
                 'enable': False, 'mode': 'Basic', 'sep': 'SEP', 'direction': 'Horizontal', 'global_effect': 'First Line',
                 'global_weight': 0.5, 'maps': [['0:0.5', '0.0:1.0', '1.0'],['0.5:1.0', '0.0:1.0', '1.0']]}}
             if SD_CLIENT:
-                logging.info(f'"Forge Couple" extension support is enabled and active.')
+                log.info(f'"Forge Couple" extension support is enabled and active.')
             # Warn Non-Forge:
             if SD_CLIENT and SD_CLIENT != 'SD WebUI Forge':
-                logging.warning(f'"Forge Couple" is not known to be compatible with "{SD_CLIENT}". If you experience errors, disable this extension in config.yaml')
+                log.warning(f'"Forge Couple" is not known to be compatible with "{SD_CLIENT}". If you experience errors, disable this extension in config.yaml')
         # Initialize layerdiffuse defaults
         if extensions.get('layerdiffuse_enabled'):
             self.payload['alwayson_scripts']['layerdiffuse'] = {'args': {
                 'enabled': False, 'method': '(SDXL) Only Generate Transparent Image (Attention Injection)', 'weight': 1.0, 'stop_at': 1.0, 'foreground': None, 'background': None,
                 'blending': None, 'resize_mode': 'Crop and Resize', 'output_mat_for_i2i': False, 'fg_prompt': '', 'bg_prompt': '', 'blended_prompt': ''}}
             if SD_CLIENT:
-                logging.info(f'"layerdiffuse" extension support is enabled and active.')
+                log.info(f'"layerdiffuse" extension support is enabled and active.')
             if SD_CLIENT and SD_CLIENT != 'SD WebUI Forge':
-                logging.warning(f'"layerdiffuse" is not known to be compatible with "{SD_CLIENT}". If you experience errors, disable this extension in config.yaml')
+                log.warning(f'"layerdiffuse" is not known to be compatible with "{SD_CLIENT}". If you experience errors, disable this extension in config.yaml')
         # Initialize ReActor defaults
         if extensions.get('reactor_enabled'):
             self.payload['alwayson_scripts']['reactor'] = {'args': {
@@ -4634,7 +4708,7 @@ class ImgModel:
                 'gender_detect_source': 0, 'gender_detect_target': 0, 'save_original': False, 'codeformer_weight': 0.8, 'source_img_hash_check': False, 'target_img_hash_check': False, 'system': 'CUDA',
                 'face_mask_correction': True, 'source_type': 0, 'face_model': '', 'source_folder': '', 'multiple_source_images': None, 'random_img': True, 'force_upscale': True, 'threshold': 0.6, 'max_faces': 2}}
             if SD_CLIENT:
-                logging.info(f'"ReActor" extension support is enabled and active.')
+                log.info(f'"ReActor" extension support is enabled and active.')
             
 class LLMContext:
     def __init__(self):
@@ -4718,6 +4792,7 @@ class LLMState:
 
 class Settings:
     def __init__(self, bot_behavior):
+        self._bot_id = 0
         self.bot_behavior = bot_behavior
         self.imgmodel = ImgModel()
         self.llmcontext = LLMContext()
@@ -4727,6 +4802,10 @@ class Settings:
         # Initialize main settings and base tags
         self.update_settings()
         asyncio.run(self.update_base_tags())
+        
+    @property
+    def name(self):
+        return self.settings.get('llmcontext', {}).get('name', 'AI')
 
     async def update_base_tags(self):
         try:
@@ -4737,7 +4816,7 @@ class Settings:
             self.base_tags = base_tags
 
         except Exception as e:
-            logging.error(f"Error updating client base tags: {e}")
+            log.error(f"Error updating client base tags: {e}")
 
     # Returns the value of Settings as a dictionary
     def settings_to_dict(self):
@@ -4761,250 +4840,245 @@ class Settings:
         attributes = ", ".join(f"{attr}={getattr(self, attr)}" for attr in dir(self) if not callable(getattr(self, attr)) and not attr.startswith("__"))
         return f"{self.__class__.__name__}({attributes})"
     
-class History:
-    def __init__(self):
-        # History settings
-        chat_history = config.get('textgenwebui', {}).get('chat_history', {})
-        self.limit_history = chat_history.get('limit_history', True)
-        self.autosave_history = chat_history.get('autosave_history', False)
-        self.autoload_history = chat_history.get('autoload_history', False)
-        self.change_char_history_method = chat_history.get('change_char_history_method', 'new')
-        self.greeting_or_history = chat_history.get('greeting_or_history', 'history')
-        self.per_channel_history_enabled = chat_history.get('per_channel_history', True)
-        # History management
-        self.unique_id = None
-        self.session_history = {}
-        self.recent_messages = {}
-        self.collected_prompts = {}
 
-    # Modified version of TGQUI function
-    def load_history(self, unique_id, character, mode):
-        type = 'single'
-        p = get_history_file_path(unique_id, character, mode)
-        f = json.loads(open(p, 'rb').read())
-        if 'internal' in f and 'visible' in f:
-            history = f
-        elif 'data' in f and 'data_visible' in f:
-            history = {'internal': f['data'],
-                       'visible': f['data_visible']}
-        else:
-            history = f
-            type = 'multichan'
-        return history, type
-
-    # Modified version of TGQUI function
-    def load_latest_history(self, state):
-        type = 'single'
-        histories = find_all_histories(state)
-        if len(histories) > 0:
-            history, type = self.load_history(histories[0], state['character_menu'], state['mode'])
-        else:
-            history = {}
-        return history, type
-
-    # Loads most recent history for current character
-    def load_bot_history(self):
-        state_dict = bot_settings.settings['llmstate']['state']
-        values_to_load_history = {'character_menu': state_dict['character_menu'],
-                                'mode': state_dict['mode']}
-        latest_history, history_type = self.load_latest_history(values_to_load_history)
-        # Only load history if most recent history type matches current history mode
-        matched = None
-        if self.per_channel_history_enabled:
-            if history_type == 'multichan':
-                matched = 'multichan'
-        else:
-            if history_type == 'single':
-                matched = 'single'
-        if matched:
-            self.session_history = dict(latest_history)
-            # print recent exchange if per-channel history
-            if matched == 'single':
-                last_exchange = self.session_history['visible'][-1] if self.session_history.get('visible') else None
-                if last_exchange:
-                    last_user_message = last_exchange[0]
-                    last_assistant_message = last_exchange[1]
-                    logging.info(f'Loaded most recent chat history. Last message exchange:\n User: "{last_user_message}"\n {bot_database.last_character}: "{last_assistant_message}"')
-                else:
-                    logging.info("Starting new conversation.")
-            if matched == 'multichan':
-                logging.info("Loaded most recent chat history for all channels.")
-            all_histories = find_all_histories(values_to_load_history)
-            if len(all_histories) > 0:
-                self.unique_id = all_histories[0]
-
-    # Save history to a new file
-    def save_bot_history(self):
-        state_dict = bot_settings.settings['llmstate']['state']
-        mode = state_dict['mode']
-        character_menu = state_dict["character_menu"]
-        if not self.unique_id:
-            if self.per_channel_history_enabled:
-                self.unique_id = f"{datetime.now().strftime('%Y%m%d-%H-%M-%S')}_multiple-history"
-            else:
-                self.unique_id = datetime.now().strftime('%Y%m%d-%H-%M-%S')
-            logging.info(f'''Chat history was saved to "/logs/{mode}/{character_menu}/{self.unique_id}.json"''')
-        save_history(self.session_history, self.unique_id, character_menu, mode)
+@dataclass_json
+@dataclass
+class CustomHistory(History):
+    manager: Optional['CustomHistoryManager'] = field(metadata=cnf(dont_save=True))
+    fp_unique_id: Optional[str] = field(default=None)
+    fp_character: Optional[str] = field(default=None)
+    fp_mode: Optional[str] = field(default=None)
+    fp_internal_id: Optional[str] = field(default=None)
     
-    # Truncates history to approx. same length as 'truncation_length' state parameter
-    def limit_prompt_history(self, i_list:list, v_list:list):
-        truncation = int(bot_settings.settings['llmstate']['state']['truncation_length'] * 4) #approx tokens
-        while (sum(len(message) for exchange in i_list for message in exchange) > truncation) \
-            or (sum(len(message) for exchange in v_list for message in exchange) > truncation):
-            if i_list and v_list:
-                i_list.pop(0) # pop oldest exchanges
-                v_list.pop(0)
+    _first_save_debug: bool = field(default=True, metadata=cnf(dont_save=True))
+    
+    
+    def __copy__(self):
+        new = super().__copy__()
+        new.fp_unique_id = self.fp_unique_id
+        new.fp_character = self.fp_character
+        new.fp_mode = self.fp_mode
+        new.fp_internal_id = self.fp_internal_id
+        return new
+    
+    
+    def fresh(self):
+        new = super().fresh()
+        new.fp_unique_id = None # only reset time to create a new file in the same dir.
+        return new
+    
+    
+    def set_save_info(self, internal_id, character, mode):
+        self.fp_character = character
+        self.fp_mode = mode
+        self.fp_internal_id = internal_id
+        
+        has_file_name = self.fp_unique_id
+        if not self.fp_unique_id:
+            self.fp_unique_id = datetime.now().strftime('%Y%m%d-%H-%M-%S')
 
-    # Manage the session history for textgen-webui
-    def manage_prompt_history(self, cp_list:list, i_list:list, v_list:list, prompt:str, reply:str=None, save_to_history:bool=True):
-        # Only prompt is received (no 'reply)
-        if reply is None:
-            # If there are previously collected prompts, join with '\n\n'
-            if cp_list:
-                cp_list += '\n\n' + prompt
-            else:
-                cp_list = prompt
-        # Both prompt and reply are received
-        else:
-            # If there are previously collected prompts, merge and reset collected prompts
-            if cp_list:
-                prompt = cp_list + '\n\n' + prompt
-                # Reset collected prompts
-                cp_list = []
-            if save_to_history:
-                i_list.append([prompt, reply])
-                # Do not append Visible list for per-channel history
-                if self.per_channel_history_enabled:
-                    v_list.append(['', ''])
-                else:
-                    v_list.append([prompt, reply])
-        #TODO return prompt
+        history_dir = self.manager.history_dir_template.format(character=self.fp_character, mode=self.fp_mode, id=self.fp_internal_id)
+        os.makedirs(history_dir, exist_ok=True)
+        self.fp = os.path.join(history_dir, f'{self.fp_unique_id}.json')
+        
+        if not has_file_name:
+            log.info(f'Internal history file will be saved to: {self.fp}')
+    
+    
+    async def save(self, fp=None, timeout=300, force=False, force_tgwui=False):
+        try:
+            status = await super().save(fp=fp, timeout=timeout, force=force)
+            self._save_for_tgwui(status, force=force_tgwui)
+            
+            if not status: # don't bother saving if nothing changed
+                return False
+            
+            self._first_save_debug = False
+            return status
 
-    def get_history_iv_lists_keys(self, chankey:str = None):
-        if self.per_channel_history_enabled:
-            # internal and visible lists
-            i_list = self.session_history.setdefault(chankey, {}).setdefault('internal', [])
-            v_list = self.session_history[chankey].setdefault('visible', [])
-        else:
-            # internal and visible lists
-            i_list = self.session_history.setdefault('internal', [])
-            v_list = self.session_history.setdefault('visible', [])
-        return i_list, v_list
+        except Exception as e:
+            print(traceback.format_exc())
+            log.critical(e)
+            
+            
+    def save_sync(self, fp=None, force=False, force_tgwui=False):
+        try:
+            status = super().save_sync(fp=fp, force=force)
+            self._save_for_tgwui(status, force=force_tgwui)
+            
+            if not status: # don't bother saving if nothing changed
+                return False
+            
+            self._first_save_debug = False
+            return status
 
-    def get_history_ul_lists_keys(self, chankey:str = None):
-        if self.per_channel_history_enabled:
-            # user and llm lists
-            u_list = self.recent_messages.setdefault(chankey, {}).setdefault('user', [])
-            l_list = self.recent_messages[chankey].setdefault('llm', [])
-        else:
-            # user and llm lists
-            u_list = self.recent_messages.setdefault('user', [])
-            l_list = self.recent_messages.setdefault('llm', [])
-        return u_list, l_list
+        except Exception as e:
+            print(traceback.format_exc())
+            log.critical(e)
+            
+            
+    def _save_for_tgwui(self, status, force=False):
+        if (status and self.manager.export_for_tgwui) or force:
+            save_history(self.render_to_tgwui(), f'{self.fp_unique_id}_{self.fp_internal_id}', self.fp_character, self.fp_mode)
+            if self._first_save_debug:
+                log.debug(f'''TGWUI chat history saved to "/logs/{self.fp_mode}/{self.fp_character}/{self.fp_unique_id}_{self.fp_internal_id}.json"''')
+        
+    
+    def last_exchange(self):
+        if not self.empty:
+            last_message:HMessage = self[-1]
+            previous_message = last_message.reply_to
+            return previous_message, last_message
+        return None, None
+    
 
-    def get_history_cp_list_key(self, chankey:str = None):
-        if self.per_channel_history_enabled:
-            # collected prompts lists
-            cp_list = self.collected_prompts.setdefault(chankey, [])
-        else:
-            # collected prompts lists
-            cp_list = self.collected_prompts
-        return cp_list
+@dataclass
+class CustomHistoryManager(HistoryManager):
+    history_dir_template: str = field(default=os.path.join(shared_path.dir_history, '{id}', '{character}_{mode}'), init=False)
+    
+    
+    def get_history_dir_template(self, id_):
+        _, character, mode = self.get_id_parts(id_)
+        return self.history_dir_template.format(character=character, mode=mode, id=id_)
+        
+    
+    def search_for_fp(self, id_:ChannelID):
+        # Note: this is an internal function part of get_history_for
 
-    def get_history_lists_keys(self, chankey:str = None):
-        i_list, v_list = self.get_history_iv_lists_keys(chankey)
-        u_list, l_list = self.get_history_ul_lists_keys(chankey)
-        cp_list = self.get_history_cp_list_key(chankey)
+        # get the first item split by _
+        # For this to work, make sure all ids start with ID_... edit the end as you wish.
+        internal_id = id_.split('_',1)[0] 
+        
+        # TODO users should not be digging in the internals, the name of the folders/files shouldn't matter
+        # But in the case you do want to add the channel/guild name to the folder 
+        # searching for folders could also be implemented.
+        
+        # TODO I don't really like this because it wont enable per channel characters easily later on.
+        # should add a **search_params to pass down to enable
+        history_dir = self.get_history_dir_template(internal_id)
+        if not os.path.isdir(history_dir):
+            return
+        
+        # get latest valid history file
+        for file in reversed(os.listdir(history_dir)):
+            return os.path.join(history_dir, file)
+            
+            
+    def get_history_for(self, id_: ChannelID=None, character=None, mode=None, fp=None, cached_only=False) -> CustomHistory:
+        '''
+        if not autoload_history:
+            New files
+        
+        
+        if change_char == keep:
+            if channels == single:
+                One global history file
+                
+            if channels == multiple:
+                History per channel
+                All characters mixed together
+                
+        if change_char == new:
+            if autoload_history:
+                Load history on start, change on switch
+            
+            if channels == single:
+                New global file on char switch
+                New file when switching back A>B>A
+                
+            if channels == multiple:
+                New files for each channel on character switch
+                New file when switching back A>B>A
+        '''
+        # Should import old logs or not.
+        search = self.autoload_history
+        
+        # TODO if there's a setting about keeping history between characters, maybe duplicating would be better?
+        # or just edit the ID here to match both
+        
+        id_, character, mode = self.get_id_parts(id_, character, mode)
+        full_id = f'{id_}_{character}_{mode}'
+        history:CustomHistory = super().get_history_for(full_id, fp=fp, search=search, cached_only=cached_only)
+        if history is not None:
+            history.set_save_info(internal_id=id_, character=character, mode=mode)
+        return history
+    
+    
+    def new_history_for(self, id_: ChannelID, character=None, mode=None) -> CustomHistory:
+        id_, character, mode = self.get_id_parts(id_, character, mode)
+        full_id = f'{id_}_{character}_{mode}'
+        return super().new_history_for(full_id)
+    
+    
+    def get_id_parts(self, id_: ChannelID, character=None, mode=None):
+        state_dict = bot_settings.settings['llmstate']['state']
+        mode = mode or state_dict['mode']
+        character = character or state_dict["character_menu"] or 'unknown_character'
+        
+        if not self.per_channel_history:
+            id_ = 'global'
+            
+        if self.change_char_history_method == 'keep':
+            character = 'Mixed'
+            mode = 'mixed'
+        
+        return id_, character, mode
 
-        return i_list, v_list, u_list, l_list, cp_list
-
-    # Retain most recent elements or characters from user prompts and bot replies (mainly for Flows feature)
-    def manage_recent_messages(self, u_list:list, l_list:list, prompt:str, reply:str=None):
-        if self.per_channel_history_enabled:
-            elem_limit = 5
-            character_limit = 3000
-        else:
-            elem_limit = 10
-            character_limit = 10000
-
-        if prompt:
-            u_list.insert(0, prompt)
-            while len(u_list) > elem_limit or sum(len(message) for message in u_list) > character_limit:
-                oldest_message = u_list.pop()
-        if reply:
-            l_list.insert(0, reply)
-            while len(l_list) > elem_limit or sum(len(message) for message in l_list) > character_limit:
-                oldest_message = l_list.pop()
-
-    def manage_history(self, prompt:str, reply:str=None, save_to_history:bool=True, chankey:str=None):
-        # Get list keys to simplify code in further steps
-        i_list, v_list, u_list, l_list, cp_list = self.get_history_lists_keys(chankey)
-        # Update recent user/LLM messages (separate from chat history)
-        self.manage_recent_messages(u_list, l_list, prompt, reply)
-        # Update history
-        self.manage_prompt_history(cp_list, i_list, v_list, prompt, reply, save_to_history)
-        # Truncate history
-        if self.limit_history:
-            self.limit_prompt_history(i_list, v_list)
-        # Save history
-        if self.autosave_history:
-            self.save_bot_history()
-
-    def set_history_key_defaults(self, ictx=None):
-        # If per-channel history
-        if self.per_channel_history_enabled and ictx:
-            chkey = str(ictx.channel.id)
-            self.session_history[chkey] = {
-                'guild_name': str(ictx.guild),
-                'channel_name': str(ictx.channel),
-                'internal': [],
-                'visible': []
-                }
-            self.collected_prompts[chkey] = []
-        # If only one history
-        else:
-            self.session_history = {'internal': [], 'visible': []}
-            self.collected_prompts = []
-
-    def get_channel_history(self, ictx=None):
-        # If per-channel history
-        if self.per_channel_history_enabled:
-            chkey = str(ictx.channel.id)
-            if not self.session_history.get(chkey):
-                self.set_history_key_defaults(ictx)
-            return self.session_history[chkey]
-        # If only one history
-        else:
-            if not self.session_history:
-                self.set_history_key_defaults()
-            return self.session_history
-
-    def reset_session_history(self, ictx=None):
-        # If per-channel history
-        if self.per_channel_history_enabled:
-            # if no interaction, all history will be reset
-            if ictx:
-                chkey = str(ictx.channel.id)
-                guild_chan = f'{ictx.guild} - {ictx.channel}'
-                logging.info(f"Starting new conversation in: {guild_chan}.")
-                # If channel has history
-                if self.session_history.get(chkey):
-                    self.set_history_key_defaults(ictx)
-                # if channel does not have history
-                else:
-                    self.get_channel_history(ictx) # will initialize channel keys
-                return
-            else:
-                logging.info("Starting new conversation in all channels.")
-        # If only one history
-        else:
-            logging.info("Starting new conversation.")
-        # Reset everything
-        self.session_history = {}
-        self.collected_prompts = {}
-
+        
 bot_behavior = Behavior() # needs to be loaded before settings
 bot_settings = Settings(bot_behavior=bot_behavior)
-bot_history = History()
+bot_history = CustomHistoryManager(class_builder_history=CustomHistory, **config.get('textgenwebui', {}).get('chat_history', {}))
 
-client.run(bot_token, log_handler=log_file_handler, log_formatter=log_file_formatter)
+
+import sys
+import signal
+
+
+def exit_handler():
+    log.info('Running cleanup tasks:')
+    bot_history.save_all_sync()
+    log.info('Done')
+
+
+def kill_handler(signum, frame):
+    log.debug(f"Signal {signum} received, initiating shutdown...")
+    exit_handler()
+    sys.exit(0)
+    
+    
+def kill_handler_windows(signum, frame):
+    log.debug(f"Signal {signum} received, initiating shutdown...")
+    sys.exit(0)
+    
+    
+def on_window_close(ctrl_type):
+    log.debug(f"Console window is closing, (signal {ctrl_type})")
+    exit_handler()
+    return False
+
+
+if sys.platform == "win32":
+    import win32api
+    win32api.SetConsoleCtrlHandler(on_window_close, True)
+    
+    signal.signal(signal.SIGINT, kill_handler_windows)
+    signal.signal(signal.SIGTERM, kill_handler_windows)
+    
+else:
+    signal.signal(signal.SIGINT, kill_handler)
+    signal.signal(signal.SIGTERM, kill_handler)
+
+
+# Manually start the bot so we can catch keyboard interupts
+async def runner():
+    async with client:
+        await client.start(bot_token, reconnect=True)
+
+discord.utils.setup_logging(
+            handler=log_file_handler,
+            formatter=log_file_formatter,
+            level=_logging.INFO,
+            root=False,
+        )
+asyncio.run(runner())
+

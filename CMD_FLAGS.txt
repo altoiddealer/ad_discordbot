@@ -1,0 +1,4 @@
+## Example flags below (includes # comment that must be removed to actually work)
+## Note that any custom model settings saved to '/text-generation-webui/models/config-user.yaml' will load by default, and do not have to be used as cmd flags.
+
+#--loader exllamav2_hf --model NeuralBeagle14-7B-8.0bpw-h8-exl2

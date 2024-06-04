@@ -1,10 +1,11 @@
-from ad_discordbot.modules.logs import import_track, log, get_logger; import_track(__file__, fp=True)
+from modules.logs import import_track, log, get_logger; import_track(__file__, fp=True)
 from pathlib import Path
 import json
 import yaml
-from ad_discordbot.modules.utils_shared import shared_path
+from modules.utils_shared import shared_path
 import os
-logging = get_logger(__name__)
+log = get_logger(__name__)
+logging = log
 
 # Function to load .json, .yml or .yaml files
 def load_file(file_path, default=None, missing_okay=False):
@@ -23,16 +24,16 @@ def load_file(file_path, default=None, missing_okay=False):
             return data
 
         else:
-            logging.error(f"Unsupported file format: {file_suffix}: {file_path}")
+            log.error(f"Unsupported file format: {file_suffix}: {file_path}")
             return default
 
     except FileNotFoundError:
         if not missing_okay:
-            logging.error(f"File not found: {file_path}")
+            log.error(f"File not found: {file_path}")
         return default
 
     except Exception as e:
-        logging.error(f"An error occurred while reading {file_path}: {str(e)}")
+        log.error(f"An error occurred while reading {file_path}: {str(e)}")
         return default
 
 def merge_base(newsettings, basekey):
@@ -54,7 +55,7 @@ def merge_base(newsettings, basekey):
         deep_update(current_dict, newsettings) # Recursively update the dictionary
         return current_dict
     except Exception as e:
-        logging.error(f"Error loading '{shared_path.base_settings}' ({basekey}): {e}")
+        log.error(f"Error loading '{shared_path.base_settings}' ({basekey}): {e}")
         return newsettings
 
 def save_yaml_file(file_path, data):
@@ -62,7 +63,7 @@ def save_yaml_file(file_path, data):
         with open(file_path, 'w') as file:
             yaml.dump(data, file, encoding='utf-8', default_flow_style=False, width=float("inf"), sort_keys=False)
     except Exception as e:
-        logging.error(f"An error occurred while saving {file_path}: {str(e)}")
+        log.error(f"An error occurred while saving {file_path}: {str(e)}")
 
 
 def make_fp_unique(fp):

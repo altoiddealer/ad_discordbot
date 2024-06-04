@@ -1,9 +1,15 @@
-from ad_discordbot.modules.logs import import_track, log, get_logger; import_track(__file__, fp=True)
-logging = get_logger(__name__)
-from ad_discordbot.modules.utils_shared import task_semaphore
+from modules.logs import import_track, log, get_logger; import_track(__file__, fp=True)
+log = get_logger(__name__)
+logging = log
+from modules.utils_shared import task_semaphore
 import discord
 from discord.ext import commands
 from typing import Union
+from modules.typing import CtxInteraction
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from modules.history import HistoryManager, History, HMessage
 
 # Send message response to user's interaction command
 async def ireply(ictx: 'CtxInteraction', process):
@@ -14,11 +20,11 @@ async def ireply(ictx: 'CtxInteraction', process):
             await ictx.reply(f'Processing your {process} request', ephemeral=True, delete_after=3)
 
     except Exception as e:
-        logging.error(f"Error sending message response to user's interaction command: {e}")
+        log.error(f"Error sending message response to user's interaction command: {e}")
 
 
 
-async def send_long_message(channel, message_text):
+async def send_long_message(channel, message_text, bot_message:'HMessage'=None):
     """ Splits a longer message into parts while preserving sentence boundaries and code blocks """
     activelang = ''
 
@@ -74,6 +80,9 @@ async def send_long_message(channel, message_text):
                 chunk_text, code_block_inserted = ensure_even_code_blocks(message_text, code_block_inserted)
                 sent_message = await channel.send(chunk_text)
                 break
+            
+    if bot_message:
+        bot_message.id = sent_message.id
 
 class SelectedListItem(discord.ui.Select):
     def __init__(self, options, placeholder, custom_id):
@@ -134,7 +143,7 @@ class SelectOptionsView(discord.ui.View):
         menu_ii += 1
         local_options = all_choices[max_items_per_menu*menu_ii: max_items_per_menu*(menu_ii+1)]
         if local_options and not self.warned:
-            logging.warning(f'Too many models, the menu will be truncated to the first {max_items_per_menu*max_menus}.')
+            log.warning(f'Too many models, the menu will be truncated to the first {max_items_per_menu*max_menus}.')
             self.warned = True
 
         # Remove Submit button if only one dropdown
@@ -164,13 +173,16 @@ class SelectOptionsView(discord.ui.View):
         self.selected_item = self.unload_item
         await interaction.response.defer()
         self.stop()
-        
 
-CtxInteraction = Union[commands.Context, discord.Interaction, discord.Message]
 
 def get_user_ctx_inter(ictx: CtxInteraction) -> Union[discord.User, discord.Member]:
     # Found instances of "i" with \((self, )?i[^a-z_\)]
     if isinstance(ictx, discord.Interaction):
         return ictx.user
-    
     return ictx.author
+
+
+def get_message_ctx_inter(ictx: CtxInteraction) -> discord.Message:
+    if isinstance(ictx, discord.Message):
+        return ictx
+    return ictx.message
