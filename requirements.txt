@@ -1,5 +1,6 @@
 discord.py
 colorama
 dataclasses-json
+pynacl
 
 pywin32; platform_system == "Windows"
