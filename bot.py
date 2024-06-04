@@ -1675,7 +1675,6 @@ async def hybrid_llm_img_gen(ictx: CtxInteraction, source:str, text:str, tags:di
         bot_will_do = params['bot_will_do']
         change_embed = None
         img_gen_embed = None
-        tts_resp = None
 
         # Check params to see if an LLM model change/swap was triggered by Tags
         llmmodel_params = params.get('llmmodel', {})
@@ -1737,11 +1736,11 @@ async def hybrid_llm_img_gen(ictx: CtxInteraction, source:str, text:str, tags:di
                     await img_gen_embed.delete()
                 params['bot_will_do'] = bot_will_do
                 await img_gen_task(source, bot_message.text, params, ictx, tags)
-                
+        # Process any TTS response
         if bot_message.text_visible:
             await process_tts_resp(channel, bot_message)
-            
-        mention_resp = update_mention(get_user_ctx_inter(ictx).mention, bot_message.text) # @mention non-consecutive users
+        # @mention non-consecutive users
+        mention_resp = update_mention(get_user_ctx_inter(ictx).mention, bot_message.text)
         if bot_will_do['should_send_text']:
             await send_long_message(channel, mention_resp, bot_message=bot_message)
 
@@ -2211,10 +2210,7 @@ async def change_char_task(ictx: CtxInteraction, source:str, params:dict):
         # Change character
         await change_character(char_name, channel)
         # Set history
-        if bot_history.autoload_history and (bot_history.change_char_history_method == 'keep' and source != 'reset'):
-            pass # no need to preload history as it gets loaded when needed.
-            
-        else:
+        if not bot_history.autoload_history or bot_history.change_char_history_method == 'new': # if we don't keep history...
             if source == 'reset':
                 # create a clone with same settings but empty, and replace it in the manager
                 bot_history.get_history_for(ictx.channel.id).fresh().replace()
