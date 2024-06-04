@@ -342,14 +342,7 @@
 
 ### Getting TTS responses from the bot (Tested: alltalk_tts, coqui_tts, silero_tts, elevenlabs_tts)
 
-1. **Run the .cmd file** in text-generation-webui directory (**ex: cmd_windows.bat**), and performing the following commands:
-
-   Required for bot to join a discord voice channel:
-   ```
-   pip install pynacl
-   ```
-
-2. **Install your TTS extension**.
+1. **Install your TTS extension**.
 
    **Follow the specific instructions for your TTS extension!!**
 
@@ -367,13 +360,13 @@
    pip install -r extensions\coqui_tts\requirements.txt
    ```
 
-3. Ensure that your bot has sufficient permissions to use the Voice channel and/or upload files (From your bot invite/Discord Developer portal, and your Discord server/channel settings)
+2. Ensure that your bot has sufficient permissions to use the Voice channel and/or upload files (From your bot invite/Discord Developer portal, and your Discord server/channel settings)
 
-4. Configure **config.yaml** in the section **discord** > **tts_settings**
+3. Configure **config.yaml** in the section **discord** > **tts_settings**
 
-5. If necessary, model file(s) should download on first launch of the bot.  If not, then first launch textgen-webui normally and enable the extension.
+4. If necessary, model file(s) should download on first launch of the bot.  If not, then first launch textgen-webui normally and enable the extension.
 
-6. **Your characters can have their own settings including voices!  See example character M1nty for usage**
+5. **Your characters can have their own settings including voices!  See example character M1nty for usage**
 
 ---
 
