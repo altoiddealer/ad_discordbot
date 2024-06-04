@@ -6,6 +6,8 @@ dict_base_settings.yaml
 dict_cmdoptions.yaml
 dict_imgmodels.yaml
 dict_tags.yaml
+activesettings.yaml
+statistics.yaml
 CMD_FLAGS.txt
 
 internal/database.yaml

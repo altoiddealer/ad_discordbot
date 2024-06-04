@@ -2211,11 +2211,13 @@ async def change_char_task(ictx: CtxInteraction, source:str, params:dict):
         await change_character(char_name, channel)
         # Set history
         if not bot_history.autoload_history or bot_history.change_char_history_method == 'new': # if we don't keep history...
-            if source == 'reset':
-                # create a clone with same settings but empty, and replace it in the manager
-                bot_history.get_history_for(ictx.channel.id).fresh().replace()
+            # create a clone with same settings but empty, and replace it in the manager
+            history = bot_history.get_history_for(ictx.channel.id, cached_only=True)
+            if history is None:
+                bot_history.new_history_for(ictx.channel.id)
+                
             else:
-                bot_history.unload_history() #.clear_all_history()
+                history.fresh().replace()
                 
         if change_embed:
             await change_embed.delete()
@@ -4925,10 +4927,7 @@ class CustomHistoryManager(HistoryManager):
     
     
     def get_history_dir_template(self, id_):
-        state_dict = bot_settings.settings['llmstate']['state']
-        mode = state_dict['mode']
-        character = state_dict["character_menu"]
-        
+        _, character, mode = self.get_id_parts(id_)
         return self.history_dir_template.format(character=character, mode=mode, id=id_)
         
     
@@ -4954,24 +4953,65 @@ class CustomHistoryManager(HistoryManager):
             return os.path.join(history_dir, file)
             
             
-    def get_history_for(self, id_: ChannelID=None, character=None, mode=None, fp=None) -> History:
-        state_dict = bot_settings.settings['llmstate']['state']
-        mode = mode or state_dict['mode']
-        character = character or state_dict["character_menu"] or 'unknown_character'
+    def get_history_for(self, id_: ChannelID=None, character=None, mode=None, fp=None, cached_only=False) -> CustomHistory:
+        '''
+        if not autoload_history:
+            New files
         
-        search = True
-        if self.change_char_history_method == 'new':
-            search = False # don't import old logs
+        
+        if change_char == keep:
+            if channels == single:
+                One global history file
+                
+            if channels == multiple:
+                History per channel
+                All characters mixed together
+                
+        if change_char == new:
+            if autoload_history:
+                Load history on start, change on switch
+            
+            if channels == single:
+                New global file on char switch
+                New file when switching back A>B>A
+                
+            if channels == multiple:
+                New files for each channel on character switch
+                New file when switching back A>B>A
+        '''
+        # Should import old logs or not.
+        search = self.autoload_history
         
         # TODO if there's a setting about keeping history between characters, maybe duplicating would be better?
         # or just edit the ID here to match both
         
+        id_, character, mode = self.get_id_parts(id_, character, mode)
+        full_id = f'{id_}_{character}_{mode}'
+        history:CustomHistory = super().get_history_for(full_id, fp=fp, search=search, cached_only=cached_only)
+        if history is not None:
+            history.set_save_info(internal_id=id_, character=character, mode=mode)
+        return history
+    
+    
+    def new_history_for(self, id_: ChannelID, character=None, mode=None) -> CustomHistory:
+        id_, character, mode = self.get_id_parts(id_, character, mode)
+        full_id = f'{id_}_{character}_{mode}'
+        return super().new_history_for(full_id)
+    
+    
+    def get_id_parts(self, id_: ChannelID, character=None, mode=None):
+        state_dict = bot_settings.settings['llmstate']['state']
+        mode = mode or state_dict['mode']
+        character = character or state_dict["character_menu"] or 'unknown_character'
+        
         if not self.per_channel_history:
             id_ = 'global'
+            
+        if self.change_char_history_method == 'keep':
+            character = 'Mixed'
+            mode = 'mixed'
         
-        history:CustomHistory = super().get_history_for(f'{id_}_{character}_{mode}', fp=fp, search=search)
-        history.set_save_info(internal_id=id_, character=character, mode=mode)
-        return history
+        return id_, character, mode
 
         
 bot_behavior = Behavior() # needs to be loaded before settings
@@ -5030,3 +5070,4 @@ discord.utils.setup_logging(
             root=False,
         )
 asyncio.run(runner())
+
