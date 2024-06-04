@@ -341,6 +341,7 @@ class History:
         new = copy.copy(self)
         new._items = []
         new._last = {}
+        log.debug(f'Created fresh copy of history {self.id}')
         return new
     
     
@@ -665,12 +666,14 @@ class HistoryManager:
         return self.class_builder_history.load_from(self, fp=fp, id_=id_)
     
 
-    def get_history_for(self, id_: ChannelID=None, fp=None, search=False) -> History:
+    def get_history_for(self, id_: ChannelID=None, fp=None, search=False, cached_only=False) -> History:
         if id_ is None:
             raise Exception('ID must be set, please create a default ID in subclass.')
         
         # Check if history already loaded
         history = self._histories.get(id_)
+        if cached_only:
+            return history
         
         # Else import from given file if provided
         if history is None and fp is not None:
@@ -693,3 +696,9 @@ class HistoryManager:
 
         return history
 
+
+    def new_history_for(self, id_: ChannelID) -> History:
+        log.debug(f'Creating new history for {id_}')
+        history = self.add_history(self.class_builder_history(self, id_))
+        return history
+        
