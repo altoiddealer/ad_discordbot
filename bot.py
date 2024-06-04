@@ -407,7 +407,7 @@ def init_textgenwebui_llmmodels():
         shared.model_name = all_llmmodels[0]
 
     # Select the model from a command-line menu
-    elif shared.args.model_menu:
+    else:
         if len(all_llmmodels) == 0:
             log.error("No LLM models are available! Please download at least one.")
             sys.exit(0)
@@ -1675,7 +1675,6 @@ async def hybrid_llm_img_gen(ictx: CtxInteraction, source:str, text:str, tags:di
         bot_will_do = params['bot_will_do']
         change_embed = None
         img_gen_embed = None
-        tts_resp = None
 
         # Check params to see if an LLM model change/swap was triggered by Tags
         llmmodel_params = params.get('llmmodel', {})
@@ -1737,11 +1736,11 @@ async def hybrid_llm_img_gen(ictx: CtxInteraction, source:str, text:str, tags:di
                     await img_gen_embed.delete()
                 params['bot_will_do'] = bot_will_do
                 await img_gen_task(source, bot_message.text, params, ictx, tags)
-                
+        # Process any TTS response
         if bot_message.text_visible:
             await process_tts_resp(channel, bot_message)
-            
-        mention_resp = update_mention(get_user_ctx_inter(ictx).mention, bot_message.text) # @mention non-consecutive users
+        # @mention non-consecutive users
+        mention_resp = update_mention(get_user_ctx_inter(ictx).mention, bot_message.text)
         if bot_will_do['should_send_text']:
             await send_long_message(channel, mention_resp, bot_message=bot_message)
 
@@ -2209,12 +2208,9 @@ async def change_char_task(ictx: CtxInteraction, source:str, params:dict):
             change_embed_info.description = f'{user_name} requested character {mode}: "{char_name}"'
             change_embed = await channel.send(embed=change_embed_info)
         # Change character
-        await change_character(char_name, channel, source)
+        await change_character(char_name, channel)
         # Set history
-        if bot_history.autoload_history and (bot_history.change_char_history_method == 'keep' and source != 'reset'):
-            pass # no need to preload history as it gets loaded when needed.
-            
-        else:
+        if not bot_history.autoload_history or bot_history.change_char_history_method == 'new': # if we don't keep history...
             if source == 'reset':
                 # create a clone with same settings but empty, and replace it in the manager
                 bot_history.get_history_for(ictx.channel.id).fresh().replace()
@@ -3895,7 +3891,7 @@ async def load_character_data(char_name):
     return char_data
 
 # Collect character information
-async def character_loader(char_name, channel=None, source=None):
+async def character_loader(char_name, channel=None):
     try:
         # Get data using textgen-webui native character loading function
         _, name, _, greeting, context = load_character(char_name, '', '')
@@ -4002,10 +3998,10 @@ async def update_client_profile(char_name, channel=None):
         log.error(f"An error occurred while updating Discord profile: {e}")
 
 # Apply character changes
-async def change_character(char_name, channel, source):
+async def change_character(char_name, channel):
     try:
         # Load the character
-        await character_loader(char_name, channel, source)
+        await character_loader(char_name, channel)
         # Update all settings
         bot_settings.update_settings()
         await bot_settings.update_base_tags()
