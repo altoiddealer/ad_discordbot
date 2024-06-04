@@ -407,7 +407,7 @@ def init_textgenwebui_llmmodels():
         shared.model_name = all_llmmodels[0]
 
     # Select the model from a command-line menu
-    elif shared.args.model_menu:
+    else:
         if len(all_llmmodels) == 0:
             log.error("No LLM models are available! Please download at least one.")
             sys.exit(0)
