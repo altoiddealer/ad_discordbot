@@ -1712,9 +1712,12 @@ async def hybrid_llm_img_gen(ictx: CtxInteraction, source:str, text:str, tags:di
                 tts_sw = await toggle_tts(toggle='off')
             # generate text with text-gen-webui
             bot_message = await llm_gen(llm_payload, params, ictx, tts_sw)
-            # If no text was generated, treat user input at the response
+
             if bot_message:
-                log.info("reply sent: \"" + user_name + ": {'text': '" + llm_payload["text"] + "', 'response': '" + bot_message.text + "'}\"")
+                # Log message exchange
+                log.info(f'''{user_name}: "{llm_payload['text']}"''')
+                log.info(f'''{llm_payload['state']['name2']}: "{bot_message.text}"''')
+            # If no text was generated, treat user input at the response
             else:
                 if bot_will_do['should_gen_image'] and sd_enabled:
                     bot_message.update(text=text)
@@ -1952,8 +1955,11 @@ async def cont_regen_task(inter:discord.Interaction, source:str, message:discord
             
         if not bot_message:
             return
-        
-        log.info("reply sent: \"" + user_name + ": {'text': '" + llm_payload["text"] + "', 'response': '" + bot_message.text + "'}\"")
+
+        # Log message exchange
+        log.info(f'''{user_name}: "{llm_payload['text']}"''')
+        log.info(f'''{llm_payload['state']['name2']}: "{bot_message.text}"''')
+
         fetched_message = await channel.fetch_message(message)
         await fetched_message.delete()
         
@@ -4872,7 +4878,7 @@ class CustomHistory(History):
         self.fp = os.path.join(history_dir, f'{self.fp_unique_id}.json')
         
         if not has_file_name:
-            log.debug(f'Internal history file will be saved to: {self.fp}')
+            log.info(f'Internal history file will be saved to: {self.fp}')
     
     
     async def save(self, fp=None, timeout=300, force=False, force_tgwui=False):
