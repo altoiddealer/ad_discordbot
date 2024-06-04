@@ -350,6 +350,14 @@ class History:
         '''
         self.manager.add_history(self)
         return self
+    
+    
+    def unload(self):
+        history = self.manager._histories.get(self.id)
+        if history is self:
+            log.debug(f'Deleting {self.id} from manager.')
+            del self.manager._histories[self.id]
+        return self
 
 
     def append(self, message: HMessage):
@@ -623,8 +631,14 @@ class HistoryManager:
         return self
     
 
-    def unload_history(self):
+    def unload_all_history(self):
         self._histories.clear()
+        return self
+    
+    
+    def unload_history(self, id_: ChannelID):
+        if id_ in self._histories:
+            del self._histories[id_]
         return self
     
     

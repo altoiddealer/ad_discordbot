@@ -2218,8 +2218,9 @@ async def change_char_task(ictx: CtxInteraction, source:str, params:dict):
             if source == 'reset':
                 # create a clone with same settings but empty, and replace it in the manager
                 bot_history.get_history_for(ictx.channel.id).fresh().replace()
+                
             else:
-                bot_history.unload_history() #.clear_all_history()
+                bot_history.unload_history(ictx.channel.id)
                 
         if change_embed:
             await change_embed.delete()
@@ -4959,21 +4960,51 @@ class CustomHistoryManager(HistoryManager):
             
             
     def get_history_for(self, id_: ChannelID=None, character=None, mode=None, fp=None) -> History:
+        '''
+        if not autoload_history:
+            New files
+        
+        
+        if change_char == keep:
+            if channels == single:
+                One global history file
+                
+            if channels == multiple:
+                History per channel
+                All characters mixed together
+                
+        if change_char == new:
+            if autoload_history:
+                Load history on start, change on switch
+            
+            if channels == single:
+                New global file on char switch
+                New file when switching back A>B>A
+                
+            if channels == multiple:
+                New files for each channel on character switch
+                New file when switching back A>B>A
+        '''
+        
         state_dict = bot_settings.settings['llmstate']['state']
         mode = mode or state_dict['mode']
         character = character or state_dict["character_menu"] or 'unknown_character'
         
-        search = True
-        if self.change_char_history_method == 'new':
-            search = False # don't import old logs
+        # Should import old logs or not.
+        search = self.autoload_history
         
         # TODO if there's a setting about keeping history between characters, maybe duplicating would be better?
         # or just edit the ID here to match both
         
         if not self.per_channel_history:
             id_ = 'global'
-        
-        history:CustomHistory = super().get_history_for(f'{id_}_{character}_{mode}', fp=fp, search=search)
+            
+        if self.change_char_history_method == 'keep':
+            character = 'Mixed'
+            mode = ''
+            
+        full_id = f'{id_}_{character}_{mode}'
+        history:CustomHistory = super().get_history_for(full_id, fp=fp, search=search)
         history.set_save_info(internal_id=id_, character=character, mode=mode)
         return history
 
@@ -5034,3 +5065,4 @@ discord.utils.setup_logging(
             root=False,
         )
 asyncio.run(runner())
+
