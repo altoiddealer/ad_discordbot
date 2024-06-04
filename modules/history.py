@@ -341,7 +341,7 @@ class History:
         new = copy.copy(self)
         new._items = []
         new._last = {}
-        log.debug(f'Created fresh copy of history {self.id}')
+        log.debug(f'Created history template for: {self.id}')
         return new
     
     
@@ -356,7 +356,7 @@ class History:
     def unload(self):
         history = self.manager._histories.get(self.id)
         if history is self:
-            log.debug(f'Deleting {self.id} from manager.')
+            log.debug(f'Deleting "{self.id}" from history manager.')
             del self.manager._histories[self.id]
         return self
 
@@ -530,7 +530,7 @@ class History:
             json_out = json.dumps(dict(history=history, messages=messages), indent=2)
             f.write(json_out)
             
-        log.debug(f'Saved file: {fp}')
+        log.debug(f'Saved file: {fp}.')
             
         return self
     
@@ -601,7 +601,7 @@ class History:
             replying_to = local_message_storage.get(message.reply_to)
             message.mark_as_reply_for(replying_to, save=False) # don't save because it's already saved
 
-        log.debug(f'Loaded {len(history._items)} total messages (some may be hidden)')
+        log.info(f'Loaded history with {len(history._items)} total messages: {history.fp}') # `save_history: False` exchanges will be excluded from TGWUI logs
         return history
 
 
@@ -677,12 +677,12 @@ class HistoryManager:
         
         # Else import from given file if provided
         if history is None and fp is not None:
-            log.debug(f'No channel {id_}, trying to load from file: {fp}')
+            log.debug(f'No history loaded for "{id_}". Trying to load from file: {fp}')
             history = self.load_history_from_fp(fp=fp, id_=id_)
             
         # Else search for matching files.
         elif history is None and search:
-            log.debug(f'No channel {id_}, Searching for file')
+            log.debug(f'No history loaded for "{id_}". Searching for file.')
             fp = self.search_for_fp(id_)
             if fp:
                 log.debug(f'Found: {fp}')
@@ -691,14 +691,14 @@ class HistoryManager:
             
         # Else 
         if history is None:
-            log.debug(f'No history for channel {id_}, creating new')
-            history = self.add_history(self.class_builder_history(self, id_))
+            log.debug(f'No history for "{id_}". Creating new.')
+            history = self.new_history_for(self.class_builder_history(self, id_))
 
         return history
 
 
     def new_history_for(self, id_: ChannelID) -> History:
-        log.debug(f'Creating new history for {id_}')
+        log.info(f'Creating new history for "{id_}".')
         history = self.add_history(self.class_builder_history(self, id_))
         return history
         

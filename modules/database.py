@@ -2,6 +2,7 @@ from modules.logs import import_track, log, get_logger; import_track(__file__, f
 log = get_logger(__name__)
 logging = log
 from modules.utils_files import load_file, save_yaml_file
+from datetime import timedelta
 import time
 
 from modules.database_migration_v1_v2 import OldDatabase
@@ -179,7 +180,7 @@ class Database(BaseFileMemory):
     def load_defaults(self, data: dict):
         self.first_run = data.pop('first_run', True)
         self.last_character = data.pop('last_character', None)
-        self.last_change = data.pop('last_change', time.time())
+        self.last_change = data.pop('last_change', (time.time() - timedelta(minutes=10).seconds))
         self.last_user_msg = data.pop('last_user_msg', {})
         self.announce_channels = data.pop('announce_channels', [])
         self.main_channels = data.pop('main_channels', [])
