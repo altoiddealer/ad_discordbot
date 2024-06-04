@@ -692,7 +692,7 @@ class HistoryManager:
         # Else 
         if history is None:
             log.debug(f'No history for "{id_}". Creating new.')
-            history = self.new_history_for(self.class_builder_history(self, id_))
+            history = self.add_history(self.class_builder_history(self, id_))
 
         return history
 
