@@ -421,6 +421,7 @@ def init_textgenwebui_llmmodels():
             print()
 
         shared.model_name = all_llmmodels[i]
+        print(f'Loading {shared.model_name}.\nTo skip model selection, use "--model" in "CMD_FLAGS.txt".')
 
 # Check user settings (models/config-user.yaml) to determine loader
 def get_llm_model_loader(model):
