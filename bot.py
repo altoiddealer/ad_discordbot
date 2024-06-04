@@ -2073,7 +2073,7 @@ async def change_imgmodel_task(user_name:str, channel, params:dict, ictx=None):
             await change_embed.delete()
             if bot_database.announce_channels:
                 # Send embeds to announcement channels
-                await bg_task_queue.put(announce_changes(ictx, 'Img model', imgmodel_name))
+                await bg_task_queue.put(announce_changes(ictx, 'changed Img model', imgmodel_name))
             else:
                 # Send change embed to interaction channel
                 change_embed_info.title = f"{user_name} changed Img model:"
@@ -2131,7 +2131,7 @@ async def change_llmmodel_task(ictx, params:dict):
                 await change_embed.delete()
                 # Send embeds to announcement channels
                 if bot_database.announce_channels:
-                    await bg_task_queue.put(announce_changes(ictx, 'LLM model', llmmodel_name))
+                    await bg_task_queue.put(announce_changes(ictx, 'changed LLM model', llmmodel_name))
                 else:
                     # Send change embed to interaction channel
                     if llmmodel_name == 'None':
@@ -2177,7 +2177,7 @@ async def send_char_greeting_or_history(ictx: CtxInteraction, char_name:str):
 
 async def announce_changes(ictx: CtxInteraction, change_label:str, change_name:str):
     user_name = get_user_ctx_inter(ictx).display_name if ictx else 'Automatically'
-    change_embed_info.title = f"{user_name} changed {change_label}:"
+    change_embed_info.title = f"{user_name} {change_label}:"
     change_embed_info.description = f'**{change_name}**'
     try:
         # adjust delay depending on how many channels there are to prevent being rate limited
@@ -2196,7 +2196,7 @@ async def announce_changes(ictx: CtxInteraction, change_label:str, change_name:s
                 await channel.send(embed=change_embed_info)
             # Channel is in another server
             else:
-                change_embed_info.title = f"A user changed {change_label} in another bot server:"
+                change_embed_info.title = f"A user {change_label} in another bot server:"
                 await channel.send(embed=change_embed_info)
     except Exception as e:
         log.error(f'An error occurred while announcing changes to announce channels: {e}')
@@ -2206,6 +2206,9 @@ async def change_char_task(ictx: CtxInteraction, source:str, params:dict):
     channel = ictx.channel
     change_embed = None
     try:
+
+        {'character': {'char_name': bot_database.last_character, 'verb': 'Resetting', 'mode': 'reset'}}
+
         char_params = params.get('character', {})
         char_name = char_params.get('char_name', {})
         verb = char_params.get('verb', 'Changing')
@@ -2222,19 +2225,19 @@ async def change_char_task(ictx: CtxInteraction, source:str, params:dict):
             history = bot_history.get_history_for(ictx.channel.id, cached_only=True)
             if history is None:
                 bot_history.new_history_for(ictx.channel.id)
-                
             else:
                 history.fresh().replace()
-                
+
         if change_embed:
             await change_embed.delete()
+            change_message = 'reset the conversation' if mode == 'reset' else 'changed character'
             # Send embeds to announcement channels
             if bot_database.announce_channels:
-                await bg_task_queue.put(announce_changes(ictx, 'character', char_name))
+                await bg_task_queue.put(announce_changes(ictx, change_message, char_name))
+            # Send change embed to interaction channel
             else:
-                # Send change embed to interaction channel
-                change_embed_info.title = f"{user_name} changed character:"
                 change_embed_info.description = f'**{char_name}**'
+                change_embed_info.title = f"{user_name} {change_message}:"
                 await channel.send(embed=change_embed_info)
         if not bot_history.per_channel_history:
             await send_char_greeting_or_history(ictx, char_name)
@@ -3835,7 +3838,7 @@ if textgenwebui_enabled:
     async def reset_conversation(ctx: commands.Context):
         try:
             shared.stop_everything = True
-            await ireply(ctx, 'character reset') # send a response msg to the user
+            await ireply(ctx, 'conversation reset') # send a response msg to the user
             # Create a new instanec of the history and set it to active
             bot_history.get_history_for(ctx.channel.id).fresh().replace()
 
