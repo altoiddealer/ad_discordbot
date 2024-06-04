@@ -3110,7 +3110,8 @@ def collect_img_tag_values(tags, params):
                     params['sd_output_dir'] = str(value)
                 elif key == 'img_censoring' and not params.get('img_censoring'):
                     params['img_censoring'] = int(value)
-                    log.info(f"[TAGS] Censoring: {'Image Blurred' if value == 1 else 'Generation Blocked'}")
+                    if value != 0:
+                        log.info(f"[TAGS] Censoring: {'Image Blurred' if value == 1 else 'Generation Blocked'}")
                 # Accept only first 'change' or 'swap'
                 elif key == 'change_imgmodel' or key == 'swap_imgmodel' and not (img_payload_mods.get('change_imgmodel') or img_payload_mods.get('swap_imgmodel')):
                     img_payload_mods[key] = str(value)
