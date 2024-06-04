@@ -2209,7 +2209,7 @@ async def change_char_task(ictx: CtxInteraction, source:str, params:dict):
             change_embed_info.description = f'{user_name} requested character {mode}: "{char_name}"'
             change_embed = await channel.send(embed=change_embed_info)
         # Change character
-        await change_character(char_name, channel, source)
+        await change_character(char_name, channel)
         # Set history
         if bot_history.autoload_history and (bot_history.change_char_history_method == 'keep' and source != 'reset'):
             pass # no need to preload history as it gets loaded when needed.
@@ -3894,7 +3894,7 @@ async def load_character_data(char_name):
     return char_data
 
 # Collect character information
-async def character_loader(char_name, channel=None, source=None):
+async def character_loader(char_name, channel=None):
     try:
         # Get data using textgen-webui native character loading function
         _, name, _, greeting, context = load_character(char_name, '', '')
@@ -4001,10 +4001,10 @@ async def update_client_profile(char_name, channel=None):
         log.error(f"An error occurred while updating Discord profile: {e}")
 
 # Apply character changes
-async def change_character(char_name, channel, source):
+async def change_character(char_name, channel):
     try:
         # Load the character
-        await character_loader(char_name, channel, source)
+        await character_loader(char_name, channel)
         # Update all settings
         bot_settings.update_settings()
         await bot_settings.update_base_tags()
