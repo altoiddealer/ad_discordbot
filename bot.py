@@ -1855,6 +1855,7 @@ async def llm_gen(llm_payload:dict, params:dict={}, ictx=None, tts_sw=None) -> H
         user = get_user_ctx_inter(ictx)
         local_history = bot_history.get_history_for(ictx.channel.id)
         user_message = local_history.new_message(llm_payload['state']['name1'], llm_payload['text'], 'user', user.id)
+        user_message.id = ictx.id if ictx else None
         if not save_to_history:
             user_message.hidden = True
             user_message.dont_save()
@@ -3861,6 +3862,38 @@ if textgenwebui_enabled:
             
         except Exception as e:
             log.error(f"Error with /save_conversation: {e}")
+
+    # Model for editing history
+    class EditMessageModal(discord.ui.Modal, title="Edit Message in History"):
+        new_content = discord.ui.TextInput(label='New Message Content', style=discord.TextStyle.paragraph, min_length=1)
+
+        def __init__(self, target_message:HMessage, original_message:discord.Message):
+            super().__init__()
+            self.original_message = original_message
+            self.target_message = target_message
+
+        async def on_submit(self, inter: discord.Interaction):
+            self.target_message.text = self.new_content.value
+            await inter.response.send_message("Message has been edited successfully.", ephemeral=True, delete_after=5)
+            if self.original_message.author == client.user:
+                if len(self.new_content.value) >= 2000:
+                    await inter.response.send_message("Message shortened in the Discord UI. It was still replaced entirely in history", ephemeral=True, delete_after=5)
+                    self.new_content.value[:2000]
+                await self.original_message.edit(content=self.new_content.value)
+
+    # Context menu command to edit a message
+    @client.tree.context_menu(name="edit history")
+    async def edit_history(inter: discord.Interaction, message: discord.Message):
+        if not (message.author == inter.user or message.author == client.user):
+            await inter.response.send_message("You can only edit your own or bot's messages.", ephemeral=True, delete_after=5)
+            return
+        history = bot_history.get_history_for(inter.channel.id)
+        target_message = history.search(lambda m: m.id == message.id)
+        if not target_message:
+            await inter.response.send_message("Message not found in current chat history. Note: if the character sent multiple messages, this command must be used on the last one.", ephemeral=True, delete_after=10)
+            return
+        modal = EditMessageModal(target_message, original_message=message)
+        await inter.response.send_modal(modal)
 
     # Context menu command to Regenerate last reply
     @client.tree.context_menu(name="regenerate")
