@@ -83,6 +83,8 @@ async def send_long_message(channel, message_text, bot_message:'HMessage'=None):
     if bot_message:
         bot_message.id = sent_message.id
 
+    return sent_message.id
+
 
 # Model for editing history
 class EditMessageModal(discord.ui.Modal, title="Edit Message in History"):

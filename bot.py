@@ -42,7 +42,7 @@ sys.path.append("ad_discordbot")
 from modules.database import Database, ActiveSettings, Config, StarBoard, Statistics
 from modules.utils_shared import task_semaphore, shared_path, patterns
 from modules.utils_misc import fix_dict, update_dict, sum_update_dict, update_dict_matched_keys, format_time
-from modules.utils_discord import ireply, send_long_message, EditMessageModal, SelectedListItem, SelectOptionsView, CtxInteraction, get_user_ctx_inter
+from modules.utils_discord import ireply, send_long_message, EditMessageModal, SelectedListItem, SelectOptionsView, CtxInteraction, get_user_ctx_inter, get_message_ctx_inter
 from modules.utils_files import load_file, merge_base, save_yaml_file
 from modules.utils_aspect_ratios import round_to_precision, res_to_model_fit, dims_from_ar, avg_from_dims, get_aspect_ratio_parts, calculate_aspect_ratio_sizes
 from modules.history import HistoryManager, History, HMessage, cnf
@@ -1704,14 +1704,21 @@ async def hybrid_llm_img_gen(ictx: CtxInteraction, source:str, text:str, tags:di
                     bot_database.update_was_warned('no_llmmodel')
                     await channel.send(f'(Cannot process text request: No LLM model is currently loaded. Use "/llmmodel" to load a model.)', delete_after=10)
                     log.warning(f'Bot tried to generate text for {user_name}, but no LLM model was loaded')
-            # Check to apply Server Mode
-            llm_payload = apply_server_mode(llm_payload, ictx)
-            # Only generate TTS for the server conntected to Voice Channel
+
+            ## Finalize payload, generate text via TGWUI, and process responses
+            # Toggle TTS off, if interaction server is not connected to Voice Channel
             tts_sw = None
             if (not bot_will_do['should_send_text']) or (voice_client and (voice_client != ictx.guild.voice_client) and int(tts_settings.get('play_mode', 0)) == 0):
                 tts_sw = await toggle_tts(toggle='off')
-            # generate text with text-gen-webui
-            bot_message = await llm_gen(llm_payload, params, ictx, tts_sw)
+            save_to_history = params.get('save_to_history', True)
+            # make final preparations for llm_gen()
+            llm_payload, user_message, local_history = await pre_llm_gen(llm_payload, save_to_history, ictx)
+            # generate text with text-generation-webui
+            last_resp, tts_resp = await llm_gen(llm_payload)
+            # Process responses
+            bot_message = await post_llm_gen(user_message, local_history, save_to_history, last_resp, tts_resp)
+            # Toggle TTS back on if it was toggled off
+            await toggle_tts(toggle='on', tts_sw=tts_sw)
 
             if bot_message:
                 # Log message exchange
@@ -1791,10 +1798,10 @@ def update_llm_gen_statistics(last_resp:str):
         log.error(f'An error occurred while saving LLM gen statistics: {e}')
 
 # Add guild data
-def apply_server_mode(llm_payload:dict, i=None):
-    if i and config.get('textgenwebui', {}).get('server_mode', False):
+def apply_server_mode(llm_payload:dict, ictx=None):
+    if ictx and config.get('textgenwebui', {}).get('server_mode', False):
         try:
-            name1 = f'Server: {i.guild}'
+            name1 = f'Server: {ictx.guild}'
             llm_payload['state']['name1'] = name1
             llm_payload['state']['name1_instruct'] = name1
         except Exception as e:
@@ -1840,29 +1847,39 @@ async def toggle_tts(toggle='on', tts_sw=None):
         log.error(f'An error occurred while toggling the TTS on/off in llm_gen(): {e}')
     return None
 
-# Send LLM Payload - get response
-async def llm_gen(llm_payload:dict, params:dict={}, ictx=None, tts_sw=None) -> HMessage:
+# make final preparations for llm_gen()
+async def pre_llm_gen(llm_payload:dict, save_to_history=True, ictx=None, set_user_msg=True) -> HMessage:
     try:
-        if shared.model_name == 'None':
-            return
+        # Check to apply Server Mode
+        llm_payload = apply_server_mode(llm_payload, ictx)
+        # Update names in stopping strings
         llm_payload = extra_stopping_strings(llm_payload)
-        loop = asyncio.get_event_loop()
-        
-        save_to_history = params.get('save_to_history', True)
-        
         # Add user message before processing bot reply.
-        # this gives time for other messages to pile up before the bot's as they do in actual chat.
+        # this gives time for other messages to acrue before the bot's response, as in realistic chat scenario.
         user = get_user_ctx_inter(ictx)
+        message = get_message_ctx_inter(ictx)
         local_history = bot_history.get_history_for(ictx.channel.id)
-        user_message = local_history.new_message(llm_payload['state']['name1'], llm_payload['text'], 'user', user.id)
-        user_message.id = ictx.id if ictx else None
-        if not save_to_history:
-            user_message.hidden = True
-            user_message.dont_save()
+        user_message = None
+        if set_user_msg:
+            user_message = local_history.new_message(llm_payload['state']['name1'], llm_payload['text'], 'user', user.id)
+            user_message.id = message.id if hasattr(message, 'id') else None
+            # set history flag
+            if not save_to_history:
+                user_message.hidden = True
+                user_message.dont_save()
+        return llm_payload, user_message, local_history
+    except Exception as e:
+        log.error(f'An error occurred before llm_gen(): {e}')
+        return None, None, None
 
+# Send LLM Payload - get responses
+async def llm_gen(llm_payload:dict) -> str:
+    if shared.model_name == 'None':
+        return
+    try:
+        loop = asyncio.get_event_loop()
         # Store time for statistics
         bot_statistics._llm_gen_time_start_last = time.time()
-
         # Subprocess prevents losing discord heartbeat
         def process_responses():
             last_resp = ''
@@ -1879,55 +1896,58 @@ async def llm_gen(llm_payload:dict, params:dict={}, ictx=None, tts_sw=None) -> H
                         audio_format_match = patterns.audio_src.search(last_vis_resp)
                         if audio_format_match:
                             tts_resp = audio_format_match.group(1)
-            return last_resp, tts_resp  # bot's reply
-
-        # Offload the synchronous task to a separate thread using run_in_executor
+            return last_resp, tts_resp  # responses from TGWUI
+        # Offload the synchronous task to a separate thread
         last_resp, tts_resp = await loop.run_in_executor(None, process_responses)
+        if last_resp:
+            update_llm_gen_statistics(last_resp) # Update statistics
+        return last_resp, tts_resp
+    except Exception as e:
+        log.error(f'An error occurred in llm_gen(): {e}')
+        traceback.print_exc()
+        return '', ''
 
-        
+# Process responses from text-generation-webui
+async def post_llm_gen(user_message:HMessage, local_history:History, save_to_history:bool=True, last_resp:str='', tts_resp:str='') -> HMessage:
+    try:
         bot_message = local_history.new_message(bot_settings.name, last_resp, 'assistant', bot_settings._bot_id, text_visible=tts_resp)
         bot_message.mark_as_reply_for(user_message)
         if not save_to_history:
             bot_message.hidden = True
             bot_message.dont_save()
-            
+
         if last_resp:
-            update_llm_gen_statistics(last_resp) # Update statistics
             truncation = int(bot_settings.settings['llmstate']['state']['truncation_length'] * 4) #approx tokens
             bot_message.history.truncate(truncation)
             client.loop.create_task(bot_message.history.save())
 
-        # Toggle TTS back on if it was toggled off
-        await toggle_tts(toggle='on', tts_sw=tts_sw)
-
         return bot_message
-    
     except Exception as e:
-        log.error(f'An error occurred in llm_gen(): {e}')
-        if str(e).startswith('list index out of range'):
-            log.warning(f'Note (this may not be the cause of error): "regen" and "continue" commands only work if bot sent message during current session.')
-        traceback.print_exc()
-        return
+        log.error(f'An error occurred after llm_gen(): {e}')
+        return None
 
-async def cont_regen_task(inter:discord.Interaction, source:str, message:discord.Message, text:str=''):
+async def cont_regen_task(inter:discord.Interaction, source:str, target_discord_msg:discord.Message):
+    user_name = get_user_ctx_inter(inter).display_name
+    channel = inter.channel
+    system_embed = None
     cmd = ''
     try:
-        user_name = get_user_ctx_inter(inter).display_name # just incase this function is used elsewhere later
-        channel = inter.channel
-        system_embed = None
+        # collect relavent history and messages
+        local_history = bot_history.get_history_for(inter.channel.id)
+        original_bot_message = local_history.search(lambda m: m.id == target_discord_msg.id)
+        if not original_bot_message:
+            await inter.followup.send("Message not found in current chat history. Note: if the character sent multiple messages, this command must be used on the last one.", ephemeral=True)
+            return
+        original_user_message = original_bot_message.reply_to
+        # build new payload
+        text = original_user_message.text or ''
         llm_payload = await init_llm_payload(inter, user_name, text)
-        
-        history = bot_history.get_history_for(inter.channel.id)
-        target_message = history.search(lambda m: m.id == message.id)
-        if target_message:
-            log.warning(f'Failed to find message: {message}')
-            history = target_message.new_history_start_here() # use new_history_end_here if you want to regenerate a message in the middle.
-            
-        sliced_i, sliced_v = history.render_to_tgwui_tuple()
-        
-        llm_payload['state']['history']['internal'] = sliced_i
-        llm_payload['state']['history']['visible'] = sliced_v
-        params = {'save_to_history': False}
+        local_history = original_bot_message.new_history_end_here()
+        sliced_i, _ = local_history.render_to_tgwui_tuple()
+        # using original 'visible' produces wonky TTS responses combined with "Continue" function
+        llm_payload['state']['history']['internal'] = copy.deepcopy(sliced_i)
+        llm_payload['state']['history']['visible'] = copy.deepcopy(sliced_i)
+        save_to_history = not original_bot_message.hidden # Assert same flag as when initially generated
         if source == 'cont':
             cmd = 'Continuing'
             llm_payload['_continue'] = True
@@ -1942,35 +1962,46 @@ async def cont_regen_task(inter:discord.Interaction, source:str, message:discord
             system_embed_info.title = f'{cmd} ... '
             system_embed_info.description = f'{cmd} text for {user_name}'
             system_embed = await channel.send(embed=system_embed_info)
-        # Check to apply Server Mode
-        llm_payload = apply_server_mode(llm_payload, inter)
-        # Only generate TTS for the server conntected to Voice Channel
+
+        ## Finalize payload, generate text via TGWUI, and process responses
+        # Toggle TTS off, if interaction server is not connected to Voice Channel
         tts_sw = None
         if voice_client and (voice_client != inter.guild.voice_client) and int(tts_settings.get('play_mode', 0)) == 0:
             tts_sw = await toggle_tts(toggle='off')
-        # generate text with text-gen-webui
-        bot_message = await llm_gen(llm_payload, params, inter, tts_sw)
-        
+        # make final preparations for llm_gen()
+        llm_payload, _, local_history = await pre_llm_gen(llm_payload, save_to_history, inter, set_user_msg=False)
+        # generate text with text-generation-webui. Skip post_llm_gen()
+        last_resp, tts_resp = await llm_gen(llm_payload)
+        # Toggle TTS back on if it was toggled off
+        await toggle_tts(toggle='on', tts_sw=tts_sw)
+
         if system_embed:
             await system_embed.delete()
-            
-        if not bot_message:
+        if not last_resp:
+            await inter.followup.send(f'Failed to {cmd} text.', silent=True)
             return
 
+        verb = "Regenerated" if source == "regen" else "Continued"
         # Log message exchange
         log.info(f'''{user_name}: "{llm_payload['text']}"''')
-        log.info(f'''{llm_payload['state']['name2']}: "{bot_message.text}"''')
+        log.info(f'{verb} text:')
+        log.info(f'''{llm_payload['state']['name2']}: "{last_resp}"''')
+        # Update original discord message, or send new one if too long
+        message_prefix = f'__{verb} text:__'
+        if len(last_resp) < 1980:
+            new_discord_msg = await target_discord_msg.edit(content=f'{message_prefix}\n{last_resp}')
+            await inter.followup.send(f'{verb} text for {user_name}.')
+        else:
+            await target_discord_msg.delete()
+            await inter.followup.send(f'__{verb} text:__', silent=True)
+            new_discord_msg = await send_long_message(channel, last_resp)
+        # Update the original message in history manager
+        updated_bot_message = original_bot_message
+        updated_bot_message.update(text=last_resp, text_visible=tts_resp, id=new_discord_msg.id)
+        # process any tts resp
+        if tts_resp:
+            await process_tts_resp(channel, updated_bot_message)
 
-        fetched_message = await channel.fetch_message(message)
-        await fetched_message.delete()
-        
-        if bot_message.text_visible:
-            await process_tts_resp(channel, bot_message)
-            
-        if source == 'regen':
-            await inter.followup.send('__Regenerated text:__', silent=True)
-        await send_long_message(channel, bot_message.text, bot_message=bot_message)
-        
     except Exception as e:
         e_msg = f'An error occurred while processing "{cmd}"'
         log.error(f'{e_msg}: {e}')
@@ -2003,7 +2034,14 @@ async def speak_task(ctx: commands.Context, text:str, params:dict):
         params['save_to_history'] = False
         tts_args = params.get('tts_args', {})
         await update_extensions(tts_args)
-        bot_message = await llm_gen(llm_payload, params)
+
+        # make final preparations for llm_gen()
+        llm_payload, user_message, local_history = await pre_llm_gen(llm_payload, False, ctx)
+        # generate text with text-generation-webui
+        last_resp, tts_resp = await llm_gen(llm_payload)
+        # Process responses
+        bot_message = await post_llm_gen(user_message, local_history, False, last_resp, tts_resp)
+
         if system_embed:
             await system_embed.delete()
         if not bot_message:
@@ -3880,6 +3918,9 @@ if textgenwebui_enabled:
     # Context menu command to Regenerate last reply
     @client.tree.context_menu(name="regenerate")
     async def regen_llm_gen(inter: discord.Interaction, message:discord.Message):
+        if not (message.author == client.user):
+            await inter.response.send_message('You can only "regenerate" messages from the bot.', ephemeral=True, delete_after=5)
+            return
         await inter.response.defer(thinking=False)
 
         async with task_semaphore:
@@ -3891,14 +3932,16 @@ if textgenwebui_enabled:
     # Context menu command to Continue last reply
     @client.tree.context_menu(name="continue")
     async def continue_llm_gen(inter: discord.Interaction, message:discord.Message):
-        text = message.content
+        if not (message.author == client.user):
+            await inter.response.send_message('You can only "continue" messages from the bot.', ephemeral=True, delete_after=5)
+            return
         await inter.response.defer(thinking=False)
 
         async with task_semaphore:
             async with inter.channel.typing():
                 # offload to ai_gen queue
                 log.info(f'{inter.user.display_name} used "Continue"')
-                await cont_regen_task(inter, 'cont', message, text)
+                await cont_regen_task(inter, 'cont', message)
 
 async def load_character_data(char_name):
     char_data = None
