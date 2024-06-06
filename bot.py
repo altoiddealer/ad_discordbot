@@ -1875,7 +1875,7 @@ async def pre_llm_gen(llm_payload:dict, save_to_history=True, ictx=None, set_use
 # Send LLM Payload - get responses
 async def llm_gen(llm_payload:dict) -> str:
     if shared.model_name == 'None':
-        return
+        return '', ''
     try:
         loop = asyncio.get_event_loop()
         # Store time for statistics
