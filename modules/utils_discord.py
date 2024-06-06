@@ -23,7 +23,6 @@ async def ireply(ictx: 'CtxInteraction', process):
         log.error(f"Error sending message response to user's interaction command: {e}")
 
 
-
 async def send_long_message(channel, message_text, bot_message:'HMessage'=None):
     """ Splits a longer message into parts while preserving sentence boundaries and code blocks """
     activelang = ''
@@ -83,6 +82,35 @@ async def send_long_message(channel, message_text, bot_message:'HMessage'=None):
             
     if bot_message:
         bot_message.id = sent_message.id
+
+
+# Model for editing history
+class EditMessageModal(discord.ui.Modal, title="Edit Message in History"):
+    def __init__(self, clientuser: discord.User, target_message: 'HMessage', original_message: discord.Message):
+        super().__init__()
+        self.original_message = original_message
+        self.target_message = target_message
+        self.clientuser = clientuser
+
+        # Add TextInput dynamically with default value
+        self.new_content = discord.ui.TextInput(
+            label='New Message Content', 
+            style=discord.TextStyle.paragraph, 
+            min_length=1, 
+            default=self.original_message.content
+        )
+        self.add_item(self.new_content)
+
+    async def on_submit(self, inter: discord.Interaction):
+        edited_message = self.new_content.value
+        self.target_message.update(text=edited_message)
+        await inter.response.send_message("Message has been edited successfully.", ephemeral=True, delete_after=5)
+
+        if self.clientuser == self.original_message.author:
+            if len(edited_message) >= 2000:
+                await inter.response.send_message("Message shortened in the Discord UI. It was still replaced entirely in history", ephemeral=True, delete_after=5)
+
+            await self.original_message.edit(content=edited_message[:2000])
 
 class SelectedListItem(discord.ui.Select):
     def __init__(self, options, placeholder, custom_id):

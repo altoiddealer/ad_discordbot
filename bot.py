@@ -42,7 +42,7 @@ sys.path.append("ad_discordbot")
 from modules.database import Database, ActiveSettings, Config, StarBoard, Statistics
 from modules.utils_shared import task_semaphore, shared_path, patterns
 from modules.utils_misc import fix_dict, update_dict, sum_update_dict, update_dict_matched_keys, format_time
-from modules.utils_discord import ireply, send_long_message, SelectedListItem, SelectOptionsView, CtxInteraction, get_user_ctx_inter
+from modules.utils_discord import ireply, send_long_message, EditMessageModal, SelectedListItem, SelectOptionsView, CtxInteraction, get_user_ctx_inter
 from modules.utils_files import load_file, merge_base, save_yaml_file
 from modules.utils_aspect_ratios import round_to_precision, res_to_model_fit, dims_from_ar, avg_from_dims, get_aspect_ratio_parts, calculate_aspect_ratio_sizes
 from modules.history import HistoryManager, History, HMessage, cnf
@@ -3863,24 +3863,6 @@ if textgenwebui_enabled:
         except Exception as e:
             log.error(f"Error with /save_conversation: {e}")
 
-    # Model for editing history
-    class EditMessageModal(discord.ui.Modal, title="Edit Message in History"):
-        new_content = discord.ui.TextInput(label='New Message Content', style=discord.TextStyle.paragraph, min_length=1)
-
-        def __init__(self, target_message:HMessage, original_message:discord.Message):
-            super().__init__()
-            self.original_message = original_message
-            self.target_message = target_message
-
-        async def on_submit(self, inter: discord.Interaction):
-            self.target_message.text = self.new_content.value
-            await inter.response.send_message("Message has been edited successfully.", ephemeral=True, delete_after=5)
-            if self.original_message.author == client.user:
-                if len(self.new_content.value) >= 2000:
-                    await inter.response.send_message("Message shortened in the Discord UI. It was still replaced entirely in history", ephemeral=True, delete_after=5)
-                    self.new_content.value[:2000]
-                await self.original_message.edit(content=self.new_content.value)
-
     # Context menu command to edit a message
     @client.tree.context_menu(name="edit history")
     async def edit_history(inter: discord.Interaction, message: discord.Message):
@@ -3892,7 +3874,7 @@ if textgenwebui_enabled:
         if not target_message:
             await inter.response.send_message("Message not found in current chat history. Note: if the character sent multiple messages, this command must be used on the last one.", ephemeral=True, delete_after=10)
             return
-        modal = EditMessageModal(target_message, original_message=message)
+        modal = EditMessageModal(client.user, target_message, original_message=message)
         await inter.response.send_modal(modal)
 
     # Context menu command to Regenerate last reply
