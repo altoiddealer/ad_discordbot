@@ -7,9 +7,10 @@ dict_cmdoptions.yaml
 dict_imgmodels.yaml
 dict_tags.yaml
 activesettings.yaml
-statistics.yaml
 CMD_FLAGS.txt
+icon_embed.png
 
-internal/database.yaml
-internal/history/*
+internal/*
 sd_outputs/*
+user_images/*
+wildcards/*
