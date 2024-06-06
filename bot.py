@@ -42,7 +42,7 @@ sys.path.append("ad_discordbot")
 from modules.database import Database, ActiveSettings, Config, StarBoard, Statistics
 from modules.utils_shared import task_semaphore, shared_path, patterns
 from modules.utils_misc import fix_dict, update_dict, sum_update_dict, update_dict_matched_keys, format_time
-from modules.utils_discord import ireply, send_long_message, EditMessageModal, SelectedListItem, SelectOptionsView, CtxInteraction, get_user_ctx_inter, get_message_ctx_inter
+from modules.utils_discord import ireply, send_long_message, EditMessageModal, SelectedListItem, SelectOptionsView, CtxInteraction, get_user_ctx_inter, get_message_ctx_inter, MAX_MESSAGE_LENGTH
 from modules.utils_files import load_file, merge_base, save_yaml_file
 from modules.utils_aspect_ratios import round_to_precision, res_to_model_fit, dims_from_ar, avg_from_dims, get_aspect_ratio_parts, calculate_aspect_ratio_sizes
 from modules.history import HistoryManager, History, HMessage, cnf
@@ -1848,7 +1848,7 @@ async def toggle_tts(toggle='on', tts_sw=None):
     return None
 
 # make final preparations for llm_gen()
-async def pre_llm_gen(llm_payload:dict, save_to_history=True, ictx=None, set_user_msg=True) -> HMessage:
+async def pre_llm_gen(llm_payload:dict, save_to_history=True, ictx=None, set_user_msg=True):
     try:
         # Check to apply Server Mode
         llm_payload = apply_server_mode(llm_payload, ictx)
@@ -1989,22 +1989,28 @@ async def cont_regen_task(inter:discord.Interaction, source:str, target_discord_
         log.info(f'''{user_name}: "{llm_payload['text']}"''')
         log.info(f'{verb} text:')
         log.info(f'''{llm_payload['state']['name2']}: "{last_resp}"''')
+        
+        # Delete other messages that are part of the Long message, but not being regenerated
+        messages_to_remove = updated_bot_message.related_ids + [updated_bot_message.id]
+        if target_discord_msg.id in messages_to_remove:
+            messages_to_remove.remove(target_discord_msg.id)
+            
+        for message_id in messages_to_remove:
+            local_message = await target_discord_msg.channel.fetch_message(message_id)
+            if local_message:
+                await local_message.delete()
+                
+        updated_bot_message.related_ids.clear() # TODO maybe add a fresh method to HMessage?
+        
         # Update original discord message, or send new one if too long
         message_prefix = f'__{verb} text:__'
-        if len(last_resp) < 1980:
+        if len(last_resp) < MAX_MESSAGE_LENGTH:
             new_discord_msg = await target_discord_msg.edit(content=f'{message_prefix}\n{last_resp}')
             await inter.followup.send(f'{verb} text for {user_name}.')
+            
         else:
             await target_discord_msg.delete()
             await inter.followup.send(f'__{verb} text:__', silent=True)
-            
-            for message_id in original_bot_message.related_ids:
-                local_message = await target_discord_msg.channel.fetch_message(message_id)
-                if local_message:
-                    await local_message.delete()
-            
-            # Just in case previous messages were deleted
-            updated_bot_message.related_ids.clear() # TODO maybe add a fresh method to HMessage?
             new_discord_msg = await send_long_message(channel, last_resp, bot_message=updated_bot_message)
 
         updated_bot_message.update(text=last_resp, text_visible=tts_resp)
