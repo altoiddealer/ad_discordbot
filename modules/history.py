@@ -128,6 +128,7 @@ class HMessage:
     text_visible: str                   = field(default='',     metadata=cnf())
     id: Optional[MessageID]             = field(default=None,   metadata=cnf(check_bool=False)) # because id's could be "0"
     audio_id: Optional[MessageID]       = field(default=None,   metadata=cnf(dont_save=True))
+    related_ids: Optional[list[MessageID]] = field(default_factory=list,   metadata=cnf()) # TODO add update tracking here.
     
     typing: bool                        = field(default=False,  metadata=cnf(False))
     spoken: bool                        = field(default=False,  metadata=cnf(False))
@@ -224,6 +225,11 @@ class HMessage:
     def dont_save(self):
         self.unsavable = True
         return self
+    
+    
+    @property
+    def savable(self):
+        return not self.unsavable
     
     
     def duplicate_history(self) -> 'History':

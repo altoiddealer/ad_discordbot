@@ -23,7 +23,7 @@ async def ireply(ictx: 'CtxInteraction', process):
         log.error(f"Error sending message response to user's interaction command: {e}")
 
 
-async def send_long_message(channel, message_text, bot_message:'HMessage'=None):
+async def send_long_message(channel, message_text, bot_message:'HMessage'=None) -> int:
     """ Splits a longer message into parts while preserving sentence boundaries and code blocks """
     activelang = ''
 
@@ -73,6 +73,9 @@ async def send_long_message(channel, message_text, bot_message:'HMessage'=None):
             chunk_text = message_text[:chunk_length]
             chunk_text, code_block_inserted = ensure_even_code_blocks(chunk_text, code_block_inserted)
             sent_message = await channel.send(chunk_text)
+            if bot_message:
+                bot_message.related_ids.append(sent_message.id)
+                
             message_text = message_text[chunk_length:]
             if len(message_text) <= 1980:
                 # Send the remaining text as a single chunk if it's shorter than or equal to 2000 characters

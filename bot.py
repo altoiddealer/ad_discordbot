@@ -1934,7 +1934,7 @@ async def cont_regen_task(inter:discord.Interaction, source:str, target_discord_
     try:
         # collect relavent history and messages
         local_history = bot_history.get_history_for(inter.channel.id)
-        original_bot_message = local_history.search(lambda m: m.id == target_discord_msg.id)
+        original_bot_message = local_history.search(lambda m: m.id == target_discord_msg.id or target_discord_msg.id in m.related_ids)
         if not original_bot_message:
             await inter.followup.send("Message not found in current chat history. Note: if the character sent multiple messages, this command must be used on the last one.", ephemeral=True)
             return
@@ -1947,7 +1947,7 @@ async def cont_regen_task(inter:discord.Interaction, source:str, target_discord_
         # using original 'visible' produces wonky TTS responses combined with "Continue" function
         llm_payload['state']['history']['internal'] = copy.deepcopy(sliced_i)
         llm_payload['state']['history']['visible'] = copy.deepcopy(sliced_i)
-        save_to_history = not original_bot_message.hidden # Assert same flag as when initially generated
+        save_to_history = original_bot_message.savable # Assert same flag as when initially generated
         if source == 'cont':
             cmd = 'Continuing'
             llm_payload['_continue'] = True
@@ -1980,6 +1980,9 @@ async def cont_regen_task(inter:discord.Interaction, source:str, target_discord_
         if not last_resp:
             await inter.followup.send(f'Failed to {cmd} text.', silent=True)
             return
+        
+        # Update the original message in history manager
+        updated_bot_message = original_bot_message
 
         verb = "Regenerated" if source == "regen" else "Continued"
         # Log message exchange
@@ -1994,10 +1997,17 @@ async def cont_regen_task(inter:discord.Interaction, source:str, target_discord_
         else:
             await target_discord_msg.delete()
             await inter.followup.send(f'__{verb} text:__', silent=True)
-            new_discord_msg = await send_long_message(channel, last_resp)
-        # Update the original message in history manager
-        updated_bot_message = original_bot_message
-        updated_bot_message.update(text=last_resp, text_visible=tts_resp, id=new_discord_msg.id)
+            
+            for message_id in original_bot_message.related_ids:
+                local_message = await target_discord_msg.channel.fetch_message(message_id)
+                if local_message:
+                    await local_message.delete()
+            
+            # Just in case previous messages were deleted
+            updated_bot_message.related_ids.clear() # TODO maybe add a fresh method to HMessage?
+            new_discord_msg = await send_long_message(channel, last_resp, bot_message=updated_bot_message)
+
+        updated_bot_message.update(text=last_resp, text_visible=tts_resp)
         # process any tts resp
         if tts_resp:
             await process_tts_resp(channel, updated_bot_message)
