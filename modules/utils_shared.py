@@ -28,8 +28,9 @@ class SharedPath:
         os.makedirs(path, exist_ok=True)
         return path
 
-    dir_tgwui = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))) # Up two directory levels from here
-    dir_root = os.path.join(dir_tgwui, 'ad_discordbot')
+    dir_tgwui = os.path.abspath('.') # because the start file goes up one dir.
+    log.debug(f'TGWUI dir: {dir_tgwui}')
+    dir_root = 'ad_discordbot'
 
     # Internal
     dir_internal = init_shared_paths(dir_root, 'internal', 'persistent settings not intended to be modified by users')
