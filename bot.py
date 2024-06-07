@@ -2033,10 +2033,10 @@ async def cont_regen_task(inter:discord.Interaction, source:str, target_discord_
             
             if continued_resp.strip():
                 if len(continued_resp) < MAX_MESSAGE_LENGTH:
-                    new_discord_msg_id = await channel.send(content=f'{message_prefix}\n{continued_resp}', reference=ref_message)
+                    new_discord_msg = await channel.send(content=f'{message_prefix}\n{continued_resp}', reference=ref_message)
                     # Add previous last message id to related ids and replace with new
                     updated_bot_message.related_ids.append(updated_bot_message.id)
-                    updated_bot_message.update(id=new_discord_msg_id)
+                    updated_bot_message.update(id=new_discord_msg.id)
                     await inter.followup.send(f'{verb} text for {user_name}.')
                     
                 else:
