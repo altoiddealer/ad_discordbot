@@ -10,6 +10,10 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from modules.history import HistoryManager, History, HMessage
+    
+    
+MAX_MESSAGE_LENGTH = 1980
+# MAX_MESSAGE_LENGTH = 200 # testing
 
 # Send message response to user's interaction command
 async def ireply(ictx: 'CtxInteraction', process):
@@ -23,7 +27,7 @@ async def ireply(ictx: 'CtxInteraction', process):
         log.error(f"Error sending message response to user's interaction command: {e}")
 
 
-async def send_long_message(channel, message_text, bot_message:'HMessage'=None):
+async def send_long_message(channel, message_text, bot_message:'HMessage'=None) -> int:
     """ Splits a longer message into parts while preserving sentence boundaries and code blocks """
     activelang = ''
 
@@ -50,14 +54,14 @@ async def send_long_message(channel, message_text, bot_message:'HMessage'=None):
             code_block_inserted = True
         return chunk_text, code_block_inserted
 
-    if len(message_text) <= 1980:
+    if len(message_text) <= MAX_MESSAGE_LENGTH:
         sent_message = await channel.send(message_text)
     else:
         code_block_inserted = False  # Initialize code_block_inserted to False
         while message_text:
             # Find the last occurrence of either a line break or the end of a sentence
-            last_line_break = message_text.rfind("\n", 0, 1980)
-            last_sentence_end = message_text.rfind(". ", 0, 1980)
+            last_line_break = message_text.rfind("\n", 0, MAX_MESSAGE_LENGTH)
+            last_sentence_end = message_text.rfind(". ", 0, MAX_MESSAGE_LENGTH)
             # Determine the index to split the string
             if last_line_break >= 0 and last_sentence_end >= 0:
                 # If both a line break and a sentence end were found, choose the one that occurred last
@@ -69,12 +73,15 @@ async def send_long_message(channel, message_text, bot_message:'HMessage'=None):
                 # If only a sentence end was found, use it as the split point
                 chunk_length = last_sentence_end + 2  # Include the period and space
             else:
-                chunk_length = 1980 # If neither was found, split at the maximum limit of 2000 characters
+                chunk_length = MAX_MESSAGE_LENGTH # If neither was found, split at the maximum limit of 2000 characters
             chunk_text = message_text[:chunk_length]
             chunk_text, code_block_inserted = ensure_even_code_blocks(chunk_text, code_block_inserted)
             sent_message = await channel.send(chunk_text)
+            if bot_message:
+                bot_message.related_ids.append(sent_message.id)
+                
             message_text = message_text[chunk_length:]
-            if len(message_text) <= 1980:
+            if len(message_text) <= MAX_MESSAGE_LENGTH:
                 # Send the remaining text as a single chunk if it's shorter than or equal to 2000 characters
                 chunk_text, code_block_inserted = ensure_even_code_blocks(message_text, code_block_inserted)
                 sent_message = await channel.send(chunk_text)

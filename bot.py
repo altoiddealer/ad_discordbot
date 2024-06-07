@@ -42,7 +42,7 @@ sys.path.append("ad_discordbot")
 from modules.database import Database, ActiveSettings, Config, StarBoard, Statistics
 from modules.utils_shared import task_semaphore, shared_path, patterns
 from modules.utils_misc import fix_dict, update_dict, sum_update_dict, update_dict_matched_keys, format_time
-from modules.utils_discord import ireply, send_long_message, EditMessageModal, SelectedListItem, SelectOptionsView, CtxInteraction, get_user_ctx_inter, get_message_ctx_inter
+from modules.utils_discord import ireply, send_long_message, EditMessageModal, SelectedListItem, SelectOptionsView, CtxInteraction, get_user_ctx_inter, get_message_ctx_inter, MAX_MESSAGE_LENGTH
 from modules.utils_files import load_file, merge_base, save_yaml_file
 from modules.utils_aspect_ratios import round_to_precision, res_to_model_fit, dims_from_ar, avg_from_dims, get_aspect_ratio_parts, calculate_aspect_ratio_sizes
 from modules.history import HistoryManager, History, HMessage, cnf
@@ -1848,7 +1848,7 @@ async def toggle_tts(toggle='on', tts_sw=None):
     return None
 
 # make final preparations for llm_gen()
-async def pre_llm_gen(llm_payload:dict, save_to_history=True, ictx=None, set_user_msg=True) -> HMessage:
+async def pre_llm_gen(llm_payload:dict, save_to_history=True, ictx=None, set_user_msg=True):
     try:
         # Check to apply Server Mode
         llm_payload = apply_server_mode(llm_payload, ictx)
@@ -1875,7 +1875,7 @@ async def pre_llm_gen(llm_payload:dict, save_to_history=True, ictx=None, set_use
 # Send LLM Payload - get responses
 async def llm_gen(llm_payload:dict) -> str:
     if shared.model_name == 'None':
-        return
+        return '', ''
     try:
         loop = asyncio.get_event_loop()
         # Store time for statistics
@@ -1934,7 +1934,7 @@ async def cont_regen_task(inter:discord.Interaction, source:str, target_discord_
     try:
         # collect relavent history and messages
         local_history = bot_history.get_history_for(inter.channel.id)
-        original_bot_message = local_history.search(lambda m: m.id == target_discord_msg.id)
+        original_bot_message = local_history.search(lambda m: m.id == target_discord_msg.id or target_discord_msg.id in m.related_ids)
         if not original_bot_message:
             await inter.followup.send("Message not found in current chat history. Note: if the character sent multiple messages, this command must be used on the last one.", ephemeral=True)
             return
@@ -1947,7 +1947,7 @@ async def cont_regen_task(inter:discord.Interaction, source:str, target_discord_
         # using original 'visible' produces wonky TTS responses combined with "Continue" function
         llm_payload['state']['history']['internal'] = copy.deepcopy(sliced_i)
         llm_payload['state']['history']['visible'] = copy.deepcopy(sliced_i)
-        save_to_history = not original_bot_message.hidden # Assert same flag as when initially generated
+        save_to_history = original_bot_message.savable # Assert same flag as when initially generated
         if source == 'cont':
             cmd = 'Continuing'
             llm_payload['_continue'] = True
@@ -1980,25 +1980,83 @@ async def cont_regen_task(inter:discord.Interaction, source:str, target_discord_
         if not last_resp:
             await inter.followup.send(f'Failed to {cmd} text.', silent=True)
             return
+        
+        # Update the original message in history manager
+        updated_bot_message = original_bot_message
 
         verb = "Regenerated" if source == "regen" else "Continued"
         # Log message exchange
         log.info(f'''{user_name}: "{llm_payload['text']}"''')
         log.info(f'{verb} text:')
         log.info(f'''{llm_payload['state']['name2']}: "{last_resp}"''')
-        # Update original discord message, or send new one if too long
         message_prefix = f'__{verb} text:__'
-        if len(last_resp) < 1980:
-            new_discord_msg = await target_discord_msg.edit(content=f'{message_prefix}\n{last_resp}')
-            new_discord_msg_id = new_discord_msg.id
-            await inter.followup.send(f'{verb} text for {user_name}.')
+        
+        
+        #######
+        # REGEN
+        if source == 'regen':
+            # Delete other messages that are part of the Long message, but not being regenerated
+            messages_to_remove = updated_bot_message.related_ids + [updated_bot_message.id]
+            if target_discord_msg.id in messages_to_remove:
+                messages_to_remove.remove(target_discord_msg.id)
+                
+            for message_id in messages_to_remove:
+                local_message = await channel.fetch_message(message_id)
+                if local_message:
+                    await local_message.delete()
+                    
+            updated_bot_message.related_ids.clear() # TODO maybe add a fresh method to HMessage?
+            
+            # Update original discord message, or send new one if too long
+            if len(last_resp) < MAX_MESSAGE_LENGTH:
+                await target_discord_msg.edit(content=f'{message_prefix}\n{last_resp}')
+                await inter.followup.send(f'{verb} text for {user_name}.')
+                
+            else:
+                await target_discord_msg.delete()
+                await inter.followup.send(f'__{verb} text:__', silent=True)
+                await send_long_message(channel, last_resp, bot_message=updated_bot_message)
+
+            updated_bot_message.update(text=last_resp, text_visible=tts_resp)
+            
+            
+        ##########
+        # CONTINUE
+        elif source == 'cont':
+            # Get a possible message to reply to
+            ref_message = target_discord_msg
+            if updated_bot_message.id != target_discord_msg.id:
+                ref_message = await channel.fetch_message(updated_bot_message.id)
+            
+            original_text = updated_bot_message.text
+            continued_resp = last_resp[len(original_text):]
+            
+            if continued_resp.strip():
+                if len(continued_resp) < MAX_MESSAGE_LENGTH:
+                    new_discord_msg = await channel.send(content=f'{message_prefix}\n{continued_resp}', reference=ref_message)
+                    # Add previous last message id to related ids and replace with new
+                    updated_bot_message.related_ids.append(updated_bot_message.id)
+                    updated_bot_message.update(id=new_discord_msg.id)
+                    await inter.followup.send(f'{verb} text for {user_name}.')
+                    
+                else:
+                    await inter.followup.send(f'__{verb} text:__', silent=True)
+                    # Add previous last message id to related ids
+                    updated_bot_message.related_ids.append(updated_bot_message.id)
+                    # Pass to send_long_message which will add more ids and update last.
+                    await send_long_message(channel, continued_resp, bot_message=updated_bot_message)
+                    
+                updated_bot_message.update(text=last_resp, text_visible=tts_resp)
+
+
+            else:
+                await inter.followup.send(':warning: Generation was continued, but nothing new was added.')
+
+            
         else:
-            await target_discord_msg.delete()
-            await inter.followup.send(f'__{verb} text:__', silent=True)
-            new_discord_msg_id = await send_long_message(channel, last_resp)
-        # Update the original message in history manager
-        updated_bot_message = original_bot_message
-        updated_bot_message.update(text=last_resp, text_visible=tts_resp, id=new_discord_msg_id)
+            raise Exception(f'Unknown source: {source}')
+        
+        
         # process any tts resp
         if tts_resp:
             await process_tts_resp(channel, updated_bot_message)
