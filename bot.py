@@ -1990,14 +1990,15 @@ async def cont_regen_task(inter:discord.Interaction, source:str, target_discord_
         message_prefix = f'__{verb} text:__'
         if len(last_resp) < 1980:
             new_discord_msg = await target_discord_msg.edit(content=f'{message_prefix}\n{last_resp}')
+            new_discord_msg_id = new_discord_msg.id
             await inter.followup.send(f'{verb} text for {user_name}.')
         else:
             await target_discord_msg.delete()
             await inter.followup.send(f'__{verb} text:__', silent=True)
-            new_discord_msg = await send_long_message(channel, last_resp)
+            new_discord_msg_id = await send_long_message(channel, last_resp)
         # Update the original message in history manager
         updated_bot_message = original_bot_message
-        updated_bot_message.update(text=last_resp, text_visible=tts_resp, id=new_discord_msg.id)
+        updated_bot_message.update(text=last_resp, text_visible=tts_resp, id=new_discord_msg_id)
         # process any tts resp
         if tts_resp:
             await process_tts_resp(channel, updated_bot_message)
