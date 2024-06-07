@@ -1989,31 +1989,74 @@ async def cont_regen_task(inter:discord.Interaction, source:str, target_discord_
         log.info(f'''{user_name}: "{llm_payload['text']}"''')
         log.info(f'{verb} text:')
         log.info(f'''{llm_payload['state']['name2']}: "{last_resp}"''')
-        
-        # Delete other messages that are part of the Long message, but not being regenerated
-        messages_to_remove = updated_bot_message.related_ids + [updated_bot_message.id]
-        if target_discord_msg.id in messages_to_remove:
-            messages_to_remove.remove(target_discord_msg.id)
-            
-        for message_id in messages_to_remove:
-            local_message = await target_discord_msg.channel.fetch_message(message_id)
-            if local_message:
-                await local_message.delete()
-                
-        updated_bot_message.related_ids.clear() # TODO maybe add a fresh method to HMessage?
-        
-        # Update original discord message, or send new one if too long
         message_prefix = f'__{verb} text:__'
-        if len(last_resp) < MAX_MESSAGE_LENGTH:
-            new_discord_msg = await target_discord_msg.edit(content=f'{message_prefix}\n{last_resp}')
-            await inter.followup.send(f'{verb} text for {user_name}.')
+        
+        
+        #######
+        # REGEN
+        if source == 'regen':
+            # Delete other messages that are part of the Long message, but not being regenerated
+            messages_to_remove = updated_bot_message.related_ids + [updated_bot_message.id]
+            if target_discord_msg.id in messages_to_remove:
+                messages_to_remove.remove(target_discord_msg.id)
+                
+            for message_id in messages_to_remove:
+                local_message = await channel.fetch_message(message_id)
+                if local_message:
+                    await local_message.delete()
+                    
+            updated_bot_message.related_ids.clear() # TODO maybe add a fresh method to HMessage?
+            
+            # Update original discord message, or send new one if too long
+            if len(last_resp) < MAX_MESSAGE_LENGTH:
+                new_discord_msg = await target_discord_msg.edit(content=f'{message_prefix}\n{last_resp}')
+                await inter.followup.send(f'{verb} text for {user_name}.')
+                
+            else:
+                await target_discord_msg.delete()
+                await inter.followup.send(f'__{verb} text:__', silent=True)
+                new_discord_msg = await send_long_message(channel, last_resp, bot_message=updated_bot_message)
+
+            updated_bot_message.update(text=last_resp, text_visible=tts_resp)
+            
+            
+        ##########
+        # CONTINUE
+        elif source == 'cont':
+            # Get a possible message to reply to
+            ref_message = target_discord_msg
+            if updated_bot_message.id != target_discord_msg.id:
+                ref_message = await channel.fetch_message(updated_bot_message.id)
+            
+            original_text = updated_bot_message.text
+            continued_resp = last_resp[len(original_text):]
+            
+            if continued_resp.strip():
+                if len(continued_resp) < MAX_MESSAGE_LENGTH:
+                    new_discord_msg = await channel.send(content=f'{message_prefix}\n{continued_resp}', reference=ref_message)
+                    # Add previous last message id to related ids and replace with new
+                    updated_bot_message.related_ids.append(updated_bot_message.id)
+                    updated_bot_message.update(id=new_discord_msg.id)
+                    await inter.followup.send(f'{verb} text for {user_name}.')
+                    
+                else:
+                    await inter.followup.send(f'__{verb} text:__', silent=True)
+                    # Add previous last message id to related ids
+                    updated_bot_message.related_ids.append(updated_bot_message.id)
+                    # Pass to send_long_message which will add more ids and update last.
+                    new_discord_msg = await send_long_message(channel, continued_resp, bot_message=updated_bot_message)
+                    
+                updated_bot_message.update(text=last_resp, text_visible=tts_resp)
+
+
+            else:
+                await inter.followup.send(':warning: Generation was continued, but nothing new was added.')
+
             
         else:
-            await target_discord_msg.delete()
-            await inter.followup.send(f'__{verb} text:__', silent=True)
-            new_discord_msg = await send_long_message(channel, last_resp, bot_message=updated_bot_message)
-
-        updated_bot_message.update(text=last_resp, text_visible=tts_resp)
+            raise Exception(f'Unknown source: {source}')
+        
+        
         # process any tts resp
         if tts_resp:
             await process_tts_resp(channel, updated_bot_message)
