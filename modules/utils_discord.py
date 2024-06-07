@@ -18,10 +18,17 @@ MAX_MESSAGE_LENGTH = 1980
 # Send message response to user's interaction command
 async def ireply(ictx: 'CtxInteraction', process):
     try:
-        if task_semaphore.locked(): # If a queued item is currently being processed
-            await ictx.reply(f'Your {process} request was added to the task queue', ephemeral=True, delete_after=5)
+        if task_semaphore.locked():  # If a queued item is currently being processed
+            message = f'Your {process} request was added to the task queue'
         else:
-            await ictx.reply(f'Processing your {process} request', ephemeral=True, delete_after=3)
+            message = f'Processing your {process} request'
+        
+        if hasattr(ictx, 'reply') and callable(getattr(ictx, 'reply')):
+            await ictx.reply(message, ephemeral=True, delete_after=5)
+        elif hasattr(ictx, 'response') and callable(getattr(ictx.response, 'send_message')):
+            await ictx.response.send_message(message, ephemeral=True, delete_after=5)
+        else:
+            raise AttributeError("ictx object has neither 'reply' nor 'response.send' methods")
 
     except Exception as e:
         log.error(f"Error sending message response to user's interaction command: {e}")
@@ -111,15 +118,37 @@ class EditMessageModal(discord.ui.Modal, title="Edit Message in History"):
         self.add_item(self.new_content)
 
     async def on_submit(self, inter: discord.Interaction):
+        # Update text in history
         edited_message = self.new_content.value
+        compound_message = ''
+        # Try rebuilding text if target message was a message chunk
+        if self.target_message.related_ids:
+            all_original_msg_ids = [self.target_message.id] + self.target_message.related_ids
+            all_original_msg_ids.sort()
+            for orig_msg_id in all_original_msg_ids:
+                if self.target_message.id != orig_msg_id:
+                    try:
+                        original_chunk_message = await inter.channel.fetch_message(orig_msg_id)
+                        compound_message += original_chunk_message.clean_content
+                    except:
+                        log.warning(f'Failed to get message content for id {orig_msg_id} for "Edit History".')
+                        compound_message = ''
+                        break                    
+                else:
+                    compound_message += edited_message
+        if compound_message:
+            edited_message = compound_message
         self.target_message.update(text=edited_message)
-        await inter.response.send_message("Message has been edited successfully.", ephemeral=True, delete_after=5)
+        await inter.response.send_message("Message history has been edited successfully.", ephemeral=True, delete_after=5)
 
+        # Update text in discord message
         if self.clientuser == self.original_message.author:
-            if len(edited_message) >= 2000:
-                await inter.response.send_message("Message shortened in the Discord UI. It was still replaced entirely in history", ephemeral=True, delete_after=5)
-
             await self.original_message.edit(content=edited_message[:2000])
+        else:
+            await inter.response.send_message("Note: The bot cannot update your message contents in Discord.", ephemeral=True, delete_after=5)
+        # Warn if text was truncated
+        if len(edited_message) >= 2000:
+            await inter.response.send_message("Message exceeded discord text limits and was truncated to 2,000 characters. It was still replaced entirely in history", ephemeral=True, delete_after=10)
 
 class SelectedListItem(discord.ui.Select):
     def __init__(self, options, placeholder, custom_id):

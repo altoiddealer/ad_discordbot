@@ -434,6 +434,16 @@ class History:
             
         return output
     
+    def get_history_pair_from_msg_id(self, msg_id):
+        hmsg_from_id = self.search(lambda m: m.id == msg_id or msg_id in m.related_ids)
+        if hmsg_from_id.reply_to is not None: # if reply_to has any value, it is bot reply
+            bot_message = hmsg_from_id
+            user_message = bot_message.reply_to
+        else:
+            user_message = hmsg_from_id
+            bot_message = self.search(lambda m: m.reply_to == user_message.uuid)
+        return user_message, bot_message
+
     
     def search(self, predicate):
         return find(predicate, self._items)
