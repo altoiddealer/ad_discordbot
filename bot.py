@@ -2009,13 +2009,13 @@ async def cont_regen_task(inter:discord.Interaction, source:str, target_discord_
             
             # Update original discord message, or send new one if too long
             if len(last_resp) < MAX_MESSAGE_LENGTH:
-                new_discord_msg = await target_discord_msg.edit(content=f'{message_prefix}\n{last_resp}')
+                await target_discord_msg.edit(content=f'{message_prefix}\n{last_resp}')
                 await inter.followup.send(f'{verb} text for {user_name}.')
                 
             else:
                 await target_discord_msg.delete()
                 await inter.followup.send(f'__{verb} text:__', silent=True)
-                new_discord_msg = await send_long_message(channel, last_resp, bot_message=updated_bot_message)
+                await send_long_message(channel, last_resp, bot_message=updated_bot_message)
 
             updated_bot_message.update(text=last_resp, text_visible=tts_resp)
             
@@ -2033,10 +2033,10 @@ async def cont_regen_task(inter:discord.Interaction, source:str, target_discord_
             
             if continued_resp.strip():
                 if len(continued_resp) < MAX_MESSAGE_LENGTH:
-                    new_discord_msg = await channel.send(content=f'{message_prefix}\n{continued_resp}', reference=ref_message)
+                    new_discord_msg_id = await channel.send(content=f'{message_prefix}\n{continued_resp}', reference=ref_message)
                     # Add previous last message id to related ids and replace with new
                     updated_bot_message.related_ids.append(updated_bot_message.id)
-                    updated_bot_message.update(id=new_discord_msg.id)
+                    updated_bot_message.update(id=new_discord_msg_id)
                     await inter.followup.send(f'{verb} text for {user_name}.')
                     
                 else:
@@ -2044,7 +2044,7 @@ async def cont_regen_task(inter:discord.Interaction, source:str, target_discord_
                     # Add previous last message id to related ids
                     updated_bot_message.related_ids.append(updated_bot_message.id)
                     # Pass to send_long_message which will add more ids and update last.
-                    new_discord_msg = await send_long_message(channel, continued_resp, bot_message=updated_bot_message)
+                    await send_long_message(channel, continued_resp, bot_message=updated_bot_message)
                     
                 updated_bot_message.update(text=last_resp, text_visible=tts_resp)
 
