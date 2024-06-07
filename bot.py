@@ -2010,12 +2010,10 @@ async def cont_regen_task(inter:discord.Interaction, source:str, target_discord_
             # Update original discord message, or send new one if too long
             if len(last_resp) < MAX_MESSAGE_LENGTH:
                 await target_discord_msg.edit(content=f'{message_prefix}\n{last_resp}')
-                await inter.followup.send(f'{verb} text for {user_name}.')
                 
             else:
                 await target_discord_msg.delete()
-                await inter.followup.send(f'__{verb} text:__', silent=True)
-                await send_long_message(channel, last_resp, bot_message=updated_bot_message)
+                await send_long_message(channel, f'{message_prefix}\n{last_resp}', bot_message=updated_bot_message)
 
             updated_bot_message.update(text=last_resp, text_visible=tts_resp)
             
@@ -2037,14 +2035,12 @@ async def cont_regen_task(inter:discord.Interaction, source:str, target_discord_
                     # Add previous last message id to related ids and replace with new
                     updated_bot_message.related_ids.append(updated_bot_message.id)
                     updated_bot_message.update(id=new_discord_msg.id)
-                    await inter.followup.send(f'{verb} text for {user_name}.')
                     
                 else:
-                    await inter.followup.send(f'__{verb} text:__', silent=True)
                     # Add previous last message id to related ids
                     updated_bot_message.related_ids.append(updated_bot_message.id)
                     # Pass to send_long_message which will add more ids and update last.
-                    await send_long_message(channel, continued_resp, bot_message=updated_bot_message)
+                    await send_long_message(channel, f'{message_prefix}\n{continued_resp}', bot_message=updated_bot_message)
                     
                 updated_bot_message.update(text=last_resp, text_visible=tts_resp)
 
