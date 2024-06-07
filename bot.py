@@ -1724,7 +1724,7 @@ async def hybrid_llm_img_gen(ictx: CtxInteraction, source:str, text:str, tags:di
             last_resp, tts_resp = await llm_gen(llm_payload)
             # Create bot message in HManager
             if params.get('bot_message_to_update'):
-                bot_message, params = await replace_msg_in_history_and_discord(params, last_resp)
+                bot_message, params = await replace_msg_in_history_and_discord(ictx, params, last_resp, tts_resp)
             else:
                 bot_message = await create_bot_message(user_message, local_history, save_to_history, last_resp, tts_resp)
             # Toggle TTS back on if it was toggled off
@@ -2024,7 +2024,7 @@ async def continue_task(inter:discord.Interaction, target_discord_msg:discord.Me
             await system_embed.delete()
 
 # Regenerate Replace...
-async def replace_msg_in_history_and_discord(ictx, params, last_resp):
+async def replace_msg_in_history_and_discord(ictx, params, last_resp, tts_resp):
     channel = ictx.channel
     try:
         updated_message = params.get('user_message_to_update') or params.get('bot_message_to_update')
@@ -2051,6 +2051,8 @@ async def replace_msg_in_history_and_discord(ictx, params, last_resp):
             await send_long_message(channel, f'__Regenerated text:__\n{last_resp}', bot_message=updated_message)
 
         params['bot_will_do']['should_send_text'] = False
+
+        updated_message.update(text=last_resp, text_visible=tts_resp)
 
         return updated_message, params
     except Exception as e:
