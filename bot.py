@@ -4040,7 +4040,7 @@ if textgenwebui_enabled:
     # Context menu command to Regenerate last reply and replace the original message
     @client.tree.context_menu(name="regenerate replace")
     async def regen_replace_llm_gen(inter: discord.Interaction, message:discord.Message):
-        if not (message.author == client.user):
+        if not (message.author == inter.user or message.author == client.user):
             await inter.response.send_message('You can only "regenerate" from messages written by yourself or from the bot.', ephemeral=True, delete_after=7)
             return
         else:
@@ -4056,7 +4056,7 @@ if textgenwebui_enabled:
     # Context menu command to Continue last reply
     @client.tree.context_menu(name="continue")
     async def continue_llm_gen(inter: discord.Interaction, message:discord.Message):
-        if not (message.author == client.user):
+        if not (message.author == inter.user or message.author == client.user):
             await inter.response.send_message('You can only "continue" from messages written by yourself or from the bot.', ephemeral=True, delete_after=7)
             return
         else:
