@@ -1985,16 +1985,14 @@ async def cont_regen_task(inter:discord.Interaction, source:str, target_discord_
         updated_bot_message = original_bot_message
 
         verb = "Regenerated" if source == "regen" else "Continued"
+        message_prefix = f'__{verb} text:__'
         # Log message exchange
         log.info(f'''{user_name}: "{llm_payload['text']}"''')
         log.info(f'{verb} text:')
         log.info(f'''{llm_payload['state']['name2']}: "{last_resp}"''')
-        message_prefix = f'__{verb} text:__'
-        
-        
-        #######
-        # REGEN
-        if source == 'regen':
+
+        # Regenerate        
+        async def regen_task():
             # Delete other messages that are part of the Long message, but not being regenerated
             messages_to_remove = updated_bot_message.related_ids + [updated_bot_message.id]
             if target_discord_msg.id in messages_to_remove:
@@ -2010,17 +2008,15 @@ async def cont_regen_task(inter:discord.Interaction, source:str, target_discord_
             # Update original discord message, or send new one if too long
             if len(last_resp) < MAX_MESSAGE_LENGTH:
                 await target_discord_msg.edit(content=f'{message_prefix}\n{last_resp}')
+                reply = await inter.followup.send('Regenerated text')
+                await inter.followup.delete_message(reply.id)
                 
             else:
                 await target_discord_msg.delete()
                 await send_long_message(channel, f'{message_prefix}\n{last_resp}', bot_message=updated_bot_message)
 
-            updated_bot_message.update(text=last_resp, text_visible=tts_resp)
-            
-            
-        ##########
-        # CONTINUE
-        elif source == 'cont':
+        # Continue
+        async def cont_task():
             # Get a possible message to reply to
             ref_message = target_discord_msg
             if updated_bot_message.id != target_discord_msg.id:
@@ -2029,7 +2025,9 @@ async def cont_regen_task(inter:discord.Interaction, source:str, target_discord_
             original_text = updated_bot_message.text
             continued_resp = last_resp[len(original_text):]
             
-            if continued_resp.strip():
+            if not continued_resp.strip():
+                await inter.followup.send(':warning: Generation was continued, but nothing new was added.')
+            else:
                 if len(continued_resp) < MAX_MESSAGE_LENGTH:
                     new_discord_msg = await channel.send(content=f'{message_prefix}\n{continued_resp}', reference=ref_message)
                     # Add previous last message id to related ids and replace with new
@@ -2041,18 +2039,16 @@ async def cont_regen_task(inter:discord.Interaction, source:str, target_discord_
                     updated_bot_message.related_ids.append(updated_bot_message.id)
                     # Pass to send_long_message which will add more ids and update last.
                     await send_long_message(channel, f'{message_prefix}\n{continued_resp}', bot_message=updated_bot_message)
-                    
-                updated_bot_message.update(text=last_resp, text_visible=tts_resp)
 
-
-            else:
-                await inter.followup.send(':warning: Generation was continued, but nothing new was added.')
-
-            
+        if source == 'regen':
+            await regen_task()
+        elif source == 'cont':
+            await cont_task()
         else:
             raise Exception(f'Unknown source: {source}')
-        
-        
+
+        updated_bot_message.update(text=last_resp, text_visible=tts_resp)
+
         # process any tts resp
         if tts_resp:
             await process_tts_resp(channel, updated_bot_message)
@@ -2060,12 +2056,7 @@ async def cont_regen_task(inter:discord.Interaction, source:str, target_discord_
     except Exception as e:
         e_msg = f'An error occurred while processing "{cmd}"'
         log.error(f'{e_msg}: {e}')
-        if str(e).startswith('cannot unpack non-iterable NoneType object'):
-            none_msg = f'Error: {cmd} only works on messages sent from the bot during current session.'
-            log.error(none_msg)
-            await inter.followup.send(none_msg, silent=True)
-        else:
-            await inter.followup.send(e_msg, silent=True)
+        await inter.followup.send(e_msg, silent=True)
         if system_embed:
             await system_embed.delete()
 
