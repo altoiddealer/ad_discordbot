@@ -24,6 +24,18 @@
 <details>
   <summary>click to expand</summary>
 
+   **06/06/2024:** Context commands are now AMAZING
+
+    - "Continue" and "Regen" have been revised to work AMAZINGLY well!
+    - New "Edit History" command has been added, that also works AMAZINGLY well!
+    - You'll have to try these for yourself to see just how perfect they work.
+
+  Right click any message to invoke these context commands
+
+  <img width="299" alt="Screenshot 2024-06-06 155152" src="https://github.com/altoiddealer/ad_discordbot/assets/1613484/bae6b141-dc70-4ad4-a533-5f239e9da0c6">
+
+  ---
+
    **06/04/2024:** Launchers! Updaters! New History Manager!
 
    Shoutout to @Artificiangel who coded an **amazing** new History Manager. Great new features are coming!
