@@ -275,12 +275,19 @@ class HistoryPairForTGWUI:
 
 
     def add_pair_to(self, internal:list, visible:list):
+        user_text = self.user.text if self.user else ''
+        user_text_visible = (self.user.text_visible or self.user.text) if self.user else ''
+        fallback_user = self.assistant.reply_to if self.assistant.reply_to is not None else None
+        if fallback_user is not None:
+            user_text = fallback_user.text or user_text
+            user_text_visible = fallback_user.text_visible or fallback_user.text or user_text_visible
+
         internal.append([
-            self.user.text if self.user else '',
+            user_text,
             self.assistant.text if self.assistant else '',
         ])
         visible.append([
-            (self.user.text_visible or self.user.text) if self.user else '',
+            user_text_visible,
             (self.assistant.text_visible or self.assistant.text) if self.assistant else '',
         ])
         return self
