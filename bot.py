@@ -1769,7 +1769,7 @@ async def message_task(ictx: CtxInteraction, text:str, source:str='message', llm
                 if llmmodel_params:
                     await llmmodel_swap_or_change()             # if LLM model swap/change was triggered
                 if bot_will_do['should_gen_image']:
-                    await init_img_embed()      # Create a "prompting" embed for image gen
+                    await init_img_embed()                      # Create a "prompting" embed for image gen
                 await message_llm_task()
                 if llm_model_mode == 'swap':
                     await llmmodel_swap_back()                  # if LLM model swapping was triggered
