@@ -434,15 +434,24 @@ class History:
             
         return output
     
-    def get_history_pair_from_msg_id(self, msg_id):
-        hmsg_from_id = self.search(lambda m: m.id == msg_id or msg_id in m.related_ids)
-        if hmsg_from_id.reply_to is not None: # if reply_to has any value, it is bot reply
-            bot_message = hmsg_from_id
-            user_message = bot_message.reply_to
+    def get_history_pair_from_msg_id(self, message_id: MessageID):
+        hmessage: HMessage = self.search(lambda m: m.id == message_id or message_id in m.related_ids)
+
+        if hmessage.role == 'assistant':
+            user_message = hmessage.reply_to
+            bot_message = hmessage
+            return user_message, bot_message
+
+        elif hmessage.role == 'user':
+            user_message = hmessage
+            bot_message = None
+            bot_message_list = [m for m in hmessage.replies if m.role == 'assistant']
+            if bot_message_list:
+                bot_message = bot_message_list[-1]
+            return user_message, bot_message
+
         else:
-            user_message = hmsg_from_id
-            bot_message = self.search(lambda m: m.reply_to == user_message.uuid)
-        return user_message, bot_message
+            raise Exception(f'Unknown HMessage role: {hmessage.role}, should match [user/assistant]')
 
     
     def search(self, predicate):

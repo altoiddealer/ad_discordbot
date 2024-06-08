@@ -1941,7 +1941,7 @@ async def continue_task(inter:discord.Interaction, target_discord_msg:discord.Me
         original_user_message, original_bot_message = local_history.get_history_pair_from_msg_id(target_discord_msg.id)
         # Requires finding original bot message in history
         if not original_bot_message:
-            await inter.followup.send("Message not found in current chat history.", ephemeral=True)
+            await inter.followup.send('Message not found in current chat history. Try using "continue" on a response from the character.', ephemeral=True)
             return
         # build new payload. 'text' parameter not important for "Continue"
         original_user_text = original_user_message.text if original_user_message else (target_discord_msg.clean_content or '')
@@ -4028,7 +4028,7 @@ if textgenwebui_enabled:
             await inter.response.send_message('You can only "regenerate" from messages written by yourself or from the bot.', ephemeral=True, delete_after=7)
             return
         else:
-            await ireply(inter, 'continue') # send a response msg to the user
+            await ireply(inter, 'regenerate') # send a response msg to the user
         #await inter.response.defer(thinking=False)
 
         async with task_semaphore:
@@ -4044,7 +4044,7 @@ if textgenwebui_enabled:
             await inter.response.send_message('You can only "regenerate" from messages written by yourself or from the bot.', ephemeral=True, delete_after=7)
             return
         else:
-            await ireply(inter, 'continue') # send a response msg to the user
+            await ireply(inter, 'regenerate') # send a response msg to the user
         #await inter.response.defer(thinking=False)
 
         async with task_semaphore:
