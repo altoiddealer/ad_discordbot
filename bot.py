@@ -1694,9 +1694,10 @@ async def message_task(ictx: CtxInteraction, text:str, source:str='message', llm
             user_message, local_history = await create_user_message(llm_payload, save_to_history, ictx)
         # generate text with text-generation-webui
         last_resp, tts_resp = await llm_gen(llm_payload)
-        # Create bot message in HManager
+        # Create bot message in HManager, unless replacing original bot message via "regenerate replace"
         if params.get('bot_message_to_update'):
-            bot_message, params = await replace_msg_in_history_and_discord(ictx, params, last_resp, tts_resp)
+            bot_message = await replace_msg_in_history_and_discord(ictx, params, last_resp, tts_resp)
+            params['bot_will_do']['should_send_text'] = False
         else:
             bot_message = await create_bot_message(user_message, local_history, save_to_history, last_resp, tts_resp)
         # Toggle TTS back on if it was toggled off
@@ -1952,6 +1953,9 @@ async def continue_task(inter:discord.Interaction, target_discord_msg:discord.Me
     try:
         # collect relavent history and messages
         local_history = bot_history.get_history_for(inter.channel.id)
+        if not local_history:
+            await inter.followup.send("There is currently no chat history to continue from.", ephemeral=True)
+            return
         original_user_message, original_bot_message = local_history.get_history_pair_from_msg_id(target_discord_msg.id)
         # Requires finding original bot message in history
         if not original_bot_message:
@@ -2038,40 +2042,41 @@ async def continue_task(inter:discord.Interaction, target_discord_msg:discord.Me
             await system_embed.delete()
 
 # Regenerate Replace...
-async def replace_msg_in_history_and_discord(ictx, params, last_resp, tts_resp):
+async def replace_msg_in_history_and_discord(ictx, params, text, text_visible):
+    updated_message = params.get('user_message_to_update') or params.get('bot_message_to_update')
+    if not updated_message:
+        return
     channel = ictx.channel
+    custom_msg_prefix = params.get('custom_msg_prefix', '')
     try:
-        updated_message = params.get('user_message_to_update') or params.get('bot_message_to_update')
         target_discord_msg_id = params.get('target_discord_msg_id')
         target_discord_msg = await channel.fetch_message(target_discord_msg_id)
 
-        # Delete other messages that are part of the Long message
+        # Delete all messages that are part of the original message
         messages_to_remove = [updated_message.id] + updated_message.related_ids
         if target_discord_msg.id in messages_to_remove:
             messages_to_remove.remove(target_discord_msg.id)
-            
         for message_id in messages_to_remove:
             local_message = await channel.fetch_message(message_id)
             if local_message:
                 await local_message.delete()
-                
         updated_message.related_ids.clear() # TODO maybe add a fresh method to HMessage?
         
         # Update original discord message, or send new one if too long
-        if len(last_resp) < MAX_MESSAGE_LENGTH:
-            await target_discord_msg.edit(content=f'__Regenerated text:__\n{last_resp}')
+        if len(text) < MAX_MESSAGE_LENGTH:
+            await target_discord_msg.edit(content=f'{custom_msg_prefix}{text}')
         else:
             await target_discord_msg.delete()
-            await send_long_message(channel, f'__Regenerated text:__\n{last_resp}', bot_message=updated_message)
+            if params.get('bot_message_to_update'):
+                await send_long_message(channel, f'{custom_msg_prefix}{text}', bot_message=updated_message)
+            else:
+                await send_long_message(channel, f'{custom_msg_prefix}{text}')
 
-        params['bot_will_do']['should_send_text'] = False
-
-        updated_message.update(text=last_resp, text_visible=tts_resp)
-
-        return updated_message, params
+        updated_message.update(text, text_visible)
+        return updated_message
     except Exception as e:
         log.error(f"An error occurred while replacing message in history and Discord: {e}")
-        return None, params
+        return None
 
 
 async def regenerate_task(inter:discord.Interaction, target_discord_msg:discord.Message, mode:str='new'):
@@ -2081,6 +2086,9 @@ async def regenerate_task(inter:discord.Interaction, target_discord_msg:discord.
     try:
         # collect relavent history and messages
         local_history = bot_history.get_history_for(inter.channel.id)
+        if not local_history:
+            await inter.followup.send("There is currently no chat history to regenerate from.", ephemeral=True)
+            return
         original_user_message, original_bot_message = local_history.get_history_pair_from_msg_id(target_discord_msg.id)
         # Replace method requires finding original bot message in history
         if mode == 'replace' and not original_bot_message:
@@ -2117,6 +2125,7 @@ async def regenerate_task(inter:discord.Interaction, target_discord_msg:discord.
             params['skip_create_user'] = True
             params['bot_message_to_update'] = original_bot_message
             params['target_discord_msg_id'] = target_discord_msg.id
+            params['custom_msg_prefix'] = '__Regenerated text:__\n'
 
         await message_task(inter, original_user_text, 'regen new', llm_payload, params)
 
@@ -4035,9 +4044,9 @@ if textgenwebui_enabled:
         modal = EditMessageModal(client.user, target_message, original_message=message)
         await inter.response.send_modal(modal)
 
-    # Context menu command to Regenerate last reply as a new message
-    @client.tree.context_menu(name="regenerate new")
-    async def regen_new_llm_gen(inter: discord.Interaction, message:discord.Message):
+    # Context menu command to Regenerate from selected user message and create new history
+    @client.tree.context_menu(name="regenerate create")
+    async def regen_create_llm_gen(inter: discord.Interaction, message:discord.Message):
         if not (message.author == inter.user or message.author == client.user):
             await inter.response.send_message('You can only "regenerate" from messages written by yourself or from the bot.', ephemeral=True, delete_after=7)
             return
@@ -4048,10 +4057,10 @@ if textgenwebui_enabled:
         async with task_semaphore:
             async with inter.channel.typing():
                 # offload to ai_gen queue
-                log.info(f'{inter.user.display_name} used "Regenerate"')
+                log.info(f'{inter.user.display_name} used "Regenerate (create)"')
                 await regenerate_task(inter, message, 'new')
 
-    # Context menu command to Regenerate last reply and replace the original message
+    # Context menu command to Regenerate from selected user message and replace the original bot response
     @client.tree.context_menu(name="regenerate replace")
     async def regen_replace_llm_gen(inter: discord.Interaction, message:discord.Message):
         if not (message.author == inter.user or message.author == client.user):
@@ -4064,7 +4073,7 @@ if textgenwebui_enabled:
         async with task_semaphore:
             async with inter.channel.typing():
                 # offload to ai_gen queue
-                log.info(f'{inter.user.display_name} used "Regenerate"')
+                log.info(f'{inter.user.display_name} used "Regenerate" (replace)')
                 await regenerate_task(inter, message, 'replace')
 
     # Context menu command to Continue last reply

@@ -436,6 +436,8 @@ class History:
     
     def get_history_pair_from_msg_id(self, message_id: MessageID):
         hmessage: HMessage = self.search(lambda m: m.id == message_id or message_id in m.related_ids)
+        if not hmessage:
+            return None, None
 
         if hmessage.role == 'assistant':
             user_message = hmessage.reply_to
