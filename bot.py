@@ -1971,7 +1971,6 @@ async def continue_task(inter:discord.Interaction, target_discord_msg:discord.Me
         llm_payload = await init_llm_payload(inter, user_name, original_user_text)
         sliced_history = original_bot_message.new_history_end_here()
         sliced_i, _ = sliced_history.render_to_tgwui_tuple()
-        print("sliced_i", sliced_i)
         # using original 'visible' produces wonky TTS responses combined with "Continue" function
         llm_payload['state']['history']['internal'] = copy.deepcopy(sliced_i)
         llm_payload['state']['history']['visible'] = copy.deepcopy(sliced_i)
@@ -2024,7 +2023,7 @@ async def continue_task(inter:discord.Interaction, target_discord_msg:discord.Me
             await inter.followup.send(':warning: Generation was continued, but nothing new was added.')
         else:
             if len(continued_text) < MAX_MESSAGE_LENGTH:
-                new_discord_msg = await channel.send(content=f'__Continued text:__\n{continued_text}', reference=ref_message)
+                new_discord_msg = await channel.send(content=f'*(continued...)* {continued_text}', reference=ref_message)
                 # Add previous last message id to related ids and replace with new
                 updated_bot_message.related_ids.append(updated_bot_message.id)
                 updated_bot_message.update(id=new_discord_msg.id)
@@ -2032,7 +2031,7 @@ async def continue_task(inter:discord.Interaction, target_discord_msg:discord.Me
                 # Add previous last message id to related ids
                 updated_bot_message.related_ids.append(updated_bot_message.id)
                 # Pass to send_long_message which will add more ids and update last.
-                await send_long_message(channel, f'__Continued text:__\n{continued_text}', bot_message=updated_bot_message)
+                await send_long_message(channel, f'*(continued...)* {continued_text}', bot_message=updated_bot_message)
 
         updated_bot_message.update(text=last_resp, text_visible=tts_resp)
 
@@ -2048,37 +2047,37 @@ async def continue_task(inter:discord.Interaction, target_discord_msg:discord.Me
             await system_embed.delete()
 
 # Regenerate Replace...
-async def replace_msg_in_history_and_discord(ictx, params, text, text_visible):
-    updated_message = params.get('user_message_to_update') or params.get('bot_message_to_update')
-    if not updated_message:
-        return
+async def replace_msg_in_history_and_discord(ictx:discord.Interaction, params:dict, text:str, text_visible:str) -> HMessage:
     channel = ictx.channel
-    custom_msg_prefix = params.get('custom_msg_prefix', '')
+    updated_message = params.get('user_message_to_update') or params.get('bot_message_to_update')
+    target_discord_msg_id = params.get('target_discord_msg_id')
     try:
-        target_discord_msg_id = params.get('target_discord_msg_id')
         target_discord_msg = await channel.fetch_message(target_discord_msg_id)
-
-        # Delete all messages that are part of the original message
+        # Collect all messages that are part of the original message
         messages_to_remove = [updated_message.id] + updated_message.related_ids
+        # Remove target message from the list
         if target_discord_msg.id in messages_to_remove:
             messages_to_remove.remove(target_discord_msg.id)
+        # Delete all other messages from discord
         for message_id in messages_to_remove:
             local_message = await channel.fetch_message(message_id)
             if local_message:
                 await local_message.delete()
+        # Clear related IDs attribute
         updated_message.related_ids.clear() # TODO maybe add a fresh method to HMessage?
         
         # Update original discord message, or send new one if too long
         if len(text) < MAX_MESSAGE_LENGTH:
-            await target_discord_msg.edit(content=f'{custom_msg_prefix}{text}')
+            await target_discord_msg.edit(content=text)
         else:
             await target_discord_msg.delete()
             if params.get('bot_message_to_update'):
-                await send_long_message(channel, f'{custom_msg_prefix}{text}', bot_message=updated_message)
+                await send_long_message(channel, text, bot_message=updated_message)
             else:
-                await send_long_message(channel, f'{custom_msg_prefix}{text}')
+                await send_long_message(channel, text)
 
-        updated_message.update(text, text_visible)
+        updated_message.update(text=text, text_visible=text_visible)
+
         return updated_message
     except Exception as e:
         log.error(f"An error occurred while replacing message in history and Discord: {e}")
@@ -2134,7 +2133,6 @@ async def regenerate_task(inter:discord.Interaction, target_discord_msg:discord.
             params['skip_create_user'] = True
             params['bot_message_to_update'] = original_bot_message
             params['target_discord_msg_id'] = target_discord_msg.id
-            params['custom_msg_prefix'] = '__Regenerated text:__\n'
 
         _, new_bot_message = await message_task(inter, original_user_text, 'regenerate', llm_payload, params)
         # Update the new user message with the original discord message ID
