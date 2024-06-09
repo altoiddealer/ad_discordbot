@@ -600,10 +600,17 @@ def get_character():
 # If first time bot script is run
 async def first_run():
     try:
-        for guild in client.guilds: # Iterate over all guilds the bot is a member of
-            text_channels = guild.text_channels
-            if text_channels and system_embed_info:
-                default_channel = text_channels[0]  # Get the first text channel of the guild
+        for guild in client.guilds:  # Iterate over all guilds the bot is a member of
+            if guild.text_channels and system_embed_info:
+                # Find the 'general' channel, if it exists
+                default_channel = None
+                for channel in guild.text_channels:
+                    if channel.name == 'general':
+                        default_channel = channel
+                        break
+                # If 'general' channel is not found, use the first text channel
+                if default_channel is None:
+                    default_channel = guild.text_channels[0]
                 await default_channel.send(embed=system_embed_info)
                 break  # Exit the loop after sending the message to the first guild
         log.info('Welcome to ad_discordbot! Use "/helpmenu" to see main commands. (https://github.com/altoiddealer/ad_discordbot) for more info.')
