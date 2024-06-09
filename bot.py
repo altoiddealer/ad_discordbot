@@ -2023,7 +2023,7 @@ async def continue_task(inter:discord.Interaction, target_discord_msg:discord.Me
             await inter.followup.send(':warning: Generation was continued, but nothing new was added.')
         else:
             if len(continued_text) < MAX_MESSAGE_LENGTH:
-                new_discord_msg = await channel.send(content=f'*(continued...)* {continued_text}', reference=ref_message)
+                new_discord_msg = await channel.send(content=f'*`(continued...)`*\n{continued_text}', reference=ref_message)
                 # Add previous last message id to related ids and replace with new
                 updated_bot_message.related_ids.append(updated_bot_message.id)
                 updated_bot_message.update(id=new_discord_msg.id)
@@ -2031,7 +2031,7 @@ async def continue_task(inter:discord.Interaction, target_discord_msg:discord.Me
                 # Add previous last message id to related ids
                 updated_bot_message.related_ids.append(updated_bot_message.id)
                 # Pass to send_long_message which will add more ids and update last.
-                await send_long_message(channel, f'*(continued...)* {continued_text}', bot_message=updated_bot_message)
+                await send_long_message(channel, f'*`(continued...)`*\n{continued_text}', bot_message=updated_bot_message)
 
         updated_bot_message.update(text=last_resp, text_visible=tts_resp)
 
@@ -2084,7 +2084,7 @@ async def replace_msg_in_history_and_discord(ictx:discord.Interaction, params:di
         return None
 
 
-async def regenerate_task(inter:discord.Interaction, target_discord_msg:discord.Message, mode:str='create'):
+async def regenerate_task(inter:discord.Interaction, inter_discord_msg:discord.Message, mode:str='create'):
     user_name = get_user_ctx_inter(inter).display_name
     channel = inter.channel
     system_embed = None
@@ -2094,15 +2094,18 @@ async def regenerate_task(inter:discord.Interaction, target_discord_msg:discord.
         if not local_history:
             await inter.followup.send("There is currently no chat history to regenerate from.", ephemeral=True)
             return
-        original_user_message, original_bot_message = local_history.get_history_pair_from_msg_id(target_discord_msg.id)
+        original_user_message, original_bot_message = local_history.get_history_pair_from_msg_id(inter_discord_msg.id)
         # Replace method requires finding original bot message in history
         if mode == 'replace' and not original_bot_message:
             await inter.followup.send("Message not found in current chat history.", ephemeral=True)
             return
+        
+        target_discord_msg = inter_discord_msg
 
-        # Get original user text from discord message
-        if inter.user == target_discord_msg.author:
-            original_user_text = target_discord_msg.clean_content
+        # Get original user text from discord message, and target the bot message to edit
+        if inter.user == inter_discord_msg.author:                  # if command used on user's own message
+            original_user_text = inter_discord_msg.clean_content    # get the message contents
+            target_discord_msg = await channel.fetch_message(original_bot_message.id) # set the target message to the bot message
         else:
             if not original_user_message:
                 await inter.followup.send("Original user prompt is required, which could not be found from the selected message or in current chat history. Please try again, using the command on your own message.", ephemeral=True)
