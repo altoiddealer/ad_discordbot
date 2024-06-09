@@ -2366,12 +2366,13 @@ async def announce_changes(ictx: CtxInteraction, change_label:str, change_name:s
             # if Automatic imgmodel change (no interaction object)
             if ictx is None:
                 await channel.send(embed=change_embed_info)
-            # Channel is interaction channel
-            # elif channel_id == ictx.channel.id:
-            #     continue # already sent
-            # Channel in interaction server (exclude private channels)
-            elif any(channel_id == channel.id for channel in ictx.guild.channels): # if channel.overwrites_for(ictx.guild.default_role).read_messages):
-                change_embed_info.title = f"A user {change_label} in <#{ictx.channel.id}>:"
+            # If private channel
+            elif ictx.channel.overwrites_for(ictx.guild.default_role).read_messages is False:
+                change_embed_info.title = f"A user {change_label}:"
+                await channel.send(embed=change_embed_info)
+            # Public channels in interaction server
+            elif any(channel_id == channel.id for channel in ictx.guild.channels):
+                change_embed_info.title = f"{user_name} {change_label} in <#{ictx.channel.id}>:"
                 await channel.send(embed=change_embed_info)
             # Channel is in another server
             elif channel_id not in [channel.id for channel in ictx.guild.channels]:
@@ -4022,7 +4023,7 @@ if textgenwebui_enabled:
 
             async with task_semaphore:
                 # offload to ai_gen queue
-                log.info(f'{ctx.author.display_name} used "/reset": "{bot_database.last_character}"')
+                log.info(f'{ctx.author.display_name} used "/reset_conversation": "{bot_database.last_character}"')
                 params = {'character': {'char_name': bot_database.last_character, 'verb': 'Resetting', 'mode': 'reset'}}
                 await change_char_task(ctx, 'reset', params)
 
