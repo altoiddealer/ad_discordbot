@@ -461,6 +461,27 @@ class History:
 
         else:
             raise Exception(f'Unknown HMessage role: {hmessage.role}, should match [user/assistant]')
+    
+    def get_message_labels(self, message:HMessage, input_text:str='') -> str:
+        labels = {'is_continued': 'continued',
+                  'is_regenerated': 'regenerated',
+                  'hidden': 'hidden message'}
+        labels_for_message = []
+        
+        for key, value in labels.items():
+            if getattr(message, key, False):
+                labels_for_message.append(value)
+        
+        labels_for_message = ', '.join(labels_for_message)
+        if labels_for_message:
+            labels_for_message = f'*`({labels_for_message})`*'
+
+        if input_text:
+            labelled_text = f'{labels_for_message}\n{input_text}' if labels_for_message else input_text
+        else:
+            labelled_text = labels_for_message
+        
+        return labelled_text
 
     
     def search(self, predicate):

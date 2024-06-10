@@ -1645,18 +1645,21 @@ async def message_task(ictx: CtxInteraction, text:str, source:str='message', llm
     img_gen_embed = None
     llm_model_mode = None
     original_llmmodel = None
+    local_history = None
     user_message = None
     bot_message = None
 
     async def send_responses():
-        nonlocal bot_message
+        nonlocal bot_message, local_history
         # Process any TTS response
         if bot_message.text_visible:
             await process_tts_resp(channel, bot_message)
-        # @mention non-consecutive users
-        mention_resp = update_mention(get_user_ctx_inter(ictx).mention, bot_message.text)
         if bot_will_do['should_send_text']:
-            await send_long_message(channel, mention_resp, bot_message=bot_message)
+            # Apply any labels applicable to message
+            labeled_resp = local_history.get_message_labels(bot_message, bot_message.text)
+            # @mention non-consecutive users
+            mention_labeled_resp = update_mention(get_user_ctx_inter(ictx).mention, labeled_resp)
+            await send_long_message(channel, mention_labeled_resp, bot_message=bot_message)
         # send any user images
         send_user_image = params.get('send_user_image', [])
         if send_user_image:
@@ -1680,7 +1683,7 @@ async def message_task(ictx: CtxInteraction, text:str, source:str='message', llm
             await change_embed.delete()                         # Delete embed again after the second call
 
     async def message_llm_task():
-        nonlocal bot_message, user_message, params, llm_payload
+        nonlocal bot_message, user_message, params, llm_payload, local_history
         # if no LLM model is loaded, notify that no text will be generated
         if shared.model_name == 'None':
             if not bot_database.was_warned('no_llmmodel'):
@@ -1946,7 +1949,7 @@ async def create_bot_message(user_message:HMessage, local_history:History, save_
             bot_message.mark_as_reply_for(user_message)
         if not save_to_history:
             bot_message.hidden = True
-            bot_message.dont_save()
+            #bot_message.dont_save()
 
         if last_resp:
             truncation = int(bot_settings.settings['llmstate']['state']['truncation_length'] * 4) #approx tokens
@@ -2038,7 +2041,8 @@ async def continue_task(inter:discord.Interaction, target_discord_msg:discord.Me
                 # Add previous last message id to related ids
                 updated_bot_message.related_ids.append(updated_bot_message.id)
                 # Pass to send_long_message which will add more ids and update last.
-                await send_long_message(channel, f'*`(continued...)`*\n{continued_text}', bot_message=updated_bot_message)
+                labeled_continued_text = local_history.get_message_labels(updated_bot_message, continued_text)
+                await send_long_message(channel, labeled_continued_text, bot_message=updated_bot_message)
 
         updated_bot_message.update(text=last_resp, text_visible=tts_resp)
 
@@ -2074,14 +2078,17 @@ async def replace_msg_in_history_and_discord(ictx:discord.Interaction, params:di
         updated_message.related_ids.clear() # TODO maybe add a fresh method to HMessage?
         
         # Update original discord message, or send new one if too long
+        local_history = bot_history.get_history_for(ictx.channel.id)
+        labeled_text = local_history.get_message_labels(updated_message, text)
+
         if len(text) < MAX_MESSAGE_LENGTH:
             await target_discord_msg.edit(content=text)
         else:
             await target_discord_msg.delete()
             if params.get('bot_message_to_update'):
-                await send_long_message(channel, text, bot_message=updated_message)
+                await send_long_message(channel, labeled_text, bot_message=updated_message)
             else:
-                await send_long_message(channel, text)
+                await send_long_message(channel, labeled_text)
 
         updated_message.update(text=text, text_visible=text_visible)
 
