@@ -1702,6 +1702,7 @@ async def message_task(ictx: CtxInteraction, text:str, source:str='message', llm
         # Get history for interaction channel
         local_history = bot_history.get_history_for(ictx.channel.id)
         # Create user message in HManager
+        user_message = None
         if not params.get('skip_create_user'):
             user_message = await create_user_message(local_history, llm_payload, save_to_history, ictx)
         # generate text with text-generation-webui
@@ -1895,7 +1896,7 @@ async def create_user_message(local_history, llm_payload:dict, save_to_history=T
         # set history flag
         if not save_to_history:
             user_message.hidden = True
-            user_message.dont_save()
+            #user_message.dont_save()
         return user_message
     except Exception as e:
         log.error(f'An error occurred while creating user message: {e}')
@@ -2027,16 +2028,15 @@ async def continue_task(inter:discord.Interaction, target_discord_msg:discord.Me
         if not continued_text.strip():
             await inter.followup.send(':warning: Generation was continued, but nothing new was added.')
         else:
+            # Add previous last message id to related ids
+            updated_bot_message.related_ids.append(updated_bot_message.id)
+            labeled_continued_text = local_history.get_message_labels(updated_bot_message, continued_text)
             if len(continued_text) < MAX_MESSAGE_LENGTH:
-                new_discord_msg = await channel.send(content=f'*`(continued...)`*\n{continued_text}', reference=ref_message)
-                # Add previous last message id to related ids and replace with new
-                updated_bot_message.related_ids.append(updated_bot_message.id)
+                new_discord_msg = await channel.send(content=labeled_continued_text, reference=ref_message)
+                # replace original id with new
                 updated_bot_message.update(id=new_discord_msg.id)
             else:
-                # Add previous last message id to related ids
-                updated_bot_message.related_ids.append(updated_bot_message.id)
                 # Pass to send_long_message which will add more ids and update last.
-                labeled_continued_text = local_history.get_message_labels(updated_bot_message, continued_text)
                 await send_long_message(channel, labeled_continued_text, bot_message=updated_bot_message)
 
         updated_bot_message.update(text=last_resp, text_visible=tts_resp)
@@ -2104,6 +2104,7 @@ async def regenerate_task(inter:discord.Interaction, inter_discord_msg:discord.M
             await inter.followup.send("There is currently no chat history to regenerate from.", ephemeral=True)
             return
         original_user_message, original_bot_message = local_history.get_history_pair_from_msg_id(inter_discord_msg.id)
+
         # Replace method requires finding original bot message in history
         if mode == 'replace' and not original_bot_message:
             await inter.followup.send("Message not found in current chat history.", ephemeral=True)
@@ -2116,7 +2117,7 @@ async def regenerate_task(inter:discord.Interaction, inter_discord_msg:discord.M
             original_user_text = inter_discord_msg.clean_content    # get the message contents
             target_discord_msg = await channel.fetch_message(original_bot_message.id) # set the target message to the bot message
         else:
-            if not original_user_message:
+            if not original_user_message or isinstance(original_user_message, str): # will be uuid text string if message failed to be found
                 await inter.followup.send("Original user prompt is required, which could not be found from the selected message or in current chat history. Please try again, using the command on your own message.", ephemeral=True)
                 return
             else:
