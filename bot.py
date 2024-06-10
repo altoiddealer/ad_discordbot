@@ -916,7 +916,7 @@ async def swap_llm_character(char_name:str, user_name:str, llm_payload:dict):
         log.error(f"An error occurred while loading the file for swap_character: {e}")
         return llm_payload
 
-def format_prompt_with_recent_output(ictx: CtxInteraction, user_name:str, prompt:str):
+def format_prompt_with_recent_output(ictx: CtxInteraction, user_name:str, prompt:str) -> str:
     try:
         formatted_prompt = prompt
         # Find all matches of {user_x} and {llm_x} in the prompt
@@ -1628,7 +1628,7 @@ async def on_message(message: discord.Message):
         async with task_semaphore:
             async with message.channel.typing():
                 log.info(f'reply requested: {message.author.display_name} said: "{text}"')
-                await message_task(message, text, 'on_message')
+                await message_task(message, text, 'on_message', llm_payload=None, params={}, tags={})
                 await run_flow_if_any(message, 'on_message', text)
 
     except Exception as e:
@@ -1640,50 +1640,49 @@ async def on_message(message: discord.Message):
 async def message_task(ictx: CtxInteraction, text:str, source:str='message', llm_payload:dict=None, params:dict={}, tags:dict={}):
     user_name = get_user_ctx_inter(ictx).display_name
     channel = ictx.channel
-    bot_will_do = None
+
     change_embed = None
     img_gen_embed = None
-    llm_model_mode = None
-    original_llmmodel = None
     local_history = None
     user_message = None
     bot_message = None
 
-    async def send_responses():
-        nonlocal bot_message, local_history
-        # Process any TTS response
-        if bot_message.text_visible:
-            await process_tts_resp(channel, bot_message)
-        if bot_will_do['should_send_text']:
-            # Apply any labels applicable to message
-            labeled_resp = local_history.get_message_labels(bot_message, bot_message.text)
-            # @mention non-consecutive users
-            mention_labeled_resp = update_mention(get_user_ctx_inter(ictx).mention, labeled_resp)
-            await send_long_message(channel, mention_labeled_resp, bot_message=bot_message)
+    async def send_responses(params:dict, bot_message:HMessage, local_history:History) -> HMessage:
+        if bot_message:
+            # Process any TTS response
+            if bot_message.text_visible:
+                await process_tts_resp(channel, bot_message)
+            if params['bot_will_do']['should_send_text']:
+                # Apply any labels applicable to message
+                labeled_resp = local_history.get_message_labels(bot_message, bot_message.text)
+                # @mention non-consecutive users
+                mention_labeled_resp = update_mention(get_user_ctx_inter(ictx).mention, labeled_resp)
+                await send_long_message(channel, mention_labeled_resp, bot_message=bot_message)
         # send any user images
         send_user_image = params.get('send_user_image', [])
         if send_user_image:
             await channel.send(file=send_user_image) if len(send_user_image) == 1 else await channel.send(files=send_user_image)
+        return bot_message
 
-    async def message_img_task():
-        nonlocal img_gen_embed, bot_message, bot_will_do, tags
+    async def message_img_task(tags:dict, params:dict, bot_message:HMessage):
+        nonlocal img_gen_embed
         tags = match_img_tags(bot_message.text, tags)
-        bot_will_do = bot_should_do(tags, bot_will_do) # check for updates from tags
-        if bot_will_do['should_gen_image']:
+        params['bot_will_do'] = bot_should_do(tags, params['bot_will_do']) # check for updates from tags
+        if params['bot_will_do']['should_gen_image']:
             if img_gen_embed:
                 await img_gen_embed.delete()
-            params['bot_will_do'] = bot_will_do
             await img_gen_task(source, bot_message.text, params, ictx, tags)
+        return tags, params
 
-    async def llmmodel_swap_back():
-        nonlocal params, change_embed, original_llmmodel
+    async def llmmodel_swap_back(params:dict, original_llmmodel:str) -> dict:
+        nonlocal change_embed
         params['llmmodel']['llmmodel_name'] = original_llmmodel
         change_embed = await change_llmmodel_task(ictx, params) # Swap LLM Model back
         if change_embed:
             await change_embed.delete()                         # Delete embed again after the second call
+        return params
 
-    async def message_llm_task():
-        nonlocal bot_message, user_message, params, llm_payload, local_history
+    async def message_llm_task(llm_payload:dict, params:dict):
         # if no LLM model is loaded, notify that no text will be generated
         if shared.model_name == 'None':
             if not bot_database.was_warned('no_llmmodel'):
@@ -1693,7 +1692,7 @@ async def message_task(ictx: CtxInteraction, text:str, source:str='message', llm
         ## Finalize payload, generate text via TGWUI, and process responses
         # Toggle TTS off, if interaction server is not connected to Voice Channel
         tts_sw = None
-        if (not bot_will_do['should_send_text']) or (voice_client and (voice_client != ictx.guild.voice_client) and int(tts_settings.get('play_mode', 0)) == 0):
+        if (not params['bot_will_do']['should_send_text']) or (voice_client and (voice_client != ictx.guild.voice_client) and int(tts_settings.get('play_mode', 0)) == 0):
             tts_sw = await toggle_tts(toggle='off')
         save_to_history = params.get('save_to_history', True)
         # Check to apply Server Mode
@@ -1722,8 +1721,9 @@ async def message_task(ictx: CtxInteraction, text:str, source:str='message', llm
             log.info(f'''{llm_payload['state']['name2']}: "{bot_message.text}"''')
         # If no text was generated, treat user input at the response
         else:
-            if bot_will_do['should_gen_image'] and sd_enabled:
+            if params['bot_will_do']['should_gen_image'] and sd_enabled:
                 bot_message.update(text=llm_payload['text'])
+        return params, bot_message, user_message, local_history
 
     async def init_img_embed():
         nonlocal img_gen_embed
@@ -1737,17 +1737,17 @@ async def message_task(ictx: CtxInteraction, text:str, source:str='message', llm
                     img_gen_embed_info.description = " "
                     img_gen_embed = await channel.send(embed=img_gen_embed_info)
 
-    async def llmmodel_swap_or_change():
-        nonlocal change_embed, llm_model_mode, original_llmmodel
+    async def llmmodel_swap_or_change(params:dict):
+        nonlocal change_embed
         # Check params to see if an LLM model change/swap was triggered by Tags
-        llm_model_mode = llmmodel_params.get('mode', 'change')  # default to 'change' unless a tag was triggered with 'swap'
-        original_llmmodel = shared.model_name                   # copy current LLM model name
+        llm_model_mode = params['llmmodel_params'].get('mode', 'change')  # default to 'change' unless a tag was triggered with 'swap'
+        original_llmmodel = copy.copy(str(shared.model_name))   # copy current LLM model name
         change_embed = await change_llmmodel_task(ictx, params) # Change LLM model
         if llm_model_mode == 'swap' and change_embed:           # Delete embed before the second call
             await change_embed.delete()
+        return llm_model_mode, original_llmmodel
 
-    async def build_llm_payload():
-        nonlocal text, tags, llm_payload, params
+    async def build_llm_payload(text:str, llm_payload:dict, tags:dict, params:dict):
         # Use prefined LLM payload or initialize with defaults
         if llm_payload is None:
             llm_payload = await init_llm_payload(ictx, user_name, text)
@@ -1765,37 +1765,32 @@ async def message_task(ictx: CtxInteraction, text:str, source:str='message', llm
         llm_prompt = process_tag_formatting(ictx, user_name, llm_prompt, formatting)
         # offload to ai_gen queue
         llm_payload['text'] = llm_prompt
-
-    async def get_and_match_llm_tags():
-        nonlocal text, tags
-        text, tags = await get_tags(text)           # collects all tags, sorted into sub-lists by phase (user / llm / userllm)
-        tags = match_tags(text, tags, phase='llm')  # match tags labeled for user / userllm.
+        return llm_payload, tags, params
 
     try:
-        await get_and_match_llm_tags()                      # Get tags, match tags
-        bot_will_do = bot_should_do(tags)                   # check what bot should do
-        params['bot_will_do'] = bot_will_do
-
-        if bot_will_do['should_gen_text']:                  # If bot should generate text:
-            await build_llm_payload()                           # Build LLM Payload
+        text, tags = await get_tags(text)                                                           # collects all tags, sorted into sub-lists by phase (user / llm / userllm)
+        tags = match_tags(text, tags, phase='llm')                                                  # match tags labeled for user / userllm.
+        params['bot_will_do'] = bot_should_do(tags)                                                 # check what bot should do
+        if params['bot_will_do']['should_gen_text']:                                                # If bot should generate text:
+            llm_payload, tags, params = await build_llm_payload(text, llm_payload, tags, params)    # Build LLM Payload
             if textgenwebui_enabled:
                 llmmodel_params = params.get('llmmodel', {})
                 if llmmodel_params:
-                    await llmmodel_swap_or_change()             # if LLM model swap/change was triggered
-                if bot_will_do['should_gen_image']:
-                    await init_img_embed()                      # Create a "prompting" embed for image gen
-                await message_llm_task()
-                if llm_model_mode == 'swap':
-                    await llmmodel_swap_back()                  # if LLM model swapping was triggered
+                    llm_model_mode, original_llmmodel = await llmmodel_swap_or_change(llmmodel_params) # if LLM model swap/change was triggered
+                if params['bot_will_do']['should_gen_image']:
+                    await init_img_embed()                                                          # Create a "prompting" embed for image gen
+                params, bot_message, user_message, local_history = await message_llm_task(llm_payload, params)
+                if llmmodel_params and llm_model_mode == 'swap':
+                    params = await llmmodel_swap_back(params, original_llmmodel)                    # if LLM model swapping was triggered
             if sd_enabled:
-                await message_img_task()                        # process image generation (A1111 / Forge)
-            await send_responses()                              # send responses (text, TTS, images)
+                tags, params = await message_img_task(tags, params, bot_message)                    # process image generation (A1111 / Forge)
+            bot_message = await send_responses(params, bot_message, local_history)                  # send responses (text, TTS, images)
 
-        elif bot_will_do['should_gen_image']:               # If bot should only generate image:
-            if await sd_online(channel):                        # Notify user their prompt will be used directly for img gen
+        elif params['bot_will_do']['should_gen_image']:                                             # If bot should only generate image:
+            if await sd_online(channel):                                                            # Notify user their prompt will be used directly for img gen
                 await channel.send(f'Bot was triggered by Tags to not respond with text.\n \
                                 **Processing image generation using your input as the prompt ...**', delete_after=5)
-            await img_gen_task(source, text, params, ictx, tags)    # process image gen task
+            await img_gen_task(source, text, params, ictx, tags)                                    # process image gen task
         
         return user_message, bot_message
 
@@ -2141,7 +2136,7 @@ async def regenerate_task(inter:discord.Interaction, inter_discord_msg:discord.M
             system_embed_info.description = f'Regenerating text for {user_name}'
             system_embed = await channel.send(embed=system_embed_info)
 
-        # Flad to skip message logging
+        # Flag to skip message logging
         params = {}
         if mode == 'create':
             params['skip_create_user'] = True
@@ -2151,7 +2146,7 @@ async def regenerate_task(inter:discord.Interaction, inter_discord_msg:discord.M
             params['bot_message_to_update'] = original_bot_message
             params['target_discord_msg_id'] = target_discord_msg.id
 
-        _, new_bot_message = await message_task(inter, original_user_text, 'regenerate', llm_payload, params)
+        _, new_bot_message = await message_task(inter, original_user_text, 'regenerate', llm_payload, params, tags={})
         # Update the new user message with the original discord message ID
         if mode == 'create':
             new_bot_message.mark_as_reply_for(original_user_message)
@@ -2556,7 +2551,7 @@ async def flow_task(ictx: CtxInteraction, source:str, text:str):
                 flow_embed_info.description = flow_embed_info.description.replace("**Processing", ":white_check_mark: **")
                 flow_embed_info.description += f'**Processing Step {total_flow_steps + 1 - remaining_flow_steps}/{total_flow_steps}**{flow_name}\n'
                 if flow_embed: await flow_embed.edit(embed=flow_embed_info)
-            await message_task(ictx, text, source)
+            await message_task(ictx, text, source, llm_payload=None, params={}, tags={})
         if flow_embed_info:
             flow_embed_info.title = f"Flow completed for {user_name}"
             flow_embed_info.description = flow_embed_info.description.replace("**Processing", ":white_check_mark: **")
@@ -3504,7 +3499,6 @@ async def img_gen_task(source:str, img_prompt:str, params:dict, ictx:CtxInteract
             swap_params['imgmodel']['mode'] = 'swap_back'
             swap_params['imgmodel']['verb'] = 'Swapping back to'
             await change_imgmodel_task(user_name, channel, swap_params, ictx)
-        return
     except Exception as e:
         log.error(f"An error occurred in img_gen_task(): {e}")
 
