@@ -2030,6 +2030,7 @@ async def continue_task(inter:discord.Interaction, target_discord_msg:discord.Me
         else:
             # Add previous last message id to related ids
             updated_bot_message.related_ids.append(updated_bot_message.id)
+            updated_bot_message.is_continued = True
             labeled_continued_text = local_history.get_message_labels(updated_bot_message, continued_text)
             if len(continued_text) < MAX_MESSAGE_LENGTH:
                 new_discord_msg = await channel.send(content=labeled_continued_text, reference=ref_message)

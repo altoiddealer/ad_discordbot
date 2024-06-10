@@ -124,6 +124,7 @@ class HMessage:
 
     replies: Optional[list['HMessage']] = field(default_factory=list,   metadata=cnf(dont_save=True))
     reply_to: Optional['HMessage']      = field(default=None,           metadata=cnf(encoder=cls_get_id, decoder=str))
+    #continued_to: Optional['HMessage']  = field(default=None,           metadata=cnf(encoder=cls_get_id, decoder=str))
 
     text_visible: str                   = field(default='',     metadata=cnf())
     id: Optional[MessageID]             = field(default=None,   metadata=cnf(check_bool=False)) # because id's could be "0"
@@ -132,6 +133,7 @@ class HMessage:
     
     typing: bool                        = field(default=False,  metadata=cnf(False))
     spoken: bool                        = field(default=False,  metadata=cnf(False))
+    is_continued: bool                  = field(default=False,  metadata=cnf(False))
     hidden: bool                        = field(default=False,  metadata=cnf(False))
     unsavable: bool                     = field(default=False,  metadata=cnf(dont_save=True))
     
