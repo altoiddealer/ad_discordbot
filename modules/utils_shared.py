@@ -72,4 +72,6 @@ class SharedRegex: # Search for [ (]r['"] in vscode
 
     instant_tags = re.compile(r'\[\[([^\[\]]*?(?:\[\[.*?\]\][^\[\]]*?)*?)\]\]')
 
+    history_labels = re.compile(r'^\*\`\(.*?\)\`\*\n')
+
 patterns = SharedRegex()
