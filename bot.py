@@ -42,7 +42,7 @@ sys.path.append("ad_discordbot")
 from modules.database import Database, ActiveSettings, Config, StarBoard, Statistics
 from modules.utils_shared import task_semaphore, shared_path, patterns
 from modules.utils_misc import fix_dict, update_dict, sum_update_dict, update_dict_matched_keys, format_time
-from modules.utils_discord import ireply, send_long_message, EditMessageModal, SelectedListItem, SelectOptionsView, CtxInteraction, get_user_ctx_inter, get_message_ctx_inter, MAX_MESSAGE_LENGTH
+from modules.utils_discord import ireply, send_long_message, EditMessageModal, SelectedListItem, SelectOptionsView, CtxInteraction, get_user_ctx_inter, get_message_ctx_inter, react_to_user_message, MAX_MESSAGE_LENGTH
 from modules.utils_files import load_file, merge_base, save_yaml_file
 from modules.utils_aspect_ratios import round_to_precision, res_to_model_fit, dims_from_ar, avg_from_dims, get_aspect_ratio_parts, calculate_aspect_ratio_sizes
 from modules.history import HistoryManager, History, HMessage, cnf
@@ -1781,6 +1781,7 @@ async def message_task(ictx: CtxInteraction, text:str, source:str='message', llm
                 if params['bot_will_do']['should_gen_image']:
                     await init_img_embed()                                                          # Create a "prompting" embed for image gen
                 params, bot_message, user_message, local_history = await message_llm_task(llm_payload, params)
+                await react_to_user_message(client, channel, user_message)                          # add a reaction to any hidden user message
                 if llmmodel_params and llm_model_mode == 'swap':
                     params = await llmmodel_swap_back(params, original_llmmodel)                    # if LLM model swapping was triggered
             if sd_enabled:
@@ -2151,6 +2152,14 @@ async def regenerate_task(inter:discord.Interaction, inter_discord_msg:discord.M
             params['target_discord_msg_id'] = target_discord_msg.id
 
         _, new_bot_message = await message_task(inter, original_user_text, 'regenerate', llm_payload, params, tags={})
+
+        # Update the user message hidden status depending on bot message status
+        if getattr(new_bot_message, 'hidden', None) is not None:
+            original_user_message.hidden = new_bot_message.hidden
+
+        # Adjust reaction if applicable
+        await react_to_user_message(client, inter.channel, original_user_message)
+
         # Update the new user message with the original discord message ID
         if mode == 'create':
             new_bot_message.mark_as_reply_for(original_user_message)
@@ -4073,50 +4082,54 @@ if textgenwebui_enabled:
     # Context menu command to hide a message pair
     @client.tree.context_menu(name="toggle as hidden")
     async def hide_or_reveal_history(inter: discord.Interaction, message: discord.Message):
-        if not (message.author == inter.user or message.author == client.user):
-            await inter.response.send_message("You can only hide your own or bot's messages.", ephemeral=True, delete_after=5)
-            return
-        local_history = bot_history.get_history_for(inter.channel.id)
-        target_message = local_history.search(lambda m: m.id == message.id or message.id in m.related_ids)
-        if not target_message:
-            await inter.response.send_message("Message not found in current chat history.", ephemeral=True, delete_after=5)
-            return
-        user_message, bot_message = local_history.get_history_pair_from_msg_id(message.id)
-        if (user_message and not getattr(user_message, 'hidden', True)) and (bot_message and not getattr(bot_message, 'hidden', True)):
-            verb = 'hidden'
-            user_message.hidden = True
-            bot_message.hidden = True
-        elif (user_message and getattr(user_message, 'hidden', False)) and (bot_message and getattr(bot_message, 'hidden', False)):
-            verb = 'revealed'
-            user_message.hidden = False
-            bot_message.hidden = False
-        else:
-            await inter.response.send_message("A valid message pair could not be found for the target message.", ephemeral=True, delete_after=5)
-            return
-        # Change target message to the bot's response, if the original target message was user's message
-        if client.user != message.author:
-            target_message = bot_message.id
-        # Iterate over all messages and update the label
-        messages_to_edit = [target_message.id]
-        if target_message.related_ids:
-            messages_to_edit = [target_message.id] + target_message.related_ids
-        for orig_msg_id in messages_to_edit:
-            try:
-                # get message object
-                if orig_msg_id == target_message.id:
-                    original_message = message
-                else:
-                    original_message = await inter.channel.fetch_message(orig_msg_id)
-                # Apply any labels applicable to message, while replacing any mentions
-                labeled_text = local_history.get_labeled_history_text(bot_message, original_message.content, mention_mode='remention', label_mode='relabel')
-                if len(labeled_text) >= 2000:
-                    continue
-                await original_message.edit(content=labeled_text)
-            except:
-                log.warning(f'Failed to edit message content for id {orig_msg_id} for "Hide History".')
-                break
-        await inter.response.send_message(f"Message exchange pair has been successfully {verb} in history.", ephemeral=True, delete_after=7)
-
+        try:
+            if not (message.author == inter.user or message.author == client.user):
+                await inter.response.send_message("You can only hide your own or bot's messages.", ephemeral=True, delete_after=5)
+                return
+            local_history = bot_history.get_history_for(inter.channel.id)
+            target_message = local_history.search(lambda m: m.id == message.id or message.id in m.related_ids)
+            if not target_message:
+                await inter.response.send_message("Message not found in current chat history.", ephemeral=True, delete_after=5)
+                return
+            user_message, bot_message = local_history.get_history_pair_from_msg_id(message.id)
+            if (user_message and not getattr(user_message, 'hidden', True)) and (bot_message and not getattr(bot_message, 'hidden', True)):
+                verb = 'hidden'
+                user_message.hidden = True
+                bot_message.hidden = True
+            elif (user_message and getattr(user_message, 'hidden', False)) and (bot_message and getattr(bot_message, 'hidden', False)):
+                verb = 'revealed'
+                user_message.hidden = False
+                bot_message.hidden = False
+            else:
+                await inter.response.send_message("A valid message pair could not be found for the target message.", ephemeral=True, delete_after=5)
+                return
+            await react_to_user_message(client, inter.channel, user_message)
+            # Change target message to the bot's response, if the original target message was user's message
+            if client.user != message.author:
+                target_message = bot_message
+            # Iterate over all messages and update the label
+            messages_to_edit = [target_message.id]
+            if getattr(target_message, 'related_ids'):
+                messages_to_edit = [target_message.id] + target_message.related_ids
+            for orig_msg_id in messages_to_edit:
+                try:
+                    # get message object
+                    if orig_msg_id == message.id:
+                        original_message = message
+                    else:
+                        original_message = await inter.channel.fetch_message(orig_msg_id)
+                    # Apply any labels applicable to message, while replacing any mentions
+                    labeled_text = local_history.get_labeled_history_text(bot_message, original_message.content, mention_mode='remention', label_mode='relabel')
+                    if len(labeled_text) >= 2000:
+                        continue
+                    await original_message.edit(content=labeled_text)
+                except Exception as e:
+                    log.error(f'Failed to edit message content for id {orig_msg_id} for "Hide History".: {e}')
+                    break
+            await inter.response.send_message(f"Message exchange pair has been successfully {verb} in history.", ephemeral=True, delete_after=5)
+        except Exception as e:
+            log.error(f'An error occured while toggling "hidden" attribute for "Hide History".: {e}')
+            
     # Context menu command to Regenerate from selected user message and create new history
     @client.tree.context_menu(name="regenerate create")
     async def regen_create_llm_gen(inter: discord.Interaction, message:discord.Message):
