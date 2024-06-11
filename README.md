@@ -24,6 +24,12 @@
 <details>
   <summary>click to expand</summary>
 
+  **06/11/2024:** More Context Menu Commands!
+
+  <img width="285" alt="Screenshot 2024-06-11 155926" src="https://github.com/altoiddealer/ad_discordbot/assets/1613484/92d1ef4f-56c2-46aa-be9e-5ce69284900e">
+
+  ---
+
    **06/06/2024:** Context commands are now AMAZING
 
     - "Continue" and "Regen" have been revised to work AMAZINGLY well!
