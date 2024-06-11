@@ -102,21 +102,21 @@ async def send_long_message(channel, message_text, bot_message:'HMessage'=None) 
 
 # Model for editing history
 class EditMessageModal(discord.ui.Modal, title="Edit Message in History"):
-    def __init__(self, clientuser: discord.User, target_message: 'HMessage', original_message: discord.Message):
+    def __init__(self, clientuser: discord.User, target_message: 'HMessage', original_message: discord.Message, local_history:'History'=None):
         super().__init__()
         self.original_message = original_message
         self.target_message = target_message
         self.clientuser = clientuser
 
-        dementioned_text = patterns.mention_prefix.sub('', original_message.content).strip()
-        dementioned_delabeled_text = patterns.history_labels.sub('', dementioned_text).strip()
+        if local_history is not None:
+            default_text = local_history.get_labeled_history_text(original_message, original_message.content, mention_mode='demention', label_mode='delabel')
 
         # Add TextInput dynamically with default value
         self.new_content = discord.ui.TextInput(
             label='New Message Content', 
             style=discord.TextStyle.paragraph, 
             min_length=1, 
-            default=dementioned_delabeled_text)
+            default=default_text)
 
         self.add_item(self.new_content)
 

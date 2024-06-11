@@ -15,6 +15,7 @@ from typing import Union
 import copy
 from uuid import uuid4
 import json
+from modules.utils_shared import patterns
 from modules.utils_discord import get_message_ctx_inter, get_user_ctx_inter
 import asyncio
 from typing import (
@@ -463,27 +464,68 @@ class History:
 
         else:
             raise Exception(f'Unknown HMessage role: {hmessage.role}, should match [user/assistant]')
-    
-    def get_message_labels(self, message:HMessage, input_text:str='') -> str:
+        
+    def get_history_labels_for_message(self, message:HMessage) -> str:
         labels = {'is_continued': 'continued',
                   'is_regenerated': 'regenerated',
                   'hidden': 'hidden message'}
+
         labels_for_message = []
         
         for key, value in labels.items():
             if getattr(message, key, False):
                 labels_for_message.append(value)
-        
+
         labels_for_message = ', '.join(labels_for_message)
+
         if labels_for_message:
             labels_for_message = f'*`({labels_for_message})`*'
-
-        if input_text:
-            labelled_text = f'{labels_for_message}\n{input_text}' if labels_for_message else input_text
-        else:
-            labelled_text = labels_for_message
         
-        return labelled_text
+        return labels_for_message
+    
+    def get_labeled_history_text(self, message:HMessage, input_text:str='', mention_mode:str=None, label_mode:str=None):
+        history_labels = self.get_history_labels_for_message(message)
+
+        ##########
+        # return labels only
+        if not input_text:
+            return history_labels
+        
+        # Default behavior: Just apply label to text    
+        mention_mode = mention_mode or None
+        label_mode = label_mode or 'label'
+
+        ##########
+        # return text with labels
+        output_text = input_text
+        mention = ''
+        # remove/extract mention
+        try:
+            if mention_mode is not None:
+                # Check to see if prefixed @mention is not just cosmetically added by the bot
+                mention_in_message = None
+                if getattr(message, 'text', None) is not None:
+                    mention_in_message = patterns.mention_prefix.search(message.text)
+                if not mention_in_message:
+                    mention_in_input = patterns.mention_prefix.search(output_text)
+                    mention = mention_in_input.group(0) if mention_in_input else ''
+                    output_text = patterns.mention_prefix.sub('', output_text).strip()
+
+            # remove existing label
+            if label_mode in ['relabel', 'delabel']:
+                output_text = patterns.history_labels.sub('', output_text).strip()
+
+            # apply label
+            if history_labels and label_mode != 'delabel':
+                output_text = f'{history_labels}\n{output_text}'
+
+            # re-apply mention
+            if mention and mention_mode == 'remention':
+                output_text = f'{mention} {output_text}'
+        except Exception as e:
+            log.error(f'Failed to update text with history labels.: {e}')
+        
+        return output_text
 
     
     def search(self, predicate):

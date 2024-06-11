@@ -1654,7 +1654,7 @@ async def message_task(ictx: CtxInteraction, text:str, source:str='message', llm
                 await process_tts_resp(channel, bot_message)
             if params['bot_will_do']['should_send_text']:
                 # Apply any labels applicable to message
-                labeled_resp = local_history.get_message_labels(bot_message, bot_message.text)
+                labeled_resp = local_history.get_labeled_history_text(bot_message, bot_message.text)
                 # @mention non-consecutive users
                 mention_labeled_resp = update_mention(get_user_ctx_inter(ictx).mention, labeled_resp)
                 await send_long_message(channel, mention_labeled_resp, bot_message=bot_message)
@@ -2031,7 +2031,8 @@ async def continue_task(inter:discord.Interaction, target_discord_msg:discord.Me
             # Add previous last message id to related ids
             updated_bot_message.related_ids.append(updated_bot_message.id)
             updated_bot_message.is_continued = True
-            labeled_continued_text = local_history.get_message_labels(updated_bot_message, continued_text)
+            # Apply any labels applicable to message
+            labeled_continued_text = local_history.get_labeled_history_text(updated_bot_message, continued_text)
             if len(continued_text) < MAX_MESSAGE_LENGTH:
                 new_discord_msg = await channel.send(content=labeled_continued_text, reference=ref_message)
                 # replace original id with new
@@ -2075,9 +2076,8 @@ async def replace_msg_in_history_and_discord(ictx:discord.Interaction, params:di
         
         # Update original discord message, or send new one if too long
         local_history = bot_history.get_history_for(ictx.channel.id)
-        dementioned_text = patterns.mention_prefix.sub('', text).strip() # Use regex to remove any existing labels
-        dementioned_delabeled_text = patterns.history_labels.sub('', dementioned_text).strip()
-        labeled_text = local_history.get_message_labels(updated_message, dementioned_delabeled_text)
+        # Apply any labels applicable to message
+        labeled_text = local_history.get_labeled_history_text(updated_message, text)
 
         if len(text) < MAX_MESSAGE_LENGTH:
             await target_discord_msg.edit(content=text)
@@ -4067,7 +4067,7 @@ if textgenwebui_enabled:
         if not target_message:
             await inter.response.send_message("Message not found in current chat history.", ephemeral=True, delete_after=5)
             return
-        modal = EditMessageModal(client.user, target_message, original_message=message)
+        modal = EditMessageModal(client.user, target_message, original_message=message, local_history=local_history)
         await inter.response.send_modal(modal)
 
     # Context menu command to hide a message pair
@@ -4107,11 +4107,8 @@ if textgenwebui_enabled:
                     original_message = message
                 else:
                     original_message = await inter.channel.fetch_message(orig_msg_id)
-                # process text
-                original_text = original_message.clean_content
-                dementioned_text = patterns.mention_prefix.sub('', original_text).strip() # Use regex to remove any existing labels
-                dementioned_delabeled_text = patterns.history_labels.sub('', dementioned_text).strip()
-                labeled_text = local_history.get_message_labels(bot_message, dementioned_delabeled_text) # Apply correct labels to message
+                # Apply any labels applicable to message, while replacing any mentions
+                labeled_text = local_history.get_labeled_history_text(bot_message, original_message.content, mention_mode='remention', label_mode='relabel')
                 if len(labeled_text) >= 2000:
                     continue
                 await original_message.edit(content=labeled_text)
