@@ -42,7 +42,7 @@ sys.path.append("ad_discordbot")
 from modules.database import Database, ActiveSettings, Config, StarBoard, Statistics
 from modules.utils_shared import task_semaphore, shared_path, patterns
 from modules.utils_misc import fix_dict, update_dict, sum_update_dict, update_dict_matched_keys, format_time
-from modules.utils_discord import ireply, send_long_message, EditMessageModal, SelectedListItem, SelectOptionsView, CtxInteraction, get_user_ctx_inter, get_message_ctx_inter
+from modules.utils_discord import ireply, send_long_message, EditMessageModal, SelectedListItem, SelectOptionsView, CtxInteraction, get_user_ctx_inter, get_message_ctx_inter, react_to_user_message, MAX_MESSAGE_LENGTH
 from modules.utils_files import load_file, merge_base, save_yaml_file
 from modules.utils_aspect_ratios import round_to_precision, res_to_model_fit, dims_from_ar, avg_from_dims, get_aspect_ratio_parts, calculate_aspect_ratio_sizes
 from modules.history import HistoryManager, History, HMessage, cnf
@@ -600,10 +600,17 @@ def get_character():
 # If first time bot script is run
 async def first_run():
     try:
-        for guild in client.guilds: # Iterate over all guilds the bot is a member of
-            text_channels = guild.text_channels
-            if text_channels and system_embed_info:
-                default_channel = text_channels[0]  # Get the first text channel of the guild
+        for guild in client.guilds:  # Iterate over all guilds the bot is a member of
+            if guild.text_channels and system_embed_info:
+                # Find the 'general' channel, if it exists
+                default_channel = None
+                for channel in guild.text_channels:
+                    if channel.name == 'general':
+                        default_channel = channel
+                        break
+                # If 'general' channel is not found, use the first text channel
+                if default_channel is None:
+                    default_channel = guild.text_channels[0]
                 await default_channel.send(embed=system_embed_info)
                 break  # Exit the loop after sending the message to the first guild
         log.info('Welcome to ad_discordbot! Use "/helpmenu" to see main commands. (https://github.com/altoiddealer/ad_discordbot) for more info.')
@@ -909,7 +916,7 @@ async def swap_llm_character(char_name:str, user_name:str, llm_payload:dict):
         log.error(f"An error occurred while loading the file for swap_character: {e}")
         return llm_payload
 
-def format_prompt_with_recent_output(ictx: CtxInteraction, user_name:str, prompt:str):
+def format_prompt_with_recent_output(ictx: CtxInteraction, user_name:str, prompt:str) -> str:
     try:
         formatted_prompt = prompt
         # Find all matches of {user_x} and {llm_x} in the prompt
@@ -1621,144 +1628,176 @@ async def on_message(message: discord.Message):
         async with task_semaphore:
             async with message.channel.typing():
                 log.info(f'reply requested: {message.author.display_name} said: "{text}"')
-                await on_message_task(message, 'on_message', text)
+                await message_task(message, text, 'on_message', llm_payload=None, params={}, tags={})
                 await run_flow_if_any(message, 'on_message', text)
 
     except Exception as e:
         log.error(f"An error occurred in on_message: {e}")
 
 #################################################################
-#################### QUEUED FROM ON MESSAGE #####################
+######################## QUEUED MESSAGE #########################
 #################################################################
-async def on_message_task(ictx: CtxInteraction, source:str, text:str):
-    try:
-        user_name = get_user_ctx_inter(ictx).display_name
-        channel = ictx.channel
-        params = {} # dictionary to pass parameters through the event
-        # collects all tags, sorted into sub-lists by phase (user / llm / userllm)
-        text, tags = await get_tags(text)
-        # match tags labeled for user / userllm.
-        tags = match_tags(text, tags, phase='llm')
-        # check what bot should do
-        bot_will_do = bot_should_do(tags)
-        params['bot_will_do'] = bot_will_do
-        # do what bot should do
-        if bot_will_do['should_gen_text']:
-            # build llm_payload with defaults
-            llm_payload = await init_llm_payload(ictx, user_name, text)
-            # make working copy of user's request (without @ mention)
-            llm_prompt = text
-            # apply tags to prompt
-            llm_prompt, tags = process_tag_insertions(llm_prompt, tags)
-            # collect matched tag values
-            llm_payload_mods, formatting, params = collect_llm_tag_values(tags, params)
-            # apply tags relevant to LLM payload
-            llm_payload, llm_prompt, params = await process_llm_payload_tags(ictx, llm_payload, llm_prompt, llm_payload_mods, params)
-            # apply formatting tags to LLM prompt
-            llm_prompt = process_tag_formatting(ictx, user_name, llm_prompt, formatting)
-            # offload to ai_gen queue
-            llm_payload['text'] = llm_prompt
+async def message_task(ictx: CtxInteraction, text:str, source:str='message', llm_payload:dict=None, params:dict={}, tags:dict={}):
+    user_name = get_user_ctx_inter(ictx).display_name
+    channel = ictx.channel
 
-            await hybrid_llm_img_gen(ictx, source, text, tags, llm_payload, params)
-        elif bot_will_do['should_gen_image']:
-            if await sd_online(channel):
-                await channel.send(f'Bot was triggered by Tags to not respond with text.\n**Processing image generation using your input as the prompt ...**', delete_after=5) # msg for if LLM model is unloaded
-            await img_gen_task(source, text, params, ictx, tags)
+    change_embed = None
+    img_gen_embed = None
+    local_history = None
+    user_message = None
+    bot_message = None
+
+    async def send_responses(params:dict, bot_message:HMessage, local_history:History) -> HMessage:
+        if bot_message:
+            # Process any TTS response
+            if bot_message.text_visible:
+                await process_tts_resp(channel, bot_message)
+            if params['bot_will_do']['should_send_text']:
+                # Apply any labels applicable to message
+                labeled_resp = local_history.get_labeled_history_text(bot_message, bot_message.text)
+                # @mention non-consecutive users
+                mention_labeled_resp = update_mention(get_user_ctx_inter(ictx).mention, labeled_resp)
+                await send_long_message(channel, mention_labeled_resp, bot_message=bot_message)
+        # send any user images
+        send_user_image = params.get('send_user_image', [])
+        if send_user_image:
+            await channel.send(file=send_user_image) if len(send_user_image) == 1 else await channel.send(files=send_user_image)
+        return bot_message
+
+    async def message_img_task(tags:dict, params:dict, bot_message:HMessage):
+        nonlocal img_gen_embed
+        tags = match_img_tags(bot_message.text, tags)
+        params['bot_will_do'] = bot_should_do(tags, params['bot_will_do']) # check for updates from tags
+        if params['bot_will_do']['should_gen_image']:
+            if img_gen_embed:
+                await img_gen_embed.delete()
+            await img_gen_task(source, bot_message.text, params, ictx, tags)
+        return tags, params
+
+    async def llmmodel_swap_back(params:dict, original_llmmodel:str) -> dict:
+        nonlocal change_embed
+        params['llmmodel']['llmmodel_name'] = original_llmmodel
+        change_embed = await change_llmmodel_task(ictx, params) # Swap LLM Model back
+        if change_embed:
+            await change_embed.delete()                         # Delete embed again after the second call
+        return params
+
+    async def message_llm_task(llm_payload:dict, params:dict):
+        # if no LLM model is loaded, notify that no text will be generated
+        if shared.model_name == 'None':
+            if not bot_database.was_warned('no_llmmodel'):
+                bot_database.update_was_warned('no_llmmodel')
+                await channel.send(f'(Cannot process text request: No LLM model is currently loaded. Use "/llmmodel" to load a model.)', delete_after=10)
+                log.warning(f'Bot tried to generate text for {user_name}, but no LLM model was loaded')
+        ## Finalize payload, generate text via TGWUI, and process responses
+        # Toggle TTS off, if interaction server is not connected to Voice Channel
+        tts_sw = None
+        if (not params['bot_will_do']['should_send_text']) or (voice_client and (voice_client != ictx.guild.voice_client) and int(tts_settings.get('play_mode', 0)) == 0):
+            tts_sw = await toggle_tts(toggle='off')
+        save_to_history = params.get('save_to_history', True)
+        # Check to apply Server Mode
+        llm_payload = apply_server_mode(llm_payload, ictx)
+        # Update names in stopping strings
+        llm_payload = extra_stopping_strings(llm_payload)
+        # Get history for interaction channel
+        local_history = bot_history.get_history_for(ictx.channel.id)
+        # Create user message in HManager
+        user_message = None
+        if not params.get('skip_create_user'):
+            user_message = await create_user_message(local_history, llm_payload, save_to_history, ictx)
+        # generate text with text-generation-webui
+        last_resp, tts_resp = await llm_gen(llm_payload)
+        # Create bot message in HManager, unless replacing original bot message via "regenerate replace"
+        if params.get('bot_message_to_update'):
+            bot_message = await replace_msg_in_history_and_discord(ictx, params, last_resp, tts_resp)
+            params['bot_will_do']['should_send_text'] = False
+        else:
+            bot_message = await create_bot_message(user_message, local_history, save_to_history, last_resp, tts_resp)
+        # Toggle TTS back on if it was toggled off
+        await toggle_tts(toggle='on', tts_sw=tts_sw)
+
+        # Log message exchange
+        if bot_message:
+            log.info(f'''{user_name}: "{llm_payload['text']}"''')
+            log.info(f'''{llm_payload['state']['name2']}: "{bot_message.text}"''')
+        # If no text was generated, treat user input at the response
+        else:
+            if params['bot_will_do']['should_gen_image'] and sd_enabled:
+                bot_message.update(text=llm_payload['text'])
+        return params, bot_message, user_message, local_history
+
+    async def init_img_embed():
+        nonlocal img_gen_embed
+        # make a 'Prompting...' embed when generating text for an image response
+        if await sd_online(channel):
+            if shared.model_name == 'None':
+                await channel.send('**Processing image generation using message as the image prompt ...**', delete_after=5) # msg for if LLM model is unloaded
+            else:
+                if img_gen_embed_info:
+                    img_gen_embed_info.title = "Prompting ..."
+                    img_gen_embed_info.description = " "
+                    img_gen_embed = await channel.send(embed=img_gen_embed_info)
+
+    async def llmmodel_swap_or_change(params:dict):
+        nonlocal change_embed
+        # Check params to see if an LLM model change/swap was triggered by Tags
+        llm_model_mode = params['llmmodel_params'].get('mode', 'change')  # default to 'change' unless a tag was triggered with 'swap'
+        original_llmmodel = copy.copy(str(shared.model_name))   # copy current LLM model name
+        change_embed = await change_llmmodel_task(ictx, params) # Change LLM model
+        if llm_model_mode == 'swap' and change_embed:           # Delete embed before the second call
+            await change_embed.delete()
+        return llm_model_mode, original_llmmodel
+
+    async def build_llm_payload(text:str, llm_payload:dict, tags:dict, params:dict):
+        # Use prefined LLM payload or initialize with defaults
+        if llm_payload is None:
+            llm_payload = await init_llm_payload(ictx, user_name, text)
+        else:
+            llm_payload['text'] = text
+        # make working copy of user's request (without @ mention)
+        llm_prompt = text
+        # apply tags to prompt
+        llm_prompt, tags = process_tag_insertions(llm_prompt, tags)
+        # collect matched tag values
+        llm_payload_mods, formatting, params = collect_llm_tag_values(tags, params)
+        # apply tags relevant to LLM payload
+        llm_payload, llm_prompt, params = await process_llm_payload_tags(ictx, llm_payload, llm_prompt, llm_payload_mods, params)
+        # apply formatting tags to LLM prompt
+        llm_prompt = process_tag_formatting(ictx, user_name, llm_prompt, formatting)
+        # offload to ai_gen queue
+        llm_payload['text'] = llm_prompt
+        return llm_payload, tags, params
+
+    try:
+        text, tags = await get_tags(text)                                                           # collects all tags, sorted into sub-lists by phase (user / llm / userllm)
+        tags = match_tags(text, tags, phase='llm')                                                  # match tags labeled for user / userllm.
+        params['bot_will_do'] = bot_should_do(tags)                                                 # check what bot should do
+        if params['bot_will_do']['should_gen_text']:                                                # If bot should generate text:
+            llm_payload, tags, params = await build_llm_payload(text, llm_payload, tags, params)    # Build LLM Payload
+            if textgenwebui_enabled:
+                llmmodel_params = params.get('llmmodel', {})
+                if llmmodel_params:
+                    llm_model_mode, original_llmmodel = await llmmodel_swap_or_change(llmmodel_params) # if LLM model swap/change was triggered
+                if params['bot_will_do']['should_gen_image']:
+                    await init_img_embed()                                                          # Create a "prompting" embed for image gen
+                params, bot_message, user_message, local_history = await message_llm_task(llm_payload, params)
+                await react_to_user_message(client, channel, user_message)                          # add a reaction to any hidden user message
+                if llmmodel_params and llm_model_mode == 'swap':
+                    params = await llmmodel_swap_back(params, original_llmmodel)                    # if LLM model swapping was triggered
+            if sd_enabled:
+                tags, params = await message_img_task(tags, params, bot_message)                    # process image generation (A1111 / Forge)
+            bot_message = await send_responses(params, bot_message, local_history)                  # send responses (text, TTS, images)
+
+        elif params['bot_will_do']['should_gen_image']:                                             # If bot should only generate image:
+            if await sd_online(channel):                                                            # Notify user their prompt will be used directly for img gen
+                await channel.send(f'Bot was triggered by Tags to not respond with text.\n \
+                                **Processing image generation using your input as the prompt ...**', delete_after=5)
+            await img_gen_task(source, text, params, ictx, tags)                                    # process image gen task
+        
+        return user_message, bot_message
 
     except Exception as e:
         print(traceback.format_exc())
-        log.error(f"An error occurred processing on_message request: {e}")
-
-async def hybrid_llm_img_gen(ictx: CtxInteraction, source:str, text:str, tags:dict, llm_payload:dict, params:dict):
-    try:
-        user_name = get_user_ctx_inter(ictx).display_name
-        channel = ictx.channel
-        bot_will_do = params['bot_will_do']
-        change_embed = None
-        img_gen_embed = None
-
-        # Check params to see if an LLM model change/swap was triggered by Tags
-        llmmodel_params = params.get('llmmodel', {})
-        send_user_image = params.get('send_user_image', [])
-        mode = llmmodel_params.get('mode', 'change') # default to 'change' unless a tag was triggered with 'swap'
-        if llmmodel_params:
-            orig_llmmodel = shared.model_name                       # copy current LLM model name
-            change_embed = await change_llmmodel_task(ictx, params)    # Change LLM model
-            if mode == 'swap' and change_embed:                     # Delete embed before the second call
-                await change_embed.delete()
-
-        # make a 'Prompting...' embed when generating text for an image response
-        if bot_will_do['should_gen_image'] and textgenwebui_enabled:
-            if await sd_online(channel):
-                if shared.model_name == 'None':
-                    await channel.send('**Processing image generation using message as the image prompt ...**', delete_after=5) # msg for if LLM model is unloaded
-                else:
-                    if img_gen_embed_info:
-                        img_gen_embed_info.title = "Prompting ..."
-                        img_gen_embed_info.description = " "
-                        img_gen_embed = await channel.send(embed=img_gen_embed_info)
-        # if no LLM model is loaded, notify that no text will be generated
-        if textgenwebui_enabled:
-            if shared.model_name == 'None':
-                if not bot_database.was_warned('no_llmmodel'):
-                    bot_database.update_was_warned('no_llmmodel')
-                    await channel.send(f'(Cannot process text request: No LLM model is currently loaded. Use "/llmmodel" to load a model.)', delete_after=10)
-                    log.warning(f'Bot tried to generate text for {user_name}, but no LLM model was loaded')
-
-            ## Finalize payload, generate text via TGWUI, and process responses
-            # Toggle TTS off, if interaction server is not connected to Voice Channel
-            tts_sw = None
-            if (not bot_will_do['should_send_text']) or (voice_client and (voice_client != ictx.guild.voice_client) and int(tts_settings.get('play_mode', 0)) == 0):
-                tts_sw = await toggle_tts(toggle='off')
-            save_to_history = params.get('save_to_history', True)
-            # make final preparations for llm_gen()
-            llm_payload, user_message, local_history = await pre_llm_gen(llm_payload, save_to_history, ictx)
-            # generate text with text-generation-webui
-            last_resp, tts_resp = await llm_gen(llm_payload)
-            # Process responses
-            bot_message = await post_llm_gen(user_message, local_history, save_to_history, last_resp, tts_resp)
-            # Toggle TTS back on if it was toggled off
-            await toggle_tts(toggle='on', tts_sw=tts_sw)
-
-            if bot_message:
-                # Log message exchange
-                log.info(f'''{user_name}: "{llm_payload['text']}"''')
-                log.info(f'''{llm_payload['state']['name2']}: "{bot_message.text}"''')
-            # If no text was generated, treat user input at the response
-            else:
-                if bot_will_do['should_gen_image'] and sd_enabled:
-                    bot_message.update(text=text)
-                else:
-                    return
-
-            # if LLM model swapping was triggered
-            if mode == 'swap':
-                params['llmmodel']['llmmodel_name'] = orig_llmmodel
-                change_embed = await change_llmmodel_task(ictx, params)    # Swap LLM Model back
-                if change_embed:
-                    await change_embed.delete()                         # Delete embed again after the second call
-
-        # process image generation (A1111 / Forge)
-        if sd_enabled:
-            tags = match_img_tags(bot_message.text, tags)
-            bot_will_do = bot_should_do(tags, bot_will_do) # check for updates from tags
-            if bot_will_do['should_gen_image']:
-                if img_gen_embed:
-                    await img_gen_embed.delete()
-                params['bot_will_do'] = bot_will_do
-                await img_gen_task(source, bot_message.text, params, ictx, tags)
-        # Process any TTS response
-        if bot_message.text_visible:
-            await process_tts_resp(channel, bot_message)
-        # @mention non-consecutive users
-        mention_resp = update_mention(get_user_ctx_inter(ictx).mention, bot_message.text)
-        if bot_will_do['should_send_text']:
-            await send_long_message(channel, mention_resp, bot_message=bot_message)
-
-        if send_user_image:
-            await channel.send(file=send_user_image) if len(send_user_image) == 1 else await channel.send(files=send_user_image)
-        return
-    except Exception as e:
         log.error(f'An error occurred while processing "{source}" request: {e}')
         if img_gen_embed_info:
             img_gen_embed_info.title = f'An error occurred while processing "{source}" request'
@@ -1767,7 +1806,6 @@ async def hybrid_llm_img_gen(ictx: CtxInteraction, source:str, text:str, tags:di
                 await img_gen_embed.edit(embed=img_gen_embed_info)
             else:
                 await channel.send(embed=img_gen_embed_info)
-
         if change_embed:
             await change_embed.delete()
 
@@ -1847,35 +1885,28 @@ async def toggle_tts(toggle='on', tts_sw=None):
         log.error(f'An error occurred while toggling the TTS on/off in llm_gen(): {e}')
     return None
 
-# make final preparations for llm_gen()
-async def pre_llm_gen(llm_payload:dict, save_to_history=True, ictx=None, set_user_msg=True) -> HMessage:
+# Creates user message in HManager
+async def create_user_message(local_history, llm_payload:dict, save_to_history=True, ictx=None):
     try:
-        # Check to apply Server Mode
-        llm_payload = apply_server_mode(llm_payload, ictx)
-        # Update names in stopping strings
-        llm_payload = extra_stopping_strings(llm_payload)
         # Add user message before processing bot reply.
         # this gives time for other messages to acrue before the bot's response, as in realistic chat scenario.
         user = get_user_ctx_inter(ictx)
         message = get_message_ctx_inter(ictx)
-        local_history = bot_history.get_history_for(ictx.channel.id)
-        user_message = None
-        if set_user_msg:
-            user_message = local_history.new_message(llm_payload['state']['name1'], llm_payload['text'], 'user', user.id)
-            user_message.id = message.id if hasattr(message, 'id') else None
-            # set history flag
-            if not save_to_history:
-                user_message.hidden = True
-                user_message.dont_save()
-        return llm_payload, user_message, local_history
+        user_message = local_history.new_message(llm_payload['state']['name1'], llm_payload['text'], 'user', user.id)
+        user_message.id = message.id if hasattr(message, 'id') else None
+        # set history flag
+        if not save_to_history:
+            user_message.hidden = True
+            #user_message.dont_save()
+        return user_message
     except Exception as e:
-        log.error(f'An error occurred before llm_gen(): {e}')
+        log.error(f'An error occurred while creating user message: {e}')
         return None, None, None
 
 # Send LLM Payload - get responses
 async def llm_gen(llm_payload:dict) -> str:
     if shared.model_name == 'None':
-        return
+        return '', ''
     try:
         loop = asyncio.get_event_loop()
         # Store time for statistics
@@ -1908,13 +1939,14 @@ async def llm_gen(llm_payload:dict) -> str:
         return '', ''
 
 # Process responses from text-generation-webui
-async def post_llm_gen(user_message:HMessage, local_history:History, save_to_history:bool=True, last_resp:str='', tts_resp:str='') -> HMessage:
+async def create_bot_message(user_message:HMessage, local_history:History, save_to_history:bool=True, last_resp:str='', tts_resp:str='') -> HMessage:
     try:
         bot_message = local_history.new_message(bot_settings.name, last_resp, 'assistant', bot_settings._bot_id, text_visible=tts_resp)
-        bot_message.mark_as_reply_for(user_message)
+        if user_message:
+            bot_message.mark_as_reply_for(user_message)
         if not save_to_history:
             bot_message.hidden = True
-            bot_message.dont_save()
+            #bot_message.dont_save()
 
         if last_resp:
             truncation = int(bot_settings.settings['llmstate']['state']['truncation_length'] * 4) #approx tokens
@@ -1923,44 +1955,37 @@ async def post_llm_gen(user_message:HMessage, local_history:History, save_to_his
 
         return bot_message
     except Exception as e:
-        log.error(f'An error occurred after llm_gen(): {e}')
+        log.error(f'An error occurred while creating bot message: {e}')
         return None
 
-async def cont_regen_task(inter:discord.Interaction, source:str, target_discord_msg:discord.Message):
+async def continue_task(inter:discord.Interaction, target_discord_msg:discord.Message):
     user_name = get_user_ctx_inter(inter).display_name
     channel = inter.channel
     system_embed = None
-    cmd = ''
     try:
         # collect relavent history and messages
         local_history = bot_history.get_history_for(inter.channel.id)
-        original_bot_message = local_history.search(lambda m: m.id == target_discord_msg.id)
-        if not original_bot_message:
-            await inter.followup.send("Message not found in current chat history. Note: if the character sent multiple messages, this command must be used on the last one.", ephemeral=True)
+        if not local_history:
+            await inter.followup.send("There is currently no chat history to continue from.", ephemeral=True)
             return
-        original_user_message = original_bot_message.reply_to
-        # build new payload
-        text = original_user_message.text or ''
-        llm_payload = await init_llm_payload(inter, user_name, text)
-        local_history = original_bot_message.new_history_end_here()
-        sliced_i, _ = local_history.render_to_tgwui_tuple()
+        original_user_message, original_bot_message = local_history.get_history_pair_from_msg_id(target_discord_msg.id)
+        # Requires finding original bot message in history
+        if not original_bot_message:
+            await inter.followup.send('Message not found in current chat history. Try using "continue" on a response from the character.', ephemeral=True)
+            return
+        # build new payload. 'text' parameter not important for "Continue"
+        original_user_text = original_user_message.text if original_user_message else (target_discord_msg.clean_content or '')
+        llm_payload = await init_llm_payload(inter, user_name, original_user_text)
+        sliced_history = original_bot_message.new_history_end_here()
+        sliced_i, _ = sliced_history.render_to_tgwui_tuple()
         # using original 'visible' produces wonky TTS responses combined with "Continue" function
         llm_payload['state']['history']['internal'] = copy.deepcopy(sliced_i)
         llm_payload['state']['history']['visible'] = copy.deepcopy(sliced_i)
-        save_to_history = not original_bot_message.hidden # Assert same flag as when initially generated
-        if source == 'cont':
-            cmd = 'Continuing'
-            llm_payload['_continue'] = True
-        else:
-            cmd = 'Regenerating'
-            llm_payload['regenerate'] = True
-        if shared.model_name == 'None':
-            await channel.send('(Cannot process text request: No LLM model is currently loaded. Use "/llmmodel" to load a model.)', delete_after=5)
-            log.warning(f'{user_name} used {cmd} but no LLM model was loaded')
-            return
+        llm_payload['_continue'] = True
+
         if system_embed_info:
-            system_embed_info.title = f'{cmd} ... '
-            system_embed_info.description = f'{cmd} text for {user_name}'
+            system_embed_info.title = f'Continuing ... '
+            system_embed_info.description = f'Continuing text for {user_name}'
             system_embed = await channel.send(embed=system_embed_info)
 
         ## Finalize payload, generate text via TGWUI, and process responses
@@ -1968,52 +1993,187 @@ async def cont_regen_task(inter:discord.Interaction, source:str, target_discord_
         tts_sw = None
         if voice_client and (voice_client != inter.guild.voice_client) and int(tts_settings.get('play_mode', 0)) == 0:
             tts_sw = await toggle_tts(toggle='off')
-        # make final preparations for llm_gen()
-        llm_payload, _, local_history = await pre_llm_gen(llm_payload, save_to_history, inter, set_user_msg=False)
-        # generate text with text-generation-webui. Skip post_llm_gen()
+        # Check to apply Server Mode
+        llm_payload = apply_server_mode(llm_payload, inter)
+        # Update names in stopping strings
+        llm_payload = extra_stopping_strings(llm_payload)
+        # Skip create_user_message()
+        # Generate text with text-generation-webui.
         last_resp, tts_resp = await llm_gen(llm_payload)
+        # Skip create_bot_message()
         # Toggle TTS back on if it was toggled off
         await toggle_tts(toggle='on', tts_sw=tts_sw)
 
         if system_embed:
             await system_embed.delete()
         if not last_resp:
-            await inter.followup.send(f'Failed to {cmd} text.', silent=True)
+            await inter.followup.send(f'Failed to continue text.', silent=True)
             return
 
-        verb = "Regenerated" if source == "regen" else "Continued"
         # Log message exchange
         log.info(f'''{user_name}: "{llm_payload['text']}"''')
-        log.info(f'{verb} text:')
+        log.info(f'Continued text:')
         log.info(f'''{llm_payload['state']['name2']}: "{last_resp}"''')
-        # Update original discord message, or send new one if too long
-        message_prefix = f'__{verb} text:__'
-        if len(last_resp) < 1980:
-            new_discord_msg = await target_discord_msg.edit(content=f'{message_prefix}\n{last_resp}')
-            new_discord_msg_id = new_discord_msg.id
-            await inter.followup.send(f'{verb} text for {user_name}.')
-        else:
-            await target_discord_msg.delete()
-            await inter.followup.send(f'__{verb} text:__', silent=True)
-            new_discord_msg_id = await send_long_message(channel, last_resp)
+
+        # Extract the continued text from previous text
+        continued_text = last_resp[len(original_bot_message.text):]
+
+        # Get a possible message to reply to
+        ref_message = target_discord_msg
+        if original_bot_message.id != target_discord_msg.id:
+            ref_message = await channel.fetch_message(original_bot_message.id)
+
         # Update the original message in history manager
         updated_bot_message = original_bot_message
-        updated_bot_message.update(text=last_resp, text_visible=tts_resp, id=new_discord_msg_id)
+
+        if not continued_text.strip():
+            await inter.followup.send(':warning: Generation was continued, but nothing new was added.')
+        else:
+            # Add previous last message id to related ids
+            updated_bot_message.related_ids.append(updated_bot_message.id)
+            updated_bot_message.is_continued = True
+            # Apply any labels applicable to message
+            labeled_continued_text = local_history.get_labeled_history_text(updated_bot_message, continued_text)
+            if len(continued_text) < MAX_MESSAGE_LENGTH:
+                new_discord_msg = await channel.send(content=labeled_continued_text, reference=ref_message)
+                # replace original id with new
+                updated_bot_message.update(id=new_discord_msg.id)
+            else:
+                # Pass to send_long_message which will add more ids and update last.
+                await send_long_message(channel, labeled_continued_text, bot_message=updated_bot_message)
+
+        updated_bot_message.update(text=last_resp, text_visible=tts_resp)
+
         # process any tts resp
         if tts_resp:
             await process_tts_resp(channel, updated_bot_message)
 
     except Exception as e:
-        e_msg = f'An error occurred while processing "{cmd}"'
+        e_msg = f'An error occurred while processing "Continue"'
         log.error(f'{e_msg}: {e}')
-        if str(e).startswith('cannot unpack non-iterable NoneType object'):
-            none_msg = f'Error: {cmd} only works on messages sent from the bot during current session.'
-            log.error(none_msg)
-            await inter.followup.send(none_msg, silent=True)
-        else:
-            await inter.followup.send(e_msg, silent=True)
+        await inter.followup.send(e_msg, silent=True)
         if system_embed:
             await system_embed.delete()
+
+# Regenerate Replace...
+async def replace_msg_in_history_and_discord(ictx:discord.Interaction, params:dict, text:str, text_visible:str) -> HMessage:
+    channel = ictx.channel
+    updated_message = params.get('user_message_to_update') or params.get('bot_message_to_update')
+    target_discord_msg_id = params.get('target_discord_msg_id')
+    try:
+        target_discord_msg = await channel.fetch_message(target_discord_msg_id)
+        # Collect all messages that are part of the original message
+        messages_to_remove = [updated_message.id] + updated_message.related_ids
+        # Remove target message from the list
+        if target_discord_msg.id in messages_to_remove:
+            messages_to_remove.remove(target_discord_msg.id)
+        # Delete all other messages from discord
+        for message_id in messages_to_remove:
+            local_message = await channel.fetch_message(message_id)
+            if local_message:
+                await local_message.delete()
+        # Clear related IDs attribute
+        updated_message.related_ids.clear() # TODO maybe add a fresh method to HMessage?
+        
+        # Update original discord message, or send new one if too long
+        local_history = bot_history.get_history_for(ictx.channel.id)
+        # Apply any labels applicable to message
+        labeled_text = local_history.get_labeled_history_text(updated_message, text)
+
+        if len(text) < MAX_MESSAGE_LENGTH:
+            await target_discord_msg.edit(content=text)
+        else:
+            await target_discord_msg.delete()
+            if params.get('bot_message_to_update'):
+                await send_long_message(channel, labeled_text, bot_message=updated_message)
+            else:
+                await send_long_message(channel, labeled_text)
+
+        updated_message.update(text=text, text_visible=text_visible)
+
+        return updated_message
+    except Exception as e:
+        log.error(f"An error occurred while replacing message in history and Discord: {e}")
+        return None
+
+
+async def regenerate_task(inter:discord.Interaction, inter_discord_msg:discord.Message, mode:str='create'):
+    user_name = get_user_ctx_inter(inter).display_name
+    channel = inter.channel
+    system_embed = None
+    try:
+        # collect relavent history and messages
+        local_history = bot_history.get_history_for(inter.channel.id)
+        if not local_history:
+            await inter.followup.send("There is currently no chat history to regenerate from.", ephemeral=True)
+            return
+        original_user_message, original_bot_message = local_history.get_history_pair_from_msg_id(inter_discord_msg.id)
+
+        # Replace method requires finding original bot message in history
+        if mode == 'replace' and not original_bot_message:
+            await inter.followup.send("Message not found in current chat history.", ephemeral=True)
+            return
+        
+        target_discord_msg = inter_discord_msg
+
+        # Get original user text from discord message, and target the bot message to edit
+        if inter.user == inter_discord_msg.author:                  # if command used on user's own message
+            original_user_text = inter_discord_msg.clean_content    # get the message contents
+            target_discord_msg = await channel.fetch_message(original_bot_message.id) # set the target message to the bot message
+        else:
+            if not original_user_message or isinstance(original_user_message, str): # will be uuid text string if message failed to be found
+                await inter.followup.send("Original user prompt is required, which could not be found from the selected message or in current chat history. Please try again, using the command on your own message.", ephemeral=True)
+                return
+            else:
+                original_message = await channel.fetch_message(original_user_message.id)
+                original_user_text = original_message.clean_content
+        
+        # Initialize payload with sliced history
+        message_for_slicing = original_user_message or original_bot_message
+        llm_payload = await init_llm_payload(inter, user_name, original_user_text)
+        sliced_history = message_for_slicing.new_history_end_here(include_self=False) # Exclude the original exchange pair
+        sliced_i, _ = sliced_history.render_to_tgwui_tuple()
+        llm_payload['state']['history']['internal'] = copy.deepcopy(sliced_i)
+        llm_payload['state']['history']['visible'] = copy.deepcopy(sliced_i)
+
+        if system_embed_info:
+            system_embed_info.title = f'Regenerating ... '
+            system_embed_info.description = f'Regenerating text for {user_name}'
+            system_embed = await channel.send(embed=system_embed_info)
+
+        # Flag to skip message logging
+        params = {}
+        if mode == 'create':
+            params['skip_create_user'] = True
+
+        if mode == 'replace':
+            params['skip_create_user'] = True
+            params['bot_message_to_update'] = original_bot_message
+            params['target_discord_msg_id'] = target_discord_msg.id
+
+        _, new_bot_message = await message_task(inter, original_user_text, 'regenerate', llm_payload, params, tags={})
+
+        # Update the user message hidden status depending on bot message status
+        if getattr(new_bot_message, 'hidden', None) is not None:
+            original_user_message.hidden = new_bot_message.hidden
+
+        # Adjust reaction if applicable
+        await react_to_user_message(client, inter.channel, original_user_message)
+
+        # Update the new user message with the original discord message ID
+        if mode == 'create':
+            new_bot_message.mark_as_reply_for(original_user_message)
+
+        if system_embed:
+            await system_embed.delete()
+
+    except Exception as e:
+        e_msg = f'An error occurred while processing "Regenerate"'
+        log.error(f'{e_msg}: {e}')
+        await inter.followup.send(e_msg, silent=True)
+        if system_embed:
+            await system_embed.delete()
+
 
 async def speak_task(ctx: commands.Context, text:str, params:dict):
     user_name = ctx.author.display_name
@@ -2036,12 +2196,17 @@ async def speak_task(ctx: commands.Context, text:str, params:dict):
         tts_args = params.get('tts_args', {})
         await update_extensions(tts_args)
 
-        # make final preparations for llm_gen()
-        llm_payload, user_message, local_history = await pre_llm_gen(llm_payload, False, ctx)
+        # Check to apply Server Mode
+        llm_payload = apply_server_mode(llm_payload, ctx)
+        # Update names in stopping strings
+        llm_payload = extra_stopping_strings(llm_payload)
+        # Get history for interaction channel
+        local_history = bot_history.get_history_for(ctx.channel.id)
+        user_message = await create_user_message(local_history, llm_payload, False, ctx)
         # generate text with text-generation-webui
         last_resp, tts_resp = await llm_gen(llm_payload)
         # Process responses
-        bot_message = await post_llm_gen(user_message, local_history, False, last_resp, tts_resp)
+        bot_message = await create_bot_message(user_message, local_history, False, last_resp, tts_resp)
 
         if system_embed:
             await system_embed.delete()
@@ -2111,14 +2276,13 @@ async def change_imgmodel_task(user_name:str, channel, params:dict, ictx=None):
         # if imgmodel_name != 'None': ### IF API IMG MODEL UNLOADING GETS EVER DEBUGGED
         if channel and change_embed:
             await change_embed.delete()
+            # Send change embed to interaction channel
+            change_embed_info.title = f"{user_name} changed Img model:"
+            change_embed_info.description = f'**{imgmodel_name}**'
+            change_embed = await channel.send(embed=change_embed_info)
             if bot_database.announce_channels:
                 # Send embeds to announcement channels
                 await bg_task_queue.put(announce_changes(ictx, 'changed Img model', imgmodel_name))
-            else:
-                # Send change embed to interaction channel
-                change_embed_info.title = f"{user_name} changed Img model:"
-                change_embed_info.description = f'**{imgmodel_name}**'
-                change_embed = await channel.send(embed=change_embed_info)
         log.info(f"Image model changed to: {imgmodel_name}")
         if config['discord']['post_active_settings']['enabled']:
             await bg_task_queue.put(post_active_settings())
@@ -2169,18 +2333,17 @@ async def change_llmmodel_task(ictx, params:dict):
                 return change_embed             # return the embed so it can be deleted by the caller
             if change_embed:
                 await change_embed.delete()
+                # Send change embed to interaction channel
+                if llmmodel_name == 'None':
+                    change_embed_info.title = f"{user_name} unloaded the LLM model"
+                    change_embed_info.description = 'Use "/llmmodel" to load a new one'
+                else:
+                    change_embed_info.title = f"{user_name} changed LLM model:"
+                    change_embed_info.description = f'**{llmmodel_name}**'
+                await channel.send(embed=change_embed_info)
                 # Send embeds to announcement channels
                 if bot_database.announce_channels:
                     await bg_task_queue.put(announce_changes(ictx, 'changed LLM model', llmmodel_name))
-                else:
-                    # Send change embed to interaction channel
-                    if llmmodel_name == 'None':
-                        change_embed_info.title = f"{user_name} unloaded the LLM model"
-                        change_embed_info.description = 'Use "/llmmodel" to load a new one'
-                    else:
-                        change_embed_info.title = f"{user_name} changed LLM model:"
-                        change_embed_info.description = f'**{llmmodel_name}**'
-                    await channel.send(embed=change_embed_info)
             log.info(f"LLM model changed to: {llmmodel_name}")
     except Exception as e:
         log.error(f"An error occurred while changing LLM Model from '/llmmodel': {e}")
@@ -2228,16 +2391,18 @@ async def announce_changes(ictx: CtxInteraction, change_label:str, change_name:s
             # if Automatic imgmodel change (no interaction object)
             if ictx is None:
                 await channel.send(embed=change_embed_info)
-            # Channel is interaction channel
-            elif channel_id == ictx.channel.id:
-                continue # already sent
-            # Channel in interaction server
-            elif channel_id in [channel.id for channel in ictx.guild.channels]:
+            # If private channel
+            elif ictx.channel.overwrites_for(ictx.guild.default_role).read_messages is False:
+                continue
+            # Public channels in interaction server
+            elif any(channel_id == channel.id for channel in ictx.guild.channels):
+                change_embed_info.title = f"{user_name} {change_label} in <#{ictx.channel.id}>:"
                 await channel.send(embed=change_embed_info)
             # Channel is in another server
-            else:
-                change_embed_info.title = f"A user {change_label} in another bot server:"
-                await channel.send(embed=change_embed_info)
+            elif channel_id not in [channel.id for channel in ictx.guild.channels]:
+                if change_label != 'reset the conversation':
+                    change_embed_info.title = f"A user {change_label} in another bot server:"
+                    await channel.send(embed=change_embed_info)
     except Exception as e:
         log.error(f'An error occurred while announcing changes to announce channels: {e}')
 
@@ -2271,14 +2436,13 @@ async def change_char_task(ictx: CtxInteraction, source:str, params:dict):
         if change_embed:
             await change_embed.delete()
             change_message = 'reset the conversation' if mode == 'reset' else 'changed character'
+            # Send change embed to interaction channel
+            change_embed_info.description = f'**{char_name}**'
+            change_embed_info.title = f"{user_name} {change_message}:"
+            await channel.send(embed=change_embed_info)
             # Send embeds to announcement channels
             if bot_database.announce_channels:
                 await bg_task_queue.put(announce_changes(ictx, change_message, char_name))
-            # Send change embed to interaction channel
-            else:
-                change_embed_info.description = f'**{char_name}**'
-                change_embed_info.title = f"{user_name} {change_message}:"
-                await channel.send(embed=change_embed_info)
         if not bot_history.per_channel_history:
             await send_char_greeting_or_history(ictx, char_name)
         log.info(f"Character loaded: {char_name}")
@@ -2349,7 +2513,7 @@ async def format_next_flow(ictx, next_flow, user_name:str, text:str):
         # get name for message embed
         if key == 'flow_step':
             flow_name = f": {value}"
-        # format prompt before feeding it back into on_message_task()
+        # format prompt before feeding it back into message_task()
         elif key == 'format_prompt':
             formatting = {'format_prompt': [value]}
             text = process_tag_formatting(ictx, user_name, text, formatting)
@@ -2400,7 +2564,7 @@ async def flow_task(ictx: CtxInteraction, source:str, text:str):
                 flow_embed_info.description = flow_embed_info.description.replace("**Processing", ":white_check_mark: **")
                 flow_embed_info.description += f'**Processing Step {total_flow_steps + 1 - remaining_flow_steps}/{total_flow_steps}**{flow_name}\n'
                 if flow_embed: await flow_embed.edit(embed=flow_embed_info)
-            await on_message_task(ictx, source, text)
+            await message_task(ictx, text, source, llm_payload=None, params={}, tags={})
         if flow_embed_info:
             flow_embed_info.title = f"Flow completed for {user_name}"
             flow_embed_info.description = flow_embed_info.description.replace("**Processing", ":white_check_mark: **")
@@ -3348,7 +3512,6 @@ async def img_gen_task(source:str, img_prompt:str, params:dict, ictx:CtxInteract
             swap_params['imgmodel']['mode'] = 'swap_back'
             swap_params['imgmodel']['verb'] = 'Swapping back to'
             await change_imgmodel_task(user_name, channel, swap_params, ictx)
-        return
     except Exception as e:
         log.error(f"An error occurred in img_gen_task(): {e}")
 
@@ -3884,7 +4047,7 @@ if textgenwebui_enabled:
 
             async with task_semaphore:
                 # offload to ai_gen queue
-                log.info(f'{ctx.author.display_name} used "/reset": "{bot_database.last_character}"')
+                log.info(f'{ctx.author.display_name} used "/reset_conversation": "{bot_database.last_character}"')
                 params = {'character': {'char_name': bot_database.last_character, 'verb': 'Resetting', 'mode': 'reset'}}
                 await change_char_task(ctx, 'reset', params)
 
@@ -3908,41 +4071,111 @@ if textgenwebui_enabled:
         if not (message.author == inter.user or message.author == client.user):
             await inter.response.send_message("You can only edit your own or bot's messages.", ephemeral=True, delete_after=5)
             return
-        history = bot_history.get_history_for(inter.channel.id)
-        target_message = history.search(lambda m: m.id == message.id)
+        local_history = bot_history.get_history_for(inter.channel.id)
+        target_message = local_history.search(lambda m: m.id == message.id or message.id in m.related_ids)
         if not target_message:
-            await inter.response.send_message("Message not found in current chat history. Note: if the character sent multiple messages, this command must be used on the last one.", ephemeral=True, delete_after=10)
+            await inter.response.send_message("Message not found in current chat history.", ephemeral=True, delete_after=5)
             return
-        modal = EditMessageModal(client.user, target_message, original_message=message)
+        modal = EditMessageModal(client.user, target_message, original_message=message, local_history=local_history)
         await inter.response.send_modal(modal)
 
-    # Context menu command to Regenerate last reply
-    @client.tree.context_menu(name="regenerate")
-    async def regen_llm_gen(inter: discord.Interaction, message:discord.Message):
-        if not (message.author == client.user):
-            await inter.response.send_message('You can only "regenerate" messages from the bot.', ephemeral=True, delete_after=5)
+    # Context menu command to hide a message pair
+    @client.tree.context_menu(name="toggle as hidden")
+    async def hide_or_reveal_history(inter: discord.Interaction, message: discord.Message):
+        try:
+            if not (message.author == inter.user or message.author == client.user):
+                await inter.response.send_message("You can only hide your own or bot's messages.", ephemeral=True, delete_after=5)
+                return
+            local_history = bot_history.get_history_for(inter.channel.id)
+            target_message = local_history.search(lambda m: m.id == message.id or message.id in m.related_ids)
+            if not target_message:
+                await inter.response.send_message("Message not found in current chat history.", ephemeral=True, delete_after=5)
+                return
+            user_message, bot_message = local_history.get_history_pair_from_msg_id(message.id)
+            if (user_message and not getattr(user_message, 'hidden', True)) and (bot_message and not getattr(bot_message, 'hidden', True)):
+                verb = 'hidden'
+                user_message.hidden = True
+                bot_message.hidden = True
+            elif (user_message and getattr(user_message, 'hidden', False)) and (bot_message and getattr(bot_message, 'hidden', False)):
+                verb = 'revealed'
+                user_message.hidden = False
+                bot_message.hidden = False
+            else:
+                await inter.response.send_message("A valid message pair could not be found for the target message.", ephemeral=True, delete_after=5)
+                return
+            await react_to_user_message(client, inter.channel, user_message)
+            # Change target message to the bot's response, if the original target message was user's message
+            if client.user != message.author:
+                target_message = bot_message
+            # Iterate over all messages and update the label
+            messages_to_edit = [target_message.id]
+            if getattr(target_message, 'related_ids'):
+                messages_to_edit = [target_message.id] + target_message.related_ids
+            for orig_msg_id in messages_to_edit:
+                try:
+                    # get message object
+                    if orig_msg_id == message.id:
+                        original_message = message
+                    else:
+                        original_message = await inter.channel.fetch_message(orig_msg_id)
+                    # Apply any labels applicable to message, while replacing any mentions
+                    labeled_text = local_history.get_labeled_history_text(bot_message, original_message.content, mention_mode='remention', label_mode='relabel')
+                    if len(labeled_text) >= 2000:
+                        continue
+                    await original_message.edit(content=labeled_text)
+                except Exception as e:
+                    log.error(f'Failed to edit message content for id {orig_msg_id} for "Hide History".: {e}')
+                    break
+            await inter.response.send_message(f"Message exchange pair has been successfully {verb} in history.", ephemeral=True, delete_after=5)
+        except Exception as e:
+            log.error(f'An error occured while toggling "hidden" attribute for "Hide History".: {e}')
+            
+    # Context menu command to Regenerate from selected user message and create new history
+    @client.tree.context_menu(name="regenerate create")
+    async def regen_create_llm_gen(inter: discord.Interaction, message:discord.Message):
+        if not (message.author == inter.user or message.author == client.user):
+            await inter.response.send_message('You can only "regenerate" from messages written by yourself or from the bot.', ephemeral=True, delete_after=7)
             return
-        await inter.response.defer(thinking=False)
+        else:
+            await ireply(inter, 'regenerate') # send a response msg to the user
+        #await inter.response.defer(thinking=False)
 
         async with task_semaphore:
             async with inter.channel.typing():
                 # offload to ai_gen queue
-                log.info(f'{inter.user.display_name} used "Regenerate"')
-                await cont_regen_task(inter, 'regen', message)
+                log.info(f'{inter.user.display_name} used "Regenerate (create)"')
+                await regenerate_task(inter, message, 'create')
+
+    # Context menu command to Regenerate from selected user message and replace the original bot response
+    @client.tree.context_menu(name="regenerate replace")
+    async def regen_replace_llm_gen(inter: discord.Interaction, message:discord.Message):
+        if not (message.author == inter.user or message.author == client.user):
+            await inter.response.send_message('You can only "regenerate" from messages written by yourself or from the bot.', ephemeral=True, delete_after=7)
+            return
+        else:
+            await ireply(inter, 'regenerate') # send a response msg to the user
+        #await inter.response.defer(thinking=False)
+
+        async with task_semaphore:
+            async with inter.channel.typing():
+                # offload to ai_gen queue
+                log.info(f'{inter.user.display_name} used "Regenerate" (replace)')
+                await regenerate_task(inter, message, 'replace')
 
     # Context menu command to Continue last reply
     @client.tree.context_menu(name="continue")
     async def continue_llm_gen(inter: discord.Interaction, message:discord.Message):
-        if not (message.author == client.user):
-            await inter.response.send_message('You can only "continue" messages from the bot.', ephemeral=True, delete_after=5)
+        if not (message.author == inter.user or message.author == client.user):
+            await inter.response.send_message('You can only "continue" from messages written by yourself or from the bot.', ephemeral=True, delete_after=7)
             return
-        await inter.response.defer(thinking=False)
+        else:
+            await ireply(inter, 'continue') # send a response msg to the user
 
         async with task_semaphore:
             async with inter.channel.typing():
                 # offload to ai_gen queue
                 log.info(f'{inter.user.display_name} used "Continue"')
-                await cont_regen_task(inter, 'cont', message)
+                await continue_task(inter, message)
 
 async def load_character_data(char_name):
     char_data = None

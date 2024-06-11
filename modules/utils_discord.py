@@ -1,7 +1,7 @@
 from modules.logs import import_track, log, get_logger; import_track(__file__, fp=True)
 log = get_logger(__name__)
 logging = log
-from modules.utils_shared import task_semaphore
+from modules.utils_shared import task_semaphore, patterns
 import discord
 from discord.ext import commands
 from typing import Union
@@ -10,20 +10,52 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from modules.history import HistoryManager, History, HMessage
+    
+    
+MAX_MESSAGE_LENGTH = 1980
+# MAX_MESSAGE_LENGTH = 200 # testing
+
+async def react_to_user_message(client:discord.Client, channel, user_message:'HMessage'=None):
+    try:
+        user_message_id = getattr(user_message, 'id', None)
+        if user_message_id and getattr(user_message, 'hidden', None) is not None:
+            emoji = '🙈'
+            has_reacted = False
+            discord_message = await channel.fetch_message(user_message_id)
+            # check for any existing reaction
+            for reaction in discord_message.reactions:
+                if str(reaction.emoji) == emoji:
+                    async for user in reaction.users():
+                        if user == client.user:
+                            has_reacted = True
+                            break
+            if user_message.hidden == True and has_reacted == False:
+                await discord_message.add_reaction(emoji)
+            elif user_message.hidden == False and has_reacted == True:
+                await discord_message.remove_reaction(emoji, client.user)
+    except Exception as e:
+        log.error(f"Error reacting to user message: {e}")
 
 # Send message response to user's interaction command
 async def ireply(ictx: 'CtxInteraction', process):
     try:
-        if task_semaphore.locked(): # If a queued item is currently being processed
-            await ictx.reply(f'Your {process} request was added to the task queue', ephemeral=True, delete_after=5)
+        if task_semaphore.locked():  # If a queued item is currently being processed
+            message = f'Your {process} request was added to the task queue'
         else:
-            await ictx.reply(f'Processing your {process} request', ephemeral=True, delete_after=3)
+            message = f'Processing your {process} request'
+        
+        if hasattr(ictx, 'reply') and callable(getattr(ictx, 'reply')):
+            await ictx.reply(message, ephemeral=True, delete_after=5)
+        elif hasattr(ictx, 'response') and callable(getattr(ictx.response, 'send_message')):
+            await ictx.response.send_message(message, ephemeral=True, delete_after=5)
+        else:
+            raise AttributeError("ictx object has neither 'reply' nor 'response.send' methods")
 
     except Exception as e:
         log.error(f"Error sending message response to user's interaction command: {e}")
 
 
-async def send_long_message(channel, message_text, bot_message:'HMessage'=None):
+async def send_long_message(channel, message_text, bot_message:'HMessage'=None) -> int:
     """ Splits a longer message into parts while preserving sentence boundaries and code blocks """
     activelang = ''
 
@@ -50,14 +82,14 @@ async def send_long_message(channel, message_text, bot_message:'HMessage'=None):
             code_block_inserted = True
         return chunk_text, code_block_inserted
 
-    if len(message_text) <= 1980:
+    if len(message_text) <= MAX_MESSAGE_LENGTH:
         sent_message = await channel.send(message_text)
     else:
         code_block_inserted = False  # Initialize code_block_inserted to False
         while message_text:
             # Find the last occurrence of either a line break or the end of a sentence
-            last_line_break = message_text.rfind("\n", 0, 1980)
-            last_sentence_end = message_text.rfind(". ", 0, 1980)
+            last_line_break = message_text.rfind("\n", 0, MAX_MESSAGE_LENGTH)
+            last_sentence_end = message_text.rfind(". ", 0, MAX_MESSAGE_LENGTH)
             # Determine the index to split the string
             if last_line_break >= 0 and last_sentence_end >= 0:
                 # If both a line break and a sentence end were found, choose the one that occurred last
@@ -69,12 +101,15 @@ async def send_long_message(channel, message_text, bot_message:'HMessage'=None):
                 # If only a sentence end was found, use it as the split point
                 chunk_length = last_sentence_end + 2  # Include the period and space
             else:
-                chunk_length = 1980 # If neither was found, split at the maximum limit of 2000 characters
+                chunk_length = MAX_MESSAGE_LENGTH # If neither was found, split at the maximum limit of 2000 characters
             chunk_text = message_text[:chunk_length]
             chunk_text, code_block_inserted = ensure_even_code_blocks(chunk_text, code_block_inserted)
             sent_message = await channel.send(chunk_text)
+            if bot_message:
+                bot_message.related_ids.append(sent_message.id)
+                
             message_text = message_text[chunk_length:]
-            if len(message_text) <= 1980:
+            if len(message_text) <= MAX_MESSAGE_LENGTH:
                 # Send the remaining text as a single chunk if it's shorter than or equal to 2000 characters
                 chunk_text, code_block_inserted = ensure_even_code_blocks(message_text, code_block_inserted)
                 sent_message = await channel.send(chunk_text)
@@ -88,31 +123,56 @@ async def send_long_message(channel, message_text, bot_message:'HMessage'=None):
 
 # Model for editing history
 class EditMessageModal(discord.ui.Modal, title="Edit Message in History"):
-    def __init__(self, clientuser: discord.User, target_message: 'HMessage', original_message: discord.Message):
+    def __init__(self, clientuser: discord.User, target_message: 'HMessage', original_message: discord.Message, local_history:'History'=None):
         super().__init__()
         self.original_message = original_message
         self.target_message = target_message
         self.clientuser = clientuser
+
+        if local_history is not None:
+            default_text = local_history.get_labeled_history_text(original_message, original_message.content, mention_mode='demention', label_mode='delabel')
 
         # Add TextInput dynamically with default value
         self.new_content = discord.ui.TextInput(
             label='New Message Content', 
             style=discord.TextStyle.paragraph, 
             min_length=1, 
-            default=self.original_message.content
-        )
+            default=default_text)
+
         self.add_item(self.new_content)
 
     async def on_submit(self, inter: discord.Interaction):
+        # Update text in history
         edited_message = self.new_content.value
+        compound_message = ''
+        # Try rebuilding text if target message was a message chunk
+        if self.target_message.related_ids:
+            all_original_msg_ids = [self.target_message.id] + self.target_message.related_ids
+            all_original_msg_ids.sort()
+            for orig_msg_id in all_original_msg_ids:
+                if self.target_message.id != orig_msg_id:
+                    try:
+                        original_chunk_message = await inter.channel.fetch_message(orig_msg_id)
+                        compound_message += original_chunk_message.clean_content
+                    except:
+                        log.warning(f'Failed to get message content for id {orig_msg_id} for "Edit History".')
+                        compound_message = ''
+                        break                    
+                else:
+                    compound_message += edited_message
+        if compound_message:
+            edited_message = compound_message
         self.target_message.update(text=edited_message)
-        await inter.response.send_message("Message has been edited successfully.", ephemeral=True, delete_after=5)
+        await inter.response.send_message("Message history has been edited successfully.", ephemeral=True, delete_after=5)
 
+        # Update text in discord message
         if self.clientuser == self.original_message.author:
-            if len(edited_message) >= 2000:
-                await inter.response.send_message("Message shortened in the Discord UI. It was still replaced entirely in history", ephemeral=True, delete_after=5)
-
             await self.original_message.edit(content=edited_message[:2000])
+        else:
+            await inter.response.send_message("Note: The bot cannot update your message contents in Discord.", ephemeral=True, delete_after=5)
+        # Warn if text was truncated
+        if len(edited_message) >= 2000:
+            await inter.response.send_message("Message exceeded discord text limits and was truncated to 2,000 characters. It was still replaced entirely in history", ephemeral=True, delete_after=10)
 
 class SelectedListItem(discord.ui.Select):
     def __init__(self, options, placeholder, custom_id):

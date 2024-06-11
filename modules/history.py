@@ -15,6 +15,7 @@ from typing import Union
 import copy
 from uuid import uuid4
 import json
+from modules.utils_shared import patterns
 from modules.utils_discord import get_message_ctx_inter, get_user_ctx_inter
 import asyncio
 from typing import (
@@ -124,13 +125,16 @@ class HMessage:
 
     replies: Optional[list['HMessage']] = field(default_factory=list,   metadata=cnf(dont_save=True))
     reply_to: Optional['HMessage']      = field(default=None,           metadata=cnf(encoder=cls_get_id, decoder=str))
+    #continued_to: Optional['HMessage']  = field(default=None,           metadata=cnf(encoder=cls_get_id, decoder=str))
 
     text_visible: str                   = field(default='',     metadata=cnf())
     id: Optional[MessageID]             = field(default=None,   metadata=cnf(check_bool=False)) # because id's could be "0"
     audio_id: Optional[MessageID]       = field(default=None,   metadata=cnf(dont_save=True))
+    related_ids: Optional[list[MessageID]] = field(default_factory=list,   metadata=cnf()) # TODO add update tracking here.
     
     typing: bool                        = field(default=False,  metadata=cnf(False))
     spoken: bool                        = field(default=False,  metadata=cnf(False))
+    is_continued: bool                  = field(default=False,  metadata=cnf(False))
     hidden: bool                        = field(default=False,  metadata=cnf(False))
     unsavable: bool                     = field(default=False,  metadata=cnf(dont_save=True))
     
@@ -226,6 +230,11 @@ class HMessage:
         return self
     
     
+    @property
+    def savable(self):
+        return not self.unsavable
+    
+    
     def duplicate_history(self) -> 'History':
         return copy.copy(self.history)
         
@@ -269,12 +278,19 @@ class HistoryPairForTGWUI:
 
 
     def add_pair_to(self, internal:list, visible:list):
+        user_text = self.user.text if self.user else ''
+        user_text_visible = (self.user.text_visible or self.user.text) if self.user else ''
+        replied_to_user = self.assistant.reply_to if self.assistant.reply_to is not None else None
+        if replied_to_user is not None:
+            user_text = replied_to_user.text or user_text
+            user_text_visible = replied_to_user.text_visible or replied_to_user.text or user_text_visible
+
         internal.append([
-            self.user.text if self.user else '',
+            user_text,
             self.assistant.text if self.assistant else '',
         ])
         visible.append([
-            (self.user.text_visible or self.user.text) if self.user else '',
+            user_text_visible,
             (self.assistant.text_visible or self.assistant.text) if self.assistant else '',
         ])
         return self
@@ -428,6 +444,89 @@ class History:
             
         return output
     
+    def get_history_pair_from_msg_id(self, message_id: MessageID):
+        hmessage: HMessage = self.search(lambda m: m.id == message_id or message_id in m.related_ids)
+        if not hmessage:
+            return None, None
+
+        if hmessage.role == 'assistant':
+            user_message = hmessage.reply_to
+            bot_message = hmessage
+            return user_message, bot_message
+
+        elif hmessage.role == 'user':
+            user_message = hmessage
+            bot_message = None
+            bot_message_list = [m for m in hmessage.replies if m.role == 'assistant']
+            if bot_message_list:
+                bot_message = bot_message_list[-1]
+            return user_message, bot_message
+
+        else:
+            raise Exception(f'Unknown HMessage role: {hmessage.role}, should match [user/assistant]')
+        
+    def get_history_labels_for_message(self, message:HMessage) -> str:
+        labels = {'is_continued': 'continued',
+                  'is_regenerated': 'regenerated',
+                  'hidden': 'hidden message'}
+
+        labels_for_message = []
+        
+        for key, value in labels.items():
+            if getattr(message, key, False):
+                labels_for_message.append(value)
+
+        labels_for_message = ', '.join(labels_for_message)
+
+        if labels_for_message:
+            labels_for_message = f'*`({labels_for_message})`*'
+        
+        return labels_for_message
+    
+    def get_labeled_history_text(self, message:HMessage, input_text:str='', mention_mode:str=None, label_mode:str=None):
+        history_labels = self.get_history_labels_for_message(message)
+
+        ##########
+        # return labels only
+        if not input_text:
+            return history_labels
+        
+        # Default behavior: Just apply label to text    
+        mention_mode = mention_mode or None
+        label_mode = label_mode or 'label'
+
+        ##########
+        # return text with labels
+        output_text = input_text
+        mention = ''
+        # remove/extract mention
+        try:
+            if mention_mode is not None:
+                # Check to see if prefixed @mention is not just cosmetically added by the bot
+                mention_in_message = None
+                if getattr(message, 'text', None) is not None:
+                    mention_in_message = patterns.mention_prefix.search(message.text)
+                if not mention_in_message:
+                    mention_in_input = patterns.mention_prefix.search(output_text)
+                    mention = mention_in_input.group(0) if mention_in_input else ''
+                    output_text = patterns.mention_prefix.sub('', output_text).strip()
+
+            # remove existing label
+            if label_mode in ['relabel', 'delabel']:
+                output_text = patterns.history_labels.sub('', output_text).strip()
+
+            # apply label
+            if history_labels and label_mode != 'delabel':
+                output_text = f'{history_labels}\n{output_text}'
+
+            # re-apply mention
+            if mention and mention_mode == 'remention':
+                output_text = f'{mention} {output_text}'
+        except Exception as e:
+            log.error(f'Failed to update text with history labels.: {e}')
+        
+        return output_text
+
     
     def search(self, predicate):
         return find(predicate, self._items)
