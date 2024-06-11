@@ -1,7 +1,7 @@
 from modules.logs import import_track, log, get_logger; import_track(__file__, fp=True)
 log = get_logger(__name__)
 logging = log
-from modules.utils_shared import task_semaphore
+from modules.utils_shared import task_semaphore, patterns
 import discord
 from discord.ext import commands
 from typing import Union
@@ -108,13 +108,16 @@ class EditMessageModal(discord.ui.Modal, title="Edit Message in History"):
         self.target_message = target_message
         self.clientuser = clientuser
 
+        dementioned_text = patterns.mention_prefix.sub('', original_message.content)
+        dementioned_delabeled_text = patterns.history_labels.sub('', dementioned_text)
+
         # Add TextInput dynamically with default value
         self.new_content = discord.ui.TextInput(
             label='New Message Content', 
             style=discord.TextStyle.paragraph, 
             min_length=1, 
-            default=self.original_message.content
-        )
+            default=dementioned_delabeled_text)
+
         self.add_item(self.new_content)
 
     async def on_submit(self, inter: discord.Interaction):

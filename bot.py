@@ -2075,8 +2075,9 @@ async def replace_msg_in_history_and_discord(ictx:discord.Interaction, params:di
         
         # Update original discord message, or send new one if too long
         local_history = bot_history.get_history_for(ictx.channel.id)
-        delabeled_text = patterns.history_labels.sub('', text)
-        labeled_text = local_history.get_message_labels(updated_message, delabeled_text)
+        dementioned_text = patterns.mention_prefix.sub('', text) # Use regex to remove any existing labels
+        dementioned_delabeled_text = patterns.history_labels.sub('', dementioned_text)
+        labeled_text = local_history.get_message_labels(updated_message, dementioned_delabeled_text)
 
         if len(text) < MAX_MESSAGE_LENGTH:
             await target_discord_msg.edit(content=text)
@@ -4108,8 +4109,9 @@ if textgenwebui_enabled:
                     original_message = await inter.channel.fetch_message(orig_msg_id)
                 # process text
                 original_text = original_message.clean_content
-                delabeled_text = patterns.history_labels.sub('', original_text) # Use regex to remove any existing labels
-                labeled_text = local_history.get_message_labels(bot_message, delabeled_text) # Apply correct labels to message
+                dementioned_text = patterns.mention_prefix.sub('', original_text) # Use regex to remove any existing labels
+                dementioned_delabeled_text = patterns.history_labels.sub('', dementioned_text)
+                labeled_text = local_history.get_message_labels(bot_message, dementioned_delabeled_text) # Apply correct labels to message
                 if len(labeled_text) >= 2000:
                     continue
                 await original_message.edit(content=labeled_text)

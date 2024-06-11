@@ -74,4 +74,6 @@ class SharedRegex: # Search for [ (]r['"] in vscode
 
     history_labels = re.compile(r'^\*\`\(.*?\)\`\*\n')
 
+    mention_prefix = re.compile(r'^<@!?\d+>')
+
 patterns = SharedRegex()
