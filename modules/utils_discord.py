@@ -108,8 +108,8 @@ class EditMessageModal(discord.ui.Modal, title="Edit Message in History"):
         self.target_message = target_message
         self.clientuser = clientuser
 
-        dementioned_text = patterns.mention_prefix.sub('', original_message.content)
-        dementioned_delabeled_text = patterns.history_labels.sub('', dementioned_text)
+        dementioned_text = patterns.mention_prefix.sub('', original_message.content).strip()
+        dementioned_delabeled_text = patterns.history_labels.sub('', dementioned_text).strip()
 
         # Add TextInput dynamically with default value
         self.new_content = discord.ui.TextInput(
