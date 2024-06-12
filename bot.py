@@ -4074,11 +4074,11 @@ if textgenwebui_enabled:
             await inter.response.send_message("You can only edit your own or bot's messages.", ephemeral=True, delete_after=5)
             return
         local_history = bot_history.get_history_for(inter.channel.id)
-        target_message = local_history.search(lambda m: m.id == message.id or message.id in m.related_ids)
-        if not target_message:
+        matched_hmessage = local_history.search(lambda m: m.id == message.id or message.id in m.related_ids)
+        if not matched_hmessage:
             await inter.response.send_message("Message not found in current chat history.", ephemeral=True, delete_after=5)
             return
-        modal = EditMessageModal(client.user, target_message, original_message=message, local_history=local_history)
+        modal = EditMessageModal(client.user, matched_hmessage, target_message=message, local_history=local_history)
         await inter.response.send_modal(modal)
 
     async def apply_labels_to_msg_list(ictx:CtxInteraction, local_history:History, hmsg:HMessage, msg_id_list:list, ictx_msg:discord.Message=None):
