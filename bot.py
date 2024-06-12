@@ -1783,7 +1783,7 @@ async def message_task(ictx: CtxInteraction, text:str, source:str='message', llm
                 if params['bot_will_do']['should_gen_image']:
                     await init_img_embed()                                                          # Create a "prompting" embed for image gen
                 params, bot_message, user_message, local_history = await message_llm_task(llm_payload, params)
-                await react_to_user_message(client, channel, user_message)                          # add a reaction to any hidden user message
+                await react_to_user_message(client.user, channel, user_message)                          # add a reaction to any hidden user message
                 if llmmodel_params and llm_model_mode == 'swap':
                     params = await llmmodel_swap_back(params, original_llmmodel)                    # if LLM model swapping was triggered
             if sd_enabled:
@@ -2160,7 +2160,7 @@ async def regenerate_task(inter:discord.Interaction, inter_discord_msg:discord.M
             original_user_message.hidden = new_bot_message.hidden
 
         # Adjust reaction if applicable
-        await react_to_user_message(client, inter.channel, original_user_message)
+        await react_to_user_message(client.user, inter.channel, original_user_message)
 
         # Update the new user message with the original discord message ID
         if mode == 'create':
@@ -4135,7 +4135,7 @@ if textgenwebui_enabled:
                 return
 
             # Apply reaction to user message
-            await react_to_user_message(client, inter.channel, user_message)
+            await react_to_user_message(client.user, inter.channel, user_message)
 
             # Change target message to the bot's response, if the original target message was user's message
             if client.user != message.author:

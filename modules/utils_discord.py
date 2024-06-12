@@ -15,7 +15,7 @@ if TYPE_CHECKING:
 MAX_MESSAGE_LENGTH = 1980
 # MAX_MESSAGE_LENGTH = 200 # testing
 
-async def react_to_user_message(client:discord.Client, channel, user_message:'HMessage'=None):
+async def react_to_user_message(clientuser: discord.User, channel, user_message:'HMessage'=None):
     try:
         user_message_id = getattr(user_message, 'id', None)
         if user_message_id and getattr(user_message, 'hidden', None) is not None:
@@ -26,13 +26,13 @@ async def react_to_user_message(client:discord.Client, channel, user_message:'HM
             for reaction in discord_message.reactions:
                 if str(reaction.emoji) == emoji:
                     async for user in reaction.users():
-                        if user == client.user:
+                        if user == clientuser:
                             has_reacted = True
                             break
             if user_message.hidden == True and has_reacted == False:
                 await discord_message.add_reaction(emoji)
             elif user_message.hidden == False and has_reacted == True:
-                await discord_message.remove_reaction(emoji, client.user)
+                await discord_message.remove_reaction(emoji, clientuser)
     except Exception as e:
         log.error(f"Error reacting to user message: {e}")
 
