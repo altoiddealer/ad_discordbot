@@ -40,7 +40,7 @@ from typing import Union
 sys.path.append("ad_discordbot")
 
 from modules.database import Database, ActiveSettings, Config, StarBoard, Statistics
-from modules.utils_shared import task_semaphore, shared_path, patterns
+from modules.utils_shared import task_semaphore, shared_path, patterns, bot_emojis
 from modules.utils_misc import fix_dict, update_dict, sum_update_dict, update_dict_matched_keys, format_time
 from modules.utils_discord import ireply, send_long_message, EditMessageModal, SelectedListItem, SelectOptionsView, CtxInteraction, get_user_ctx_inter, get_message_ctx_inter, react_to_user_message, MAX_MESSAGE_LENGTH
 from modules.utils_files import load_file, merge_base, save_yaml_file
@@ -704,6 +704,8 @@ async def on_raw_reaction_add(endorsed_img):
                 total_reaction_count += reaction.count
     else:
         for reaction in message.reactions:
+            if emoji in [bot_emojis]:
+                continue
             total_reaction_count += reaction.count
     if total_reaction_count >= config['discord']['starboard'].get('min_reactions', 2):
 
@@ -4079,6 +4081,24 @@ if textgenwebui_enabled:
         modal = EditMessageModal(client.user, target_message, original_message=message, local_history=local_history)
         await inter.response.send_modal(modal)
 
+    async def apply_labels_to_msg_list(ictx:CtxInteraction, local_history:History, hmsg:HMessage, msg_id_list:list, ictx_msg:discord.Message=None):
+        try:
+            for msg_id in msg_id_list:
+                # skip fetching message if provided and matched
+                if ictx_msg and msg_id == ictx_msg.id:
+                    msg_to_edit = ictx_msg
+                # fetch message object from id
+                else:
+                    msg_to_edit = await ictx.channel.fetch_message(msg_id)
+                # Apply any labels applicable to message, while replacing any mentions
+                labeled_text = local_history.get_labeled_history_text(hmsg, msg_to_edit.content, mention_mode='remention', label_mode='relabel')
+                if len(labeled_text) >= 2000:
+                    log.warning('Could not edit a message to include history labels due to Discord message length limit.')
+                    continue
+                await msg_to_edit.edit(content=labeled_text)
+        except Exception as e:
+            log.error(f'Failed to edit message content for id {msg_id}: {e}')
+
     # Context menu command to hide a message pair
     @client.tree.context_menu(name="toggle as hidden")
     async def hide_or_reveal_history(inter: discord.Interaction, message: discord.Message):
@@ -4092,9 +4112,19 @@ if textgenwebui_enabled:
                 await inter.response.send_message("Message not found in current chat history.", ephemeral=True, delete_after=5)
                 return
             user_message, bot_message = local_history.get_history_pair_from_msg_id(message.id)
+
+            # Prevent user message from being automatically hidden while open bot replies
+            all_bot_replies = user_message.replies
+            num_bot_open_msgs = len(all_bot_replies)
+            for bot_msg in all_bot_replies:
+                if getattr(bot_msg, 'hidden') and bot_msg.hidden == True:
+                    num_bot_open_msgs -= 1
+
+            # Apply command
             if (user_message and not getattr(user_message, 'hidden', True)) and (bot_message and not getattr(bot_message, 'hidden', True)):
                 verb = 'hidden'
-                user_message.hidden = True
+                if num_bot_open_msgs <= 1:
+                    user_message.hidden = True
                 bot_message.hidden = True
             elif (user_message and getattr(user_message, 'hidden', False)) and (bot_message and getattr(bot_message, 'hidden', False)):
                 verb = 'revealed'
@@ -4103,33 +4133,24 @@ if textgenwebui_enabled:
             else:
                 await inter.response.send_message("A valid message pair could not be found for the target message.", ephemeral=True, delete_after=5)
                 return
+
+            # Apply reaction to user message
             await react_to_user_message(client, inter.channel, user_message)
+
             # Change target message to the bot's response, if the original target message was user's message
             if client.user != message.author:
                 target_message = bot_message
-            # Iterate over all messages and update the label
-            messages_to_edit = [target_message.id]
+
+            # Iterate over all messages and update the labels
+            msg_ids_to_edit = [target_message.id]
             if getattr(target_message, 'related_ids'):
-                messages_to_edit = [target_message.id] + target_message.related_ids
-            for orig_msg_id in messages_to_edit:
-                try:
-                    # get message object
-                    if orig_msg_id == message.id:
-                        original_message = message
-                    else:
-                        original_message = await inter.channel.fetch_message(orig_msg_id)
-                    # Apply any labels applicable to message, while replacing any mentions
-                    labeled_text = local_history.get_labeled_history_text(bot_message, original_message.content, mention_mode='remention', label_mode='relabel')
-                    if len(labeled_text) >= 2000:
-                        continue
-                    await original_message.edit(content=labeled_text)
-                except Exception as e:
-                    log.error(f'Failed to edit message content for id {orig_msg_id} for "Hide History".: {e}')
-                    break
+                msg_ids_to_edit = [target_message.id] + target_message.related_ids
+            await apply_labels_to_msg_list(inter, local_history, bot_message, msg_ids_to_edit, message)
+
             await inter.response.send_message(f"Message exchange pair has been successfully {verb} in history.", ephemeral=True, delete_after=5)
         except Exception as e:
             log.error(f'An error occured while toggling "hidden" attribute for "Hide History".: {e}')
-            
+
     # Context menu command to Regenerate from selected user message and create new history
     @client.tree.context_menu(name="regenerate create")
     async def regen_create_llm_gen(inter: discord.Interaction, message:discord.Message):

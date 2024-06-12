@@ -77,3 +77,8 @@ class SharedRegex: # Search for [ (]r['"] in vscode
     mention_prefix = re.compile(r'^<@!?\d+>')
 
 patterns = SharedRegex()
+
+class SharedBotEmojis:
+    hidden_emoji = '🙈'
+
+bot_emojis = SharedBotEmojis()
