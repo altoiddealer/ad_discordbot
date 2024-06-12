@@ -1,7 +1,7 @@
 from modules.logs import import_track, log, get_logger; import_track(__file__, fp=True)
 log = get_logger(__name__)
 logging = log
-from modules.utils_shared import task_semaphore, patterns
+from modules.utils_shared import task_semaphore, bot_emojis
 import discord
 from discord.ext import commands
 from typing import Union
@@ -19,7 +19,7 @@ async def react_to_user_message(client:discord.Client, channel, user_message:'HM
     try:
         user_message_id = getattr(user_message, 'id', None)
         if user_message_id and getattr(user_message, 'hidden', None) is not None:
-            emoji = '🙈'
+            emoji = bot_emojis.hidden_emoji
             has_reacted = False
             discord_message = await channel.fetch_message(user_message_id)
             # check for any existing reaction
