@@ -7,6 +7,7 @@ from discord.ext import commands
 from typing import Union
 from modules.typing import CtxInteraction
 from typing import TYPE_CHECKING
+import asyncio
 
 if TYPE_CHECKING:
     from modules.history import HistoryManager, History, HMessage
@@ -35,6 +36,14 @@ async def react_to_user_message(clientuser: discord.User, channel, user_message:
                 await discord_message.remove_reaction(emoji, clientuser)
     except Exception as e:
         log.error(f"Error reacting to user message: {e}")
+
+# Delete discord message without "delete_after" attribute
+async def sleep_delete_message(message: discord.Message, wait:int=5):
+    try:
+        await asyncio.sleep(wait)
+        await message.delete()
+    except Exception as e:
+        log.error(f'Failed to delete stubborn message: {e}')
 
 # Send message response to user's interaction command
 async def ireply(ictx: 'CtxInteraction', process):
