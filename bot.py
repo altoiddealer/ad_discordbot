@@ -42,7 +42,7 @@ sys.path.append("ad_discordbot")
 from modules.database import Database, ActiveSettings, Config, StarBoard, Statistics
 from modules.utils_shared import task_semaphore, shared_path, patterns, bot_emojis
 from modules.utils_misc import fix_dict, update_dict, sum_update_dict, update_dict_matched_keys, format_time
-from modules.utils_discord import ireply, send_long_message, EditMessageModal, SelectedListItem, SelectOptionsView, CtxInteraction, get_user_ctx_inter, get_message_ctx_inter, react_to_user_message, MAX_MESSAGE_LENGTH
+from modules.utils_discord import ireply, sleep_delete_message, send_long_message, EditMessageModal, SelectedListItem, SelectOptionsView, CtxInteraction, get_user_ctx_inter, get_message_ctx_inter, react_to_user_message, MAX_MESSAGE_LENGTH
 from modules.utils_files import load_file, merge_base, save_yaml_file
 from modules.utils_aspect_ratios import round_to_precision, res_to_model_fit, dims_from_ar, avg_from_dims, get_aspect_ratio_parts, calculate_aspect_ratio_sizes
 from modules.history import HistoryManager, History, HMessage, cnf
@@ -774,22 +774,25 @@ async def toggle_voice_client(toggle:str=None):
         log.error(f"An error occurred while toggling voice channel: {e}")
 
 async def voice_channel(vc_setting):
-    # Start voice client if configured, and not explicitly deactivated in character settings
-    if voice_client is None and (vc_setting is None or vc_setting) and int(tts_settings.get('play_mode', 0)) != 1:
-        try:
-            if tts_enabled and tts_client and tts_client in shared.args.extensions:
-                await toggle_voice_client('enabled')
-            else:
-                if not bot_database.was_warned('char_tts'):
-                    bot_database.update_was_warned('char_tts')
-                    log.warning(f'Character "use_voice_channel" = True, and "voice channel" is specified in config.yaml, but no "tts_client" is specified in config.yaml')
-        except Exception as e:
-            log.error(f"An error occurred while connecting to voice channel: {e}")
-    # Stop voice client if explicitly deactivated in character settings
-    if voice_client and voice_client.is_connected():
-        if vc_setting is False:
-            log.info("New context has setting to disconnect from voice channel. Disconnecting...")
-            await toggle_voice_client('disabled')
+    try:
+        # Start voice client if configured, and not explicitly deactivated in character settings
+        if voice_client is None and (vc_setting is None or vc_setting) and int(tts_settings.get('play_mode', 0)) != 1:
+            try:
+                if tts_enabled and tts_client and tts_client in shared.args.extensions:
+                    await toggle_voice_client('enabled')
+                else:
+                    if not bot_database.was_warned('char_tts'):
+                        bot_database.update_was_warned('char_tts')
+                        log.warning(f'Character "use_voice_channel" = True, and "voice channel" is specified in config.yaml, but no "tts_client" is specified in config.yaml')
+            except Exception as e:
+                log.error(f"An error occurred while connecting to voice channel: {e}")
+        # Stop voice client if explicitly deactivated in character settings
+        if voice_client and voice_client.is_connected():
+            if vc_setting is False:
+                log.info("New context has setting to disconnect from voice channel. Disconnecting...")
+                await toggle_voice_client('disabled')
+    except Exception as e:
+        log.error(f"An error occurred while managing voice channel settings: {e}")
 
 last_extension_params = {}
 
@@ -4121,8 +4124,12 @@ if textgenwebui_enabled:
         if not matched_hmessage:
             await inter.response.send_message("Message not found in current chat history.", ephemeral=True, delete_after=5)
             return
-        modal = EditMessageModal(client.user, matched_hmessage, target_message=message, local_history=local_history)
-        await inter.response.send_modal(modal)
+        
+        async with task_semaphore:
+            # offload to ai_gen queue
+            log.info(f'{inter.user.display_name} used "edit history"')
+            modal = EditMessageModal(client.user, matched_hmessage, target_message=message, local_history=local_history)
+            await inter.response.send_modal(modal)
 
     async def apply_labels_to_msg_list(ictx:CtxInteraction, local_history:History, hmsg:HMessage, msg_id_list:list, ictx_msg:discord.Message=None):
         try:
@@ -4142,18 +4149,8 @@ if textgenwebui_enabled:
         except Exception as e:
             log.error(f'Failed to edit message content for id {msg_id}: {e}')
 
-    # Context menu command to hide a message pair
-    @client.tree.context_menu(name="toggle as hidden")
-    async def hide_or_reveal_history(inter: discord.Interaction, message: discord.Message):
+    async def apply_hide_or_reveal_history(inter: discord.Interaction, local_history: History, message: discord.Message, target_message:HMessage):
         try:
-            if not (message.author == inter.user or message.author == client.user):
-                await inter.response.send_message("You can only hide your own or bot's messages.", ephemeral=True, delete_after=5)
-                return
-            local_history = bot_history.get_history_for(inter.channel.id)
-            target_message = local_history.search(lambda m: m.id == message.id or message.id in m.related_ids)
-            if not target_message:
-                await inter.response.send_message("Message not found in current chat history.", ephemeral=True, delete_after=5)
-                return
             user_message, bot_message = local_history.get_history_pair_from_msg_id(message.id)
 
             # Prevent user message from being automatically hidden while open bot replies
@@ -4190,9 +4187,34 @@ if textgenwebui_enabled:
                 msg_ids_to_edit = [target_message.id] + target_message.related_ids
             await apply_labels_to_msg_list(inter, local_history, bot_message, msg_ids_to_edit, message)
 
-            await inter.response.send_message(f"Message exchange pair has been successfully {verb} in history.", ephemeral=True, delete_after=5)
+            undeletable_message = await inter.channel.send(f"Modified message exchange pair in history for {inter.user.display_name} (messages {verb}).")
+            log.info(f"Modified message exchange pair in history for {inter.user.display_name} (messages {verb}).")
+
+            await bg_task_queue.put(sleep_delete_message(undeletable_message))
+
         except Exception as e:
-            log.error(f'An error occured while toggling "hidden" attribute for "Hide History".: {e}')
+            log.error(f'An error occured while toggling "hidden" attribute for "Hide History": {e}')
+
+    # Context menu command to hide a message pair
+    @client.tree.context_menu(name="toggle as hidden")
+    async def hide_or_reveal_history(inter: discord.Interaction, message: discord.Message):
+        if not (message.author == inter.user or message.author == client.user):
+            await inter.response.send_message("You can only hide your own or bot's messages.", ephemeral=True, delete_after=5)
+            return
+        try:
+            local_history = bot_history.get_history_for(inter.channel.id)
+            target_message = local_history.search(lambda m: m.id == message.id or message.id in m.related_ids)
+            if not target_message:
+                await inter.response.send_message("Message not found in current chat history.", ephemeral=True, delete_after=5)
+                return
+        except Exception as e:
+            log.error(f'An error occured while getting history for "Hide History".: {e}')
+
+        await ireply(inter, 'toggle as hidden') # send a response msg to the user
+        async with task_semaphore:
+            # offload to ai_gen queue
+            log.info(f'{inter.user.display_name} used "hide or reveal history"')
+            await apply_hide_or_reveal_history(inter, local_history, message, target_message)
 
     # Context menu command to Regenerate from selected user message and create new history
     @client.tree.context_menu(name="regenerate create")
@@ -4279,9 +4301,9 @@ async def character_loader(char_name, channel=None):
         for key, value in char_data.items():
             if key == 'extensions':
                 if not tts_enabled:
-                    for subkey in value:
-                        if subkey in supported_tts_clients:
-                            key[subkey]['activate'] = False
+                    for subkey, subvalue in value.items():
+                        if subkey in supported_tts_clients and char_data[key][subkey].get('activate'):
+                            char_data[key][subkey]['activate'] = False
                 await update_extensions(value)
                 char_llmcontext['extensions'] = value
             elif key == 'use_voice_channel':
