@@ -364,6 +364,7 @@ def init_textgenwebui_extensions():
             break
 
     # If any TTS extension defined in config.yaml, set tts bot vars and add extension to shared.args.extensions
+    tts_enabled = False
     tts_client = tts_settings.get('extension') or tts_client or '' # tts client
     tts_api_key = None
     tts_voice_key = None
@@ -371,7 +372,7 @@ def init_textgenwebui_extensions():
     if tts_client:
         if tts_client not in supported_tts_clients:
             log.warning(f'tts client "{tts_client}" is not yet confirmed to be work. The "/speak" command will not be registered. List of supported tts_clients: {supported_tts_clients}')
-
+        tts_enabled = True
         tts_api_key = tts_settings.get('api_key', None)
         if tts_client == 'alltalk_tts':
             tts_voice_key = 'voice'
@@ -385,7 +386,7 @@ def init_textgenwebui_extensions():
         elif tts_client == 'elevenlabs_tts':
             tts_voice_key = 'selected_voice'
             tts_lang_key = ''
-            
+
         if tts_client not in shared.args.extensions:
             shared.args.extensions.append(tts_client)
 
@@ -393,7 +394,7 @@ def init_textgenwebui_extensions():
     if shared.args.extensions and len(shared.args.extensions) > 0:
         extensions_module.load_extensions(extensions_module.extensions, extensions_module.available_extensions)
 
-    return tts_client, tts_api_key, tts_voice_key, tts_lang_key
+    return tts_enabled, tts_client, tts_api_key, tts_voice_key, tts_lang_key
 
 def init_textgenwebui_llmmodels():
     all_llmmodels = utils.get_available_models()
@@ -469,7 +470,7 @@ async def load_llm_model(loader=None):
 
 if textgenwebui_enabled:
     init_textgenwebui_settings()
-    tts_client, tts_api_key, tts_voice_key, tts_lang_key = init_textgenwebui_extensions()
+    tts_enabled, tts_client, tts_api_key, tts_voice_key, tts_lang_key = init_textgenwebui_extensions()
     # Get list of available models
     init_textgenwebui_llmmodels()
     asyncio.run(load_llm_model())
@@ -756,17 +757,28 @@ async def post_active_settings():
 #################################################################
 voice_client = None
 
-async def voice_channel(vc_setting):
+async def toggle_voice_client(toggle:str=None):
     global voice_client
+    try:
+        if toggle == 'enabled' and not voice_client:
+            if tts_settings.get('voice_channel', ''):
+                voice_channel = client.get_channel(tts_settings['voice_channel'])
+                voice_client = await voice_channel.connect()
+            else:
+                log.warning(f'TTS is enabled for {tts_client}, but a valid voice channel is not specified in config.yaml')
+        if toggle == 'disabled':
+            if voice_client and voice_client.is_connected():
+                await voice_client.disconnect()
+                voice_client = None
+    except Exception as e:
+        log.error(f"An error occurred while toggling voice channel: {e}")
+
+async def voice_channel(vc_setting):
     # Start voice client if configured, and not explicitly deactivated in character settings
     if voice_client is None and (vc_setting is None or vc_setting) and int(tts_settings.get('play_mode', 0)) != 1:
         try:
-            if tts_client and tts_client in shared.args.extensions:
-                if tts_settings.get('voice_channel', ''):
-                    voice_channel = client.get_channel(tts_settings['voice_channel'])
-                    voice_client = await voice_channel.connect()
-                else:
-                    log.warning(f'Bot launched with {tts_client}, but no voice channel is specified in config.yaml')
+            if tts_enabled and tts_client and tts_client in shared.args.extensions:
+                await toggle_voice_client('enabled')
             else:
                 if not bot_database.was_warned('char_tts'):
                     bot_database.update_was_warned('char_tts')
@@ -775,13 +787,9 @@ async def voice_channel(vc_setting):
             log.error(f"An error occurred while connecting to voice channel: {e}")
     # Stop voice client if explicitly deactivated in character settings
     if voice_client and voice_client.is_connected():
-        try:
-            if vc_setting is False:
-                log.info("New context has setting to disconnect from voice channel. Disconnecting...")
-                await voice_client.disconnect()
-                voice_client = None
-        except Exception as e:
-            log.error(f"An error occurred while disconnecting from voice channel: {e}")
+        if vc_setting is False:
+            log.info("New context has setting to disconnect from voice channel. Disconnecting...")
+            await toggle_voice_client('disabled')
 
 last_extension_params = {}
 
@@ -869,6 +877,40 @@ async def process_tts_resp(channel:discord.TextChannel, bot_message:HMessage):
         await bg_task_queue.put(play_in_voice_channel(bot_message.text_visible)) # run task in background
         
     bot_message.update(spoken=True)
+
+if textgenwebui_enabled and tts_client:
+
+    async def process_toggle_tts(ctx: commands.Context):
+        global tts_enabled
+        try:
+            if tts_enabled:
+                await apply_toggle_tts(toggle='off')
+                tts_enabled = False
+                message = 'disabled'
+            else:
+                await apply_toggle_tts(toggle='on', tts_sw=True)
+                tts_enabled = True
+                message = 'enabled'
+            await toggle_voice_client(message)
+            if change_embed_info:
+                # Send change embed to interaction channel
+                change_embed_info.title = f"{ctx.author.display_name} {message} TTS."
+                change_embed_info.description = 'Note: Does not load/unload the TTS model.'
+                await ctx.channel.send(embed=change_embed_info)
+                if bot_database.announce_channels:
+                    # Send embeds to announcement channels
+                    await bg_task_queue.put(announce_changes(ctx, f'{message} TTS', ' '))
+            log.info(f"TTS was {message}.")
+        except Exception as e:
+            log.error(f'Error when toggling TTS to "{message}": {e}')
+
+    # Register command for helper function to toggle TTS
+    @client.hybrid_command(description='Toggles TTS on/off')
+    async def toggle_tts(ctx: commands.Context):
+        await ireply(ctx, 'toggle TTS') # send a response msg to the user
+        async with task_semaphore:
+            log.info(f'{ctx.author.display_name} used "/toggle_tts"')
+            await process_toggle_tts(ctx)
 
 #################################################################
 ########################### ON MESSAGE ##########################
@@ -1695,7 +1737,7 @@ async def message_task(ictx: CtxInteraction, text:str, source:str='message', llm
         # Toggle TTS off, if interaction server is not connected to Voice Channel
         tts_sw = None
         if (not params['bot_will_do']['should_send_text']) or (voice_client and (voice_client != ictx.guild.voice_client) and int(tts_settings.get('play_mode', 0)) == 0):
-            tts_sw = await toggle_tts(toggle='off')
+            tts_sw = await apply_toggle_tts(toggle='off')
         save_to_history = params.get('save_to_history', True)
         # Check to apply Server Mode
         llm_payload = apply_server_mode(llm_payload, ictx)
@@ -1716,7 +1758,7 @@ async def message_task(ictx: CtxInteraction, text:str, source:str='message', llm
         else:
             bot_message = await create_bot_message(user_message, local_history, save_to_history, last_resp, tts_resp)
         # Toggle TTS back on if it was toggled off
-        await toggle_tts(toggle='on', tts_sw=tts_sw)
+        await apply_toggle_tts(toggle='on', tts_sw=tts_sw)
 
         # Log message exchange
         if bot_message:
@@ -1871,20 +1913,20 @@ def extra_stopping_strings(llm_payload:dict):
         log.error(f'An error occurred while updating stopping strings: {e}')
     return llm_payload
 
-# Only generate TTS for the server conntected to Voice Channel
-async def toggle_tts(toggle='on', tts_sw=None):
+# Toggles TTS on/off
+async def apply_toggle_tts(toggle:str='on', tts_sw:bool=None):
     try:
         extensions = copy.deepcopy(bot_settings.settings['llmcontext'].get('extensions', {}))
         if toggle == 'off' and extensions.get(tts_client, {}).get('activate'):
             extensions[tts_client]['activate'] = False
             await update_extensions(extensions)
-            # Return True if subsequent toggle_tts() should enable TTS
+            # Return True if subsequent apply_toggle_tts() should enable TTS
             return True
         if tts_sw:
             extensions[tts_client]['activate'] = True
             await update_extensions(extensions)
     except Exception as e:
-        log.error(f'An error occurred while toggling the TTS on/off in llm_gen(): {e}')
+        log.error(f'An error occurred while toggling the TTS on/off: {e}')
     return None
 
 # Creates user message in HManager
@@ -1994,7 +2036,7 @@ async def continue_task(inter:discord.Interaction, target_discord_msg:discord.Me
         # Toggle TTS off, if interaction server is not connected to Voice Channel
         tts_sw = None
         if voice_client and (voice_client != inter.guild.voice_client) and int(tts_settings.get('play_mode', 0)) == 0:
-            tts_sw = await toggle_tts(toggle='off')
+            tts_sw = await apply_toggle_tts(toggle='off')
         # Check to apply Server Mode
         llm_payload = apply_server_mode(llm_payload, inter)
         # Update names in stopping strings
@@ -2004,7 +2046,7 @@ async def continue_task(inter:discord.Interaction, target_discord_msg:discord.Me
         last_resp, tts_resp = await llm_gen(llm_payload)
         # Skip create_bot_message()
         # Toggle TTS back on if it was toggled off
-        await toggle_tts(toggle='on', tts_sw=tts_sw)
+        await apply_toggle_tts(toggle='on', tts_sw=tts_sw)
 
         if system_embed:
             await system_embed.delete()
@@ -4236,6 +4278,10 @@ async def character_loader(char_name, channel=None):
         char_llmcontext = {}
         for key, value in char_data.items():
             if key == 'extensions':
+                if not tts_enabled:
+                    for subkey in value:
+                        if subkey in supported_tts_clients:
+                            key[subkey]['activate'] = False
                 await update_extensions(value)
                 char_llmcontext['extensions'] = value
             elif key == 'use_voice_channel':
@@ -4767,6 +4813,10 @@ async def process_user_voice(ctx: commands.Context, voice_input=None):
 
 async def process_speak(ctx: commands.Context, input_text, selected_voice=None, lang=None, voice_input=None):
     try:
+        # Only generate TTS for the server conntected to Voice Channel
+        if voice_client and (voice_client != ctx.guild.voice_client) and int(tts_settings.get('play_mode', 0)) == 0:
+            await ctx.send('Voice Channel is not enabled on this server', ephemeral=True, delete_after=5)
+            return
         user_voice = await process_user_voice(ctx, voice_input)
         tts_args = await process_speak_args(ctx, selected_voice, lang, user_voice)
         await ireply(ctx, 'tts') # send a response msg to the user
@@ -4840,10 +4890,6 @@ if textgenwebui_enabled and tts_client and tts_client in supported_tts_clients:
         @app_commands.choices(voice=voice_options)
         @app_commands.choices(lang=lang_options)
         async def speak(ctx: commands.Context, input_text: str, voice: typing.Optional[app_commands.Choice[str]], lang: typing.Optional[app_commands.Choice[str]], voice_input: typing.Optional[discord.Attachment]):
-            # Only generate TTS for the server conntected to Voice Channel
-            if voice_client and (voice_client != ctx.guild.voice_client) and int(tts_settings.get('play_mode', 0)) == 0:
-                await ctx.send('Voice Channel is not enabled on this server', ephemeral=True, delete_after=5)
-                return
             selected_voice = voice.value if voice is not None else ''
             if selected_voice:
                 selected_voice = _voice_hash_dict[selected_voice]
@@ -4861,10 +4907,6 @@ if textgenwebui_enabled and tts_client and tts_client in supported_tts_clients:
         @app_commands.choices(voice_2=voice_options1)
         @app_commands.choices(lang=lang_options)
         async def speak(ctx: commands.Context, input_text: str, voice_1: typing.Optional[app_commands.Choice[str]], voice_2: typing.Optional[app_commands.Choice[str]], lang: typing.Optional[app_commands.Choice[str]], voice_input: typing.Optional[discord.Attachment]):
-            # Only generate TTS for the server conntected to Voice Channel
-            if voice_client and (voice_client != ctx.guild.voice_client) and int(tts_settings.get('play_mode', 0)) == 0:
-                await ctx.send('Voice Channel is not enabled on this server', ephemeral=True, delete_after=5)
-                return
             if voice_1 and voice_2:
                 await ctx.send("A voice was picked from two separate menus. Using the first selection.", ephemeral=True)
             selected_voice = ((voice_1 or voice_2) and (voice_1 or voice_2).value) or ''
@@ -4887,10 +4929,6 @@ if textgenwebui_enabled and tts_client and tts_client in supported_tts_clients:
         @app_commands.choices(voice_3=voice_options2)
         @app_commands.choices(lang=lang_options)
         async def speak(ctx: commands.Context, input_text: str, voice_1: typing.Optional[app_commands.Choice[str]], voice_2: typing.Optional[app_commands.Choice[str]], voice_3: typing.Optional[app_commands.Choice[str]], lang: typing.Optional[app_commands.Choice[str]], voice_input: typing.Optional[discord.Attachment]):
-            # Only generate TTS for the server conntected to Voice Channel
-            if voice_client and (voice_client != ctx.guild.voice_client) and int(tts_settings.get('play_mode', 0)) == 0:
-                await ctx.send('Voice Channel is not enabled on this server', ephemeral=True, delete_after=5)
-                return
             if sum(1 for v in (voice_1, voice_2, voice_3) if v) > 1:
                 await ctx.send("A voice was picked from two separate menus. Using the first selection.", ephemeral=True)
             selected_voice = ((voice_1 or voice_2 or voice_3) and (voice_1 or voice_2 or voice_3).value) or ''
