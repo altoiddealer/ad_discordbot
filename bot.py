@@ -2445,8 +2445,7 @@ async def change_char_task(ictx: CtxInteraction, source:str, params:dict):
             # Send embeds to announcement channels
             if bot_database.announce_channels:
                 await bg_task_queue.put(announce_changes(ictx, change_message, char_name))
-        if not bot_history.per_channel_history:
-            await send_char_greeting_or_history(ictx, char_name)
+        await send_char_greeting_or_history(ictx, char_name)
         log.info(f"Character loaded: {char_name}")
     except Exception as e:
         log.error(f'An error occurred while loading character for "{source}": {e}')
