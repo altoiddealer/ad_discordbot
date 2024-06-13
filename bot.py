@@ -2278,10 +2278,12 @@ async def change_imgmodel_task(user_name:str, channel, params:dict, ictx=None):
         # if imgmodel_name != 'None': ### IF API IMG MODEL UNLOADING GETS EVER DEBUGGED
         if channel and change_embed:
             await change_embed.delete()
-            # Send change embed to interaction channel
-            change_embed_info.title = f"{user_name} changed Img model:"
-            change_embed_info.description = f'**{imgmodel_name}**'
-            change_embed = await channel.send(embed=change_embed_info)
+        if change_embed_info:
+            if channel:
+                # Send change embed to interaction channel
+                change_embed_info.title = f"{user_name} changed Img model:"
+                change_embed_info.description = f'**{imgmodel_name}**'
+                change_embed = await channel.send(embed=change_embed_info)
             if bot_database.announce_channels:
                 # Send embeds to announcement channels
                 await bg_task_queue.put(announce_changes(ictx, 'changed Img model', imgmodel_name))
