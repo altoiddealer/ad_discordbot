@@ -15,7 +15,7 @@ if TYPE_CHECKING:
 MAX_MESSAGE_LENGTH = 1980
 # MAX_MESSAGE_LENGTH = 200 # testing
 
-async def react_to_user_message(client:discord.Client, channel, user_message:'HMessage'=None):
+async def react_to_user_message(clientuser: discord.User, channel, user_message:'HMessage'=None):
     try:
         user_message_id = getattr(user_message, 'id', None)
         if user_message_id and getattr(user_message, 'hidden', None) is not None:
@@ -26,13 +26,13 @@ async def react_to_user_message(client:discord.Client, channel, user_message:'HM
             for reaction in discord_message.reactions:
                 if str(reaction.emoji) == emoji:
                     async for user in reaction.users():
-                        if user == client.user:
+                        if user == clientuser:
                             has_reacted = True
                             break
             if user_message.hidden == True and has_reacted == False:
                 await discord_message.add_reaction(emoji)
             elif user_message.hidden == False and has_reacted == True:
-                await discord_message.remove_reaction(emoji, client.user)
+                await discord_message.remove_reaction(emoji, clientuser)
     except Exception as e:
         log.error(f"Error reacting to user message: {e}")
 
@@ -123,14 +123,15 @@ async def send_long_message(channel, message_text, bot_message:'HMessage'=None) 
 
 # Model for editing history
 class EditMessageModal(discord.ui.Modal, title="Edit Message in History"):
-    def __init__(self, clientuser: discord.User, target_message: 'HMessage', original_message: discord.Message, local_history:'History'=None):
+    def __init__(self, clientuser: discord.User, matched_hmessage: 'HMessage', target_message: discord.Message, local_history:'History'=None):
         super().__init__()
-        self.original_message = original_message
         self.target_message = target_message
+        self.matched_hmessage = matched_hmessage
         self.clientuser = clientuser
-
+        
+        default_text = target_message.clean_content
         if local_history is not None:
-            default_text = local_history.get_labeled_history_text(original_message, original_message.content, mention_mode='demention', label_mode='delabel')
+            default_text = local_history.get_labeled_history_text(matched_hmessage, target_message.content, mention_mode='demention', label_mode='delabel')
 
         # Add TextInput dynamically with default value
         self.new_content = discord.ui.TextInput(
@@ -146,11 +147,11 @@ class EditMessageModal(discord.ui.Modal, title="Edit Message in History"):
         edited_message = self.new_content.value
         compound_message = ''
         # Try rebuilding text if target message was a message chunk
-        if self.target_message.related_ids:
-            all_original_msg_ids = [self.target_message.id] + self.target_message.related_ids
+        if self.matched_hmessage.related_ids:
+            all_original_msg_ids = [self.matched_hmessage.id] + self.matched_hmessage.related_ids
             all_original_msg_ids.sort()
             for orig_msg_id in all_original_msg_ids:
-                if self.target_message.id != orig_msg_id:
+                if self.matched_hmessage.id != orig_msg_id:
                     try:
                         original_chunk_message = await inter.channel.fetch_message(orig_msg_id)
                         compound_message += original_chunk_message.clean_content
@@ -162,12 +163,13 @@ class EditMessageModal(discord.ui.Modal, title="Edit Message in History"):
                     compound_message += edited_message
         if compound_message:
             edited_message = compound_message
-        self.target_message.update(text=edited_message)
+        # Update the HMessage with the new value
+        self.matched_hmessage.update(text=edited_message)
         await inter.response.send_message("Message history has been edited successfully.", ephemeral=True, delete_after=5)
 
         # Update text in discord message
-        if self.clientuser == self.original_message.author:
-            await self.original_message.edit(content=edited_message[:2000])
+        if self.clientuser == self.target_message.author:
+            await self.target_message.edit(content=edited_message[:2000])
         else:
             await inter.response.send_message("Note: The bot cannot update your message contents in Discord.", ephemeral=True, delete_after=5)
         # Warn if text was truncated

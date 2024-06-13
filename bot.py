@@ -1783,7 +1783,7 @@ async def message_task(ictx: CtxInteraction, text:str, source:str='message', llm
                 if params['bot_will_do']['should_gen_image']:
                     await init_img_embed()                                                          # Create a "prompting" embed for image gen
                 params, bot_message, user_message, local_history = await message_llm_task(llm_payload, params)
-                await react_to_user_message(client, channel, user_message)                          # add a reaction to any hidden user message
+                await react_to_user_message(client.user, channel, user_message)                          # add a reaction to any hidden user message
                 if llmmodel_params and llm_model_mode == 'swap':
                     params = await llmmodel_swap_back(params, original_llmmodel)                    # if LLM model swapping was triggered
             if sd_enabled:
@@ -2160,7 +2160,7 @@ async def regenerate_task(inter:discord.Interaction, inter_discord_msg:discord.M
             original_user_message.hidden = new_bot_message.hidden
 
         # Adjust reaction if applicable
-        await react_to_user_message(client, inter.channel, original_user_message)
+        await react_to_user_message(client.user, inter.channel, original_user_message)
 
         # Update the new user message with the original discord message ID
         if mode == 'create':
@@ -2278,10 +2278,12 @@ async def change_imgmodel_task(user_name:str, channel, params:dict, ictx=None):
         # if imgmodel_name != 'None': ### IF API IMG MODEL UNLOADING GETS EVER DEBUGGED
         if channel and change_embed:
             await change_embed.delete()
-            # Send change embed to interaction channel
-            change_embed_info.title = f"{user_name} changed Img model:"
-            change_embed_info.description = f'**{imgmodel_name}**'
-            change_embed = await channel.send(embed=change_embed_info)
+        if change_embed_info:
+            if channel:
+                # Send change embed to interaction channel
+                change_embed_info.title = f"{user_name} changed Img model:"
+                change_embed_info.description = f'**{imgmodel_name}**'
+                change_embed = await channel.send(embed=change_embed_info)
             if bot_database.announce_channels:
                 # Send embeds to announcement channels
                 await bg_task_queue.put(announce_changes(ictx, 'changed Img model', imgmodel_name))
@@ -2445,8 +2447,7 @@ async def change_char_task(ictx: CtxInteraction, source:str, params:dict):
             # Send embeds to announcement channels
             if bot_database.announce_channels:
                 await bg_task_queue.put(announce_changes(ictx, change_message, char_name))
-        if not bot_history.per_channel_history:
-            await send_char_greeting_or_history(ictx, char_name)
+        await send_char_greeting_or_history(ictx, char_name)
         log.info(f"Character loaded: {char_name}")
     except Exception as e:
         log.error(f'An error occurred while loading character for "{source}": {e}')
@@ -4074,11 +4075,11 @@ if textgenwebui_enabled:
             await inter.response.send_message("You can only edit your own or bot's messages.", ephemeral=True, delete_after=5)
             return
         local_history = bot_history.get_history_for(inter.channel.id)
-        target_message = local_history.search(lambda m: m.id == message.id or message.id in m.related_ids)
-        if not target_message:
+        matched_hmessage = local_history.search(lambda m: m.id == message.id or message.id in m.related_ids)
+        if not matched_hmessage:
             await inter.response.send_message("Message not found in current chat history.", ephemeral=True, delete_after=5)
             return
-        modal = EditMessageModal(client.user, target_message, original_message=message, local_history=local_history)
+        modal = EditMessageModal(client.user, matched_hmessage, target_message=message, local_history=local_history)
         await inter.response.send_modal(modal)
 
     async def apply_labels_to_msg_list(ictx:CtxInteraction, local_history:History, hmsg:HMessage, msg_id_list:list, ictx_msg:discord.Message=None):
@@ -4135,7 +4136,7 @@ if textgenwebui_enabled:
                 return
 
             # Apply reaction to user message
-            await react_to_user_message(client, inter.channel, user_message)
+            await react_to_user_message(client.user, inter.channel, user_message)
 
             # Change target message to the bot's response, if the original target message was user's message
             if client.user != message.author:
