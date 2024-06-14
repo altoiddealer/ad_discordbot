@@ -1,6 +1,3 @@
-from modules.logs import import_track, log, get_logger; import_track(__file__, fp=True)
-log = get_logger(__name__)
-logging = log
 from modules.utils_shared import task_semaphore, bot_emojis
 import discord
 from discord.ext import commands
@@ -9,8 +6,11 @@ from modules.typing import CtxInteraction
 from typing import TYPE_CHECKING
 import asyncio
 
+from modules.logs import import_track, get_logger; import_track(__file__, fp=True); log = get_logger(__name__)  # noqa: E702
+logging = log
+
 if TYPE_CHECKING:
-    from modules.history import HistoryManager, History, HMessage
+    from modules.history import HistoryManager, History, HMessage  # noqa: F401
     
     
 MAX_MESSAGE_LENGTH = 1980
@@ -37,10 +37,13 @@ async def react_to_user_message(clientuser: discord.User, channel, user_message:
                         if user == clientuser:
                             has_reacted = True
                             break
-            if user_message.hidden == True and has_reacted == False:
+                        
+            if user_message.hidden and not has_reacted:
                 await discord_message.add_reaction(emoji)
-            elif user_message.hidden == False and has_reacted == True:
+                
+            elif not user_message.hidden and has_reacted:
                 await discord_message.remove_reaction(emoji, clientuser)
+                
     except Exception as e:
         log.error(f"Error reacting to user message: {e}")
 
@@ -171,7 +174,7 @@ class EditMessageModal(discord.ui.Modal, title="Edit Message in History"):
                     try:
                         original_chunk_message = await inter.channel.fetch_message(orig_msg_id)
                         compound_message += original_chunk_message.clean_content
-                    except:
+                    except Exception:
                         log.warning(f'Failed to get message content for id {orig_msg_id} for "Edit History".')
                         compound_message = ''
                         break                    

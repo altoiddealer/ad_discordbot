@@ -1,6 +1,3 @@
-from modules.logs import import_track, log, get_logger; import_track(__file__, fp=True)
-log = get_logger(__name__)
-logging = log
 from modules.utils_files import load_file, save_yaml_file
 from datetime import timedelta
 import time
@@ -9,6 +6,9 @@ from modules.database_migration_v1_v2 import OldDatabase
 from modules.utils_shared import shared_path
 from modules.utils_files import make_fp_unique
 import os
+
+from modules.logs import import_track, get_logger; import_track(__file__, fp=True); log = get_logger(__name__)  # noqa: E702
+logging = log
 
 class BaseFileMemory:
     def __init__(self, fp, version=0, missing_okay=False) -> None:
@@ -194,7 +194,7 @@ class Database(BaseFileMemory):
         if not isinstance(self.last_user_msg, dict):
             self.last_user_msg = {}
 
-        if not channel_id in self.last_user_msg:
+        if channel_id not in self.last_user_msg:
             save_now = True
 
         self.last_user_msg[channel_id] = time.time()
@@ -264,7 +264,7 @@ class _Statistic:
         self.data: dict = data
 
     def set(self, key, value, save_now=False):
-        if not key in self.data:
+        if key not in self.data:
             save_now = True
 
         self.data[key] = value

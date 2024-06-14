@@ -1,9 +1,9 @@
-from modules.logs import import_track, log, get_logger; import_track(__file__, fp=True)
 import asyncio
 import os
 import re
 from shutil import copyfile
-log = get_logger(__name__)
+
+from modules.logs import import_track, get_logger; import_track(__file__, fp=True); log = get_logger(__name__)  # noqa: E702
 logging = log
 
 task_semaphore = asyncio.Semaphore(1)

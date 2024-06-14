@@ -1,6 +1,6 @@
-from modules.logs import import_track, log, get_logger; import_track(__file__, fp=True)
 from math import sqrt
-log = get_logger(__name__)
+
+from modules.logs import import_track, get_logger; import_track(__file__, fp=True); log = get_logger(__name__)  # noqa: E702
 logging = log
 
 def round_to_precision(val, prec):
@@ -45,9 +45,12 @@ def calculate_aspect_ratio_sizes(avg, aspect_ratios):
             n, d = get_aspect_ratio_parts(ratio)
             w, h = dims_from_ar(avg, n, d)
             # Apply labels
-            if w > h: aspect_type = "landscape"
-            elif w < h: aspect_type = "portrait"
-            else: aspect_type = "square"
+            if w > h: 
+                aspect_type = "landscape"
+            elif w < h: 
+                aspect_type = "portrait"
+            else: 
+                aspect_type = "square"
             # Format the result
             size_name = f"{w} x {h} ({ratio} {aspect_type})"
             ratio_options.append({'name': size_name, 'width': w, 'height': h})

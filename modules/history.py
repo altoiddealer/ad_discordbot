@@ -1,10 +1,5 @@
 # Designed by Artificiangel
 # https://github.com/Artificiangel/llm-history-manager.git for future updates
-
-
-from modules.logs import import_track, log, get_logger; import_track(__file__, fp=True)
-log = get_logger(__name__)
-logging = log
 import os
 from dataclasses import dataclass, field
 from dataclasses_json import dataclass_json, config
@@ -25,11 +20,12 @@ from typing import (
     Callable,
     Coroutine,
     Iterable,
-    Optional,
     TypeVar,
-    Union,
     overload,
 )
+
+from modules.logs import import_track, get_logger; import_track(__file__, fp=True); log = get_logger(__name__)  # noqa: E702
+logging = log
 
 #######
 # Utils
@@ -243,7 +239,7 @@ class HMessage:
     
     def new_history_end_here(self, include_self=True) -> Union['History', None]:
         new_history = self.duplicate_history()
-        if not self in new_history:
+        if self not in new_history:
             return None
 
         index = new_history.index(self)
@@ -256,7 +252,7 @@ class HMessage:
     
     def new_history_start_here(self, include_self=True) -> Union['History', None]:
         new_history = self.duplicate_history()
-        if not self in new_history:
+        if self not in new_history:
             return None
 
         index = new_history.index(self)

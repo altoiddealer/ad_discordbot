@@ -1,10 +1,10 @@
-from modules.logs import import_track, log, get_logger; import_track(__file__, fp=True)
-log = get_logger(__name__)
-logging = log
-from datetime import datetime, timedelta
+from datetime import datetime
 import sqlite3
 import os
 from modules.utils_shared import shared_path
+
+from modules.logs import import_track, get_logger; import_track(__file__, fp=True); log = get_logger(__name__)  # noqa: E702
+logging = log
 
 class OldDatabase:
     def __init__(self):
