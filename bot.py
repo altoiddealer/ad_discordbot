@@ -5344,6 +5344,16 @@ class CustomHistory(History):
         
         if not has_file_name:
             log.info(f'Internal history file will be saved to: {self.fp}')
+            
+            
+            
+    # def should_save_condition(self):
+    #     if self.fp_internal_id is not None and self.fp_internal_id.isdigit():
+    #         channel = client.get_channel(int(self.fp_internal_id))
+    #         if isinstance(channel, discord.DMChannel):
+    #             return False
+            
+    #     return True
     
     
     async def save(self, fp=None, timeout=300, force=False, force_tgwui=False):
