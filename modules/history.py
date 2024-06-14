@@ -625,6 +625,8 @@ class History:
                 continue
             messages.append(message.to_dict())
 
+        os.makedirs(os.path.dirname(fp), exist_ok=True)
+
         with open(fp, 'w', encoding='utf8') as f:
             json_out = json.dumps(dict(history=history, messages=messages), indent=2)
             f.write(json_out)
