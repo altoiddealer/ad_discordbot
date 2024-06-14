@@ -25,11 +25,10 @@ def guild_only():
 
 async def react_to_user_message(clientuser: discord.User, channel, user_message:'HMessage'=None):
     try:
-        user_message_id = getattr(user_message, 'id', None)
-        if user_message_id and getattr(user_message, 'hidden', None) is not None:
+        if user_message.id:
             emoji = bot_emojis.hidden_emoji
             has_reacted = False
-            discord_message = await channel.fetch_message(user_message_id)
+            discord_message = await channel.fetch_message(user_message.id)
             # check for any existing reaction
             for reaction in discord_message.reactions:
                 if str(reaction.emoji) == emoji:

@@ -510,7 +510,7 @@ class History:
             if mention_mode is not None:
                 # Check to see if prefixed @mention is not just cosmetically added by the bot
                 mention_in_message = None
-                if getattr(message, 'text', None) is not None:
+                if message.text:
                     mention_in_message = patterns.mention_prefix.search(message.text)
                 if not mention_in_message:
                     mention_in_input = patterns.mention_prefix.search(output_text)

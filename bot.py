@@ -2227,8 +2227,7 @@ async def regenerate_task(inter:discord.Interaction, inter_discord_msg:discord.M
         _, new_bot_message = await message_task(inter, original_user_text, 'regenerate', llm_payload, params, tags={})
 
         # Update the user message hidden status depending on bot message status
-        if getattr(new_bot_message, 'hidden', None) is not None:
-            original_user_message.hidden = new_bot_message.hidden
+        original_user_message.update(hidden=new_bot_message.hidden)
 
         # Adjust reaction if applicable
         await react_to_user_message(client.user, inter.channel, original_user_message)
@@ -4224,19 +4223,21 @@ if textgenwebui_enabled:
             all_bot_replies = user_message.replies
             num_bot_open_msgs = len(all_bot_replies)
             for bot_msg in all_bot_replies:
-                if getattr(bot_msg, 'hidden') and bot_msg.hidden: # TODO remove getattr
+                if bot_msg.hidden:
                     num_bot_open_msgs -= 1
 
             # Apply command
-            if (user_message and not getattr(user_message, 'hidden', True)) and (bot_message and not getattr(bot_message, 'hidden', True)):
+            if (user_message is not None and not user_message.hidden) and (bot_message is not None and not bot_message.hidden):
                 verb = 'hidden'
                 if num_bot_open_msgs <= 1:
-                    user_message.hidden = True
-                bot_message.hidden = True
-            elif (user_message and getattr(user_message, 'hidden', False)) and (bot_message and getattr(bot_message, 'hidden', False)):
+                    user_message.update(hidden=True)
+                bot_message.update(hidden=True)
+                
+            elif (user_message is not None and user_message.hidden) and (bot_message is not None and bot_message.hidden):
                 verb = 'revealed'
-                user_message.hidden = False
-                bot_message.hidden = False
+                user_message.update(hidden=False)
+                bot_message.update(hidden=False)
+                
             else:
                 await inter.response.send_message("A valid message pair could not be found for the target message.", ephemeral=True, delete_after=5)
                 return
@@ -4250,7 +4251,7 @@ if textgenwebui_enabled:
 
             # Iterate over all messages and update the labels
             msg_ids_to_edit = [target_message.id]
-            if getattr(target_message, 'related_ids'):
+            if target_message.related_ids:
                 msg_ids_to_edit = [target_message.id] + target_message.related_ids
             await apply_labels_to_msg_list(inter, local_history, bot_message, msg_ids_to_edit, message)
 
