@@ -40,7 +40,7 @@ def test(message, *args, **kws):
 def get_logger(name):
     return log.getChild(name)
 
-log.test = test
+log.test = test # type: ignore
 log_level = logging.INFO
 
 log_formatter = ColoredFormatter(f'{Fore.BLACK}{Back.WHITE}%(asctime)s.%(msecs)03d{Back.BLACK} {Back.LIGHTBLACK_EX}#%(lineno)-5d{Style.RESET_ALL} {Fore.LIGHTWHITE_EX}%(levelname)s%(message)s{Style.RESET_ALL}', datefmt='%H:%M:%S')

@@ -9,6 +9,7 @@ logging = log
 
 # Function to load .json, .yml or .yaml files
 def load_file(file_path, default=None, missing_okay=False):
+    default = default or {}
     try:
         file_suffix = Path(file_path).suffix.lower()
 

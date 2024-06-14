@@ -4,7 +4,7 @@ import os
 from dataclasses import dataclass, field
 from dataclasses_json import dataclass_json, config
 import time
-from typing import Optional
+from typing import Iterator, Optional
 from modules.typing import ChannelID, UserID, MessageID, CtxInteraction
 from typing import Union
 import copy
@@ -79,7 +79,7 @@ def cls_get_id(x):
     return x.uuid if x else None
 
 # config
-def cnf(default=None, default_list:tuple=None, check_bool=True, encoder=None, decoder=None, name=None, dont_save=False, decode_pass=True, exclude=None):
+def cnf(default=None, default_list:Optional[tuple]=None, check_bool=True, encoder=None, decoder=None, name=None, dont_save=False, decode_pass=True, exclude=None):
     
     # Create an exclusion function based on passed settings
     def exclude_func(x):
@@ -98,7 +98,7 @@ def cnf(default=None, default_list:tuple=None, check_bool=True, encoder=None, de
     
     exclude = exclude or exclude_func
     if dont_save:
-        encoder = dont_save
+        encoder = cls_get_none
     
     return config(exclude=exclude, encoder=encoder, decoder=decoder, field_name=name)
     
@@ -122,12 +122,12 @@ class HMessage:
     replies: list['HMessage']           = field(default_factory=list,   metadata=cnf(dont_save=True))
     reply_to: Optional['HMessage']      = field(default=None,           metadata=cnf(encoder=cls_get_id, decoder=str))
     
-    continue_next: Optional['HMessage'] = field(default=None,           metadata=cnf(encoder=cls_get_id, decoder=str))
-    continue_prev: Optional['HMessage'] = field(default=None,           metadata=cnf(encoder=cls_get_id, decoder=str))
-    _continue_root: Optional['HMessage']= field(default=None,           metadata=cnf(dont_save=True))
+    # continue_next: Optional['HMessage'] = field(default=None,           metadata=cnf(encoder=cls_get_id, decoder=str))
+    # continue_prev: Optional['HMessage'] = field(default=None,           metadata=cnf(encoder=cls_get_id, decoder=str))
+    # _continue_root: Optional['HMessage']= field(default=None,           metadata=cnf(dont_save=True))
     
-    continuations: list['HMessage']     = field(default_factory=list,   metadata=cnf(dont_save=True))
-    continued_of: Optional['HMessage']  = field(default=None,           metadata=cnf(encoder=cls_get_id, decoder=str))
+    # continuations: list['HMessage']     = field(default_factory=list,   metadata=cnf(dont_save=True))
+    # continued_of: Optional['HMessage']  = field(default=None,           metadata=cnf(encoder=cls_get_id, decoder=str))
 
 
 
@@ -146,9 +146,9 @@ class HMessage:
     created: float                      = field(default_factory=time.time)
     uuid: str                           = field(default_factory=get_uuid_hex)
     
-    def __post_init__(self):
-        if self.uuid is None:
-            pass
+    # def __post_init__(self):
+    #     if self.uuid is None:
+    #         pass
         # TODO should get new id from history a local counter
 
 
@@ -207,92 +207,92 @@ class HMessage:
 
 
     def unmark_reply(self, save=True):
-        message:HMessage = self.reply_to
+        message:Optional[HMessage] = self.reply_to
         self.reply_to = None
         
         if message:
             if self in message.replies:
-                message.replies.pop(self)
+                message.replies.remove(self)
         if save:
             self.history.event_save.set()
         return self
     
     
-    @property
-    def is_root_of_continue_chain(self):
-        'True if there are no previous items'
-        return self.continue_prev is None
+    # @property
+    # def is_root_of_continue_chain(self):
+    #     'True if there are no previous items'
+    #     return self.continue_prev is None
+    
+    
+    # # def set_continuation(self, message: 'HMessage', save=True):
+    # #     assert isinstance(message, self.__class__), f'HMessage.set_continuation expected {self.__class__} type, got {type(message)}'
+        
+    # #     return message.mark_as_continuation_for(self, save=save)
     
     
     # def set_continuation(self, message: 'HMessage', save=True):
+    #     if not message:
+    #         return self
+        
     #     assert isinstance(message, self.__class__), f'HMessage.set_continuation expected {self.__class__} type, got {type(message)}'
         
-    #     return message.mark_as_continuation_for(self, save=save)
-    
-    
-    def set_continuation(self, message: 'HMessage', save=True):
-        if not message:
-            return self
-        
-        assert isinstance(message, self.__class__), f'HMessage.set_continuation expected {self.__class__} type, got {type(message)}'
-        
-        self.continue_next = message
-        message.continue_prev = self
+    #     self.continue_next = message
+    #     message.continue_prev = self
 
-        if save:
-            self.history.event_save.set()
-        return self
+    #     if save:
+    #         self.history.event_save.set()
+    #     return self
     
     
-    def remove_continuation(self, save=True):
-        message:HMessage = self.continue_next
-        self.continue_next = None
+    # def remove_continuation(self, save=True):
+    #     message: Optional[HMessage] = self.continue_next
+    #     self.continue_next = None
         
-        if message:
-            message.continue_prev = None
-            message._continue_root = None # TODO this should propagate up the chain
+    #     if message:
+    #         message.continue_prev = None
+    #         message._continue_root = None # TODO this should propagate up the chain
         
-        if save:
-            self.history.event_save.set()
-        return self
+    #     if save:
+    #         self.history.event_save.set()
+    #     return self
     
     
-    def get_continue_root(self) -> 'HMessage':
-        'Return first message in chain of continuations'
-        if self._continue_root is not None:
-            return self._continue_root
+    # def get_continue_root(self) -> 'HMessage':
+    #     'Return first message in chain of continuations'
+    #     if self._continue_root is not None:
+    #         return self._continue_root
         
-        root = self
+    #     root = self
         
-        visited = set()
-        visited.add(root)
-        while root.continue_prev is not None:
-            root = root.continue_prev
-            if root in visited:
-                raise Exception(f'HMessage.get_continue_root found circular dependency while moving backwards: {root} has already been visited, this would cause a loop forever.')
+    #     visited = set()
+    #     visited.add(root)
+    #     while root.continue_prev is not None:
+    #         root = root.continue_prev
+    #         if root in visited:
+    #             raise Exception(f'HMessage.get_continue_root found circular dependency while moving backwards: {root} has already been visited, this would cause a loop forever.')
             
-            visited.add(root)
+    #         visited.add(root)
             
-        self._continue_root = root
-        return self._continue_root
+    #     self._continue_root = root
+    #     return self._continue_root
     
     
-    def get_continued_chain(self, start_from_root=True) -> Iterable['HMessage']:
-        root: HMessage = self
+    # def get_continued_chain(self, start_from_root=True) -> Iterable['HMessage']:
+    #     root: Optional[HMessage] = self
         
-        if start_from_root:
-            root = self.get_continue_root()
+    #     if start_from_root:
+    #         root = self.get_continue_root()
             
-        visited = set()
-        visited.add(root)
-        while root is not None:
-            yield root
+    #     visited = set()
+    #     visited.add(root)
+    #     while root is not None:
+    #         yield root
             
-            root = root.continue_next
-            if root in visited:
-                raise Exception(f'HMessage.get_continued_chain found circular dependency: {root} has already been visited, this would cause a loop forever.')
+    #         root: Optional[HMessage] = root.continue_next
+    #         if root in visited:
+    #             raise Exception(f'HMessage.get_continued_chain found circular dependency: {root} has already been visited, this would cause a loop forever.')
             
-            visited.add(root)
+    #         visited.add(root)
             
 
     ###########
@@ -362,8 +362,8 @@ class HMessage:
 
 @dataclass
 class HistoryPairForTGWUI:
-    user: HMessage = field(default=None)
-    assistant: HMessage = field(default=None)
+    user: Optional[HMessage] = field(default=None)
+    assistant: Optional[HMessage] = field(default=None)
 
 
     def add_pair_to(self, internal:list, visible:list):
@@ -481,7 +481,7 @@ class History:
         return self._items.pop(index)
 
 
-    def __iter__(self):
+    def __iter__(self) -> Iterator[HMessage]:
         return iter(self._items)
 
 
@@ -539,7 +539,7 @@ class History:
         return output
     
     def get_history_pair_from_msg_id(self, message_id: MessageID):
-        hmessage: HMessage = self.search(lambda m: m.id == message_id or message_id in m.related_ids)
+        hmessage: Optional[HMessage] = self.search(lambda m: m.id == message_id or message_id in m.related_ids)
         if not hmessage:
             return None, None
 
@@ -579,7 +579,7 @@ class History:
         
         return labels_for_message
     
-    def get_labeled_history_text(self, message:HMessage, input_text:str='', mention_mode:str=None, label_mode:str=None):
+    def get_labeled_history_text(self, message:Optional[HMessage], input_text:str='', mention_mode:Optional[str]=None, label_mode:Optional[str]=None):
         # assert is handled by get_history_labels for now.
         history_labels = self.get_history_labels_for_message(message)
 
@@ -799,9 +799,9 @@ class History:
             replying_to = local_message_storage.get(message.reply_to)
             message.mark_as_reply_for(replying_to, save=False) # don't save because it's already saved
             
-            message.mark_as_continuation_of()
-            message.continue_prev = local_message_storage.get(message.continue_prev)
-            message.continue_next = local_message_storage.get(message.continue_next)
+            # message.mark_as_continuation_of()
+            # message.continue_prev = local_message_storage.get(message.continue_prev)
+            # message.continue_next = local_message_storage.get(message.continue_next)
 
         log.info(f'Loaded history with {len(history._items)} total messages: {history.fp}') # `save_history: False` exchanges will be excluded from TGWUI logs
         return history
@@ -863,19 +863,19 @@ class HistoryManager:
         return history
 
 
-    def load_history_from_fp(self, fp=None, id_: ChannelID=None) -> History:
+    def load_history_from_fp(self, fp=None, id_: Optional[ChannelID]=None) -> History:
         '''
         Pass an id to overwrite channel id.
         '''
         return self.class_builder_history.load_from(self, fp=fp, id_=id_)
     
 
-    def get_history_for(self, id_: ChannelID=None, fp=None, search=False, cached_only=False) -> History:
+    def get_history_for(self, id_: Optional[ChannelID]=None, fp=None, search=False, cached_only=False) -> Optional[History]:
         if id_ is None:
             raise Exception('ID must be set, please create a default ID in subclass.')
         
         # Check if history already loaded
-        history = self._histories.get(id_)
+        history: Optional[History] = self._histories.get(id_)
         if cached_only:
             return history
         

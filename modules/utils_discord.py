@@ -1,7 +1,7 @@
 from modules.utils_shared import task_semaphore, bot_emojis
 import discord
 from discord.ext import commands
-from typing import Union
+from typing import Optional, Union
 from modules.typing import CtxInteraction
 from typing import TYPE_CHECKING
 import asyncio
@@ -23,9 +23,9 @@ def guild_only():
         return True
     return commands.check(predicate)
 
-async def react_to_user_message(client_user: discord.User, channel, user_message:'HMessage'=None):
+async def react_to_user_message(client_user: Optional[discord.ClientUser], channel, user_message:Optional['HMessage']=None):
     try:
-        if user_message.id:
+        if user_message is not None and user_message.id:
             emoji = bot_emojis.hidden_emoji
             has_reacted = False
             discord_message = await channel.fetch_message(user_message.id)
@@ -73,7 +73,7 @@ async def ireply(ictx: 'CtxInteraction', process):
         log.error(f"Error sending message response to user's interaction command: {e}")
 
 
-async def send_long_message(channel, message_text, bot_message:'HMessage'=None) -> int:
+async def send_long_message(channel, message_text, bot_message:Optional['HMessage']=None) -> int:
     """ Splits a longer message into parts while preserving sentence boundaries and code blocks """
     active_lang = ''
 
@@ -141,7 +141,7 @@ async def send_long_message(channel, message_text, bot_message:'HMessage'=None) 
 
 # Model for editing history
 class EditMessageModal(discord.ui.Modal, title="Edit Message in History"):
-    def __init__(self, client_user: discord.User, matched_hmessage: 'HMessage', target_message: discord.Message, local_history:'History'=None):
+    def __init__(self, client_user: Optional[discord.ClientUser], matched_hmessage: 'HMessage', target_message: discord.Message, local_history:Optional['History']=None):
         super().__init__()
         self.target_message = target_message
         self.matched_hmessage = matched_hmessage

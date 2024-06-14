@@ -1,8 +1,9 @@
+# pyright: reportOptionalMemberAccess=false
 import logging as _logging
 from datetime import datetime, timedelta
 from dataclasses import dataclass, field
 from dataclasses_json import dataclass_json
-from typing import Optional
+from typing import Any, Optional
 from pathlib import Path
 import asyncio
 import random
@@ -198,7 +199,6 @@ if sd_enabled:
             else:
                 log.error(f'Error getting data from "{SD_URL}{endpoint}": {e}')
                 traceback.print_exc()
-                return e
 
     async def get_sd_sysinfo():
         global SD_CLIENT
@@ -1260,7 +1260,8 @@ def process_tag_insertions(prompt:str, tags:dict):
         log.error(f"Error processing LLM prompt tags: {e}")
         return prompt, tags
 
-def process_tag_trumps(matches:list, trump_params:list=[]):
+def process_tag_trumps(matches:list, trump_params:Optional[list]=None):
+    trump_params = trump_params or []
     try:
         # Collect all 'trump' parameters for all matched tags
         trump_params = set(trump_params)
@@ -1396,7 +1397,7 @@ async def expand_triggers(all_tags:list) -> list:
     return all_tags
 
 # Function to convert string values to bool/int/float
-def extract_value(value_str:str) -> Union[bool, int, float]:
+def extract_value(value_str:str) -> Optional[Union[bool, int, float, str]]:
     try:
         value_str = value_str.strip()
         if value_str.lower() == 'true':
@@ -1417,7 +1418,7 @@ def extract_value(value_str:str) -> Union[bool, int, float]:
     except Exception as e:
         log.error(f"Error converting string to bool/int/float: {e}")
 
-def parse_tag_from_text_value(value_str:str) -> str:
+def parse_tag_from_text_value(value_str:str) -> Any:
     try:
         if value_str.startswith('{') and value_str.endswith('}'):
             inner_text = value_str[1:-1]  # Remove outer curly brackets
@@ -1465,6 +1466,7 @@ def parse_key_pair_from_text(kv_pair):
         return key, value
     except Exception as e:
         log.error(f"Error parsing nested value: {e}")
+        return None, None
 
 # Matches [[this:syntax]] and creates 'tags' from matches
 # Can handle any structure including dictionaries, lists, even nested sublists.
@@ -1745,7 +1747,7 @@ async def message_task(ictx: CtxInteraction, text:str, source:str='message', llm
                 log.warning(f'Bot tried to generate text for {user_name}, but no LLM model was loaded')
         ## Finalize payload, generate text via TGWUI, and process responses
         # Toggle TTS off, if interaction server is not connected to Voice Channel
-        tts_sw = None
+        tts_sw = False
         if (not params['bot_will_do']['should_send_text']) or (
             hasattr(ictx, 'guild') and getattr(ictx.guild, 'voice_client', None) and 
             voice_client and (voice_client != ictx.guild.voice_client) and int(tts_settings.get('play_mode', 0)) == 0):
@@ -1928,7 +1930,7 @@ def extra_stopping_strings(llm_payload:dict):
     return llm_payload
 
 # Toggles TTS on/off
-async def apply_toggle_tts(toggle:str='on', tts_sw:bool=None):
+async def apply_toggle_tts(toggle:str='on', tts_sw:bool=False):
     try:
         extensions = copy.deepcopy(bot_settings.settings['llmcontext'].get('extensions', {}))
         if toggle == 'off' and extensions.get(tts_client, {}).get('activate'):
@@ -1941,10 +1943,10 @@ async def apply_toggle_tts(toggle:str='on', tts_sw:bool=None):
             await update_extensions(extensions)
     except Exception as e:
         log.error(f'An error occurred while toggling the TTS on/off: {e}')
-    return None
+    return False
 
 # Creates user message in HManager
-async def create_user_message(local_history, llm_payload:dict, save_to_history=True, ictx:CtxInteraction=None):
+async def create_user_message(local_history, llm_payload:dict, save_to_history=True, ictx:Optional[CtxInteraction]=None):
     try:
         # Add user message before processing bot reply.
         # this gives time for other messages to accrue before the bot's response, as in realistic chat scenario.
@@ -1962,10 +1964,9 @@ async def create_user_message(local_history, llm_payload:dict, save_to_history=T
         return user_message
     except Exception as e:
         log.error(f'An error occurred while creating user message: {e}')
-        return None, None, None
 
 # Send LLM Payload - get responses
-async def llm_gen(llm_payload:dict) -> str:
+async def llm_gen(llm_payload:dict) -> tuple[str, str]:
     if shared.model_name == 'None':
         return '', ''
     try:
@@ -2001,7 +2002,7 @@ async def llm_gen(llm_payload:dict) -> str:
     
 # Warn anyone direct messaging the bot
 async def warn_direct_channel(ictx: CtxInteraction):
-    warned_id = f'dm_{ictx.author.id}'
+    warned_id = f'dm_{get_user_ctx_inter(ictx).id}'
     if not bot_database.was_warned(warned_id):
         bot_database.update_was_warned(warned_id)
         if system_embed_info:
@@ -2012,7 +2013,7 @@ async def warn_direct_channel(ictx: CtxInteraction):
             await ictx.channel.send("This conversation will not be saved. ***However***, your interactions will be included in the bot's general logging.")
 
 # Process responses from text-generation-webui
-async def create_bot_message(user_message:HMessage, local_history:History, save_to_history:bool=True, last_resp:str='', tts_resp:str='', ictx:CtxInteraction=None) -> HMessage:
+async def create_bot_message(user_message:Optional[HMessage], local_history:Optional[History], save_to_history:bool=True, last_resp:str='', tts_resp:str='', ictx:Optional[CtxInteraction]=None) -> HMessage:
     try:
         bot_message = local_history.new_message(bot_settings.name, last_resp, 'assistant', bot_settings._bot_id, text_visible=tts_resp)
         if user_message:
@@ -2130,9 +2131,9 @@ async def continue_task(inter:discord.Interaction, target_discord_msg:discord.Me
             await system_embed.delete()
 
 # Regenerate Replace...
-async def replace_msg_in_history_and_discord(ictx:discord.Interaction, params:dict, text:str, text_visible:str) -> HMessage:
+async def replace_msg_in_history_and_discord(ictx:discord.Interaction, params:dict, text:str, text_visible:str) -> Optional[HMessage]:
     channel = ictx.channel
-    updated_message = params.get('user_message_to_update') or params.get('bot_message_to_update')
+    updated_message: Optional[HMessage] = params.get('user_message_to_update') or params.get('bot_message_to_update')
     target_discord_msg_id = params.get('target_discord_msg_id')
     try:
         target_discord_msg = await channel.fetch_message(target_discord_msg_id)
@@ -2367,7 +2368,7 @@ async def change_imgmodel_task(user_name:str, channel, params:dict, ictx=None):
         traceback.print_exc()
         if change_embed_info:
             change_embed_info.title = "An error occurred while changing Img model"
-            change_embed_info.description = e
+            change_embed_info.description = str(e)
             if change_embed:
                 await change_embed.edit(embed=change_embed_info)
             else:
@@ -3662,6 +3663,7 @@ if sd_enabled:
 
         except Exception as e:
             log.error(f"An error occurred while building options for /image: {e}")
+            return None, None
 
     async def get_cnet_data() -> dict:
 
@@ -4962,6 +4964,7 @@ async def fetch_speak_options():
         return lang_list, all_voices
     except Exception as e:
         log.error(f"Error building options for '/speak' command: {e}")
+        return None, None
 
 if textgenwebui_enabled and tts_client and tts_client in supported_tts_clients:
     lang_list, all_voices = asyncio.run(fetch_speak_options())
@@ -5303,7 +5306,7 @@ class Settings:
 @dataclass_json
 @dataclass
 class CustomHistory(History):
-    manager: Optional['CustomHistoryManager'] = field(metadata=cnf(dont_save=True))
+    manager: 'CustomHistoryManager' = field(metadata=cnf(dont_save=True))
     fp_unique_id: Optional[str] = field(default=None)
     fp_character: Optional[str] = field(default=None)
     fp_mode: Optional[str] = field(default=None)
@@ -5422,7 +5425,7 @@ class CustomHistoryManager(HistoryManager):
             return os.path.join(history_dir, file)
             
             
-    def get_history_for(self, id_: ChannelID=None, character=None, mode=None, fp=None, cached_only=False) -> CustomHistory:
+    def get_history_for(self, id_: Optional[ChannelID|int]=None, character=None, mode=None, fp=None, cached_only=False) -> Optional[CustomHistory]:
         '''
         if not autoload_history:
             New files
@@ -5456,7 +5459,7 @@ class CustomHistoryManager(HistoryManager):
         
         id_, character, mode = self.get_id_parts(id_, character, mode)
         full_id = f'{id_}_{character}_{mode}'
-        history:CustomHistory = super().get_history_for(full_id, fp=fp, search=search, cached_only=cached_only)
+        history:Optional[CustomHistory] = super().get_history_for(full_id, fp=fp, search=search, cached_only=cached_only) # type: ignore
         if history is not None:
             history.set_save_info(internal_id=id_, character=character, mode=mode)
         return history
@@ -5465,7 +5468,7 @@ class CustomHistoryManager(HistoryManager):
     def new_history_for(self, id_: ChannelID, character=None, mode=None) -> CustomHistory:
         id_, character, mode = self.get_id_parts(id_, character, mode)
         full_id = f'{id_}_{character}_{mode}'
-        return super().new_history_for(full_id)
+        return super().new_history_for(full_id) # type: ignore
     
     
     def get_id_parts(self, id_: ChannelID, character=None, mode=None):
