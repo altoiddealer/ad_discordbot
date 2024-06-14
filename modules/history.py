@@ -408,6 +408,7 @@ class History:
     uuid: str                           = field(default_factory=get_uuid_hex,   metadata=cnf(dont_save=True))
     _save_event: asyncio.Event          = field(default_factory=asyncio.Event,  init=False, metadata=cnf(dont_save=True))
     _last_save: float                   = field(default_factory=time.time,      init=False, metadata=cnf(dont_save=True))
+    unsavable: bool                     = field(default=False,  metadata=cnf(dont_save=True))
     
     def __copy__(self) -> 'History':
         new = self.__class__(
@@ -692,6 +693,16 @@ class History:
 
     ###########
     # Save/load
+    def dont_save(self):
+        self.unsavable = True
+        return self
+    
+    
+    @property
+    def savable(self):
+        return not self.unsavable
+    
+    
     def last_save_delta(self):
         return time.time()-self._last_save
     
