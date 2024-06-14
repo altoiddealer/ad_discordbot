@@ -338,13 +338,14 @@ def load_extensions(extensions, available_extensions):
             except Exception:
                 log.error(f'Failed to load the extension "{name}".')
 
-tts_settings = {} # TODO ?
-try:
-    tts_settings = config.get('textgenwebui', {}).get('tts_settings', {})
-except Exception:
+
+tts_settings = config.get('textgenwebui', {}).get('tts_settings', {})
+if not tts_settings:
     tts_settings = config.get('discord', {}).get('tts_settings', {})
 
+
 supported_tts_clients = ['alltalk_tts', 'coqui_tts', 'silero_tts', 'elevenlabs_tts']
+
 
 def init_textgenwebui_extensions():
     # monkey patch load_extensions behavior from pre-commit b3fc2cd
