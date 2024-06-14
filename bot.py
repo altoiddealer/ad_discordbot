@@ -1690,7 +1690,7 @@ async def on_message(message: discord.Message):
 #################################################################
 ######################## QUEUED MESSAGE #########################
 #################################################################
-async def message_task(ictx: CtxInteraction, text:str, source:str='message', llm_payload:dict=None, params:dict={}, tags:dict={}):
+async def message_task(ictx: CtxInteraction, text:str, source:str='message', llm_payload:dict=None, params:dict={}, tags:dict={}) -> tuple[HMessage, HMessage]:
     user_name = get_user_ctx_inter(ictx).display_name
     channel = ictx.channel
 
@@ -1863,6 +1863,8 @@ async def message_task(ictx: CtxInteraction, text:str, source:str='message', llm
                 await channel.send(embed=img_gen_embed_info)
         if change_embed:
             await change_embed.delete()
+    
+    return None, None
 
 #################################################################
 ##################### QUEUED LLM GENERATION #####################
@@ -4950,7 +4952,7 @@ async def fetch_speak_options():
         elif tts_client == 'elevenlabs_tts':
             lang_list = ['English', 'German', 'Polish', 'Spanish', 'Italian', 'French', 'Portuegese', 'Hindi', 'Arabic']
             log.info('''Getting list of available voices for elevenlabs_tts for "/speak" command...''')
-            from extensions.elevenlabs_tts.script import refresh_voices, update_api_key
+            from extensions.elevenlabs_tts.script import refresh_voices, update_api_key # type: ignore
             if tts_api_key:
                 update_api_key(tts_api_key)
             all_voices = refresh_voices()
