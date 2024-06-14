@@ -289,7 +289,7 @@ if textgenwebui_enabled:
     from modules.models_settings import get_model_metadata, update_model_parameters, get_fallback_settings, infer_loader
     from modules.prompts import count_tokens
 
-## Majority of this code section is copypasta from modules/server.py
+## Majority of this code section is copy pasted from modules/server.py
 
 def init_textgenwebui_settings():
     # Loading custom settings
@@ -1667,7 +1667,7 @@ async def dynamic_prompting(user_name:str, text:str, i=None):
 @client.event
 async def on_message(message: discord.Message):
     try:
-        text = message.clean_content # primarly converts @mentions to actual user names
+        text = message.clean_content # primarily converts @mentions to actual user names
         if textgenwebui_enabled and not bot_behavior.bot_should_reply(message, text): 
             return # Check that bot should reply or not
         # Store the current time. The value will save locally to database.yaml at another time
@@ -1804,7 +1804,7 @@ async def message_task(ictx: CtxInteraction, text:str, source:str='message', llm
         return llm_model_mode, original_llmmodel
 
     async def build_llm_payload(text:str, llm_payload:dict, tags:dict, params:dict):
-        # Use prefined LLM payload or initialize with defaults
+        # Use predefined LLM payload or initialize with defaults
         if llm_payload is None:
             llm_payload = await init_llm_payload(ictx, user_name, text)
         else:
@@ -1946,7 +1946,7 @@ async def apply_toggle_tts(toggle:str='on', tts_sw:bool=None):
 async def create_user_message(local_history, llm_payload:dict, save_to_history=True, ictx:CtxInteraction=None):
     try:
         # Add user message before processing bot reply.
-        # this gives time for other messages to acrue before the bot's response, as in realistic chat scenario.
+        # this gives time for other messages to accrue before the bot's response, as in realistic chat scenario.
         user = get_user_ctx_inter(ictx)
         message = get_message_ctx_inter(ictx)
         user_message = local_history.new_message(llm_payload['state']['name1'], llm_payload['text'], 'user', user.id)
@@ -2036,7 +2036,7 @@ async def continue_task(inter:discord.Interaction, target_discord_msg:discord.Me
     channel = inter.channel
     system_embed = None
     try:
-        # collect relavent history and messages
+        # collect relevant history and messages
         local_history = bot_history.get_history_for(inter.channel.id)
         if not local_history:
             await inter.followup.send("There is currently no chat history to continue from.", ephemeral=True)
@@ -2175,7 +2175,7 @@ async def regenerate_task(inter:discord.Interaction, inter_discord_msg:discord.M
     channel = inter.channel
     system_embed = None
     try:
-        # collect relavent history and messages
+        # collect relevant history and messages
         local_history = bot_history.get_history_for(inter.channel.id)
         if not local_history:
             await inter.followup.send("There is currently no chat history to regenerate from.", ephemeral=True)

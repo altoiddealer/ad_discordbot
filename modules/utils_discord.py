@@ -23,7 +23,7 @@ def guild_only():
         return True
     return commands.check(predicate)
 
-async def react_to_user_message(clientuser: discord.User, channel, user_message:'HMessage'=None):
+async def react_to_user_message(client_user: discord.User, channel, user_message:'HMessage'=None):
     try:
         if user_message.id:
             emoji = bot_emojis.hidden_emoji
@@ -33,7 +33,7 @@ async def react_to_user_message(clientuser: discord.User, channel, user_message:
             for reaction in discord_message.reactions:
                 if str(reaction.emoji) == emoji:
                     async for user in reaction.users():
-                        if user == clientuser:
+                        if user == client_user:
                             has_reacted = True
                             break
                         
@@ -41,7 +41,7 @@ async def react_to_user_message(clientuser: discord.User, channel, user_message:
                 await discord_message.add_reaction(emoji)
                 
             elif not user_message.hidden and has_reacted:
-                await discord_message.remove_reaction(emoji, clientuser)
+                await discord_message.remove_reaction(emoji, client_user)
                 
     except Exception as e:
         log.error(f"Error reacting to user message: {e}")
@@ -75,16 +75,16 @@ async def ireply(ictx: 'CtxInteraction', process):
 
 async def send_long_message(channel, message_text, bot_message:'HMessage'=None) -> int:
     """ Splits a longer message into parts while preserving sentence boundaries and code blocks """
-    activelang = ''
+    active_lang = ''
 
     # Helper function to ensure even pairs of code block markdown
     def ensure_even_code_blocks(chunk_text, code_block_inserted):
-        nonlocal activelang  # Declare activelang as nonlocal to modify the global variable
+        nonlocal active_lang  # Declare active_lang as nonlocal to modify the global variable
         code_block_languages = ["asciidoc", "autohotkey", "bash", "coffeescript", "cpp", "cs", "css", "diff", "fix", "glsl", "ini", "json", "md", "ml", "prolog", "ps", "py", "tex", "xl", "xml", "yaml", "html"]
         code_block_count = chunk_text.count("```")
         if code_block_inserted:
             # If a code block was inserted in the previous chunk, add a leading set of "```"
-            chunk_text = f"```{activelang}\n" + chunk_text
+            chunk_text = f"```{active_lang}\n" + chunk_text
             code_block_inserted = False  # Reset the code_block_inserted flag
         code_block_count = chunk_text.count("```")
         if code_block_count % 2 == 1:
@@ -93,7 +93,7 @@ async def send_long_message(channel, message_text, bot_message:'HMessage'=None) 
             last_code_block = chunk_text[last_code_block_index + len("```"):].strip()
             for lang in code_block_languages:
                 if (last_code_block.lower()).startswith(lang):
-                    activelang = lang
+                    active_lang = lang
                     break  # Stop checking if a match is found
             # If there is an odd number of code blocks, add a closing set of "```"
             chunk_text += "```"
@@ -141,11 +141,11 @@ async def send_long_message(channel, message_text, bot_message:'HMessage'=None) 
 
 # Model for editing history
 class EditMessageModal(discord.ui.Modal, title="Edit Message in History"):
-    def __init__(self, clientuser: discord.User, matched_hmessage: 'HMessage', target_message: discord.Message, local_history:'History'=None):
+    def __init__(self, client_user: discord.User, matched_hmessage: 'HMessage', target_message: discord.Message, local_history:'History'=None):
         super().__init__()
         self.target_message = target_message
         self.matched_hmessage = matched_hmessage
-        self.clientuser = clientuser
+        self.client_user = client_user
         
         default_text = target_message.clean_content
         if local_history is not None:
@@ -186,7 +186,7 @@ class EditMessageModal(discord.ui.Modal, title="Edit Message in History"):
         await inter.response.send_message("Message history has been edited successfully.", ephemeral=True, delete_after=5)
 
         # Update text in discord message
-        if self.clientuser == self.target_message.author:
+        if self.client_user == self.target_message.author:
             await self.target_message.edit(content=edited_message[:2000])
         else:
             await inter.response.send_message("Note: The bot cannot update your message contents in Discord.", ephemeral=True, delete_after=5)
