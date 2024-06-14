@@ -2785,7 +2785,7 @@ async def layerdiffuse_hack(temp_dir, img_payload, images, pnginfo):
     except Exception as e:
         log.error(f'Error processing layerdiffuse images: {e}')
 
-async def apply_reactor_mask(temp_dir, images, pnginfo, reactor_mask):
+async def apply_reactor_mask(temp_dir, images: list[Image.Image], pnginfo, reactor_mask):
     try:
         reactor_mask = Image.open(io.BytesIO(base64.b64decode(reactor_mask))).convert('L')
         orig_image = images[0]                                          # Open original image
