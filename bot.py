@@ -5306,7 +5306,6 @@ class CustomHistory(History):
             self.fp_unique_id = datetime.now().strftime('%Y%m%d-%H-%M-%S')
 
         history_dir = self.manager.history_dir_template.format(character=self.fp_character, mode=self.fp_mode, id=self.fp_internal_id)
-        os.makedirs(history_dir, exist_ok=True)
         self.fp = os.path.join(history_dir, f'{self.fp_unique_id}.json')
         
         if not has_file_name:
