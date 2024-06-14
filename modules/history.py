@@ -108,25 +108,25 @@ def cnf(default=None, default_list:tuple=None, check_bool=True, encoder=None, de
 @dataclass_json
 @dataclass
 class HMessage:
-    history: Optional['History']        = field(metadata=cnf(dont_save=True))
+    history: 'History'                  = field(metadata=cnf(dont_save=True))
     # TODO make history optional
     # so that HMessage could be subclassed to fill out items like role
     # then the message has an .add_to_history(history) method
     # which will assign it, and grab a uuid
     
-    name: Optional[str]                 = field(default='', metadata=cnf())
-    text: Optional[str]                 = field(default='', metadata=cnf())
+    name: str                           = field(default='', metadata=cnf())
+    text: str                           = field(default='', metadata=cnf())
     role: Optional[str]                 = field(default=None, metadata=cnf())
     author_id: Optional[UserID]         = field(default=None, metadata=cnf())
 
-    replies: Optional[list['HMessage']] = field(default_factory=list,   metadata=cnf(dont_save=True))
+    replies: list['HMessage']           = field(default_factory=list,   metadata=cnf(dont_save=True))
     reply_to: Optional['HMessage']      = field(default=None,           metadata=cnf(encoder=cls_get_id, decoder=str))
     #continued_to: Optional['HMessage']  = field(default=None,           metadata=cnf(encoder=cls_get_id, decoder=str))
 
     text_visible: str                   = field(default='',     metadata=cnf())
     id: Optional[MessageID]             = field(default=None,   metadata=cnf(check_bool=False)) # because id's could be "0"
     audio_id: Optional[MessageID]       = field(default=None,   metadata=cnf(dont_save=True))
-    related_ids: Optional[list[MessageID]] = field(default_factory=list,   metadata=cnf()) # TODO add update tracking here.
+    related_ids: list[MessageID]        = field(default_factory=list,   metadata=cnf()) # TODO add update tracking here.
     
     typing: bool                        = field(default=False,  metadata=cnf(False))
     spoken: bool                        = field(default=False,  metadata=cnf(False))
@@ -307,7 +307,7 @@ class HistoryPairForTGWUI:
 @dataclass_json
 @dataclass
 class History:
-    manager: Optional['HistoryManager'] = field(metadata=cnf(dont_save=True))
+    manager: 'HistoryManager'           = field(metadata=cnf(dont_save=True))
     id: ChannelID
     
     fp: Optional[str]                   = field(default=None, metadata=cnf(dont_save=True)) # TODO just set this on load when found correct file.
