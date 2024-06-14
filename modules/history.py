@@ -189,6 +189,8 @@ class HMessage:
         if not message:
             return self
         
+        assert isinstance(message, self.__class__), f'HMessage.mark_as_reply_for expected {self.__class__} type, got {type(message)}'
+        
         self.reply_to = message
         message.replies.append(self)
         if save:
@@ -336,6 +338,7 @@ class History:
     ###########
     # Item list
     def __contains__(self, message: HMessage):
+        assert isinstance(message, HMessage), f'History.__contains__ expected {HMessage} type, got {type(message)}'
         return message in self._items
 
 
@@ -378,6 +381,8 @@ class History:
 
 
     def append(self, message: HMessage):
+        assert isinstance(message, HMessage), f'History.append expected {HMessage} type, got {type(message)}'
+        
         self._items.append(message)
         self._last[message.author_id] = message
         self.event_save.set()
@@ -398,6 +403,8 @@ class History:
 
 
     def __setitem__(self, slice:slice, message: HMessage):
+        assert isinstance(message, HMessage), f'History.__setitem__ expected {HMessage} type, got {type(message)}'
+        
         self._items[slice] = message
         self.event_save.set()
 
@@ -466,6 +473,8 @@ class History:
             raise Exception(f'Unknown HMessage role: {hmessage.role}, should match [user/assistant]')
         
     def get_history_labels_for_message(self, message:HMessage) -> str:
+        assert isinstance(message, HMessage), f'History.get_history_labels_for_message expected {HMessage} type, got {type(message)}'
+        
         labels = {'is_continued': 'continued',
                   'is_regenerated': 'regenerated',
                   'hidden': 'hidden message'}
@@ -484,6 +493,7 @@ class History:
         return labels_for_message
     
     def get_labeled_history_text(self, message:HMessage, input_text:str='', mention_mode:str=None, label_mode:str=None):
+        # assert is handled by get_history_labels for now.
         history_labels = self.get_history_labels_for_message(message)
 
         ##########
@@ -756,6 +766,8 @@ class HistoryManager:
     
 
     def add_history(self, history: History):
+        assert isinstance(history, History), f'HistoryManager.add_history expected {History} type, got {type(history)}'
+        
         self._histories[history.id] = history
         return history
 
