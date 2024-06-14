@@ -4116,11 +4116,8 @@ async def announce(ctx: commands.Context):
         log.error(f"Error toggling announce channel setting: {e}")
 
 @client.hybrid_command(description="Toggle current channel as main channel for bot to auto-reply without needing to be called")
+@guild_only()
 async def main(ctx: commands.Context):
-    allowed_commands = config.get('discord', {}).get('direct_messages', {}).get('allowed_commands', [])
-    if 'main' not in allowed_commands:
-        await ctx.reply('The bot is not configured to process this command in direct messages')
-        return
     try:
         if ctx.channel.id in bot_database.main_channels:
             bot_database.main_channels.remove(ctx.channel.id) # If the channel is already in the main channels, remove it
@@ -5088,13 +5085,15 @@ class Behavior:
         return False
 
     def bot_should_reply(self, message:discord.Message, text:str) -> bool:
+        main_condition = (isinstance(message.channel, discord.DMChannel) or (message.channel.id in bot_database.main_channels))
+
         if not config.get('discord', {}).get('direct_messages', {}).get('allow_chatting', True):
             return False
         # Don't reply to @everyone or to itself
         if message.mention_everyone or (message.author == client.user and not self.probability_to_reply(self.reply_to_itself)):
             return False
         # Whether to reply to other bots
-        if message.author.bot and bot_database.last_character.lower() in text.lower() and message.channel.id in bot_database.main_channels:
+        if message.author.bot and bot_database.last_character.lower() in text.lower() and main_condition:
             if 'bye' in text.lower(): # don't reply if another bot is saying goodbye
                 return False
             return self.probability_to_reply(self.reply_to_bots_when_addressed)
@@ -5103,13 +5102,13 @@ class Behavior:
             return False
         # Whether to reply if only speak when spoken to
         if (self.only_speak_when_spoken_to and (client.user.mentioned_in(message) or any(word in message.content.lower() for word in bot_database.last_character.lower().split()))) \
-            or (self.in_active_conversation(message.author.id) and message.channel.id in bot_database.main_channels):
+            or (self.in_active_conversation(message.author.id) and main_condition):
             return True
         reply = False
         # few more conditions
-        if message.author.bot and message.channel.id in bot_database.main_channels:
+        if message.author.bot and main_condition:
             reply = self.probability_to_reply(self.chance_to_reply_to_other_bots)
-        if self.go_wild_in_channel and message.channel.id in bot_database.main_channels:
+        if self.go_wild_in_channel and main_condition:
             reply = True
         if reply:
             self.update_user_dict(message.author.id)
