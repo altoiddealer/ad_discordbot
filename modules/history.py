@@ -1,10 +1,5 @@
 # Designed by Artificiangel
 # https://github.com/Artificiangel/llm-history-manager.git for future updates
-
-
-from modules.logs import import_track, log, get_logger; import_track(__file__, fp=True)
-log = get_logger(__name__)
-logging = log
 import os
 from dataclasses import dataclass, field
 from dataclasses_json import dataclass_json, config
@@ -25,11 +20,12 @@ from typing import (
     Callable,
     Coroutine,
     Iterable,
-    Optional,
     TypeVar,
-    Union,
     overload,
 )
+
+from modules.logs import import_track, get_logger; import_track(__file__, fp=True); log = get_logger(__name__)  # noqa: E702
+logging = log
 
 #######
 # Utils
@@ -112,25 +108,25 @@ def cnf(default=None, default_list:tuple=None, check_bool=True, encoder=None, de
 @dataclass_json
 @dataclass
 class HMessage:
-    history: Optional['History']        = field(metadata=cnf(dont_save=True))
+    history: 'History'                  = field(metadata=cnf(dont_save=True))
     # TODO make history optional
     # so that HMessage could be subclassed to fill out items like role
     # then the message has an .add_to_history(history) method
     # which will assign it, and grab a uuid
     
-    name: Optional[str]                 = field(default='', metadata=cnf())
-    text: Optional[str]                 = field(default='', metadata=cnf())
+    name: str                           = field(default='', metadata=cnf())
+    text: str                           = field(default='', metadata=cnf())
     role: Optional[str]                 = field(default=None, metadata=cnf())
     author_id: Optional[UserID]         = field(default=None, metadata=cnf())
 
-    replies: Optional[list['HMessage']] = field(default_factory=list,   metadata=cnf(dont_save=True))
+    replies: list['HMessage']           = field(default_factory=list,   metadata=cnf(dont_save=True))
     reply_to: Optional['HMessage']      = field(default=None,           metadata=cnf(encoder=cls_get_id, decoder=str))
     #continued_to: Optional['HMessage']  = field(default=None,           metadata=cnf(encoder=cls_get_id, decoder=str))
 
     text_visible: str                   = field(default='',     metadata=cnf())
     id: Optional[MessageID]             = field(default=None,   metadata=cnf(check_bool=False)) # because id's could be "0"
     audio_id: Optional[MessageID]       = field(default=None,   metadata=cnf(dont_save=True))
-    related_ids: Optional[list[MessageID]] = field(default_factory=list,   metadata=cnf()) # TODO add update tracking here.
+    related_ids: list[MessageID]        = field(default_factory=list,   metadata=cnf()) # TODO add update tracking here.
     
     typing: bool                        = field(default=False,  metadata=cnf(False))
     spoken: bool                        = field(default=False,  metadata=cnf(False))
@@ -189,6 +185,8 @@ class HMessage:
         if not message:
             return self
         
+        assert isinstance(message, self.__class__), f'HMessage.mark_as_reply_for expected {self.__class__} type, got {type(message)}'
+        
         self.reply_to = message
         message.replies.append(self)
         if save:
@@ -241,7 +239,7 @@ class HMessage:
     
     def new_history_end_here(self, include_self=True) -> Union['History', None]:
         new_history = self.duplicate_history()
-        if not self in new_history:
+        if self not in new_history:
             return None
 
         index = new_history.index(self)
@@ -254,7 +252,7 @@ class HMessage:
     
     def new_history_start_here(self, include_self=True) -> Union['History', None]:
         new_history = self.duplicate_history()
-        if not self in new_history:
+        if self not in new_history:
             return None
 
         index = new_history.index(self)
@@ -309,7 +307,7 @@ class HistoryPairForTGWUI:
 @dataclass_json
 @dataclass
 class History:
-    manager: Optional['HistoryManager'] = field(metadata=cnf(dont_save=True))
+    manager: 'HistoryManager'           = field(metadata=cnf(dont_save=True))
     id: ChannelID
     
     fp: Optional[str]                   = field(default=None, metadata=cnf(dont_save=True)) # TODO just set this on load when found correct file.
@@ -336,6 +334,7 @@ class History:
     ###########
     # Item list
     def __contains__(self, message: HMessage):
+        assert isinstance(message, HMessage), f'History.__contains__ expected {HMessage} type, got {type(message)}'
         return message in self._items
 
 
@@ -378,6 +377,8 @@ class History:
 
 
     def append(self, message: HMessage):
+        assert isinstance(message, HMessage), f'History.append expected {HMessage} type, got {type(message)}'
+        
         self._items.append(message)
         self._last[message.author_id] = message
         self.event_save.set()
@@ -398,6 +399,8 @@ class History:
 
 
     def __setitem__(self, slice:slice, message: HMessage):
+        assert isinstance(message, HMessage), f'History.__setitem__ expected {HMessage} type, got {type(message)}'
+        
         self._items[slice] = message
         self.event_save.set()
 
@@ -466,6 +469,8 @@ class History:
             raise Exception(f'Unknown HMessage role: {hmessage.role}, should match [user/assistant]')
         
     def get_history_labels_for_message(self, message:HMessage) -> str:
+        assert isinstance(message, HMessage), f'History.get_history_labels_for_message expected {HMessage} type, got {type(message)}'
+        
         labels = {'is_continued': 'continued',
                   'is_regenerated': 'regenerated',
                   'hidden': 'hidden message'}
@@ -484,6 +489,7 @@ class History:
         return labels_for_message
     
     def get_labeled_history_text(self, message:HMessage, input_text:str='', mention_mode:str=None, label_mode:str=None):
+        # assert is handled by get_history_labels for now.
         history_labels = self.get_history_labels_for_message(message)
 
         ##########
@@ -504,7 +510,7 @@ class History:
             if mention_mode is not None:
                 # Check to see if prefixed @mention is not just cosmetically added by the bot
                 mention_in_message = None
-                if getattr(message, 'text', None) is not None:
+                if message.text:
                     mention_in_message = patterns.mention_prefix.search(message.text)
                 if not mention_in_message:
                     mention_in_input = patterns.mention_prefix.search(output_text)
@@ -756,6 +762,8 @@ class HistoryManager:
     
 
     def add_history(self, history: History):
+        assert isinstance(history, History), f'HistoryManager.add_history expected {History} type, got {type(history)}'
+        
         self._histories[history.id] = history
         return history
 
