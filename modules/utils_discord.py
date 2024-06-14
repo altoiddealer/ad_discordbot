@@ -16,6 +16,13 @@ if TYPE_CHECKING:
 MAX_MESSAGE_LENGTH = 1980
 # MAX_MESSAGE_LENGTH = 200 # testing
 
+def guild_only():
+    async def predicate(ctx):
+        if ctx.guild is None:
+            raise commands.CheckFailure("This command can only be used in a server.")
+        return True
+    return commands.check(predicate)
+
 async def react_to_user_message(clientuser: discord.User, channel, user_message:'HMessage'=None):
     try:
         user_message_id = getattr(user_message, 'id', None)

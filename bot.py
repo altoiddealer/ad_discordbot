@@ -42,7 +42,7 @@ sys.path.append("ad_discordbot")
 from modules.database import Database, ActiveSettings, Config, StarBoard, Statistics
 from modules.utils_shared import task_semaphore, shared_path, patterns, bot_emojis
 from modules.utils_misc import fix_dict, update_dict, sum_update_dict, update_dict_matched_keys, format_time
-from modules.utils_discord import ireply, sleep_delete_message, send_long_message, EditMessageModal, SelectedListItem, SelectOptionsView, CtxInteraction, get_user_ctx_inter, get_message_ctx_inter, react_to_user_message, MAX_MESSAGE_LENGTH
+from modules.utils_discord import guild_only, ireply, sleep_delete_message, send_long_message, EditMessageModal, SelectedListItem, SelectOptionsView, CtxInteraction, get_user_ctx_inter, get_message_ctx_inter, react_to_user_message, MAX_MESSAGE_LENGTH
 from modules.utils_files import load_file, merge_base, save_yaml_file
 from modules.utils_aspect_ratios import round_to_precision, res_to_model_fit, dims_from_ar, avg_from_dims, get_aspect_ratio_parts, calculate_aspect_ratio_sizes
 from modules.history import HistoryManager, History, HMessage, cnf
@@ -223,6 +223,7 @@ if sd_enabled:
 
     # Function to attempt restarting the SD WebUI Client in the event it gets stuck
     @client.hybrid_command(description=f"Immediately Restarts the {SD_CLIENT} server. Requires '--api-server-stop' SD WebUI launch flag.")
+    @guild_only()
     async def restart_sd_client(ctx: commands.Context):
         try:
             system_embed = None
@@ -542,6 +543,7 @@ imgmodel_update_task = None # Global variable allows process to be cancelled and
 if sd_enabled:
     # Register command for helper function to toggle auto-select imgmodel
     @client.hybrid_command(description='Toggles the automatic Img model changing task')
+    @guild_only()
     async def toggle_auto_change_imgmodels(ctx: commands.Context):
         global imgmodel_update_task
         if imgmodel_update_task and not imgmodel_update_task.done():
@@ -909,6 +911,7 @@ if textgenwebui_enabled and tts_client:
 
     # Register command for helper function to toggle TTS
     @client.hybrid_command(description='Toggles TTS on/off')
+    @guild_only()
     async def toggle_tts(ctx: commands.Context):
         await ireply(ctx, 'toggle TTS') # send a response msg to the user
         async with task_semaphore:
@@ -1739,7 +1742,9 @@ async def message_task(ictx: CtxInteraction, text:str, source:str='message', llm
         ## Finalize payload, generate text via TGWUI, and process responses
         # Toggle TTS off, if interaction server is not connected to Voice Channel
         tts_sw = None
-        if (not params['bot_will_do']['should_send_text']) or (voice_client and (voice_client != ictx.guild.voice_client) and int(tts_settings.get('play_mode', 0)) == 0):
+        if (not params['bot_will_do']['should_send_text']) or (
+            hasattr(ictx, 'guild') and getattr(ictx.guild, 'voice_client', None) and 
+            voice_client and (voice_client != ictx.guild.voice_client) and int(tts_settings.get('play_mode', 0)) == 0):
             tts_sw = await apply_toggle_tts(toggle='off')
         save_to_history = params.get('save_to_history', True)
         # Check to apply Server Mode
@@ -1759,7 +1764,7 @@ async def message_task(ictx: CtxInteraction, text:str, source:str='message', llm
             bot_message = await replace_msg_in_history_and_discord(ictx, params, last_resp, tts_resp)
             params['bot_will_do']['should_send_text'] = False
         else:
-            bot_message = await create_bot_message(user_message, local_history, save_to_history, last_resp, tts_resp)
+            bot_message = await create_bot_message(user_message, local_history, save_to_history, last_resp, tts_resp, ictx)
         # Toggle TTS back on if it was toggled off
         await apply_toggle_tts(toggle='on', tts_sw=tts_sw)
 
@@ -1933,7 +1938,7 @@ async def apply_toggle_tts(toggle:str='on', tts_sw:bool=None):
     return None
 
 # Creates user message in HManager
-async def create_user_message(local_history, llm_payload:dict, save_to_history=True, ictx=None):
+async def create_user_message(local_history, llm_payload:dict, save_to_history=True, ictx:CtxInteraction=None):
     try:
         # Add user message before processing bot reply.
         # this gives time for other messages to acrue before the bot's response, as in realistic chat scenario.
@@ -1944,7 +1949,10 @@ async def create_user_message(local_history, llm_payload:dict, save_to_history=T
         # set history flag
         if not save_to_history:
             user_message.hidden = True
-            #user_message.dont_save()
+        if ictx and hasattr(ictx, 'channel') and isinstance(ictx.channel, discord.DMChannel):
+            user_message.dont_save()
+            await warn_direct_channel(ictx)
+
         return user_message
     except Exception as e:
         log.error(f'An error occurred while creating user message: {e}')
@@ -1984,16 +1992,29 @@ async def llm_gen(llm_payload:dict) -> str:
         log.error(f'An error occurred in llm_gen(): {e}')
         traceback.print_exc()
         return '', ''
+    
+# Warn anyone direct messaging the bot
+async def warn_direct_channel(ictx: CtxInteraction):
+    warned_id = f'dm_{ictx.author.id}'
+    if not bot_database.was_warned(warned_id):
+        bot_database.update_was_warned(warned_id)
+        if system_embed_info:
+            system_embed_info.title = "This conversation will not be saved, ***however***:"
+            system_embed_info.description = "Your interactions will be included in the bot's general logging."
+            await ictx.channel.send(embed=system_embed_info)
+        else:
+            await ictx.channel.send("This conversation will not be saved. ***However***, your interactions will be included in the bot's general logging.")
 
 # Process responses from text-generation-webui
-async def create_bot_message(user_message:HMessage, local_history:History, save_to_history:bool=True, last_resp:str='', tts_resp:str='') -> HMessage:
+async def create_bot_message(user_message:HMessage, local_history:History, save_to_history:bool=True, last_resp:str='', tts_resp:str='', ictx:CtxInteraction=None) -> HMessage:
     try:
         bot_message = local_history.new_message(bot_settings.name, last_resp, 'assistant', bot_settings._bot_id, text_visible=tts_resp)
         if user_message:
             bot_message.mark_as_reply_for(user_message)
         if not save_to_history:
             bot_message.hidden = True
-            #bot_message.dont_save()
+        if ictx and hasattr(ictx, 'channel') and isinstance(ictx.channel, discord.DMChannel):
+            bot_message.dont_save()
 
         if last_resp:
             truncation = int(bot_settings.settings['llmstate']['state']['truncation_length'] * 4) #approx tokens
@@ -2253,7 +2274,7 @@ async def speak_task(ctx: commands.Context, text:str, params:dict):
         # generate text with text-generation-webui
         last_resp, tts_resp = await llm_gen(llm_payload)
         # Process responses
-        bot_message = await create_bot_message(user_message, local_history, False, last_resp, tts_resp)
+        bot_message = await create_bot_message(user_message, local_history, False, last_resp, tts_resp, ctx)
 
         if system_embed:
             await system_embed.delete()
@@ -2490,7 +2511,7 @@ async def change_char_task(ictx: CtxInteraction, source:str, params:dict):
             change_embed_info.title = f"{user_name} {change_message}:"
             await channel.send(embed=change_embed_info)
             # Send embeds to announcement channels
-            if bot_database.announce_channels:
+            if bot_database.announce_channels and not isinstance(ictx.channel, discord.DMChannel):
                 await bg_task_queue.put(announce_changes(ictx, change_message, char_name))
         await send_char_greeting_or_history(ictx, char_name)
         log.info(f"Character loaded: {char_name}")
@@ -3714,6 +3735,10 @@ if sd_enabled:
             await process_image(ctx, user_selections)
 
     async def process_image(ctx: commands.Context, selections):
+        allowed_commands = config.get('discord', {}).get('direct_messages', {}).get('allowed_commands', [])
+        if 'image' not in allowed_commands:
+            await ctx.reply('The bot is not configured to process this command in direct messages')
+            return
         # Do not process if SD WebUI is offline
         if not await sd_online(ctx.channel):
             await ctx.defer()
@@ -4019,6 +4044,16 @@ if sd_enabled:
 #################################################################
 ######################### MISC COMMANDS #########################
 #################################################################
+@client.event
+async def on_command_error(ctx, error):
+    if isinstance(error, commands.CheckFailure):    
+        if hasattr(ctx, 'reply') and callable(getattr(ctx, 'reply')):
+            await ctx.reply(error, ephemeral=True, delete_after=5)
+        elif hasattr(ctx, 'response') and callable(getattr(ctx.response, 'send_message')):
+            await ctx.response.send_message(error, ephemeral=True, delete_after=5)
+        else:
+            await ctx.send(error)
+
 if system_embed_info:
     @client.hybrid_command(description="Display help menu")
     async def helpmenu(ctx):
@@ -4040,6 +4075,7 @@ if system_embed_info:
         await ctx.send(embed=system_embed_info)
 
 @client.hybrid_command(description="Toggle current channel as an announcement channel for the bot (model changes)")
+@guild_only()
 async def announce(ctx: commands.Context):
     try:
         if ctx.channel.id in bot_database.announce_channels:
@@ -4057,6 +4093,10 @@ async def announce(ctx: commands.Context):
 
 @client.hybrid_command(description="Toggle current channel as main channel for bot to auto-reply without needing to be called")
 async def main(ctx: commands.Context):
+    allowed_commands = config.get('discord', {}).get('direct_messages', {}).get('allowed_commands', [])
+    if 'main' not in allowed_commands:
+        await ctx.reply('The bot is not configured to process this command in direct messages')
+        return
     try:
         if ctx.channel.id in bot_database.main_channels:
             bot_database.main_channels.remove(ctx.channel.id) # If the channel is already in the main channels, remove it
@@ -4072,6 +4112,7 @@ async def main(ctx: commands.Context):
         log.error(f"Error toggling main channel setting: {e}")
 
 @client.hybrid_command(description="Update dropdown menus without restarting bot script.")
+@guild_only()
 async def sync(ctx: commands.Context):
     try:
         await ctx.reply('Syncing client tree. Note: Menus may not update instantly.', ephemeral=True, delete_after=10)
@@ -4087,6 +4128,9 @@ if textgenwebui_enabled:
     # /reset_conversation command - Resets current character
     @client.hybrid_command(description="Reset the conversation with current character")
     async def reset_conversation(ctx: commands.Context):
+        if config.get('discord', {}).get('direct_messages', {}).get('allow_chatting', True) == False:
+            await ctx.reply('The bot is not configured to process this command in direct messages')
+            return
         try:
             shared.stop_everything = True
             await ireply(ctx, 'conversation reset') # send a response msg to the user
@@ -4105,6 +4149,7 @@ if textgenwebui_enabled:
 
     # /save_conversation command
     @client.hybrid_command(description="Saves the current conversation to a new file in text-generation-webui/logs/")
+    @guild_only()
     async def save_conversation(ctx: commands.Context):
         try:
             await bot_history.get_history_for(ctx.channel.id).save(timeout=0, force=True)
@@ -4446,6 +4491,7 @@ def get_all_characters():
 if textgenwebui_enabled:
     # Command to change characters
     @client.hybrid_command(description="Choose a character")
+    @guild_only()
     async def character(ctx: commands.Context):
         try:
             _, filtered_characters = get_all_characters()
@@ -4661,6 +4707,7 @@ async def process_imgmodel(ctx, selected_imgmodel_value):
 if sd_enabled:
 
     @client.hybrid_command(description="Choose an Img Model")
+    @guild_only()
     async def imgmodel(ctx: commands.Context):
         try:
             all_imgmodels = await fetch_imgmodels()
@@ -4708,6 +4755,7 @@ async def process_llmmodel(ctx, selected_llmmodel):
 if textgenwebui_enabled:
 
     @client.hybrid_command(description="Choose an LLM Model")
+    @guild_only()
     async def llmmodel(ctx: commands.Context):
         try:
             all_llmmodels = utils.get_available_models()
@@ -4835,6 +4883,10 @@ async def process_user_voice(ctx: commands.Context, voice_input=None):
 
 async def process_speak(ctx: commands.Context, input_text, selected_voice=None, lang=None, voice_input=None):
     try:
+        allowed_commands = config.get('discord', {}).get('direct_messages', {}).get('allowed_commands', [])
+        if 'speak' not in allowed_commands:
+            await ctx.reply('The bot is not configured to process this command in direct messages')
+            return
         # Only generate TTS for the server conntected to Voice Channel
         if voice_client and (voice_client != ctx.guild.voice_client) and int(tts_settings.get('play_mode', 0)) == 0:
             await ctx.send('Voice Channel is not enabled on this server', ephemeral=True, delete_after=5)
@@ -5002,6 +5054,8 @@ class Behavior:
         return False
 
     def bot_should_reply(self, message:discord.Message, text:str) -> bool:
+        if config.get('discord', {}).get('direct_messages', {}).get('allow_chatting', True) == False:
+            return False
         # Don't reply to @everyone or to itself
         if message.mention_everyone or (message.author == client.user and not self.probability_to_reply(self.reply_to_itself)):
             return False
