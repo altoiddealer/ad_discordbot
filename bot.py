@@ -40,7 +40,7 @@ sys.path.append("ad_discordbot")
 from modules.database import Database, ActiveSettings, Config, StarBoard, Statistics
 from modules.utils_shared import task_semaphore, shared_path, patterns, bot_emojis
 from modules.utils_misc import fix_dict, update_dict, sum_update_dict, update_dict_matched_keys, format_time  # noqa: F401
-from modules.utils_discord import guild_only, ireply, sleep_delete_message, send_long_message, EditMessageModal, SelectedListItem, SelectOptionsView, get_user_ctx_inter, get_message_ctx_inter, react_to_user_message, MAX_MESSAGE_LENGTH  # noqa: F401
+from modules.utils_discord import guild_only, configurable_for_dm_if, is_direct_message, ireply, sleep_delete_message, send_long_message, EditMessageModal, SelectedListItem, SelectOptionsView, get_user_ctx_inter, get_message_ctx_inter, react_to_user_message, MAX_MESSAGE_LENGTH  # noqa: F401
 from modules.utils_files import load_file, merge_base, save_yaml_file  # noqa: F401
 from modules.utils_aspect_ratios import round_to_precision, res_to_model_fit, dims_from_ar, avg_from_dims, get_aspect_ratio_parts, calculate_aspect_ratio_sizes  # noqa: F401
 from modules.history import HistoryManager, History, HMessage, cnf
@@ -875,13 +875,13 @@ async def upload_tts_file(channel:discord.TextChannel, bot_message:HMessage):
         bot_message.update(audio_id=sent_message.id)
     
 
-async def process_tts_resp(channel:discord.TextChannel, bot_message:HMessage):
+async def process_tts_resp(ictx:CtxInteraction, bot_message:HMessage, is_dm:bool=False):
     play_mode = int(tts_settings.get('play_mode', 0))
     # Upload to interaction channel
     if play_mode > 0:
-        await upload_tts_file(channel, bot_message)
+        await upload_tts_file(ictx.channel, bot_message)
     # Play in voice channel
-    if play_mode != 1 and (voice_client == channel.guild.voice_client):
+    if not is_direct_message(ictx) and play_mode != 1 and (voice_client == ictx.channel.guild.voice_client):
         await bg_task_queue.put(play_in_voice_channel(bot_message.text_visible)) # run task in background
         
     bot_message.update(spoken=True)
@@ -1706,7 +1706,7 @@ async def message_task(ictx: CtxInteraction, text:str, source:str='message', llm
         if bot_message:
             # Process any TTS response
             if bot_message.text_visible:
-                await process_tts_resp(channel, bot_message)
+                await process_tts_resp(ictx, bot_message)
             if params['bot_will_do']['should_send_text']:
                 # Apply any labels applicable to message
                 labeled_resp = local_history.get_labeled_history_text(bot_message, bot_message.text)
@@ -1757,7 +1757,7 @@ async def message_task(ictx: CtxInteraction, text:str, source:str='message', llm
         # Update names in stopping strings
         llm_payload = extra_stopping_strings(llm_payload)
         # Get history for interaction channel
-        if isinstance(ictx.channel, discord.DMChannel):
+        if is_direct_message(ictx):
             local_history = bot_history.get_history_for(ictx.channel.id).dont_save()
         else:
             local_history = bot_history.get_history_for(ictx.channel.id)
@@ -1959,7 +1959,7 @@ async def create_user_message(local_history, llm_payload:dict, save_to_history=T
         # set history flag
         if not save_to_history:
             user_message.hidden = True
-        if ictx and hasattr(ictx, 'channel') and isinstance(ictx.channel, discord.DMChannel):
+        if is_direct_message(ictx):
             user_message.dont_save()
             await warn_direct_channel(ictx)
 
@@ -2022,7 +2022,7 @@ async def create_bot_message(user_message:Optional[HMessage], local_history:Opti
             bot_message.mark_as_reply_for(user_message)
         if not save_to_history:
             bot_message.hidden = True
-        if ictx and hasattr(ictx, 'channel') and isinstance(ictx.channel, discord.DMChannel):
+        if is_direct_message(ictx):
             bot_message.dont_save()
 
         if last_resp:
@@ -2123,7 +2123,7 @@ async def continue_task(inter:discord.Interaction, target_discord_msg:discord.Me
 
         # process any tts resp
         if tts_resp:
-            await process_tts_resp(channel, updated_bot_message)
+            await process_tts_resp(inter, updated_bot_message)
 
     except Exception as e:
         e_msg = 'An error occurred while processing "Continue"'
@@ -2288,7 +2288,7 @@ async def speak_task(ctx: commands.Context, text:str, params:dict):
             await system_embed.delete()
         if not bot_message:
             return
-        await process_tts_resp(channel, bot_message)
+        await process_tts_resp(ctx, bot_message)
         # remove api key (don't want to share this to the world!)
         for sub_dict in tts_args.values():
             if 'api_key' in sub_dict:
@@ -2520,7 +2520,7 @@ async def change_char_task(ictx: CtxInteraction, source:str, params:dict):
             change_embed_info.title = f"{user_name} {change_message}:"
             await channel.send(embed=change_embed_info)
             # Send embeds to announcement channels
-            if bot_database.announce_channels and not isinstance(ictx.channel, discord.DMChannel):
+            if bot_database.announce_channels and not is_direct_message(ictx):
                 await bg_task_queue.put(announce_changes(ictx, change_message, char_name))
         await send_char_greeting_or_history(ictx, char_name)
         log.info(f"Character loaded: {char_name}")
@@ -3712,6 +3712,7 @@ if sd_enabled:
         @app_commands.describe(controlnet='Guides image diffusion using an input image or map.')
         @app_commands.choices(size=size_choices)
         @app_commands.choices(style=style_choices)
+        @configurable_for_dm_if(lambda ctx: 'image' in config.discord_dm_setting('allowed_commands', []))
         async def image(ctx: commands.Context, prompt: str, size: typing.Optional[app_commands.Choice[str]], style: typing.Optional[app_commands.Choice[str]], neg_prompt: typing.Optional[str], img2img: typing.Optional[discord.Attachment], img2img_mask: typing.Optional[discord.Attachment],
             face_swap: typing.Optional[discord.Attachment], controlnet: typing.Optional[discord.Attachment]):
             user_selections = {"prompt": prompt, "size": size.value if size else None, "style": style.value if style else None, "neg_prompt": neg_prompt, "img2img": img2img if img2img else None, "img2img_mask": img2img_mask if img2img_mask else None,
@@ -3725,6 +3726,7 @@ if sd_enabled:
         @app_commands.describe(controlnet='Guides image diffusion using an input image or map.')
         @app_commands.choices(size=size_choices)
         @app_commands.choices(style=style_choices)
+        @configurable_for_dm_if(lambda ctx: 'image' in config.discord_dm_setting('allowed_commands', []))
         async def image(ctx: commands.Context, prompt: str, size: typing.Optional[app_commands.Choice[str]], style: typing.Optional[app_commands.Choice[str]], neg_prompt: typing.Optional[str], img2img: typing.Optional[discord.Attachment], img2img_mask: typing.Optional[discord.Attachment],
             controlnet: typing.Optional[discord.Attachment]):
             user_selections = {"prompt": prompt, "size": size.value if size else None, "style": style.value if style else None, "neg_prompt": neg_prompt, "img2img": img2img if img2img else None, "img2img_mask": img2img_mask if img2img_mask else None,
@@ -3738,6 +3740,7 @@ if sd_enabled:
         @app_commands.describe(face_swap='For best results, attach a square (1:1) cropped image of a face, to swap into the output.')
         @app_commands.choices(size=size_choices)
         @app_commands.choices(style=style_choices)
+        @configurable_for_dm_if(lambda ctx: 'image' in config.discord_dm_setting('allowed_commands', []))
         async def image(ctx: commands.Context, prompt: str, size: typing.Optional[app_commands.Choice[str]], style: typing.Optional[app_commands.Choice[str]], neg_prompt: typing.Optional[str], img2img: typing.Optional[discord.Attachment], img2img_mask: typing.Optional[discord.Attachment],
             face_swap: typing.Optional[discord.Attachment]):
             user_selections = {"prompt": prompt, "size": size.value if size else None, "style": style.value if style else None, "neg_prompt": neg_prompt, "img2img": img2img if img2img else None, "img2img_mask": img2img_mask if img2img_mask else None,
@@ -3750,15 +3753,12 @@ if sd_enabled:
         @app_commands.describe(img2img_mask='Masks the diffusion strength for the img2img input. Requires img2img.')
         @app_commands.choices(size=size_choices)
         @app_commands.choices(style=style_choices)
+        @configurable_for_dm_if(lambda ctx: 'image' in config.discord_dm_setting('allowed_commands', []))
         async def image(ctx: commands.Context, prompt: str,  size: typing.Optional[app_commands.Choice[str]], style: typing.Optional[app_commands.Choice[str]], neg_prompt: typing.Optional[str], img2img: typing.Optional[discord.Attachment], img2img_mask: typing.Optional[discord.Attachment]):
             user_selections = {"prompt": prompt, "size": size.value if size else None, "style": style.value if style else None, "neg_prompt": neg_prompt, "img2img": img2img if img2img else None, "img2img_mask": img2img_mask if img2img_mask else None}
             await process_image(ctx, user_selections)
 
     async def process_image(ctx: commands.Context, selections):
-        allowed_commands = config.get('discord', {}).get('direct_messages', {}).get('allowed_commands', [])
-        if 'image' not in allowed_commands:
-            await ctx.reply('The bot is not configured to process this command in direct messages')
-            return
         # Do not process if SD WebUI is offline
         if not await sd_online(ctx.channel):
             await ctx.defer()
@@ -4065,14 +4065,15 @@ if sd_enabled:
 ######################### MISC COMMANDS #########################
 #################################################################
 @client.event
-async def on_command_error(ctx, error):
-    if isinstance(error, commands.CheckFailure):    
-        if hasattr(ctx, 'reply') and callable(getattr(ctx, 'reply')):
-            await ctx.reply(error, ephemeral=True, delete_after=5)
-        elif hasattr(ctx, 'response') and callable(getattr(ctx.response, 'send_message')):
-            await ctx.response.send_message(error, ephemeral=True, delete_after=5)
-        else:
-            await ctx.send(error)
+async def on_command_error(ctx:commands.Context, error:Exception):
+    log.debug(f'Command error: {error}')
+    await ctx.reply(str(error), ephemeral=True, delete_after=5)
+            
+@client.listen('on_app_command_error')
+async def on_app_command_error(inter:discord.Interaction, error:discord.app_commands.AppCommandError):
+    log.debug(f'App command error: {error}')
+    await inter.response.send_message(str(error), ephemeral=True, delete_after=5)
+
 
 if system_embed_info:
     @client.hybrid_command(description="Display help menu")
@@ -4144,10 +4145,8 @@ async def sync(ctx: commands.Context):
 if textgenwebui_enabled:
     # /reset_conversation command - Resets current character
     @client.hybrid_command(description="Reset the conversation with current character")
+    @configurable_for_dm_if(lambda ctx: config.discord_dm_setting('allow_chatting', True))
     async def reset_conversation(ctx: commands.Context):
-        if not config.get('discord', {}).get('direct_messages', {}).get('allow_chatting', True):
-            await ctx.reply('The bot is not configured to process this command in direct messages')
-            return
         try:
             shared.stop_everything = True
             await ireply(ctx, 'conversation reset') # send a response msg to the user
@@ -4890,12 +4889,9 @@ async def process_user_voice(ctx: commands.Context, voice_input=None):
 
 async def process_speak(ctx: commands.Context, input_text, selected_voice=None, lang=None, voice_input=None):
     try:
-        allowed_commands = config.get('discord', {}).get('direct_messages', {}).get('allowed_commands', [])
-        if 'speak' not in allowed_commands:
-            await ctx.reply('The bot is not configured to process this command in direct messages')
-            return
         # Only generate TTS for the server conntected to Voice Channel
-        if voice_client and (voice_client != ctx.guild.voice_client) and int(tts_settings.get('play_mode', 0)) == 0:
+        if voice_client and (is_direct_message(ctx) or (voice_client != ctx.guild.voice_client)) \
+            and int(tts_settings.get('play_mode', 0)) == 0:
             await ctx.send('Voice Channel is not enabled on this server', ephemeral=True, delete_after=5)
             return
         user_voice = await process_user_voice(ctx, voice_input)
@@ -4973,6 +4969,7 @@ if textgenwebui_enabled and tts_client and tts_client in supported_tts_clients:
         @app_commands.describe(voice=f'Voices {voice_options_label.upper()}')
         @app_commands.choices(voice=voice_options)
         @app_commands.choices(lang=lang_options)
+        @configurable_for_dm_if(lambda ctx: 'speak' in config.discord_dm_setting('allowed_commands', []))
         async def speak(ctx: commands.Context, input_text: str, voice: typing.Optional[app_commands.Choice[str]], lang: typing.Optional[app_commands.Choice[str]], voice_input: typing.Optional[discord.Attachment]):
             selected_voice = voice.value if voice is not None else ''
             if selected_voice:
@@ -4990,6 +4987,7 @@ if textgenwebui_enabled and tts_client and tts_client in supported_tts_clients:
         @app_commands.describe(voice_2=f'Voices {voice_options1_label.upper()}')
         @app_commands.choices(voice_2=voice_options1)
         @app_commands.choices(lang=lang_options)
+        @configurable_for_dm_if(lambda ctx: 'speak' in config.discord_dm_setting('allowed_commands', []))
         async def speak(ctx: commands.Context, input_text: str, voice_1: typing.Optional[app_commands.Choice[str]], voice_2: typing.Optional[app_commands.Choice[str]], lang: typing.Optional[app_commands.Choice[str]], voice_input: typing.Optional[discord.Attachment]):
             if voice_1 and voice_2:
                 await ctx.send("A voice was picked from two separate menus. Using the first selection.", ephemeral=True)
@@ -5012,6 +5010,7 @@ if textgenwebui_enabled and tts_client and tts_client in supported_tts_clients:
         @app_commands.describe(voice_3=f'Voices {voice_options2_label.upper()}')
         @app_commands.choices(voice_3=voice_options2)
         @app_commands.choices(lang=lang_options)
+        @configurable_for_dm_if(lambda ctx: 'speak' in config.discord_dm_setting('allowed_commands', []))
         async def speak(ctx: commands.Context, input_text: str, voice_1: typing.Optional[app_commands.Choice[str]], voice_2: typing.Optional[app_commands.Choice[str]], voice_3: typing.Optional[app_commands.Choice[str]], lang: typing.Optional[app_commands.Choice[str]], voice_input: typing.Optional[discord.Attachment]):
             if sum(1 for v in (voice_1, voice_2, voice_3) if v) > 1:
                 await ctx.send("A voice was picked from two separate menus. Using the first selection.", ephemeral=True)
@@ -5064,7 +5063,7 @@ class Behavior:
         return False
 
     def bot_should_reply(self, message:discord.Message, text:str) -> bool:
-        main_condition = (isinstance(message.channel, discord.DMChannel) or (message.channel.id in bot_database.main_channels))
+        main_condition = is_direct_message(message) or (message.channel.id in bot_database.main_channels)
 
         if not config.get('discord', {}).get('direct_messages', {}).get('allow_chatting', True):
             return False
@@ -5322,16 +5321,6 @@ class CustomHistory(History):
         
         if not has_file_name:
             log.info(f'Internal history file will be saved to: {self.fp}')
-            
-            
-            
-    # def should_save_condition(self):
-    #     if self.fp_internal_id is not None and self.fp_internal_id.isdigit():
-    #         channel = client.get_channel(int(self.fp_internal_id))
-    #         if isinstance(channel, discord.DMChannel):
-    #             return False
-            
-    #     return True
     
     
     async def save(self, fp=None, timeout=300, force=False, force_tgwui=False):
