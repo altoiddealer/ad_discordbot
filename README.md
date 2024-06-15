@@ -24,6 +24,15 @@
 <details>
   <summary>click to expand</summary>
 
+   **06/14/2024:** Direct Messages Support. Image model changes.
+
+    - The bot now supports Direct Messages, which have their own history!
+    - Most commands are disabled in DMs.
+    - Direct messaging can be disabled via config.yaml
+    - Img model "override settings" (checkpoint, vae, clip skip) are no longer saved.
+
+  ---
+
   **06/11/2024:** More Context Menu Commands!
 
   <img width="285" alt="Screenshot 2024-06-11 155926" src="https://github.com/altoiddealer/ad_discordbot/assets/1613484/92d1ef4f-56c2-46aa-be9e-5ce69284900e">
