@@ -40,7 +40,7 @@ sys.path.append("ad_discordbot")
 from modules.database import Database, ActiveSettings, Config, StarBoard, Statistics
 from modules.utils_shared import task_semaphore, shared_path, patterns, bot_emojis
 from modules.utils_misc import fix_dict, update_dict, sum_update_dict, update_dict_matched_keys, format_time  # noqa: F401
-from modules.utils_discord import guild_only, configurable_for_dm_if, ireply, sleep_delete_message, send_long_message, EditMessageModal, SelectedListItem, SelectOptionsView, get_user_ctx_inter, get_message_ctx_inter, react_to_user_message, MAX_MESSAGE_LENGTH  # noqa: F401
+from modules.utils_discord import guild_only, configurable_for_dm_if, is_direct_message, ireply, sleep_delete_message, send_long_message, EditMessageModal, SelectedListItem, SelectOptionsView, get_user_ctx_inter, get_message_ctx_inter, react_to_user_message, MAX_MESSAGE_LENGTH  # noqa: F401
 from modules.utils_files import load_file, merge_base, save_yaml_file  # noqa: F401
 from modules.utils_aspect_ratios import round_to_precision, res_to_model_fit, dims_from_ar, avg_from_dims, get_aspect_ratio_parts, calculate_aspect_ratio_sizes  # noqa: F401
 from modules.history import HistoryManager, History, HMessage, cnf
@@ -875,13 +875,13 @@ async def upload_tts_file(channel:discord.TextChannel, bot_message:HMessage):
         bot_message.update(audio_id=sent_message.id)
     
 
-async def process_tts_resp(channel:discord.TextChannel, bot_message:HMessage):
+async def process_tts_resp(ictx:CtxInteraction, bot_message:HMessage, is_dm:bool=False):
     play_mode = int(tts_settings.get('play_mode', 0))
     # Upload to interaction channel
     if play_mode > 0:
-        await upload_tts_file(channel, bot_message)
+        await upload_tts_file(ictx.channel, bot_message)
     # Play in voice channel
-    if play_mode != 1 and (voice_client == channel.guild.voice_client):
+    if not is_direct_message(ictx) and play_mode != 1 and (voice_client == ictx.channel.guild.voice_client):
         await bg_task_queue.put(play_in_voice_channel(bot_message.text_visible)) # run task in background
         
     bot_message.update(spoken=True)
@@ -1706,7 +1706,7 @@ async def message_task(ictx: CtxInteraction, text:str, source:str='message', llm
         if bot_message:
             # Process any TTS response
             if bot_message.text_visible:
-                await process_tts_resp(channel, bot_message)
+                await process_tts_resp(ictx, bot_message)
             if params['bot_will_do']['should_send_text']:
                 # Apply any labels applicable to message
                 labeled_resp = local_history.get_labeled_history_text(bot_message, bot_message.text)
@@ -1757,7 +1757,7 @@ async def message_task(ictx: CtxInteraction, text:str, source:str='message', llm
         # Update names in stopping strings
         llm_payload = extra_stopping_strings(llm_payload)
         # Get history for interaction channel
-        if isinstance(ictx.channel, discord.DMChannel):
+        if is_direct_message(ictx):
             local_history = bot_history.get_history_for(ictx.channel.id).dont_save()
         else:
             local_history = bot_history.get_history_for(ictx.channel.id)
@@ -1959,7 +1959,7 @@ async def create_user_message(local_history, llm_payload:dict, save_to_history=T
         # set history flag
         if not save_to_history:
             user_message.hidden = True
-        if ictx and hasattr(ictx, 'channel') and isinstance(ictx.channel, discord.DMChannel):
+        if is_direct_message(ictx):
             user_message.dont_save()
             await warn_direct_channel(ictx)
 
@@ -2022,7 +2022,7 @@ async def create_bot_message(user_message:Optional[HMessage], local_history:Opti
             bot_message.mark_as_reply_for(user_message)
         if not save_to_history:
             bot_message.hidden = True
-        if ictx and hasattr(ictx, 'channel') and isinstance(ictx.channel, discord.DMChannel):
+        if is_direct_message(ictx):
             bot_message.dont_save()
 
         if last_resp:
@@ -2123,7 +2123,7 @@ async def continue_task(inter:discord.Interaction, target_discord_msg:discord.Me
 
         # process any tts resp
         if tts_resp:
-            await process_tts_resp(channel, updated_bot_message)
+            await process_tts_resp(inter, updated_bot_message)
 
     except Exception as e:
         e_msg = 'An error occurred while processing "Continue"'
@@ -2288,7 +2288,7 @@ async def speak_task(ctx: commands.Context, text:str, params:dict):
             await system_embed.delete()
         if not bot_message:
             return
-        await process_tts_resp(channel, bot_message)
+        await process_tts_resp(ctx, bot_message)
         # remove api key (don't want to share this to the world!)
         for sub_dict in tts_args.values():
             if 'api_key' in sub_dict:
@@ -2520,7 +2520,7 @@ async def change_char_task(ictx: CtxInteraction, source:str, params:dict):
             change_embed_info.title = f"{user_name} {change_message}:"
             await channel.send(embed=change_embed_info)
             # Send embeds to announcement channels
-            if bot_database.announce_channels and not isinstance(ictx.channel, discord.DMChannel):
+            if bot_database.announce_channels and not is_direct_message(ictx):
                 await bg_task_queue.put(announce_changes(ictx, change_message, char_name))
         await send_char_greeting_or_history(ictx, char_name)
         log.info(f"Character loaded: {char_name}")
@@ -4890,7 +4890,8 @@ async def process_user_voice(ctx: commands.Context, voice_input=None):
 async def process_speak(ctx: commands.Context, input_text, selected_voice=None, lang=None, voice_input=None):
     try:
         # Only generate TTS for the server conntected to Voice Channel
-        if voice_client and (voice_client != ctx.guild.voice_client) and int(tts_settings.get('play_mode', 0)) == 0:
+        if voice_client and (is_direct_message(ctx) or (voice_client != ctx.guild.voice_client)) \
+            and int(tts_settings.get('play_mode', 0)) == 0:
             await ctx.send('Voice Channel is not enabled on this server', ephemeral=True, delete_after=5)
             return
         user_voice = await process_user_voice(ctx, voice_input)
@@ -5062,7 +5063,7 @@ class Behavior:
         return False
 
     def bot_should_reply(self, message:discord.Message, text:str) -> bool:
-        main_condition = (isinstance(message.channel, discord.DMChannel) or (message.channel.id in bot_database.main_channels))
+        main_condition = is_direct_message(message) or (message.channel.id in bot_database.main_channels)
 
         if not config.get('discord', {}).get('direct_messages', {}).get('allow_chatting', True):
             return False
@@ -5320,16 +5321,6 @@ class CustomHistory(History):
         
         if not has_file_name:
             log.info(f'Internal history file will be saved to: {self.fp}')
-            
-            
-            
-    # def should_save_condition(self):
-    #     if self.fp_internal_id is not None and self.fp_internal_id.isdigit():
-    #         channel = client.get_channel(int(self.fp_internal_id))
-    #         if isinstance(channel, discord.DMChannel):
-    #             return False
-            
-    #     return True
     
     
     async def save(self, fp=None, timeout=300, force=False, force_tgwui=False):
