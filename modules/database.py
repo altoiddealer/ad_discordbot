@@ -223,6 +223,10 @@ class Config(BaseFileMemory):
         self._migrate_from_file(_old_active, load=True)
 
 
+    def discord_dm_setting(self, key, default=None):
+        return self.get('discord', {}).get('direct_messages', {}).get(key, default)
+
+
 class ActiveSettings(BaseFileMemory):
     def __init__(self) -> None:
         self.behavior: dict
