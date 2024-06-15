@@ -369,7 +369,7 @@ class HistoryPairForTGWUI:
     def add_pair_to(self, internal:list, visible:list):
         user_text = self.user.text if self.user else ''
         user_text_visible = (self.user.text_visible or self.user.text) if self.user else ''
-        replied_to_user = self.assistant.reply_to if self.assistant.reply_to is not None else None
+        replied_to_user = self.assistant.reply_to
         if replied_to_user is not None:
             user_text = replied_to_user.text or user_text
             user_text_visible = replied_to_user.text_visible or replied_to_user.text or user_text_visible
@@ -745,6 +745,9 @@ class History:
     
     
     async def save(self, fp=None, timeout=30, force=False):
+        if self.unsavable:
+            return False
+        
         self.fp = fp or self.fp
         
         delta = self.last_save_delta()
@@ -761,6 +764,9 @@ class History:
     
     
     def save_sync(self, fp=None, force=False):
+        if self.unsavable:
+            return False
+        
         self.fp = fp or self.fp
         
         if self.event_save.is_set() or force:
