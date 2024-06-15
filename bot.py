@@ -1757,7 +1757,10 @@ async def message_task(ictx: CtxInteraction, text:str, source:str='message', llm
         # Update names in stopping strings
         llm_payload = extra_stopping_strings(llm_payload)
         # Get history for interaction channel
-        local_history = bot_history.get_history_for(ictx.channel.id)
+        if isinstance(ictx.channel, discord.DMChannel):
+            local_history = bot_history.get_history_for(ictx.channel.id).dont_save()
+        else:
+            local_history = bot_history.get_history_for(ictx.channel.id)
         # Create user message in HManager
         user_message = None
         if not params.get('skip_create_user'):
