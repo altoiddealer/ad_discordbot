@@ -23,6 +23,24 @@ def guild_only():
         return True
     return commands.check(predicate)
 
+
+def configurable_for_dm_if(func):
+    async def predicate(ctx):
+        if ctx.guild is None:
+            try:
+                if func(ctx):
+                    return True
+                
+            except Exception as e:
+                log.warning(f'Something went wrong with check: {e}')
+            
+            raise commands.CheckFailure("The bot is not configured to process this command in direct messages")
+        
+        return True
+    
+    return commands.check(predicate)
+
+
 async def react_to_user_message(client_user: Optional[discord.ClientUser], channel, user_message:Optional['HMessage']=None):
     try:
         if user_message is not None and user_message.id:
