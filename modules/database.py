@@ -1,6 +1,3 @@
-from modules.logs import import_track, log, get_logger; import_track(__file__, fp=True)
-log = get_logger(__name__)
-logging = log
 from modules.utils_files import load_file, save_yaml_file
 from datetime import timedelta
 import time
@@ -9,6 +6,9 @@ from modules.database_migration_v1_v2 import OldDatabase
 from modules.utils_shared import shared_path
 from modules.utils_files import make_fp_unique
 import os
+
+from modules.logs import import_track, get_logger; import_track(__file__, fp=True); log = get_logger(__name__)  # noqa: E702
+logging = log
 
 class BaseFileMemory:
     def __init__(self, fp, version=0, missing_okay=False) -> None:
@@ -149,6 +149,8 @@ class Database(BaseFileMemory):
         self.first_run:bool
         self.last_character:str
         self.last_change:float
+        self.last_imgmodel_name:str
+        self.last_imgmodel_checkpoint:str
         self.last_user_msg:dict[str, float]
         self.announce_channels:list[int]
         self.main_channels:list[int]
@@ -171,7 +173,6 @@ class Database(BaseFileMemory):
         self.last_character = old.last_character or self.last_character
         self.last_change = old.last_change or self.last_change
         self.last_user_msg = old.last_user_msg or self.last_user_msg
-        self.announce_channels = old.announce_channels or self.announce_channels
         self.main_channels = old.main_channels or self.main_channels
         self.warned_once = old.warned_once or self.warned_once
 
@@ -181,6 +182,8 @@ class Database(BaseFileMemory):
         self.first_run = data.pop('first_run', True)
         self.last_character = data.pop('last_character', None)
         self.last_change = data.pop('last_change', (time.time() - timedelta(minutes=10).seconds))
+        self.last_imgmodel_name = data.pop('last_imgmodel_name', '')
+        self.last_imgmodel_checkpoint = data.pop('last_imgmodel_checkpoint', '')
         self.last_user_msg = data.pop('last_user_msg', {})
         self.announce_channels = data.pop('announce_channels', [])
         self.main_channels = data.pop('main_channels', [])
@@ -194,7 +197,7 @@ class Database(BaseFileMemory):
         if not isinstance(self.last_user_msg, dict):
             self.last_user_msg = {}
 
-        if not channel_id in self.last_user_msg:
+        if channel_id not in self.last_user_msg:
             save_now = True
 
         self.last_user_msg[channel_id] = time.time()
@@ -264,7 +267,7 @@ class _Statistic:
         self.data: dict = data
 
     def set(self, key, value, save_now=False):
-        if not key in self.data:
+        if key not in self.data:
             save_now = True
 
         self.data[key] = value

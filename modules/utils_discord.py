@@ -1,39 +1,48 @@
-from modules.logs import import_track, log, get_logger; import_track(__file__, fp=True)
-log = get_logger(__name__)
-logging = log
 from modules.utils_shared import task_semaphore, bot_emojis
 import discord
 from discord.ext import commands
-from typing import Union
+from typing import Optional, Union
 from modules.typing import CtxInteraction
 from typing import TYPE_CHECKING
 import asyncio
 
+from modules.logs import import_track, get_logger; import_track(__file__, fp=True); log = get_logger(__name__)  # noqa: E702
+logging = log
+
 if TYPE_CHECKING:
-    from modules.history import HistoryManager, History, HMessage
+    from modules.history import HistoryManager, History, HMessage  # noqa: F401
     
     
 MAX_MESSAGE_LENGTH = 1980
 # MAX_MESSAGE_LENGTH = 200 # testing
 
-async def react_to_user_message(clientuser: discord.User, channel, user_message:'HMessage'=None):
+def guild_only():
+    async def predicate(ctx):
+        if ctx.guild is None:
+            raise commands.CheckFailure("This command can only be used in a server.")
+        return True
+    return commands.check(predicate)
+
+async def react_to_user_message(client_user: Optional[discord.ClientUser], channel, user_message:Optional['HMessage']=None):
     try:
-        user_message_id = getattr(user_message, 'id', None)
-        if user_message_id and getattr(user_message, 'hidden', None) is not None:
+        if user_message is not None and user_message.id:
             emoji = bot_emojis.hidden_emoji
             has_reacted = False
-            discord_message = await channel.fetch_message(user_message_id)
+            discord_message = await channel.fetch_message(user_message.id)
             # check for any existing reaction
             for reaction in discord_message.reactions:
                 if str(reaction.emoji) == emoji:
                     async for user in reaction.users():
-                        if user == clientuser:
+                        if user == client_user:
                             has_reacted = True
                             break
-            if user_message.hidden == True and has_reacted == False:
+                        
+            if user_message.hidden and not has_reacted:
                 await discord_message.add_reaction(emoji)
-            elif user_message.hidden == False and has_reacted == True:
-                await discord_message.remove_reaction(emoji, clientuser)
+                
+            elif not user_message.hidden and has_reacted:
+                await discord_message.remove_reaction(emoji, client_user)
+                
     except Exception as e:
         log.error(f"Error reacting to user message: {e}")
 
@@ -64,18 +73,18 @@ async def ireply(ictx: 'CtxInteraction', process):
         log.error(f"Error sending message response to user's interaction command: {e}")
 
 
-async def send_long_message(channel, message_text, bot_message:'HMessage'=None) -> int:
+async def send_long_message(channel, message_text, bot_message:Optional['HMessage']=None) -> int:
     """ Splits a longer message into parts while preserving sentence boundaries and code blocks """
-    activelang = ''
+    active_lang = ''
 
     # Helper function to ensure even pairs of code block markdown
     def ensure_even_code_blocks(chunk_text, code_block_inserted):
-        nonlocal activelang  # Declare activelang as nonlocal to modify the global variable
+        nonlocal active_lang  # Declare active_lang as nonlocal to modify the global variable
         code_block_languages = ["asciidoc", "autohotkey", "bash", "coffeescript", "cpp", "cs", "css", "diff", "fix", "glsl", "ini", "json", "md", "ml", "prolog", "ps", "py", "tex", "xl", "xml", "yaml", "html"]
         code_block_count = chunk_text.count("```")
         if code_block_inserted:
             # If a code block was inserted in the previous chunk, add a leading set of "```"
-            chunk_text = f"```{activelang}\n" + chunk_text
+            chunk_text = f"```{active_lang}\n" + chunk_text
             code_block_inserted = False  # Reset the code_block_inserted flag
         code_block_count = chunk_text.count("```")
         if code_block_count % 2 == 1:
@@ -84,7 +93,7 @@ async def send_long_message(channel, message_text, bot_message:'HMessage'=None) 
             last_code_block = chunk_text[last_code_block_index + len("```"):].strip()
             for lang in code_block_languages:
                 if (last_code_block.lower()).startswith(lang):
-                    activelang = lang
+                    active_lang = lang
                     break  # Stop checking if a match is found
             # If there is an odd number of code blocks, add a closing set of "```"
             chunk_text += "```"
@@ -132,11 +141,11 @@ async def send_long_message(channel, message_text, bot_message:'HMessage'=None) 
 
 # Model for editing history
 class EditMessageModal(discord.ui.Modal, title="Edit Message in History"):
-    def __init__(self, clientuser: discord.User, matched_hmessage: 'HMessage', target_message: discord.Message, local_history:'History'=None):
+    def __init__(self, client_user: Optional[discord.ClientUser], matched_hmessage: 'HMessage', target_message: discord.Message, local_history:Optional['History']=None):
         super().__init__()
         self.target_message = target_message
         self.matched_hmessage = matched_hmessage
-        self.clientuser = clientuser
+        self.client_user = client_user
         
         default_text = target_message.clean_content
         if local_history is not None:
@@ -164,7 +173,7 @@ class EditMessageModal(discord.ui.Modal, title="Edit Message in History"):
                     try:
                         original_chunk_message = await inter.channel.fetch_message(orig_msg_id)
                         compound_message += original_chunk_message.clean_content
-                    except:
+                    except Exception:
                         log.warning(f'Failed to get message content for id {orig_msg_id} for "Edit History".')
                         compound_message = ''
                         break                    
@@ -177,7 +186,7 @@ class EditMessageModal(discord.ui.Modal, title="Edit Message in History"):
         await inter.response.send_message("Message history has been edited successfully.", ephemeral=True, delete_after=5)
 
         # Update text in discord message
-        if self.clientuser == self.target_message.author:
+        if self.client_user == self.target_message.author:
             await self.target_message.edit(content=edited_message[:2000])
         else:
             await inter.response.send_message("Note: The bot cannot update your message contents in Discord.", ephemeral=True, delete_after=5)

@@ -1,10 +1,10 @@
 import colorama
-colorama.init()
 from colorama import Fore, Back, Style
 import sys
 import logging
 import os
 log = logging.getLogger('bot')
+colorama.init()
 
 COLORS = {
     'WARNING': f'{Fore.LIGHTRED_EX} WARN [{{name}}]: ',
@@ -40,7 +40,7 @@ def test(message, *args, **kws):
 def get_logger(name):
     return log.getChild(name)
 
-log.test = test
+log.test = test # type: ignore
 log_level = logging.INFO
 
 log_formatter = ColoredFormatter(f'{Fore.BLACK}{Back.WHITE}%(asctime)s.%(msecs)03d{Back.BLACK} {Back.LIGHTBLACK_EX}#%(lineno)-5d{Style.RESET_ALL} {Fore.LIGHTWHITE_EX}%(levelname)s%(message)s{Style.RESET_ALL}', datefmt='%H:%M:%S')
@@ -67,7 +67,6 @@ log_file_handler, log_file_formatter = add_file_handler(fp='discord.log', mode='
 
 ################
 # import tracker
-import os
 root_path_ = os.path.dirname(os.path.abspath(__file__)).rsplit(os.sep,2)[0].lower()
 _import_log = get_logger(__name__)
 def import_track(string, fp=False):

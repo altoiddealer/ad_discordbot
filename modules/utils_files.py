@@ -1,14 +1,15 @@
-from modules.logs import import_track, log, get_logger; import_track(__file__, fp=True)
 from pathlib import Path
 import json
 import yaml
 from modules.utils_shared import shared_path
 import os
-log = get_logger(__name__)
+
+from modules.logs import import_track, get_logger; import_track(__file__, fp=True); log = get_logger(__name__)  # noqa: E702
 logging = log
 
 # Function to load .json, .yml or .yaml files
 def load_file(file_path, default=None, missing_okay=False):
+    default = default or {}
     try:
         file_suffix = Path(file_path).suffix.lower()
 

@@ -1,15 +1,10 @@
 # Designed by Artificiangel
 # https://github.com/Artificiangel/llm-history-manager.git for future updates
-
-
-from modules.logs import import_track, log, get_logger; import_track(__file__, fp=True)
-log = get_logger(__name__)
-logging = log
 import os
 from dataclasses import dataclass, field
 from dataclasses_json import dataclass_json, config
 import time
-from typing import Optional
+from typing import Iterator, Optional
 from modules.typing import ChannelID, UserID, MessageID, CtxInteraction
 from typing import Union
 import copy
@@ -25,11 +20,12 @@ from typing import (
     Callable,
     Coroutine,
     Iterable,
-    Optional,
     TypeVar,
-    Union,
     overload,
 )
+
+from modules.logs import import_track, get_logger; import_track(__file__, fp=True); log = get_logger(__name__)  # noqa: E702
+logging = log
 
 #######
 # Utils
@@ -83,7 +79,7 @@ def cls_get_id(x):
     return x.uuid if x else None
 
 # config
-def cnf(default=None, default_list:tuple=None, check_bool=True, encoder=None, decoder=None, name=None, dont_save=False, decode_pass=True, exclude=None):
+def cnf(default=None, default_list:Optional[tuple]=None, check_bool=True, encoder=None, decoder=None, name=None, dont_save=False, decode_pass=True, exclude=None):
     
     # Create an exclusion function based on passed settings
     def exclude_func(x):
@@ -102,7 +98,7 @@ def cnf(default=None, default_list:tuple=None, check_bool=True, encoder=None, de
     
     exclude = exclude or exclude_func
     if dont_save:
-        encoder = dont_save
+        encoder = cls_get_none
     
     return config(exclude=exclude, encoder=encoder, decoder=decoder, field_name=name)
     
@@ -112,25 +108,33 @@ def cnf(default=None, default_list:tuple=None, check_bool=True, encoder=None, de
 @dataclass_json
 @dataclass
 class HMessage:
-    history: Optional['History']        = field(metadata=cnf(dont_save=True))
+    history: 'History'                  = field(metadata=cnf(dont_save=True))
     # TODO make history optional
     # so that HMessage could be subclassed to fill out items like role
     # then the message has an .add_to_history(history) method
     # which will assign it, and grab a uuid
     
-    name: Optional[str]                 = field(default='', metadata=cnf())
-    text: Optional[str]                 = field(default='', metadata=cnf())
+    name: str                           = field(default='', metadata=cnf())
+    text: str                           = field(default='', metadata=cnf())
     role: Optional[str]                 = field(default=None, metadata=cnf())
     author_id: Optional[UserID]         = field(default=None, metadata=cnf())
 
-    replies: Optional[list['HMessage']] = field(default_factory=list,   metadata=cnf(dont_save=True))
+    replies: list['HMessage']           = field(default_factory=list,   metadata=cnf(dont_save=True))
     reply_to: Optional['HMessage']      = field(default=None,           metadata=cnf(encoder=cls_get_id, decoder=str))
-    #continued_to: Optional['HMessage']  = field(default=None,           metadata=cnf(encoder=cls_get_id, decoder=str))
+    
+    # continue_next: Optional['HMessage'] = field(default=None,           metadata=cnf(encoder=cls_get_id, decoder=str))
+    # continue_prev: Optional['HMessage'] = field(default=None,           metadata=cnf(encoder=cls_get_id, decoder=str))
+    # _continue_root: Optional['HMessage']= field(default=None,           metadata=cnf(dont_save=True))
+    
+    # continuations: list['HMessage']     = field(default_factory=list,   metadata=cnf(dont_save=True))
+    # continued_of: Optional['HMessage']  = field(default=None,           metadata=cnf(encoder=cls_get_id, decoder=str))
+
+
 
     text_visible: str                   = field(default='',     metadata=cnf())
     id: Optional[MessageID]             = field(default=None,   metadata=cnf(check_bool=False)) # because id's could be "0"
     audio_id: Optional[MessageID]       = field(default=None,   metadata=cnf(dont_save=True))
-    related_ids: Optional[list[MessageID]] = field(default_factory=list,   metadata=cnf()) # TODO add update tracking here.
+    related_ids: list[MessageID]        = field(default_factory=list,   metadata=cnf()) # TODO add update tracking here.
     
     typing: bool                        = field(default=False,  metadata=cnf(False))
     spoken: bool                        = field(default=False,  metadata=cnf(False))
@@ -142,9 +146,9 @@ class HMessage:
     created: float                      = field(default_factory=time.time)
     uuid: str                           = field(default_factory=get_uuid_hex)
     
-    def __post_init__(self):
-        if self.uuid is None:
-            pass
+    # def __post_init__(self):
+    #     if self.uuid is None:
+    #         pass
         # TODO should get new id from history a local counter
 
 
@@ -163,6 +167,10 @@ class HMessage:
     def __repr__(self):
         replies = f', Replies({len(self.replies)})' if self.replies else ''
         return f'<HMessage ({self.role}) by {self.name!r}: {self.text[:20]!r}{replies}>'
+    
+    
+    def __hash__(self):
+        return hash(f'<HMessage {self.uuid}>')
 
 
     def delta(self) -> float:
@@ -189,6 +197,8 @@ class HMessage:
         if not message:
             return self
         
+        assert isinstance(message, self.__class__), f'HMessage.mark_as_reply_for expected {self.__class__} type, got {type(message)}'
+        
         self.reply_to = message
         message.replies.append(self)
         if save:
@@ -197,14 +207,93 @@ class HMessage:
 
 
     def unmark_reply(self, save=True):
-        message:HMessage = self.reply_to
+        message:Optional[HMessage] = self.reply_to
+        self.reply_to = None
+        
         if message:
             if self in message.replies:
-                message.replies.pop(self)
+                message.replies.remove(self)
         if save:
             self.history.event_save.set()
         return self
+    
+    
+    # @property
+    # def is_root_of_continue_chain(self):
+    #     'True if there are no previous items'
+    #     return self.continue_prev is None
+    
+    
+    # # def set_continuation(self, message: 'HMessage', save=True):
+    # #     assert isinstance(message, self.__class__), f'HMessage.set_continuation expected {self.__class__} type, got {type(message)}'
+        
+    # #     return message.mark_as_continuation_for(self, save=save)
+    
+    
+    # def set_continuation(self, message: 'HMessage', save=True):
+    #     if not message:
+    #         return self
+        
+    #     assert isinstance(message, self.__class__), f'HMessage.set_continuation expected {self.__class__} type, got {type(message)}'
+        
+    #     self.continue_next = message
+    #     message.continue_prev = self
 
+    #     if save:
+    #         self.history.event_save.set()
+    #     return self
+    
+    
+    # def remove_continuation(self, save=True):
+    #     message: Optional[HMessage] = self.continue_next
+    #     self.continue_next = None
+        
+    #     if message:
+    #         message.continue_prev = None
+    #         message._continue_root = None # TODO this should propagate up the chain
+        
+    #     if save:
+    #         self.history.event_save.set()
+    #     return self
+    
+    
+    # def get_continue_root(self) -> 'HMessage':
+    #     'Return first message in chain of continuations'
+    #     if self._continue_root is not None:
+    #         return self._continue_root
+        
+    #     root = self
+        
+    #     visited = set()
+    #     visited.add(root)
+    #     while root.continue_prev is not None:
+    #         root = root.continue_prev
+    #         if root in visited:
+    #             raise Exception(f'HMessage.get_continue_root found circular dependency while moving backwards: {root} has already been visited, this would cause a loop forever.')
+            
+    #         visited.add(root)
+            
+    #     self._continue_root = root
+    #     return self._continue_root
+    
+    
+    # def get_continued_chain(self, start_from_root=True) -> Iterable['HMessage']:
+    #     root: Optional[HMessage] = self
+        
+    #     if start_from_root:
+    #         root = self.get_continue_root()
+            
+    #     visited = set()
+    #     visited.add(root)
+    #     while root is not None:
+    #         yield root
+            
+    #         root: Optional[HMessage] = root.continue_next
+    #         if root in visited:
+    #             raise Exception(f'HMessage.get_continued_chain found circular dependency: {root} has already been visited, this would cause a loop forever.')
+            
+    #         visited.add(root)
+            
 
     ###########
     # Rendering
@@ -241,7 +330,7 @@ class HMessage:
     
     def new_history_end_here(self, include_self=True) -> Union['History', None]:
         new_history = self.duplicate_history()
-        if not self in new_history:
+        if self not in new_history:
             return None
 
         index = new_history.index(self)
@@ -254,7 +343,7 @@ class HMessage:
     
     def new_history_start_here(self, include_self=True) -> Union['History', None]:
         new_history = self.duplicate_history()
-        if not self in new_history:
+        if self not in new_history:
             return None
 
         index = new_history.index(self)
@@ -273,14 +362,14 @@ class HMessage:
 
 @dataclass
 class HistoryPairForTGWUI:
-    user: HMessage = field(default=None)
-    assistant: HMessage = field(default=None)
+    user: Optional[HMessage] = field(default=None)
+    assistant: Optional[HMessage] = field(default=None)
 
 
     def add_pair_to(self, internal:list, visible:list):
         user_text = self.user.text if self.user else ''
         user_text_visible = (self.user.text_visible or self.user.text) if self.user else ''
-        replied_to_user = self.assistant.reply_to if self.assistant.reply_to is not None else None
+        replied_to_user = self.assistant.reply_to
         if replied_to_user is not None:
             user_text = replied_to_user.text or user_text
             user_text_visible = replied_to_user.text_visible or replied_to_user.text or user_text_visible
@@ -309,7 +398,7 @@ class HistoryPairForTGWUI:
 @dataclass_json
 @dataclass
 class History:
-    manager: Optional['HistoryManager'] = field(metadata=cnf(dont_save=True))
+    manager: 'HistoryManager'           = field(metadata=cnf(dont_save=True))
     id: ChannelID
     
     fp: Optional[str]                   = field(default=None, metadata=cnf(dont_save=True)) # TODO just set this on load when found correct file.
@@ -319,6 +408,7 @@ class History:
     uuid: str                           = field(default_factory=get_uuid_hex,   metadata=cnf(dont_save=True))
     _save_event: asyncio.Event          = field(default_factory=asyncio.Event,  init=False, metadata=cnf(dont_save=True))
     _last_save: float                   = field(default_factory=time.time,      init=False, metadata=cnf(dont_save=True))
+    unsavable: bool                     = field(default=False,  metadata=cnf(dont_save=True))
     
     def __copy__(self) -> 'History':
         new = self.__class__(
@@ -336,6 +426,7 @@ class History:
     ###########
     # Item list
     def __contains__(self, message: HMessage):
+        assert isinstance(message, HMessage), f'History.__contains__ expected {HMessage} type, got {type(message)}'
         return message in self._items
 
 
@@ -378,6 +469,8 @@ class History:
 
 
     def append(self, message: HMessage):
+        assert isinstance(message, HMessage), f'History.append expected {HMessage} type, got {type(message)}'
+        
         self._items.append(message)
         self._last[message.author_id] = message
         self.event_save.set()
@@ -389,7 +482,7 @@ class History:
         return self._items.pop(index)
 
 
-    def __iter__(self):
+    def __iter__(self) -> Iterator[HMessage]:
         return iter(self._items)
 
 
@@ -398,6 +491,8 @@ class History:
 
 
     def __setitem__(self, slice:slice, message: HMessage):
+        assert isinstance(message, HMessage), f'History.__setitem__ expected {HMessage} type, got {type(message)}'
+        
         self._items[slice] = message
         self.event_save.set()
 
@@ -445,7 +540,7 @@ class History:
         return output
     
     def get_history_pair_from_msg_id(self, message_id: MessageID):
-        hmessage: HMessage = self.search(lambda m: m.id == message_id or message_id in m.related_ids)
+        hmessage: Optional[HMessage] = self.search(lambda m: m.id == message_id or message_id in m.related_ids)
         if not hmessage:
             return None, None
 
@@ -466,6 +561,8 @@ class History:
             raise Exception(f'Unknown HMessage role: {hmessage.role}, should match [user/assistant]')
         
     def get_history_labels_for_message(self, message:HMessage) -> str:
+        assert isinstance(message, HMessage), f'History.get_history_labels_for_message expected {HMessage} type, got {type(message)}'
+        
         labels = {'is_continued': 'continued',
                   'is_regenerated': 'regenerated',
                   'hidden': 'hidden message'}
@@ -483,7 +580,8 @@ class History:
         
         return labels_for_message
     
-    def get_labeled_history_text(self, message:HMessage, input_text:str='', mention_mode:str=None, label_mode:str=None):
+    def get_labeled_history_text(self, message:Optional[HMessage], input_text:str='', mention_mode:Optional[str]=None, label_mode:Optional[str]=None):
+        # assert is handled by get_history_labels for now.
         history_labels = self.get_history_labels_for_message(message)
 
         ##########
@@ -504,7 +602,7 @@ class History:
             if mention_mode is not None:
                 # Check to see if prefixed @mention is not just cosmetically added by the bot
                 mention_in_message = None
-                if getattr(message, 'text', None) is not None:
+                if message.text:
                     mention_in_message = patterns.mention_prefix.search(message.text)
                 if not mention_in_message:
                     mention_in_input = patterns.mention_prefix.search(output_text)
@@ -595,6 +693,16 @@ class History:
 
     ###########
     # Save/load
+    def dont_save(self):
+        self.unsavable = True
+        return self
+    
+    
+    @property
+    def savable(self):
+        return not self.unsavable
+    
+    
     def last_save_delta(self):
         return time.time()-self._last_save
     
@@ -625,6 +733,8 @@ class History:
                 continue
             messages.append(message.to_dict())
 
+        os.makedirs(os.path.dirname(fp), exist_ok=True)
+
         with open(fp, 'w', encoding='utf8') as f:
             json_out = json.dumps(dict(history=history, messages=messages), indent=2)
             f.write(json_out)
@@ -635,6 +745,9 @@ class History:
     
     
     async def save(self, fp=None, timeout=30, force=False):
+        if self.unsavable:
+            return False
+        
         self.fp = fp or self.fp
         
         delta = self.last_save_delta()
@@ -651,6 +764,9 @@ class History:
     
     
     def save_sync(self, fp=None, force=False):
+        if self.unsavable:
+            return False
+        
         self.fp = fp or self.fp
         
         if self.event_save.is_set() or force:
@@ -695,10 +811,14 @@ class History:
             history.append(message)
             local_message_storage[message.uuid] = message
 
-        # resolve replies
+        # resolve replies and continuations
         for message in history:
             replying_to = local_message_storage.get(message.reply_to)
             message.mark_as_reply_for(replying_to, save=False) # don't save because it's already saved
+            
+            # message.mark_as_continuation_of()
+            # message.continue_prev = local_message_storage.get(message.continue_prev)
+            # message.continue_next = local_message_storage.get(message.continue_next)
 
         log.info(f'Loaded history with {len(history._items)} total messages: {history.fp}') # `save_history: False` exchanges will be excluded from TGWUI logs
         return history
@@ -754,23 +874,25 @@ class HistoryManager:
     
 
     def add_history(self, history: History):
+        assert isinstance(history, History), f'HistoryManager.add_history expected {History} type, got {type(history)}'
+        
         self._histories[history.id] = history
         return history
 
 
-    def load_history_from_fp(self, fp=None, id_: ChannelID=None) -> History:
+    def load_history_from_fp(self, fp=None, id_: Optional[ChannelID]=None) -> History:
         '''
         Pass an id to overwrite channel id.
         '''
         return self.class_builder_history.load_from(self, fp=fp, id_=id_)
     
 
-    def get_history_for(self, id_: ChannelID=None, fp=None, search=False, cached_only=False) -> History:
+    def get_history_for(self, id_: Optional[ChannelID]=None, fp=None, search=False, cached_only=False) -> Optional[History]:
         if id_ is None:
             raise Exception('ID must be set, please create a default ID in subclass.')
         
         # Check if history already loaded
-        history = self._histories.get(id_)
+        history: Optional[History] = self._histories.get(id_)
         if cached_only:
             return history
         
