@@ -149,6 +149,8 @@ class Database(BaseFileMemory):
         self.first_run:bool
         self.last_character:str
         self.last_change:float
+        self.last_imgmodel_name:str
+        self.last_imgmodel_checkpoint:str
         self.last_user_msg:dict[str, float]
         self.announce_channels:list[int]
         self.main_channels:list[int]
@@ -171,7 +173,6 @@ class Database(BaseFileMemory):
         self.last_character = old.last_character or self.last_character
         self.last_change = old.last_change or self.last_change
         self.last_user_msg = old.last_user_msg or self.last_user_msg
-        self.announce_channels = old.announce_channels or self.announce_channels
         self.main_channels = old.main_channels or self.main_channels
         self.warned_once = old.warned_once or self.warned_once
 
@@ -181,6 +182,8 @@ class Database(BaseFileMemory):
         self.first_run = data.pop('first_run', True)
         self.last_character = data.pop('last_character', None)
         self.last_change = data.pop('last_change', (time.time() - timedelta(minutes=10).seconds))
+        self.last_imgmodel_name = data.pop('last_imgmodel_name', '')
+        self.last_imgmodel_checkpoint = data.pop('last_imgmodel_checkpoint', '')
         self.last_user_msg = data.pop('last_user_msg', {})
         self.announce_channels = data.pop('announce_channels', [])
         self.main_channels = data.pop('main_channels', [])
