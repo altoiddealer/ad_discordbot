@@ -1143,7 +1143,7 @@ async def process_llm_payload_tags(ictx: CtxInteraction, llm_payload:dict, llm_p
         log.error(f"Error processing LLM tags: {e}")
         return llm_payload, llm_prompt, {}
 
-def collect_llm_tag_values(tags: SORTED_TAGS, params):
+def collect_llm_tag_values(tags: SORTED_TAGS, params:dict):
     llm_payload_mods = {}
     formatting = {}
     try:
@@ -2182,7 +2182,7 @@ async def replace_msg_in_history_and_discord(ictx:CtxInteraction, params:dict, t
         return None
 
 
-async def regenerate_task(inter:discord.Interaction, inter_discord_msg:discord.Message, mode:str='create'):
+async def regenerate_task(inter:discord.Interaction, target_discord_msg:discord.Message, mode:str='create'):
     user_name = get_user_ctx_inter(inter).display_name
     channel = inter.channel
     system_embed = None
@@ -2192,18 +2192,16 @@ async def regenerate_task(inter:discord.Interaction, inter_discord_msg:discord.M
         if not local_history:
             await inter.followup.send("There is currently no chat history to regenerate from.", ephemeral=True)
             return
-        original_user_message, original_bot_message = local_history.get_history_pair_from_msg_id(inter_discord_msg.id)
+        original_user_message, original_bot_message = local_history.get_history_pair_from_msg_id(target_discord_msg.id)
 
         # Replace method requires finding original bot message in history
         if mode == 'replace' and not original_bot_message:
             await inter.followup.send("Message not found in current chat history.", ephemeral=True)
             return
-        
-        target_discord_msg = inter_discord_msg
 
         # Get original user text from discord message, and target the bot message to edit
-        if inter.user == inter_discord_msg.author:                  # if command used on user's own message
-            original_user_text = inter_discord_msg.clean_content    # get the message contents
+        if inter.user == target_discord_msg.author:                  # if command used on user's own message
+            original_user_text = target_discord_msg.clean_content    # get the message contents
             target_discord_msg = await channel.fetch_message(original_bot_message.id) # set the target message to the bot message
         else:
             if not original_user_message or isinstance(original_user_message, str): # will be uuid text string if message failed to be found
@@ -4225,17 +4223,12 @@ if textgenwebui_enabled:
             user_message, bot_message = local_history.get_history_pair_from_msg_id(message.id)
 
             # determine outcome
-            hiding_messages = (user_message is not None and not user_message.hidden) and (bot_message is not None and not bot_message.hidden)
-            revealing_messages = (user_message is not None and user_message.hidden) and (bot_message is not None and bot_message.hidden)
-            if hiding_messages == False and revealing_messages == False:
-                await inter.response.send_message("A valid message pair could not be found for the target message.", ephemeral=True, delete_after=5)
+            if user_message is None or bot_message is None:
+                undeletable_message = await inter.followup.send("A valid message pair could not be found for the target message.", ephemeral=True)
+                await bg_task_queue.put(sleep_delete_message(undeletable_message))
                 return
 
-            verb = 'hidden' if hiding_messages else 'revealed'
-            print("verb", verb)
-
-            # List of HMessages to update associated discord messages for
-            hmessages_to_relabel = [target_hmessage]
+            verb = 'hidden' if not target_hmessage.hidden else 'revealed'
 
             # Default action, no fancy extra toggling
             def toggle_hmessages(bot_message:HMessage, other_message:HMessage, verb:str, stagger:bool=False):
@@ -4246,52 +4239,80 @@ if textgenwebui_enabled:
                     bot_message.update(hidden=False)
                     other_message.update(hidden=False if not stagger else True)
 
-            # If command was used on a bot reply (not the user message)
-            if client.user == message.author:
-                # Get all bot replies
-                all_bot_replies = user_message.replies
-                # If only one reply, toggle with user message
-                if len(all_bot_replies) == 1:
-                    toggle_hmessages(bot_message, user_message, verb) # Toggle hidden
-                # If multiple replies, get next reply and toggle with it instead of user message
-                else:
-                    next_reply = None
-                    for i in range(len(all_bot_replies)):
-                        if all_bot_replies[i] == bot_message:
-                            # there's a more recent reply
-                            if i + 1 < len(all_bot_replies):
-                                print("there's newer msg")
-                                next_reply = all_bot_replies[i + 1]
-                            # selected reply is the last one
-                            else:
-                                print("this one is last, using previous one")
-                                next_reply = all_bot_replies[i - 1]
-                            break
-                        if next_reply:
-                            hmessages_to_relabel.append(next_reply)  # add next HMessage
-                            toggle_hmessages(bot_message, next_reply, verb, stagger=True) # Toggle hidden
-                        else:
-                            print("error")
-                            toggle_hmessages(bot_message, user_message, verb) # Toggle hidden
+            # List of HMessages to update associated discord messages for. Do not edit a user message.
+            hmessages_to_relabel = [target_hmessage] if client.user == message.author else []
 
-            # If command was used on a user message (not the bot reply)
+            # Get all bot replies
+            all_bot_replies = user_message.replies
+
+            # If only one reply, toggle with user message
+            if len(all_bot_replies) == 1:
+                toggle_hmessages(bot_message, user_message, verb)
+            # If multiple replies, get next reply and toggle with it
             else:
-                toggle_hmessages(bot_message, user_message, verb) # Toggle hidden
-                # Change target messages to the bot's response
-                target_hmessage = bot_message
-                hmessages_to_relabel = [target_hmessage]
+                next_reply = None
+                # If command was used on a bot reply
+                if client.user == message.author:
+                    # if user message is hidden, then do not toggle any other bot messages
+                    if user_message.hidden:
+                        pass
+                    # if user message is revealed, determine next bot message to toggle
+                    else:
+                        if verb == 'hidden':
+                            for i in range(len(all_bot_replies)):
+                                if all_bot_replies[i] == bot_message:
+                                    # There's a more recent reply
+                                    if i + 1 < len(all_bot_replies):
+                                        next_reply = all_bot_replies[i + 1]
+                                    # Selected reply is the last one
+                                    else:
+                                        next_reply = all_bot_replies[i - 1]
+                                    break
+                        elif verb == 'revealed':
+                            for i in range(len(all_bot_replies)):
+                                if all_bot_replies[i] == bot_message:
+                                    for j in range(i + 1, len(all_bot_replies)):
+                                        if not all_bot_replies[j].hidden:
+                                            next_reply = all_bot_replies[j]
+                                            break
+                                    if not next_reply and i > 0:
+                                        for j in range(i - 1, -1, -1):
+                                            if not all_bot_replies[j].hidden:
+                                                next_reply = all_bot_replies[j]
+                                                break
+                                    break
+                # If command was used on user message
+                else:
+                    if verb == 'hidden':
+                        for i in range(len(all_bot_replies)):
+                            if not all_bot_replies[i].hidden:
+                                next_reply = all_bot_replies[i]
+                                break
 
+                    elif verb == 'revealed':
+                        next_reply = all_bot_replies[-1]
+
+                if next_reply:
+                    if client.user == message.author:
+                        toggle_hmessages(bot_message, next_reply, verb, stagger=True)
+                    else:
+                        toggle_hmessages(user_message, next_reply, verb)
+                    # Add HMessages to update
+                    hmessages_to_relabel.append(next_reply)
+                else:
+                    toggle_hmessages(bot_message, user_message, verb)
+            
             # Apply reaction to user message
             await react_to_user_message(client.user, inter.channel, user_message)
 
-            # Collect all messages that need label updates
-            msg_ids_to_edit = []
-            for target_msg in hmessages_to_relabel:
-                if target_msg.related_ids:
-                    msg_ids_to_edit.extend([target_msg.id] + target_msg.related_ids)
-            print("msg_ids_to_edit", msg_ids_to_edit)
-            # Apply labels to all affected messages
-            await apply_labels_to_msg_list(inter, local_history, bot_message, msg_ids_to_edit, message)
+            # Process all messages that need label updates
+            for target_hmsg in hmessages_to_relabel:
+                msg_ids_to_edit = []
+                msg_ids_to_edit.append(target_hmsg.id)
+                if target_hmsg.related_ids:
+                    msg_ids_to_edit.extend(target_hmsg.related_ids)
+                # Apply labels to all affected messages
+                await apply_labels_to_msg_list(inter, local_history, target_hmsg, msg_ids_to_edit, message)
 
             undeletable_message = await inter.channel.send(f"Modified message exchange pair in history for {inter.user.display_name} (messages {verb}).")
             log.info(f"Modified message exchange pair in history for {inter.user.display_name} (messages {verb}).")
