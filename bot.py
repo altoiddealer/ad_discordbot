@@ -44,6 +44,7 @@ from modules.utils_discord import guild_only, configurable_for_dm_if, is_direct_
 from modules.utils_files import load_file, merge_base, save_yaml_file  # noqa: F401
 from modules.utils_aspect_ratios import round_to_precision, res_to_model_fit, dims_from_ar, avg_from_dims, get_aspect_ratio_parts, calculate_aspect_ratio_sizes  # noqa: F401
 from modules.history import HistoryManager, History, HMessage, cnf
+from modules.typing import TAG_LIST, TAG_LIST_DICT, SORTED_TAGS
 
 from modules.logs import import_track, get_logger, log_file_handler, log_file_formatter; import_track(__file__, fp=True); log = get_logger(__name__)  # noqa: E702
 logging = log
@@ -1142,7 +1143,7 @@ async def process_llm_payload_tags(ictx: CtxInteraction, llm_payload:dict, llm_p
         log.error(f"Error processing LLM tags: {e}")
         return llm_payload, llm_prompt, {}
 
-def collect_llm_tag_values(tags, params):
+def collect_llm_tag_values(tags: SORTED_TAGS, params):
     llm_payload_mods = {}
     formatting = {}
     try:
@@ -1208,11 +1209,11 @@ def collect_llm_tag_values(tags, params):
         log.error(f"Error collecting LLM tag values: {e}")
     return llm_payload_mods, formatting, params
 
-def process_tag_insertions(prompt:str, tags:dict):
+def process_tag_insertions(prompt:str, tags:SORTED_TAGS) -> tuple[str, SORTED_TAGS]:
     try:
         # iterate over a copy of the matches, preserving the structure of the original matches list
-        tuple_matches = copy.deepcopy(tags['matches'])
-        tuple_matches = [item for item in tuple_matches if isinstance(item, tuple)]  # Filter out only tuples
+        tuple_matches = copy.deepcopy(tags['matches']) # type: ignore
+        tuple_matches: list[tuple[dict, int, int]] = [item for item in tuple_matches if isinstance(item, tuple)]  # Filter out only tuples
         tuple_matches.sort(key=lambda x: -x[1])  # Sort the tuple matches in reverse order by their second element (start index)
         for item in tuple_matches:
             tag, start, end = item # unpack tuple
@@ -1241,8 +1242,8 @@ def process_tag_insertions(prompt:str, tags:dict):
         updated_matches = []
         for item in tags['matches']:
             if isinstance(item, tuple):
-                tag, start, end = item
-            else:
+                tag, start, end = item # TODO Use a class
+            elif isinstance(item, dict): # fixes pylance
                 tag = item
             phase = tag.get('phase', 'user')
             if phase == 'llm':
@@ -1259,7 +1260,7 @@ def process_tag_insertions(prompt:str, tags:dict):
         log.error(f"Error processing LLM prompt tags: {e}")
         return prompt, tags
 
-def process_tag_trumps(matches:list, trump_params:Optional[list]=None) -> tuple[list, set]:
+def process_tag_trumps(matches:list, trump_params:TAG_LIST|None=None) -> tuple[TAG_LIST, TAG_LIST]:
     trump_params = trump_params or []
     try:
         # Collect all 'trump' parameters for all matched tags
@@ -1281,32 +1282,36 @@ def process_tag_trumps(matches:list, trump_params:Optional[list]=None) -> tuple[
                 tag_dict = tag[0]  # get tag value if tuple
             else:
                 tag_dict = tag
-            if any(trigger.strip().lower() == trump.strip().lower() for trigger in tag_dict.get('trigger', '').split(',') for trump in trump_params_set):
+            if any(trigger.strip().lower() == trump.strip().lower() for trigger in tag_dict.get('trigger', '').split(',') for trump in trump_params_set): # TODO line too long and hard to follow
                 log.info(f'''[TAGS] Tag with triggers "{tag_dict['trigger']}" was trumped by another tag.''')
             else:
                 untrumped_matches.append(tag)
-        return untrumped_matches, trump_params_set
+        return untrumped_matches, list(trump_params_set)
     except Exception as e:
         log.error(f"Error processing matched tags: {e}")
         # return original matches if error occurs
         # also return empty set for trump_tags which is expected
-        return matches, set()
+        return matches, []
 
-def match_tags(search_text:str, tags:dict, phase='llm') -> dict:
+def match_tags(search_text:str, tags:SORTED_TAGS, phase='llm') -> SORTED_TAGS:
     try:
         # Remove 'llm' tags if pre-LLM phase, to be added back to unmatched tags list at the end of function
         if phase == 'llm':
-            llm_tags = tags['unmatched'].pop('llm', []) if 'user' in tags['unmatched'] else []
-        updated_tags = copy.deepcopy(tags)
-        matches = updated_tags['matches']
-        unmatched = updated_tags['unmatched']
-        for list_name, unmatched_list in tags['unmatched'].items():
+            llm_tags = tags['unmatched'].pop('llm', []) if 'user' in tags['unmatched'] else [] # type: ignore
+            
+        updated_tags:SORTED_TAGS = copy.deepcopy(tags)
+        matches:TAG_LIST = updated_tags['matches'] # type: ignore
+        unmatched:TAG_LIST_DICT = updated_tags['unmatched'] # type: ignore
+        for list_name, unmatched_list in tags['unmatched'].items(): # type: ignore
+            unmatched_list: TAG_LIST
+            
             for tag in unmatched_list:
                 if 'trigger' not in tag:
                     unmatched[list_name].remove(tag)
-                    tag['phase'] = phase
+                    tag['phase'] = phase # TODO warning: this updates the original tag before deepcopy
                     matches.append(tag)
                     continue
+                
                 case_sensitive = tag.get('case_sensitive', False)
                 triggers = [t.strip() for t in tag['trigger'].split(',')]
                 for index, trigger in enumerate(triggers):
@@ -1322,6 +1327,7 @@ def match_tags(search_text:str, tags:dict, phase='llm') -> dict:
                             tag['matched_trigger'] = trigger  # retain the matched trigger phrase
                             if (('insert_text' in tag and phase == 'llm') or ('positive_prompt' in tag and phase == 'img')):
                                 matches.append((tag, trigger_match.start(), trigger_match.end()))  # Add as a tuple with start/end indexes if inserting text later
+                                # TODO tag class
                             else:
                                 if 'positive_prompt' in tag:
                                     tag['imgtag_matched_early'] = True
@@ -1332,7 +1338,7 @@ def match_tags(search_text:str, tags:dict, phase='llm') -> dict:
                             tag['imgtag_uninserted'] = True
                             matches.append(tag)
         if matches:
-            updated_tags['matches'], updated_tags['trump_params'] = process_tag_trumps(matches, tags['trump_params']) # trump tags
+            updated_tags['matches'], updated_tags['trump_params'] = process_tag_trumps(matches, tags['trump_params']) # type: ignore # trump tags
         # Add LLM sublist back to unmatched tags list if LLM phase
         if phase == 'llm':
             unmatched['llm'] = llm_tags
@@ -1344,26 +1350,27 @@ def match_tags(search_text:str, tags:dict, phase='llm') -> dict:
         log.error(f"Error matching tags: {e}")
         return tags
 
-def sort_tags(all_tags: list) -> Union[list, dict]:
-    try:
-        sorted_tags = {'matches': [], 'unmatched': {'user': [], 'llm': [], 'userllm': []}, 'trump_params': []}
-        for tag in all_tags:
-            if 'random' in tag:
-                if not isinstance(tag['random'], (int, float)):
-                    log.error("Error: Value for 'random' in tags should be float value (ex: 0.8).")
-                    continue # Skip this tag
-                if not random.random() < tag['random']:
-                    continue # Skip this tag
-            search_mode = tag.get('search_mode', 'userllm')  # Default to 'userllm' if 'search_mode' is not present
-            if search_mode in sorted_tags['unmatched']:
-                sorted_tags['unmatched'][search_mode].append({k: v for k, v in tag.items() if k != 'search_mode'})
-            else:
-                log.warning(f"Ignoring unknown search_mode: {search_mode}")
-        return sorted_tags
 
-    except Exception as e:
-        log.error(f"Error sorting tags: {e}")
-        return all_tags
+def sort_tags(all_tags: TAG_LIST) -> SORTED_TAGS:
+    sorted_tags = {'matches': [], 'unmatched': {'user': [], 'llm': [], 'userllm': []}, 'trump_params': []}
+    
+    for tag in all_tags:
+        if 'random' in tag.keys():
+            if not isinstance(tag['random'], (int, float)):
+                log.error("Error: Value for 'random' in tags should be float value (ex: 0.8).")
+                continue # Skip this tag
+            if not random.random() < tag['random']:
+                continue # Skip this tag
+            
+        search_mode = tag.get('search_mode', 'userllm')  # Default to 'userllm' if 'search_mode' is not present
+        if search_mode in sorted_tags['unmatched']:
+            sorted_tags['unmatched'][search_mode].append({k: v for k, v in tag.items() if k != 'search_mode'})
+            
+        else:
+            log.warning(f"Ignoring unknown search_mode: {search_mode}")
+            
+    return sorted_tags
+
 
 
 def _expand_value(value:str) -> str:
@@ -1471,7 +1478,7 @@ def parse_key_pair_from_text(kv_pair):
 
 # Matches [[this:syntax]] and creates 'tags' from matches
 # Can handle any structure including dictionaries, lists, even nested sublists.
-def get_tags_from_text(text):
+def get_tags_from_text(text) -> tuple[str, list[dict]]:
     try:
         tags_from_text = []
         matches = patterns.instant_tags.findall(text)
@@ -1490,7 +1497,7 @@ def get_tags_from_text(text):
         log.error(f"Error getting tags from text: {e}")
         return text, []
 
-async def get_tags(text):
+async def get_tags(text) -> tuple[str, SORTED_TAGS]:
     try:
         flow_step_tags = []
         if flow_queue.qsize() > 0:
@@ -1504,7 +1511,7 @@ async def get_tags(text):
         return detagged_text, sorted_tags
     except Exception as e:
         log.error(f"Error getting tags: {e}")
-        return text, []
+        return text, {}
 
 async def init_llm_payload(ictx: CtxInteraction, user_name:str, text:str) -> dict:
     llm_payload = copy.deepcopy(bot_settings.settings['llmstate'])
@@ -1533,7 +1540,6 @@ def get_wildcard_value(matched_text, dir_path=None):
         selected_file = random.choice(txt_files)
         with open(selected_file, 'r') as file:
             lines = file.readlines()
-            # filtered_lines = [line.strip() for line in lines if not line.startswith("#")] # TODO UNUSED
             selected_option = random.choice(lines).strip()
     else:
         # If no matching .txt file is found, try to find a subdirectory
@@ -1545,7 +1551,6 @@ def get_wildcard_value(matched_text, dir_path=None):
                     selected_file = random.choice(subdir_files)
                     with open(selected_file, 'r') as file:
                         lines = file.readlines()
-                        # filtered_lines = [line.strip() for line in lines if not line.startswith("#")] # TODO UNUSED
                         selected_option = random.choice(lines).strip()
     # Check if selected option has braces pattern
     if selected_option:
@@ -1557,7 +1562,6 @@ def get_wildcard_value(matched_text, dir_path=None):
         if selected_option.startswith('__') and selected_option.endswith('__'):
             # Extract nested directory path from the nested value
             nested_dir = selected_option[2:-2]  # Strip the first 2 and last 2 characters
-            # nested_dir_path = os.path.join(dir_path, nested_dir)  # Use os.path.join for correct path joining # TODO UNUSED
             # Get the last component of the nested directory path
             search_phrase = os.path.split(nested_dir)[-1]
             # Remove the last component from the nested directory path
@@ -1685,7 +1689,7 @@ async def on_message(message: discord.Message):
         async with task_semaphore:
             async with message.channel.typing():
                 log.info(f'reply requested: {message.author.display_name} said: "{text}"')
-                await message_task(message, text, 'on_message', llm_payload=None, params={}, tags={})
+                await message_task(message, text, 'on_message')
                 await run_flow_if_any(message, 'on_message', text)
 
     except Exception as e:
@@ -1694,7 +1698,9 @@ async def on_message(message: discord.Message):
 #################################################################
 ######################## QUEUED MESSAGE #########################
 #################################################################
-async def message_task(ictx: CtxInteraction, text:str, source:str='message', llm_payload:dict=None, params:dict={}, tags:dict={}) -> tuple[HMessage, HMessage]:
+async def message_task(ictx: CtxInteraction, text:str, source:str='message', llm_payload:dict|None=None, params:dict|None=None) -> tuple[HMessage, HMessage]:
+    params = params or {}
+    tags = {} # just incase there's an exception.
     user_name = get_user_ctx_inter(ictx).display_name
     channel = ictx.channel
 
@@ -1721,7 +1727,7 @@ async def message_task(ictx: CtxInteraction, text:str, source:str='message', llm
             await channel.send(file=send_user_image) if len(send_user_image) == 1 else await channel.send(files=send_user_image)
         return bot_message
 
-    async def message_img_task(tags:dict, params:dict, bot_message:HMessage):
+    async def message_img_task(tags:SORTED_TAGS, params:dict, bot_message:HMessage):
         nonlocal img_gen_embed
         tags = match_img_tags(bot_message.text, tags)
         params['bot_will_do'] = bot_should_do(tags, params['bot_will_do']) # check for updates from tags
@@ -1810,7 +1816,7 @@ async def message_task(ictx: CtxInteraction, text:str, source:str='message', llm
             await change_embed.delete()
         return llm_model_mode, original_llmmodel
 
-    async def build_llm_payload(text:str, llm_payload:dict, tags:dict, params:dict):
+    async def build_llm_payload(text:str, llm_payload:dict|None, tags:SORTED_TAGS, params:dict):
         # Use predefined LLM payload or initialize with defaults
         if llm_payload is None:
             llm_payload = await init_llm_payload(ictx, user_name, text)
@@ -2152,7 +2158,7 @@ async def replace_msg_in_history_and_discord(ictx:CtxInteraction, params:dict, t
             if local_message:
                 await local_message.delete()
         # Clear related IDs attribute
-        updated_message.related_ids.clear() # TODO maybe add a fresh method to HMessage?
+        updated_message.related_ids.clear() # TODO maybe add a 'fresh' method to HMessage? - For Reality
         
         # Update original discord message, or send new one if too long
         local_history = bot_history.get_history_for(ictx.channel.id)
@@ -2230,7 +2236,7 @@ async def regenerate_task(inter:discord.Interaction, inter_discord_msg:discord.M
             params['bot_message_to_update'] = original_bot_message
             params['target_discord_msg_id'] = target_discord_msg.id
 
-        _, new_bot_message = await message_task(inter, original_user_text, 'regenerate', llm_payload, params, tags={})
+        _, new_bot_message = await message_task(inter, original_user_text, 'regenerate', llm_payload, params)
 
         # Update the user message hidden status depending on bot message status
         original_user_message.update(hidden=new_bot_message.hidden)
@@ -2615,7 +2621,6 @@ async def format_next_flow(ictx, next_flow, user_name:str, text:str):
 async def peek_flow_queue(ictx, queue, user_name:str, text:str):
     temp_queue = asyncio.Queue()
     total_queue_size = queue.qsize()
-    # first_flow = None # TODO UNUSED
     while queue.qsize() > 0:
         if queue.qsize() == total_queue_size:
             item = await queue.get()
@@ -2648,7 +2653,7 @@ async def flow_task(ictx: CtxInteraction, source:str, text:str):
                 flow_embed_info.description += f'**Processing Step {total_flow_steps + 1 - remaining_flow_steps}/{total_flow_steps}**{flow_name}\n'
                 if flow_embed: 
                     await flow_embed.edit(embed=flow_embed_info)
-            await message_task(ictx, text, source, llm_payload=None, params={}, tags={})
+            await message_task(ictx, text, source)
         if flow_embed_info:
             flow_embed_info.title = f"Flow completed for {user_name}"
             flow_embed_info.description = flow_embed_info.description.replace("**Processing", ":white_check_mark: **")
@@ -2979,7 +2984,7 @@ def clean_img_payload(img_payload):
         log.error(f"An error occurred when cleaning img_payload: {e}")
     return img_payload
 
-def apply_loractl(tags):
+def apply_loractl(tags: SORTED_TAGS):# -> SORTED_TAGS:
     try:
         if SD_CLIENT != 'A1111 SD WebUI':
             if not bot_database.was_warned('loractl'):
@@ -3504,12 +3509,11 @@ def init_img_payload(img_prompt:str, neg_prompt:str) -> dict:
     except Exception as e:
         log.error(f"Error initializing img payload: {e}")
 
-def match_img_tags(img_prompt:str, tags:dict) -> dict:
+def match_img_tags(img_prompt:str, tags:SORTED_TAGS) -> SORTED_TAGS:
     try:
         # Unmatch any previously matched tags which try to insert text into the img_prompt
-        for tag in tags['matches'][:]:  # Iterate over a copy of the list
-            tag:dict
-
+        matches_:TAG_LIST = tags['matches'] # type: ignore
+        for tag in matches_[:]:  # Iterate over a copy of the list
             if tag.get('imgtag_matched_early'): # extract text insertion key pairs from previously matched tags
                 new_tag = {}
                 tag_copy = copy.copy(tag)
@@ -3536,7 +3540,8 @@ def match_img_tags(img_prompt:str, tags:dict) -> dict:
 
     return tags
 
-async def img_gen_task(source:str, img_prompt:str, params:dict, ictx:CtxInteraction, tags={}):
+async def img_gen_task(source:str, img_prompt:str, params:dict, ictx:CtxInteraction, tags: SORTED_TAGS|None=None):
+    tags = tags or {}
     user_name = get_user_ctx_inter(ictx).display_name or None
     channel = ictx.channel
     bot_will_do = params.get('bot_will_do', {})
@@ -4949,7 +4954,6 @@ async def process_speak(ctx: commands.Context, input_text, selected_voice=None, 
 async def fetch_speak_options():
     try:
         lang_list = []
-        # all_voicess = [] # TODO UNUSED
         if tts_client == 'coqui_tts' or tts_client == 'alltalk_tts':
             lang_list = ['Arabic', 'Chinese', 'Czech', 'Dutch', 'English', 'French', 'German', 'Hungarian', 'Italian', 'Japanese', 'Korean', 'Polish', 'Portuguese', 'Russian', 'Spanish', 'Turkish']
             if tts_client == 'coqui_tts':
@@ -5478,13 +5482,13 @@ class CustomHistoryManager(HistoryManager):
         return history
     
     
-    def new_history_for(self, id_: ChannelID, character=None, mode=None) -> CustomHistory:
+    def new_history_for(self, id_: Optional[ChannelID|int], character=None, mode=None) -> CustomHistory:
         id_, character, mode = self.get_id_parts(id_, character, mode)
         full_id = f'{id_}_{character}_{mode}'
         return super().new_history_for(full_id) # type: ignore
     
     
-    def get_id_parts(self, id_: ChannelID, character=None, mode=None):
+    def get_id_parts(self, id_: Optional[ChannelID|int], character=None, mode=None):
         state_dict = bot_settings.settings['llmstate']['state']
         mode = mode or state_dict['mode']
         character = character or state_dict["character_menu"] or 'unknown_character'
