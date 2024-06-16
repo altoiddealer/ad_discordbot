@@ -1344,7 +1344,7 @@ def match_tags(search_text:str, tags:dict, phase='llm') -> dict:
         log.error(f"Error matching tags: {e}")
         return tags
 
-def sort_tags(all_tags: list) -> Union[list, dict]:
+def sort_tags(all_tags: list[dict]) -> Union[list, dict]:
     try:
         sorted_tags = {'matches': [], 'unmatched': {'user': [], 'llm': [], 'userllm': []}, 'trump_params': []}
         for tag in all_tags:
@@ -1471,7 +1471,7 @@ def parse_key_pair_from_text(kv_pair):
 
 # Matches [[this:syntax]] and creates 'tags' from matches
 # Can handle any structure including dictionaries, lists, even nested sublists.
-def get_tags_from_text(text):
+def get_tags_from_text(text) -> tuple[str, list[dict]]:
     try:
         tags_from_text = []
         matches = patterns.instant_tags.findall(text)
