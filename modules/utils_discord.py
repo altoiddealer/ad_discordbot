@@ -40,6 +40,9 @@ def configurable_for_dm_if(func):
     
     return commands.check(predicate)
 
+def is_direct_message(ictx: CtxInteraction):
+    return ictx and getattr(ictx, 'guild') is None \
+        and hasattr(ictx, 'channel') and isinstance(ictx.channel, discord.DMChannel)
 
 async def react_to_user_message(client_user: Optional[discord.ClientUser], channel, user_message:Optional['HMessage']=None):
     try:

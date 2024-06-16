@@ -40,7 +40,7 @@ sys.path.append("ad_discordbot")
 from modules.database import Database, ActiveSettings, Config, StarBoard, Statistics
 from modules.utils_shared import task_semaphore, shared_path, patterns, bot_emojis
 from modules.utils_misc import fix_dict, update_dict, sum_update_dict, update_dict_matched_keys, format_time  # noqa: F401
-from modules.utils_discord import guild_only, configurable_for_dm_if, ireply, sleep_delete_message, send_long_message, EditMessageModal, SelectedListItem, SelectOptionsView, get_user_ctx_inter, get_message_ctx_inter, react_to_user_message, MAX_MESSAGE_LENGTH  # noqa: F401
+from modules.utils_discord import guild_only, configurable_for_dm_if, is_direct_message, ireply, sleep_delete_message, send_long_message, EditMessageModal, SelectedListItem, SelectOptionsView, get_user_ctx_inter, get_message_ctx_inter, react_to_user_message, MAX_MESSAGE_LENGTH  # noqa: F401
 from modules.utils_files import load_file, merge_base, save_yaml_file  # noqa: F401
 from modules.utils_aspect_ratios import round_to_precision, res_to_model_fit, dims_from_ar, avg_from_dims, get_aspect_ratio_parts, calculate_aspect_ratio_sizes  # noqa: F401
 from modules.history import HistoryManager, History, HMessage, cnf
@@ -528,14 +528,13 @@ async def auto_update_imgmodel_task(mode, duration):
     while True:
         await asyncio.sleep(duration)
         try:
-            current_imgmodel_name = bot_settings.settings['imgmodel'].get('imgmodel_name', '')
             # Select an imgmodel automatically
-            selected_imgmodel = await auto_select_imgmodel(current_imgmodel_name, mode)
+            selected_imgmodel = await auto_select_imgmodel(bot_database.last_imgmodel_name, mode)
 
             async with task_semaphore:
                 # offload to ai_gen queue
                 params = {'imgmodel': selected_imgmodel}
-                await change_imgmodel_task('Automatically', channel=None, params=params, ictx=None)
+                await change_imgmodel_task(params=params, ictx=None)
                 log.info("Automatically updated imgmodel settings")
 
         except Exception as e:
@@ -876,13 +875,13 @@ async def upload_tts_file(channel:discord.TextChannel, bot_message:HMessage):
         bot_message.update(audio_id=sent_message.id)
     
 
-async def process_tts_resp(channel:discord.TextChannel, bot_message:HMessage):
+async def process_tts_resp(ictx:CtxInteraction, bot_message:HMessage, is_dm:bool=False):
     play_mode = int(tts_settings.get('play_mode', 0))
     # Upload to interaction channel
     if play_mode > 0:
-        await upload_tts_file(channel, bot_message)
+        await upload_tts_file(ictx.channel, bot_message)
     # Play in voice channel
-    if play_mode != 1 and (voice_client == channel.guild.voice_client):
+    if not is_direct_message(ictx) and play_mode != 1 and (voice_client == ictx.channel.guild.voice_client):
         await bg_task_queue.put(play_in_voice_channel(bot_message.text_visible)) # run task in background
         
     bot_message.update(spoken=True)
@@ -1709,7 +1708,7 @@ async def message_task(ictx: CtxInteraction, text:str, source:str='message', llm
         if bot_message:
             # Process any TTS response
             if bot_message.text_visible:
-                await process_tts_resp(channel, bot_message)
+                await process_tts_resp(ictx, bot_message)
             if params['bot_will_do']['should_send_text']:
                 # Apply any labels applicable to message
                 labeled_resp = local_history.get_labeled_history_text(bot_message, bot_message.text)
@@ -1760,7 +1759,10 @@ async def message_task(ictx: CtxInteraction, text:str, source:str='message', llm
         # Update names in stopping strings
         llm_payload = extra_stopping_strings(llm_payload)
         # Get history for interaction channel
-        local_history = bot_history.get_history_for(ictx.channel.id)
+        if is_direct_message(ictx):
+            local_history = bot_history.get_history_for(ictx.channel.id).dont_save()
+        else:
+            local_history = bot_history.get_history_for(ictx.channel.id)
         # Create user message in HManager
         user_message = None
         if not params.get('skip_create_user'):
@@ -1959,7 +1961,7 @@ async def create_user_message(local_history, llm_payload:dict, save_to_history=T
         # set history flag
         if not save_to_history:
             user_message.hidden = True
-        if ictx and hasattr(ictx, 'channel') and isinstance(ictx.channel, discord.DMChannel):
+        if is_direct_message(ictx):
             user_message.dont_save()
             await warn_direct_channel(ictx)
 
@@ -2022,7 +2024,7 @@ async def create_bot_message(user_message:Optional[HMessage], local_history:Opti
             bot_message.mark_as_reply_for(user_message)
         if not save_to_history:
             bot_message.hidden = True
-        if ictx and hasattr(ictx, 'channel') and isinstance(ictx.channel, discord.DMChannel):
+        if is_direct_message(ictx):
             bot_message.dont_save()
 
         if last_resp:
@@ -2123,7 +2125,7 @@ async def continue_task(inter:discord.Interaction, target_discord_msg:discord.Me
 
         # process any tts resp
         if tts_resp:
-            await process_tts_resp(channel, updated_bot_message)
+            await process_tts_resp(inter, updated_bot_message)
 
     except Exception as e:
         e_msg = 'An error occurred while processing "Continue"'
@@ -2133,7 +2135,7 @@ async def continue_task(inter:discord.Interaction, target_discord_msg:discord.Me
             await system_embed.delete()
 
 # Regenerate Replace...
-async def replace_msg_in_history_and_discord(ictx:discord.Interaction, params:dict, text:str, text_visible:str) -> Optional[HMessage]:
+async def replace_msg_in_history_and_discord(ictx:CtxInteraction, params:dict, text:str, text_visible:str) -> Optional[HMessage]:
     channel = ictx.channel
     updated_message: Optional[HMessage] = params.get('user_message_to_update') or params.get('bot_message_to_update')
     target_discord_msg_id = params.get('target_discord_msg_id')
@@ -2232,13 +2234,16 @@ async def regenerate_task(inter:discord.Interaction, inter_discord_msg:discord.M
 
         # Update the user message hidden status depending on bot message status
         original_user_message.update(hidden=new_bot_message.hidden)
-
         # Adjust reaction if applicable
         await react_to_user_message(client.user, inter.channel, original_user_message)
 
-        # Update the new user message with the original discord message ID
         if mode == 'create':
+            # Update the new user message with the original discord message ID
             new_bot_message.mark_as_reply_for(original_user_message)
+            # Hide original bot message(s)
+            original_bot_message.update(hidden=True)
+            original_bot_message_ids = [original_bot_message.id] + original_bot_message.related_ids
+            await apply_labels_to_msg_list(inter, local_history, original_bot_message, original_bot_message_ids, target_discord_msg)
 
         if system_embed:
             await system_embed.delete()
@@ -2288,7 +2293,7 @@ async def speak_task(ctx: commands.Context, text:str, params:dict):
             await system_embed.delete()
         if not bot_message:
             return
-        await process_tts_resp(channel, bot_message)
+        await process_tts_resp(ctx, bot_message)
         # remove api key (don't want to share this to the world!)
         for sub_dict in tts_args.values():
             if 'api_key' in sub_dict:
@@ -2311,12 +2316,12 @@ async def speak_task(ctx: commands.Context, text:str, params:dict):
 #################################################################
 ###################### QUEUED MODEL CHANGE ######################
 #################################################################
-# Process selected Img model
-async def change_imgmodel_task(user_name:str, channel, params:dict, ictx=None):
+# Process selected Img model.
+async def change_imgmodel_task(params:dict, ictx=None):
     try:
-        if ictx:
-            user_name = get_user_ctx_inter(ictx).display_name
-            channel = ictx.channel
+        user_name = get_user_ctx_inter(ictx).display_name if ictx else 'Automatically'
+        channel = ictx.channel if ictx else None
+
         change_embed = None
         await sd_online(channel) # Can't change Img model if not online!
 
@@ -2325,24 +2330,22 @@ async def change_imgmodel_task(user_name:str, channel, params:dict, ictx=None):
         mode = imgmodel_params.get('mode', 'change')    # default to 'change
         verb = imgmodel_params.get('verb', 'Changing')  # default to 'Changing'
 
-        # Was not 'None' and did not match any known model names/checkpoints
+        # Value did not match any known model names/checkpoints
         if len(imgmodel_params) < 3:
             if channel and change_embed_info:
                 change_embed_info.title = 'Failed to change Img model:'
                 change_embed_info.description = f'Img model not found: {imgmodel_name}'
                 change_embed = await channel.send(embed=change_embed_info)
             return False
-        # if imgmodel_name != 'None': ### IF API IMG MODEL UNLOADING GETS EVER DEBUGGED
-        if channel and change_embed_info: # Auto-select imgmodel feature may not have a configured channel
+
+        if channel and change_embed_info:
             change_embed_info.title = f'{verb} Img model ... '
             change_embed_info.description = f'{verb} to {imgmodel_name}'
             change_embed = await channel.send(embed=change_embed_info)
 
         # Swap Image model
         if mode == 'swap' or mode == 'swap_back':
-            current_model_settings = bot_settings.settings['imgmodel'].get('override_settings') or bot_settings.settings['imgmodel']['payload'].get('override_settings')
-            new_model_settings = copy.deepcopy(current_model_settings)
-            new_model_settings['sd_model_checkpoint'] = imgmodel_params['sd_model_checkpoint']
+            new_model_settings = {'sd_model_checkpoint': imgmodel_params['sd_model_checkpoint']}
             _ = await sd_api(endpoint='/sdapi/v1/options', method='post', json=new_model_settings, retry=True)
             if change_embed:
                 await change_embed.delete()
@@ -2350,7 +2353,7 @@ async def change_imgmodel_task(user_name:str, channel, params:dict, ictx=None):
 
         # Change Image model
         await change_imgmodel(imgmodel_params)
-        # if imgmodel_name != 'None': ### IF API IMG MODEL UNLOADING GETS EVER DEBUGGED
+
         if channel and change_embed:
             await change_embed.delete()
         if change_embed_info:
@@ -2522,7 +2525,7 @@ async def change_char_task(ictx: CtxInteraction, source:str, params:dict):
             change_embed_info.title = f"{user_name} {change_message}:"
             await channel.send(embed=change_embed_info)
             # Send embeds to announcement channels
-            if bot_database.announce_channels and not isinstance(ictx.channel, discord.DMChannel):
+            if bot_database.announce_channels and not is_direct_message(ictx):
                 await bg_task_queue.put(announce_changes(ictx, change_message, char_name))
         await send_char_greeting_or_history(ictx, char_name)
         log.info(f"Character loaded: {char_name}")
@@ -3244,21 +3247,19 @@ async def process_img_payload_tags(img_payload:dict, mods:dict, params:dict):
             # Imgmodel handling
             new_imgmodel = change_imgmodel or swap_imgmodel or None
             if new_imgmodel:
-                    ## IF API IMG MODEL UNLOADING GETS EVER DEBUGGED
-                    ## if not change_imgmodel and swap_imgmodel and swap_imgmodel == 'None':
-                        # _ = await sd_api(endpoint='/sdapi/v1/unload-checkpoint', method='post', json=None, retry=True)
-                params['imgmodel'] = await get_selected_imgmodel_data(new_imgmodel) # {sd_model_checkpoint, imgmodel_name, filename}
-                current_sd_model_checkpoint = bot_settings.settings['imgmodel'].get('override_settings', {}).get('sd_model_checkpoint') or bot_settings.settings['imgmodel']['payload'].get('override_settings', {}).get('sd_model_checkpoint') or ''
-                current_imgmodel_name = bot_settings.settings['imgmodel'].get('imgmodel_name')
+                params['imgmodel'] = await get_selected_imgmodel_params(new_imgmodel) # {sd_model_checkpoint, imgmodel_name, filename}
+                current_imgmodel_name = bot_database.last_imgmodel_name
+                new_imgmodel_name = params['imgmodel'].get('imgmodel_name', '')
                 # Check if new model same as current model
-                if current_imgmodel_name == params['imgmodel'].get('imgmodel_name', ''):
+                if current_imgmodel_name == new_imgmodel_name:
                     log.info(f'[TAGS] Img model was triggered to change, but it is the same as current ("{current_imgmodel_name}").')
                 else:
+                    mode = 'change' if new_imgmodel == change_imgmodel else 'swap'
+                    verb = 'Changing' if mode == 'change' else 'Swapping'
                     params['imgmodel']['current_imgmodel_name'] = current_imgmodel_name
-                    params['imgmodel']['current_sd_model_checkpoint'] = current_sd_model_checkpoint
-                    params['imgmodel']['mode'] = 'change' if new_imgmodel == change_imgmodel else 'swap'
-                    params['imgmodel']['verb'] = 'Changing' if params['imgmodel']['mode'] == 'change' else 'Swapping'
-                    log.info(f'[TAGS] {params["imgmodel"]["verb"]} Img model: "{params["imgmodel"].get("imgmodel_name", "")}"')
+                    params['imgmodel']['mode'] = mode
+                    params['imgmodel']['verb'] = verb
+                    log.info(f'[TAGS] {verb} Img model: "{new_imgmodel_name}"')
             # Payload handling
             if payload:
                 if isinstance(payload, dict):
@@ -3306,10 +3307,10 @@ async def process_img_payload_tags(img_payload:dict, mods:dict, params:dict):
             # Inpaint Mask handling
             if img2img_mask:
                 img_payload['mask'] = str(img2img_mask)
-        return img_payload, params
     except Exception as e:
         log.error(f"Error processing Img tags: {e}")
-        return img_payload, None
+        traceback.print_exc()
+    return img_payload, params
 
 # The methods of this function allow multiple extensions with an identical "select image from random folder" value to share the first selected folder.
 # The function will first try to find a specific image file based on the extension's key name (ex: 'canny.png' or 'img2img_mask.jpg')
@@ -3498,7 +3499,6 @@ def init_img_payload(img_prompt:str, neg_prompt:str) -> dict:
         # Apply settings from imgmodel configuration
         imgmodel_img_payload = copy.deepcopy(bot_settings.settings['imgmodel'].get('payload', {}))
         img_payload.update(imgmodel_img_payload)
-        img_payload['override_settings'] = copy.deepcopy(bot_settings.settings['imgmodel'].get('override_settings', {}))
         return img_payload
 
     except Exception as e:
@@ -3542,10 +3542,6 @@ async def img_gen_task(source:str, img_prompt:str, params:dict, ictx:CtxInteract
     bot_will_do = params.get('bot_will_do', {})
     img_censoring = params.get('img_censoring', 0)
     try:
-        check_key = bot_settings.settings['imgmodel'].get('override_settings', {}) or bot_settings.settings['imgmodel'].get('payload', {}).get('override_settings', {})
-        if check_key.get('sd_model_checkpoint', '') == 'None': # Model currently unloaded
-            await channel.send("**Cannot process image request:** No Img model is currently loaded")
-            log.warning(f'Bot tried to generate image for {user_name}, but no Img model was loaded')
         if not tags:
             img_prompt, tags = await get_tags(img_prompt)
             tags = match_img_tags(img_prompt, tags)
@@ -3578,12 +3574,15 @@ async def img_gen_task(source:str, img_prompt:str, params:dict, ictx:CtxInteract
         should_swap = False
         imgmodel_params = params.get('imgmodel', {})
         if imgmodel_params:
-            # Add new checkpoint to payload
-            img_payload['override_settings']['sd_model_checkpoint'] = imgmodel_params.get('sd_model_checkpoint', '')
+            # Add checkpoint to image payload (change_imgmodel_task() will change it anyway)
+            sd_model_checkpoint = imgmodel_params.get('sd_model_checkpoint', '')
+            override_settings = img_payload.setdefault('override_settings', {})
+            override_settings['sd_model_checkpoint'] = sd_model_checkpoint
+            # collect params fpr event of model swapping
             swap_params = {'imgmodel': {}}
-            swap_params['imgmodel']['imgmodel_name'] = imgmodel_params.pop('current_imgmodel_name', '')
-            swap_params['imgmodel']['sd_model_checkpoint'] = imgmodel_params.pop('current_sd_model_checkpoint', '')
-            should_swap = await change_imgmodel_task(user_name, channel, params, ictx)
+            swap_params['imgmodel']['imgmodel_name'] = bot_database.last_imgmodel_name
+            swap_params['imgmodel']['sd_model_checkpoint'] = bot_database.last_imgmodel_checkpoint
+            should_swap = await change_imgmodel_task(params, ictx)
         # Generate and send images
         params['bot_will_do'] = bot_will_do
         await process_image_gen(img_payload, channel, params)
@@ -3603,7 +3602,7 @@ async def img_gen_task(source:str, img_prompt:str, params:dict, ictx:CtxInteract
         if should_swap:
             swap_params['imgmodel']['mode'] = 'swap_back'
             swap_params['imgmodel']['verb'] = 'Swapping back to'
-            await change_imgmodel_task(user_name, channel, swap_params, ictx)
+            await change_imgmodel_task(swap_params, ictx)
     except Exception as e:
         log.error(f"An error occurred in img_gen_task(): {e}")
 
@@ -4216,44 +4215,77 @@ if textgenwebui_enabled:
         except Exception as e:
             log.error(f'Failed to edit message content for id {msg_id}: {e}')
 
-    async def apply_hide_or_reveal_history(inter: discord.Interaction, local_history: History, message: discord.Message, target_message:HMessage):
+    async def apply_hide_or_reveal_history(inter: discord.Interaction, local_history: History, message: discord.Message, target_hmessage:HMessage):
         try:
             user_message, bot_message = local_history.get_history_pair_from_msg_id(message.id)
 
-            # Prevent user message from being automatically hidden while open bot replies
-            all_bot_replies = user_message.replies
-            num_bot_open_msgs = len(all_bot_replies)
-            for bot_msg in all_bot_replies:
-                if bot_msg.hidden:
-                    num_bot_open_msgs -= 1
-
-            # Apply command
-            if (user_message is not None and not user_message.hidden) and (bot_message is not None and not bot_message.hidden):
-                verb = 'hidden'
-                if num_bot_open_msgs <= 1:
-                    user_message.update(hidden=True)
-                bot_message.update(hidden=True)
-                
-            elif (user_message is not None and user_message.hidden) and (bot_message is not None and bot_message.hidden):
-                verb = 'revealed'
-                user_message.update(hidden=False)
-                bot_message.update(hidden=False)
-                
-            else:
+            # determine outcome
+            hiding_messages = (user_message is not None and not user_message.hidden) and (bot_message is not None and not bot_message.hidden)
+            revealing_messages = (user_message is not None and user_message.hidden) and (bot_message is not None and bot_message.hidden)
+            if hiding_messages == False and revealing_messages == False:
                 await inter.response.send_message("A valid message pair could not be found for the target message.", ephemeral=True, delete_after=5)
                 return
+
+            verb = 'hidden' if hiding_messages else 'revealed'
+            print("verb", verb)
+
+            # List of HMessages to update associated discord messages for
+            hmessages_to_relabel = [target_hmessage]
+
+            # Default action, no fancy extra toggling
+            def toggle_hmessages(bot_message:HMessage, other_message:HMessage, verb:str, stagger:bool=False):
+                if verb == 'hidden':
+                    bot_message.update(hidden=True)
+                    other_message.update(hidden=True if not stagger else False)
+                else:
+                    bot_message.update(hidden=False)
+                    other_message.update(hidden=False if not stagger else True)
+
+            # If command was used on a bot reply (not the user message)
+            if client.user == message.author:
+                # Get all bot replies
+                all_bot_replies = user_message.replies
+                # If only one reply, toggle with user message
+                if len(all_bot_replies) == 1:
+                    toggle_hmessages(bot_message, user_message, verb) # Toggle hidden
+                # If multiple replies, get next reply and toggle with it instead of user message
+                else:
+                    next_reply = None
+                    for i in range(len(all_bot_replies)):
+                        if all_bot_replies[i] == bot_message:
+                            # there's a more recent reply
+                            if i + 1 < len(all_bot_replies):
+                                print("there's newer msg")
+                                next_reply = all_bot_replies[i + 1]
+                            # selected reply is the last one
+                            else:
+                                print("this one is last, using previous one")
+                                next_reply = all_bot_replies[i - 1]
+                            break
+                        if next_reply:
+                            hmessages_to_relabel.append(next_reply)  # add next HMessage
+                            toggle_hmessages(bot_message, next_reply, verb, stagger=True) # Toggle hidden
+                        else:
+                            print("error")
+                            toggle_hmessages(bot_message, user_message, verb) # Toggle hidden
+
+            # If command was used on a user message (not the bot reply)
+            else:
+                toggle_hmessages(bot_message, user_message, verb) # Toggle hidden
+                # Change target messages to the bot's response
+                target_hmessage = bot_message
+                hmessages_to_relabel = [target_hmessage]
 
             # Apply reaction to user message
             await react_to_user_message(client.user, inter.channel, user_message)
 
-            # Change target message to the bot's response, if the original target message was user's message
-            if client.user != message.author:
-                target_message = bot_message
-
-            # Iterate over all messages and update the labels
-            msg_ids_to_edit = [target_message.id]
-            if target_message.related_ids:
-                msg_ids_to_edit = [target_message.id] + target_message.related_ids
+            # Collect all messages that need label updates
+            msg_ids_to_edit = []
+            for target_msg in hmessages_to_relabel:
+                if target_msg.related_ids:
+                    msg_ids_to_edit.extend([target_msg.id] + target_msg.related_ids)
+            print("msg_ids_to_edit", msg_ids_to_edit)
+            # Apply labels to all affected messages
             await apply_labels_to_msg_list(inter, local_history, bot_message, msg_ids_to_edit, message)
 
             undeletable_message = await inter.channel.send(f"Modified message exchange pair in history for {inter.user.display_name} (messages {verb}).")
@@ -4272,8 +4304,8 @@ if textgenwebui_enabled:
             return
         try:
             local_history = bot_history.get_history_for(inter.channel.id)
-            target_message = local_history.search(lambda m: m.id == message.id or message.id in m.related_ids)
-            if not target_message:
+            target_hmessage = local_history.search(lambda m: m.id == message.id or message.id in m.related_ids)
+            if not target_hmessage:
                 await inter.response.send_message("Message not found in current chat history.", ephemeral=True, delete_after=5)
                 return
         except Exception as e:
@@ -4283,7 +4315,7 @@ if textgenwebui_enabled:
         async with task_semaphore:
             # offload to ai_gen queue
             log.info(f'{inter.user.display_name} used "hide or reveal history"')
-            await apply_hide_or_reveal_history(inter, local_history, message, target_message)
+            await apply_hide_or_reveal_history(inter, local_history, message, target_hmessage)
 
     # Context menu command to Regenerate from selected user message and create new history
     @client.tree.context_menu(name="regenerate create")
@@ -4293,7 +4325,6 @@ if textgenwebui_enabled:
             return
         else:
             await ireply(inter, 'regenerate') # send a response msg to the user
-        #await inter.response.defer(thinking=False)
 
         async with task_semaphore:
             async with inter.channel.typing():
@@ -4309,7 +4340,6 @@ if textgenwebui_enabled:
             return
         else:
             await ireply(inter, 'regenerate') # send a response msg to the user
-        #await inter.response.defer(thinking=False)
 
         async with task_semaphore:
             async with inter.channel.typing():
@@ -4617,101 +4647,87 @@ async def guess_model_data(selected_imgmodel, presets):
     except Exception as e:
         log.error(f"Error guessing selected imgmodel data: {e}")
 
-async def change_imgmodel(selected_imgmodel:dict):
+
+async def change_imgmodel(selected_imgmodel_params:dict):
+
     # Merge selected imgmodel/tag data with base settings
-    async def merge_new_imgmodel_data(selected_imgmodel:dict):
+    async def merge_new_imgmodel_data(selected_imgmodel_params:dict):
         try:
-            selected_imgmodel_name = selected_imgmodel.get('imgmodel_name')
-            ### IF API IMG MODEL UNLOADING GETS EVER DEBUGGED
-            # if selected_imgmodel_name == 'None': # Unloading model
-            #     selected_imgmodel_tags = []
-            #     return selected_imgmodel, selected_imgmodel_name, selected_imgmodel_tags
             # Get tags if defined
-            selected_imgmodel_tags = None
-            imgmodel_settings = {'payload': {}, 'override_settings': {}}
+            imgmodel_tags = None
+            imgmodel_settings = {}
             imgmodels_data = load_file(shared_path.img_models, {})
             if imgmodels_data.get('settings', {}).get('auto_change_imgmodels', {}).get('guess_model_params', True):
                 imgmodel_presets = copy.deepcopy(imgmodels_data.get('presets', []))
-                matched_preset = await guess_model_data(selected_imgmodel, imgmodel_presets)
+                matched_preset = await guess_model_data(selected_imgmodel_params, imgmodel_presets)
                 if matched_preset:
-                    selected_imgmodel_tags = matched_preset.pop('tags', None)
+                    imgmodel_tags = matched_preset.pop('tags', None)
                     imgmodel_settings['payload'] = matched_preset.get('payload', {})
-            imgmodel_settings['override_settings']['sd_model_checkpoint'] = selected_imgmodel['sd_model_checkpoint']
-            imgmodel_settings['imgmodel_name'] = selected_imgmodel_name
 
-            # Replace input dictionary
-            selected_imgmodel = imgmodel_settings
             # Merge the selected imgmodel data with base imgmodel data
-            selected_imgmodel = merge_base(selected_imgmodel, 'imgmodel')
+            updated_imgmodel_params = merge_base(imgmodel_settings, 'imgmodel')
             # Unpack any tag presets
-            selected_imgmodel_tags = await update_tags(selected_imgmodel_tags)
-            return selected_imgmodel, selected_imgmodel_name, selected_imgmodel_tags
+            imgmodel_tags = await update_tags(imgmodel_tags)
+            return updated_imgmodel_params, imgmodel_tags
         except Exception as e:
             log.error(f"Error merging selected imgmodel data with base imgmodel data: {e}")
             return {}
 
     # Save new Img model data
-    async def save_new_imgmodel_settings(selected_imgmodel, selected_imgmodel_tags):
+    async def save_new_imgmodel_settings(load_new_model, updated_imgmodel_params, imgmodel_tags):
         try:
             # get current/new average width/height for '/image' cmd size options
             current_avg = get_current_avg_from_dims()
-            new_avg = avg_from_dims(selected_imgmodel.get('payload', {}).get('width', 512), selected_imgmodel.get('payload', {}).get('height', 512))
-            bot_active_settings['imgmodel'] = selected_imgmodel
-            bot_active_settings['imgmodel']['tags'] = selected_imgmodel_tags
+            new_avg = avg_from_dims(updated_imgmodel_params['payload']['width'], updated_imgmodel_params['payload']['height'])
+            bot_active_settings['imgmodel'] = updated_imgmodel_params
+            bot_active_settings['imgmodel']['payload'].pop('override_settings', {}) # Not saving to bot_active_settings
+            bot_active_settings['imgmodel']['tags'] = imgmodel_tags
             bot_active_settings.save()
             # Update all settings
             bot_settings.update_settings()
             await bot_settings.update_base_tags()
 
-            ### IF API IMG MODEL UNLOADING GETS EVER DEBUGGED
-            # if selected_imgmodel['imgmodel_name'] == 'None':
-            # _ = await sd_api(endpoint='/sdapi/v1/unload-checkpoint', method='post', json=None)
-            #     change_embed.title = 'Unloaded Img model'
-            #     change_embed.description = ''
-            #     await channel.send(embed=change_embed)
-            #     return
-            # Load the imgmodel and VAE via API
-            model_data = bot_settings.settings['imgmodel'].get('override_settings') or bot_settings.settings['imgmodel']['payload'].get('override_settings')
-            _ = await sd_api(endpoint='/sdapi/v1/options', method='post', json=model_data, retry=True)
+            # load the model
+            _ = await sd_api(endpoint='/sdapi/v1/options', method='post', json=load_new_model, retry=True)
             # Update size options for /image command if old/new averages are different
             if current_avg != new_avg:
                 await bg_task_queue.put(update_size_options(new_avg))
         except Exception as e:
             log.error(f"Error updating settings with the selected imgmodel data: {e}")
 
-    selected_imgmodel, selected_imgmodel_name, selected_imgmodel_tags = await merge_new_imgmodel_data(selected_imgmodel)
-    await save_new_imgmodel_settings(selected_imgmodel, selected_imgmodel_tags)
+    # Save model details to bot database
+    bot_database.set('last_imgmodel_name', selected_imgmodel_params['imgmodel_name'])
+    bot_database.set('last_imgmodel_checkpoint', selected_imgmodel_params['sd_model_checkpoint'])
+    # Retain the model checkpoint
+    load_new_model = {'sd_model_checkpoint': selected_imgmodel_params['sd_model_checkpoint']}
+    # Guess model params, merge with basesettings
+    updated_imgmodel_params, imgmodel_tags = await merge_new_imgmodel_data(selected_imgmodel_params)
+    # Save settings
+    await save_new_imgmodel_settings(load_new_model, updated_imgmodel_params, imgmodel_tags)
 
-async def get_selected_imgmodel_data(selected_imgmodel_value:str) -> dict:
+
+async def get_selected_imgmodel_params(selected_imgmodel_value:str) -> dict:
     try:
-        selected_imgmodel = {}
-        ### IF API IMG MODEL UNLOADING GETS EVER DEBUGGED
-        # Unloading the current Img model
-        # if selected_imgmodel_value == 'None':
-        #     selected_imgmodel = {'override_settings': {'sd_model_checkpoint': 'None'}, 'imgmodel_name': 'None'}
-        #     return selected_imgmodel
-        # if selected_imgmodel_value == 'Exit':
-        #      selected_imgmodel = {'imgmodel_name': 'None were selected'}
-        #     return selected_imgmodel
+        selected_imgmodel_params = {}
+
         all_imgmodels = await fetch_imgmodels()
         for imgmodel in all_imgmodels:
             # check that the value matches a valid checkpoint
             if selected_imgmodel_value == (imgmodel.get('imgmodel_name') or imgmodel.get('sd_model_checkpoint')):
-                selected_imgmodel = {
-                    "sd_model_checkpoint": imgmodel["sd_model_checkpoint"],
-                    "imgmodel_name": imgmodel.get("imgmodel_name"),
-                    "filename": imgmodel.get("filename", None)
-                }
+                selected_imgmodel_params = {"sd_model_checkpoint": imgmodel["sd_model_checkpoint"],
+                                            "imgmodel_name": imgmodel.get("imgmodel_name"),
+                                            "filename": imgmodel.get("filename", None)}
                 break
-        if not selected_imgmodel:
+        if not selected_imgmodel_params:
             log.error(f'Img model not found: {selected_imgmodel_value}')
-        return selected_imgmodel
+        return selected_imgmodel_params
 
     except Exception as e:
         log.error(f"Error getting selected imgmodel data: {e}")
         return {}
 
-async def process_imgmodel(ctx, selected_imgmodel_value):
+async def process_imgmodel(ctx: commands.Context, selected_imgmodel_value:str):
+    user_name = get_user_ctx_inter(ctx).display_name or None
     try:
         if not selected_imgmodel_value:
             await ctx.reply('**No Img model was selected**.', ephemeral=True, delete_after=5)
@@ -4720,10 +4736,10 @@ async def process_imgmodel(ctx, selected_imgmodel_value):
 
         async with task_semaphore:
             # offload to ai_gen queue
-            log.info(f'{ctx.author.display_name} used "/imgmodel": "{selected_imgmodel_value}"')
+            log.info(f'{user_name} used "/imgmodel": "{selected_imgmodel_value}"')
             params = {}
-            params['imgmodel'] = await get_selected_imgmodel_data(selected_imgmodel_value) # {sd_model_checkpoint, imgmodel_name, filename}
-            await change_imgmodel_task(ctx.author.display_name, ctx.channel, params, ctx)
+            params['imgmodel'] = await get_selected_imgmodel_params(selected_imgmodel_value) # {sd_model_checkpoint, imgmodel_name, filename}
+            await change_imgmodel_task(params, ctx)
 
     except Exception as e:
         log.error(f"Error processing selected imgmodel from /imgmodel command: {e}")
@@ -4736,9 +4752,6 @@ if sd_enabled:
         try:
             all_imgmodels = await fetch_imgmodels()
             if all_imgmodels:
-                ### IF API IMG MODEL UNLOADING GETS EVER DEBUGGED
-                # unload_options = [app_commands.Choice(name="Unload Model", value="None"),
-                # app_commands.Choice(name="Do Not Unload Model", value="Exit")]
                 items_for_img_model = [i["imgmodel_name"] for i in all_imgmodels]
                 warned_too_many_img_model = False # TODO use the warned_once feature?
                 imgmodels_view = SelectOptionsView(items_for_img_model,
@@ -4913,7 +4926,8 @@ async def process_user_voice(ctx: commands.Context, voice_input=None):
 async def process_speak(ctx: commands.Context, input_text, selected_voice=None, lang=None, voice_input=None):
     try:
         # Only generate TTS for the server conntected to Voice Channel
-        if voice_client and (voice_client != ctx.guild.voice_client) and int(tts_settings.get('play_mode', 0)) == 0:
+        if voice_client and (is_direct_message(ctx) or (voice_client != ctx.guild.voice_client)) \
+            and int(tts_settings.get('play_mode', 0)) == 0:
             await ctx.send('Voice Channel is not enabled on this server', ephemeral=True, delete_after=5)
             return
         user_voice = await process_user_voice(ctx, voice_input)
@@ -5085,7 +5099,7 @@ class Behavior:
         return False
 
     def bot_should_reply(self, message:discord.Message, text:str) -> bool:
-        main_condition = (isinstance(message.channel, discord.DMChannel) or (message.channel.id in bot_database.main_channels))
+        main_condition = is_direct_message(message) or (message.channel.id in bot_database.main_channels)
 
         if not config.get('discord', {}).get('direct_messages', {}).get('allow_chatting', True):
             return False
@@ -5343,16 +5357,6 @@ class CustomHistory(History):
         
         if not has_file_name:
             log.info(f'Internal history file will be saved to: {self.fp}')
-            
-            
-            
-    # def should_save_condition(self):
-    #     if self.fp_internal_id is not None and self.fp_internal_id.isdigit():
-    #         channel = client.get_channel(int(self.fp_internal_id))
-    #         if isinstance(channel, discord.DMChannel):
-    #             return False
-            
-    #     return True
     
     
     async def save(self, fp=None, timeout=300, force=False, force_tgwui=False):
