@@ -1685,7 +1685,7 @@ async def on_message(message: discord.Message):
         async with task_semaphore:
             async with message.channel.typing():
                 log.info(f'reply requested: {message.author.display_name} said: "{text}"')
-                await message_task(message, text, 'on_message', llm_payload=None, params={}, tags={})
+                await message_task(message, text, 'on_message')
                 await run_flow_if_any(message, 'on_message', text)
 
     except Exception as e:
@@ -1694,8 +1694,9 @@ async def on_message(message: discord.Message):
 #################################################################
 ######################## QUEUED MESSAGE #########################
 #################################################################
-async def message_task(ictx: CtxInteraction, text:str, source:str='message', llm_payload:dict|None=None, params:dict|None=None, tags:dict={}) -> tuple[HMessage, HMessage]:
+async def message_task(ictx: CtxInteraction, text:str, source:str='message', llm_payload:dict|None=None, params:dict|None=None) -> tuple[HMessage, HMessage]:
     params = params or {}
+    tags = {} # just incase there's an exception.
     user_name = get_user_ctx_inter(ictx).display_name
     channel = ictx.channel
 
@@ -2231,7 +2232,7 @@ async def regenerate_task(inter:discord.Interaction, inter_discord_msg:discord.M
             params['bot_message_to_update'] = original_bot_message
             params['target_discord_msg_id'] = target_discord_msg.id
 
-        _, new_bot_message = await message_task(inter, original_user_text, 'regenerate', llm_payload, params, tags={})
+        _, new_bot_message = await message_task(inter, original_user_text, 'regenerate', llm_payload, params)
 
         # Update the user message hidden status depending on bot message status
         original_user_message.update(hidden=new_bot_message.hidden)
@@ -2649,7 +2650,7 @@ async def flow_task(ictx: CtxInteraction, source:str, text:str):
                 flow_embed_info.description += f'**Processing Step {total_flow_steps + 1 - remaining_flow_steps}/{total_flow_steps}**{flow_name}\n'
                 if flow_embed: 
                     await flow_embed.edit(embed=flow_embed_info)
-            await message_task(ictx, text, source, llm_payload=None, params={}, tags={})
+            await message_task(ictx, text, source)
         if flow_embed_info:
             flow_embed_info.title = f"Flow completed for {user_name}"
             flow_embed_info.description = flow_embed_info.description.replace("**Processing", ":white_check_mark: **")
