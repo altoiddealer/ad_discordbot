@@ -1344,26 +1344,33 @@ def match_tags(search_text:str, tags:dict, phase='llm') -> dict:
         log.error(f"Error matching tags: {e}")
         return tags
 
-def sort_tags(all_tags: list[dict]) -> Union[list, dict]:
+TAG_LIST = list[dict]
+TAG_LIST_DICT = dict[str, TAG_LIST]
+def sort_tags(all_tags: TAG_LIST) -> dict[str, Union[TAG_LIST, TAG_LIST_DICT]]:
+    sorted_tags = {'matches': [], 'unmatched': {'user': [], 'llm': [], 'userllm': []}, 'trump_params': [], 'failed': []}
+    
     try:
-        sorted_tags = {'matches': [], 'unmatched': {'user': [], 'llm': [], 'userllm': []}, 'trump_params': []}
         for tag in all_tags:
-            if 'random' in tag:
+            if 'random' in tag.keys():
                 if not isinstance(tag['random'], (int, float)):
                     log.error("Error: Value for 'random' in tags should be float value (ex: 0.8).")
                     continue # Skip this tag
                 if not random.random() < tag['random']:
                     continue # Skip this tag
+                
             search_mode = tag.get('search_mode', 'userllm')  # Default to 'userllm' if 'search_mode' is not present
             if search_mode in sorted_tags['unmatched']:
                 sorted_tags['unmatched'][search_mode].append({k: v for k, v in tag.items() if k != 'search_mode'})
+                
             else:
                 log.warning(f"Ignoring unknown search_mode: {search_mode}")
+                
         return sorted_tags
 
     except Exception as e:
         log.error(f"Error sorting tags: {e}")
-        return all_tags
+        sorted_tags['failed'] = all_tags
+        return sorted_tags
 
 
 def _expand_value(value:str) -> str:
