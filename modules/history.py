@@ -193,7 +193,7 @@ class HMessage:
 
     ###############
     # relationships
-    def mark_as_reply_for(self, message: 'HMessage', save=True):
+    def mark_as_reply_for(self, message: 'HMessage|None', save=True):
         if not message:
             return self
         
@@ -559,6 +559,27 @@ class History:
 
         else:
             raise Exception(f'Unknown HMessage role: {hmessage.role}, should match [user/assistant]')
+        
+        
+    def get_history_pair_from_msg_id_as_list(self, message_id: MessageID):
+        hmessage: Optional[HMessage] = self.search(lambda m: m.id == message_id or message_id in m.related_ids)
+        if not hmessage:
+            return [], []
+
+        if hmessage.role == 'assistant':
+            user_message = hmessage.reply_to
+            bot_message = hmessage
+            return [user_message], [bot_message]
+
+        elif hmessage.role == 'user':
+            user_message = hmessage
+            bot_message = None
+            bot_message_list = [m for m in hmessage.replies if m.role == 'assistant']
+            return [user_message], bot_message_list
+
+        else:
+            raise Exception(f'Unknown HMessage role: {hmessage.role}, should match [user/assistant]')
+        
         
     def get_history_labels_for_message(self, message:HMessage) -> str:
         assert isinstance(message, HMessage), f'History.get_history_labels_for_message expected {HMessage} type, got {type(message)}'

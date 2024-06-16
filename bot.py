@@ -1259,21 +1259,21 @@ def process_tag_insertions(prompt:str, tags:dict):
         log.error(f"Error processing LLM prompt tags: {e}")
         return prompt, tags
 
-def process_tag_trumps(matches:list, trump_params:Optional[list]=None):
+def process_tag_trumps(matches:list, trump_params:Optional[list]=None) -> tuple[list, set]:
     trump_params = trump_params or []
     try:
         # Collect all 'trump' parameters for all matched tags
-        trump_params = set(trump_params)
+        trump_params_set = set(trump_params)
         for tag in matches:
             if isinstance(tag, tuple):
                 tag_dict = tag[0]  # get tag value if tuple
             else:
                 tag_dict = tag
             if 'trumps' in tag_dict:
-                trump_params.update([param.strip().lower() for param in tag_dict['trumps'].split(',')])
+                trump_params_set.update([param.strip().lower() for param in tag_dict['trumps'].split(',')])
                 del tag_dict['trumps']
-        # Remove duplicates from the trump_params set
-        trump_params = set(trump_params)
+        # Remove duplicates from the trump_params_set
+        trump_params_set = set(trump_params_set)
         # Iterate over all tags in 'matches' and remove 'trumped' tags
         untrumped_matches = []
         for tag in matches:
@@ -1281,14 +1281,16 @@ def process_tag_trumps(matches:list, trump_params:Optional[list]=None):
                 tag_dict = tag[0]  # get tag value if tuple
             else:
                 tag_dict = tag
-            if any(trigger.strip().lower() == trump.strip().lower() for trigger in tag_dict.get('trigger', '').split(',') for trump in trump_params):
+            if any(trigger.strip().lower() == trump.strip().lower() for trigger in tag_dict.get('trigger', '').split(',') for trump in trump_params_set):
                 log.info(f'''[TAGS] Tag with triggers "{tag_dict['trigger']}" was trumped by another tag.''')
             else:
                 untrumped_matches.append(tag)
-        return untrumped_matches, trump_params
+        return untrumped_matches, trump_params_set
     except Exception as e:
         log.error(f"Error processing matched tags: {e}")
-        return matches  # return original matches if error occurs
+        # return original matches if error occurs
+        # also return empty set for trump_tags which is expected
+        return matches, set()
 
 def match_tags(search_text:str, tags:dict, phase='llm') -> dict:
     try:
