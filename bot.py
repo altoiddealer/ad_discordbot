@@ -1694,7 +1694,8 @@ async def on_message(message: discord.Message):
 #################################################################
 ######################## QUEUED MESSAGE #########################
 #################################################################
-async def message_task(ictx: CtxInteraction, text:str, source:str='message', llm_payload:dict=None, params:dict={}, tags:dict={}) -> tuple[HMessage, HMessage]:
+async def message_task(ictx: CtxInteraction, text:str, source:str='message', llm_payload:dict|None=None, params:dict|None=None, tags:dict={}) -> tuple[HMessage, HMessage]:
+    params = params or {}
     user_name = get_user_ctx_inter(ictx).display_name
     channel = ictx.channel
 
