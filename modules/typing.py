@@ -7,3 +7,6 @@ UserID = int
 MessageID = int
 
 CtxInteraction = Union[commands.Context, discord.Interaction, discord.Message]
+
+TAG_LIST = list[dict]
+TAG_LIST_DICT = dict[str, TAG_LIST]

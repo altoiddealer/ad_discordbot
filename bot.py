@@ -44,6 +44,7 @@ from modules.utils_discord import guild_only, configurable_for_dm_if, is_direct_
 from modules.utils_files import load_file, merge_base, save_yaml_file  # noqa: F401
 from modules.utils_aspect_ratios import round_to_precision, res_to_model_fit, dims_from_ar, avg_from_dims, get_aspect_ratio_parts, calculate_aspect_ratio_sizes  # noqa: F401
 from modules.history import HistoryManager, History, HMessage, cnf
+from modules.typing import TAG_LIST, TAG_LIST_DICT
 
 from modules.logs import import_track, get_logger, log_file_handler, log_file_formatter; import_track(__file__, fp=True); log = get_logger(__name__)  # noqa: E702
 logging = log
@@ -1344,8 +1345,7 @@ def match_tags(search_text:str, tags:dict, phase='llm') -> dict:
         log.error(f"Error matching tags: {e}")
         return tags
 
-TAG_LIST = list[dict]
-TAG_LIST_DICT = dict[str, TAG_LIST]
+
 def sort_tags(all_tags: TAG_LIST) -> dict[str, Union[TAG_LIST, TAG_LIST_DICT]]:
     sorted_tags = {'matches': [], 'unmatched': {'user': [], 'llm': [], 'userllm': []}, 'trump_params': []}
     
