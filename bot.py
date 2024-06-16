@@ -1540,7 +1540,6 @@ def get_wildcard_value(matched_text, dir_path=None):
         selected_file = random.choice(txt_files)
         with open(selected_file, 'r') as file:
             lines = file.readlines()
-            # filtered_lines = [line.strip() for line in lines if not line.startswith("#")] # TODO UNUSED
             selected_option = random.choice(lines).strip()
     else:
         # If no matching .txt file is found, try to find a subdirectory
@@ -1552,7 +1551,6 @@ def get_wildcard_value(matched_text, dir_path=None):
                     selected_file = random.choice(subdir_files)
                     with open(selected_file, 'r') as file:
                         lines = file.readlines()
-                        # filtered_lines = [line.strip() for line in lines if not line.startswith("#")] # TODO UNUSED
                         selected_option = random.choice(lines).strip()
     # Check if selected option has braces pattern
     if selected_option:
@@ -1564,7 +1562,6 @@ def get_wildcard_value(matched_text, dir_path=None):
         if selected_option.startswith('__') and selected_option.endswith('__'):
             # Extract nested directory path from the nested value
             nested_dir = selected_option[2:-2]  # Strip the first 2 and last 2 characters
-            # nested_dir_path = os.path.join(dir_path, nested_dir)  # Use os.path.join for correct path joining # TODO UNUSED
             # Get the last component of the nested directory path
             search_phrase = os.path.split(nested_dir)[-1]
             # Remove the last component from the nested directory path
@@ -2161,7 +2158,7 @@ async def replace_msg_in_history_and_discord(ictx:CtxInteraction, params:dict, t
             if local_message:
                 await local_message.delete()
         # Clear related IDs attribute
-        updated_message.related_ids.clear() # TODO maybe add a fresh method to HMessage?
+        updated_message.related_ids.clear() # TODO maybe add a 'fresh' method to HMessage? - For Reality
         
         # Update original discord message, or send new one if too long
         local_history = bot_history.get_history_for(ictx.channel.id)
@@ -2624,7 +2621,6 @@ async def format_next_flow(ictx, next_flow, user_name:str, text:str):
 async def peek_flow_queue(ictx, queue, user_name:str, text:str):
     temp_queue = asyncio.Queue()
     total_queue_size = queue.qsize()
-    # first_flow = None # TODO UNUSED
     while queue.qsize() > 0:
         if queue.qsize() == total_queue_size:
             item = await queue.get()
@@ -4958,7 +4954,6 @@ async def process_speak(ctx: commands.Context, input_text, selected_voice=None, 
 async def fetch_speak_options():
     try:
         lang_list = []
-        # all_voicess = [] # TODO UNUSED
         if tts_client == 'coqui_tts' or tts_client == 'alltalk_tts':
             lang_list = ['Arabic', 'Chinese', 'Czech', 'Dutch', 'English', 'French', 'German', 'Hungarian', 'Italian', 'Japanese', 'Korean', 'Polish', 'Portuguese', 'Russian', 'Spanish', 'Turkish']
             if tts_client == 'coqui_tts':
@@ -5487,13 +5482,13 @@ class CustomHistoryManager(HistoryManager):
         return history
     
     
-    def new_history_for(self, id_: ChannelID, character=None, mode=None) -> CustomHistory:
+    def new_history_for(self, id_: Optional[ChannelID|int], character=None, mode=None) -> CustomHistory:
         id_, character, mode = self.get_id_parts(id_, character, mode)
         full_id = f'{id_}_{character}_{mode}'
         return super().new_history_for(full_id) # type: ignore
     
     
-    def get_id_parts(self, id_: ChannelID, character=None, mode=None):
+    def get_id_parts(self, id_: Optional[ChannelID|int], character=None, mode=None):
         state_dict = bot_settings.settings['llmstate']['state']
         mode = mode or state_dict['mode']
         character = character or state_dict["character_menu"] or 'unknown_character'

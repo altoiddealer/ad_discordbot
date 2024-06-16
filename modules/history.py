@@ -93,9 +93,6 @@ def cnf(default=None, default_list:Optional[tuple]=None, check_bool=True, encode
             return True
         return False
     
-    # if decoder is None and decode_pass: # TODO test this?
-    #     decoder = cls_get_pass
-    
     exclude = exclude or exclude_func
     if dont_save:
         encoder = cls_get_none
@@ -109,7 +106,7 @@ def cnf(default=None, default_list:Optional[tuple]=None, check_bool=True, encode
 @dataclass
 class HMessage:
     history: 'History'                  = field(metadata=cnf(dont_save=True))
-    # TODO make history optional
+    # TODO make history optional - For Reality
     # so that HMessage could be subclassed to fill out items like role
     # then the message has an .add_to_history(history) method
     # which will assign it, and grab a uuid
@@ -134,7 +131,7 @@ class HMessage:
     text_visible: str                   = field(default='',     metadata=cnf())
     id: Optional[MessageID]             = field(default=None,   metadata=cnf(check_bool=False)) # because id's could be "0"
     audio_id: Optional[MessageID]       = field(default=None,   metadata=cnf(dont_save=True))
-    related_ids: list[MessageID]        = field(default_factory=list,   metadata=cnf()) # TODO add update tracking here.
+    related_ids: list[MessageID]        = field(default_factory=list,   metadata=cnf()) # TODO add update tracking here. - For Reality
     
     typing: bool                        = field(default=False,  metadata=cnf(False))
     spoken: bool                        = field(default=False,  metadata=cnf(False))
@@ -149,7 +146,7 @@ class HMessage:
     # def __post_init__(self):
     #     if self.uuid is None:
     #         pass
-        # TODO should get new id from history a local counter
+        # TODO should get new id from history a local counter - For Reality
 
 
     ##################
@@ -181,7 +178,7 @@ class HMessage:
         self.history.append(self)
         
         
-    def update(self, **kw): # TODO could replace all attrs with private internals so users don't accidentally set them.
+    def update(self, **kw): # TODO could replace all attrs with private internals so users don't accidentally set them. - For Reality
         for k, v in kw.items():
             setattr(self, k, v)
             
@@ -250,7 +247,7 @@ class HMessage:
         
     #     if message:
     #         message.continue_prev = None
-    #         message._continue_root = None # TODO this should propagate up the chain
+    #         message._continue_root = None # TODO this should propagate up the chain - For Reality
         
     #     if save:
     #         self.history.event_save.set()
@@ -336,7 +333,7 @@ class HMessage:
         index = new_history.index(self)
         if not include_self:
             index -= 1
-        new_history._items = new_history._items[:index+1] # TODO write internal methods to set/get items
+        new_history._items = new_history._items[:index+1] # TODO write internal methods to set/get items - For Reality
 
         return new_history
     
@@ -349,7 +346,7 @@ class HMessage:
         index = new_history.index(self)
         if not include_self:
             index += 1
-        new_history._items = new_history._items[index:] # TODO write internal methods to set/get items
+        new_history._items = new_history._items[index:] # TODO write internal methods to set/get items - For Reality
 
         return new_history
 
@@ -357,7 +354,7 @@ class HMessage:
     def from_ctx(self, ictx: CtxInteraction):
         self.author_id = get_user_ctx_inter(ictx).id
         self.id = get_message_ctx_inter(ictx).id
-        # self.history.event_save.set() # TODO maybe?
+        # self.history.event_save.set() # TODO maybe? - For Reality
 
 
 @dataclass
@@ -401,7 +398,7 @@ class History:
     manager: 'HistoryManager'           = field(metadata=cnf(dont_save=True))
     id: ChannelID
     
-    fp: Optional[str]                   = field(default=None, metadata=cnf(dont_save=True)) # TODO just set this on load when found correct file.
+    fp: Optional[str]                   = field(default=None, metadata=cnf(dont_save=True))
 
     _last: dict[UserID, HMessage]       = field(default_factory=dict, init=False, metadata=cnf(dont_save=True))
     _items: list[HMessage]              = field(default_factory=list, init=False, metadata=cnf(dont_save=True))
@@ -513,7 +510,7 @@ class History:
     ##########
     # Messages
     def new_message(self, name='', text='', role=None, author_id=None, save=True, **kw) -> HMessage: 
-        # TODO maybe remove this in favor of creating messages from class
+        # TODO maybe remove this in favor of creating messages from class - For Reality
         # that would allow message presets, such as AssistantHMessage, or FlowsHMessage
         # and easier sorting with isinstance()
         message = HMessage(name=name, text=text, role=role, author_id=author_id, history=self, **kw)
@@ -668,7 +665,7 @@ class History:
 
     ###########
     # Rendering
-    def render_to_tgwui_tuple(self): # TODO create caching by storing event and clearing on render.
+    def render_to_tgwui_tuple(self): # TODO create caching by storing event and clearing on render. - For Reality
         internal = []
         visible = []
         current_pair = HistoryPairForTGWUI()
