@@ -193,7 +193,7 @@ class HMessage:
 
     ###############
     # relationships
-    def mark_as_reply_for(self, message: 'HMessage', save=True):
+    def mark_as_reply_for(self, message: 'HMessage|None', save=True):
         if not message:
             return self
         
