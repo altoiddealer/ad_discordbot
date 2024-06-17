@@ -80,5 +80,7 @@ patterns = SharedRegex()
 
 class SharedBotEmojis:
     hidden_emoji = '🙈'
+    regen_emoji = '🔁'
+    continue_emoji = '⏭️'
 
 bot_emojis = SharedBotEmojis()

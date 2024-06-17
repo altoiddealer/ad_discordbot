@@ -44,28 +44,47 @@ def is_direct_message(ictx: CtxInteraction):
     return ictx and getattr(ictx, 'guild') is None \
         and hasattr(ictx, 'channel') and isinstance(ictx.channel, discord.DMChannel)
 
-async def react_to_user_message(client_user: Optional[discord.ClientUser], channel, user_message:Optional['HMessage']=None):
+
+def get_history_emojis_for_message(message:'HMessage') -> str:   
+    history_emojis = {'is_continued': bot_emojis.continue_emoji,
+                      'regenerated_from': bot_emojis.regen_emoji,
+                      'hidden': bot_emojis.hidden_emoji}
+
+    emojis_for_message = []
+
+    for key, value in history_emojis.items():
+        if getattr(message, key, False):
+            emojis_for_message.append(value)
+    
+    return emojis_for_message
+
+async def update_message_reactions(client_user:discord.ClientUser, emojis_list:list, discord_msg:discord.Message):
     try:
-        if user_message is not None and user_message.id:
-            emoji = bot_emojis.hidden_emoji
-            has_reacted = False
-            discord_message = await channel.fetch_message(user_message.id)
-            # check for any existing reaction
-            for reaction in discord_message.reactions:
-                if str(reaction.emoji) == emoji:
-                    async for user in reaction.users():
-                        if user == client_user:
-                            has_reacted = True
-                            break
-                        
-            if user_message.hidden and not has_reacted:
-                await discord_message.add_reaction(emoji)
-                
-            elif not user_message.hidden and has_reacted:
-                await discord_message.remove_reaction(emoji, client_user)
+        all_bot_emojis = [bot_emojis.continue_emoji,
+                          bot_emojis.regen_emoji,
+                          bot_emojis.hidden_emoji]
+
+        reactions_to_add = emojis_list
+        reactions_to_remove = []
+
+        # check for existing reactions
+        for reaction in discord_msg.reactions:
+            async for user in reaction.users():
+                if reaction.emoji in all_bot_emojis and user == client_user:
+                    if reaction.emoji not in emojis_list:
+                        reactions_to_remove.append(reaction.emoji)
+                    else:
+                        reactions_to_add.pop(reaction.emoji)
+        
+        for reaction in reactions_to_add:
+            await discord_msg.add_reaction(reaction)
+
+        for reaction in reactions_to_remove:
+            await discord_msg.remove_reaction(reaction, client_user)
                 
     except Exception as e:
-        log.error(f"Error reacting to user message: {e}")
+        log.error(f"Error reacting to message: {e}")
+
 
 # Delete discord message without "delete_after" attribute
 async def sleep_delete_message(message: discord.Message, wait:int=5):
@@ -170,7 +189,7 @@ class EditMessageModal(discord.ui.Modal, title="Edit Message in History"):
         
         default_text = target_message.clean_content
         if local_history is not None:
-            default_text = local_history.get_labeled_history_text(matched_hmessage, target_message.content, mention_mode='demention', label_mode='delabel')
+            default_text = local_history.remove_bot_mention_from_message(matched_hmessage, target_message.content)
 
         # Add TextInput dynamically with default value
         self.new_content = discord.ui.TextInput(
