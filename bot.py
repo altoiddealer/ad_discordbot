@@ -2182,35 +2182,47 @@ async def replace_msg_in_history_and_discord(ictx:CtxInteraction, params:dict, t
         return None
 
 
-async def regenerate_task(inter:discord.Interaction, target_discord_msg:discord.Message, mode:str='create'):
+async def regenerate_task(inter: discord.Interaction, local_history: History, target_discord_msg: discord.Message, target_hmessage:HMessage, mode:str='create'):
     user_name = get_user_ctx_inter(inter).display_name
     channel = inter.channel
     system_embed = None
     try:
-        # collect relevant history and messages
-        local_history = bot_history.get_history_for(inter.channel.id)
-        if not local_history:
-            await inter.followup.send("There is currently no chat history to regenerate from.", ephemeral=True)
-            return
         original_user_message, original_bot_message = local_history.get_history_pair_from_msg_id(target_discord_msg.id)
 
         # Replace method requires finding original bot message in history
         if mode == 'replace' and not original_bot_message:
             await inter.followup.send("Message not found in current chat history.", ephemeral=True)
             return
+        
+        # Original user text is needed for both 'create' and 'replace'
+        # For create, `target_bot_reply` will hide the appropriate currently revealed message (unused for 'replace')
+        all_bot_replies = original_user_message.replies
 
-        # Get original user text from discord message, and target the bot message to edit
-        if inter.user == target_discord_msg.author:                  # if command used on user's own message
-            original_user_text = target_discord_msg.clean_content    # get the message contents
-            target_discord_msg = await channel.fetch_message(original_bot_message.id) # set the target message to the bot message
+        # default to assume it is bot reply for message command
+        target_bot_reply = target_hmessage
+
+        # if command used on user's own message
+        if inter.user == target_discord_msg.author:
+            original_user_text = target_discord_msg.clean_content   # get the message contents for prompt
+            target_bot_reply = original_bot_message                 # set to most recent bot reply
+            for i in range(len(all_bot_replies)):
+                if not all_bot_replies[i].hidden:
+                    target_bot_reply = all_bot_replies[i] # set the target message to a non-hidden bot message
+                    break
+        # if command used on a bot reply
         else:
             if not original_user_message or isinstance(original_user_message, str): # will be uuid text string if message failed to be found
                 await inter.followup.send("Original user prompt is required, which could not be found from the selected message or in current chat history. Please try again, using the command on your own message.", ephemeral=True)
                 return
-            else:
-                original_message = await channel.fetch_message(original_user_message.id)
-                original_user_text = original_message.clean_content
-        
+            # get the user's message contents for prompt
+            original_message = await channel.fetch_message(original_user_message.id)
+            original_user_text = original_message.clean_content
+            if target_hmessage.hidden:
+                for i in range(len(all_bot_replies)):
+                    if not all_bot_replies[i].hidden:
+                        target_bot_reply = all_bot_replies[i] # set to first non-hidden bot message
+                        break
+
         # Initialize payload with sliced history
         message_for_slicing = original_user_message or original_bot_message
         llm_payload = await init_llm_payload(inter, user_name, original_user_text)
@@ -2244,10 +2256,10 @@ async def regenerate_task(inter:discord.Interaction, target_discord_msg:discord.
         if mode == 'create':
             # Update the new user message with the original discord message ID
             new_bot_message.mark_as_reply_for(original_user_message)
-            # Hide original bot message(s)
-            original_bot_message.update(hidden=True)
-            original_bot_message_ids = [original_bot_message.id] + original_bot_message.related_ids
-            await apply_labels_to_msg_list(inter, local_history, original_bot_message, original_bot_message_ids, target_discord_msg)
+            # Hide the appropriate bot message(s)
+            target_bot_reply.update(hidden=True)
+            target_bot_message_ids = [target_bot_reply.id] + target_bot_reply.related_ids
+            await apply_labels_to_msg_list(inter, local_history, target_bot_reply, target_bot_message_ids, target_discord_msg)
 
         if system_embed:
             await system_embed.delete()
@@ -2258,7 +2270,6 @@ async def regenerate_task(inter:discord.Interaction, target_discord_msg:discord.
         await inter.followup.send(e_msg, silent=True)
         if system_embed:
             await system_embed.delete()
-
 
 async def speak_task(ctx: commands.Context, text:str, params:dict):
     user_name = ctx.author.display_name
@@ -4199,7 +4210,8 @@ if textgenwebui_enabled:
             log.info(f'{inter.user.display_name} used "edit history"')
             modal = EditMessageModal(client.user, matched_hmessage, target_message=message, local_history=local_history)
             await inter.response.send_modal(modal)
-
+    
+    # Applies history labels to a list of discord messages, such as all related messages from 'Continue' function
     async def apply_labels_to_msg_list(ictx:CtxInteraction, local_history:History, hmsg:HMessage, msg_id_list:list, ictx_msg:discord.Message=None):
         try:
             for msg_id in msg_id_list:
@@ -4218,9 +4230,9 @@ if textgenwebui_enabled:
         except Exception as e:
             log.error(f'Failed to edit message content for id {msg_id}: {e}')
 
-    async def apply_hide_or_reveal_history(inter: discord.Interaction, local_history: History, message: discord.Message, target_hmessage:HMessage):
+    async def apply_hide_or_reveal_history(inter: discord.Interaction, local_history: History, target_discord_msg: discord.Message, target_hmessage:HMessage):
         try:
-            user_message, bot_message = local_history.get_history_pair_from_msg_id(message.id)
+            user_message, bot_message = local_history.get_history_pair_from_msg_id(target_discord_msg.id)
 
             # determine outcome
             if user_message is None or bot_message is None:
@@ -4240,7 +4252,7 @@ if textgenwebui_enabled:
                     other_message.update(hidden=False if not stagger else True)
 
             # List of HMessages to update associated discord messages for. Do not edit a user message.
-            hmessages_to_relabel = [target_hmessage] if client.user == message.author else []
+            hmessages_to_relabel = [target_hmessage] if client.user == target_discord_msg.author else []
 
             # Get all bot replies
             all_bot_replies = user_message.replies
@@ -4252,7 +4264,7 @@ if textgenwebui_enabled:
             else:
                 next_reply = None
                 # If command was used on a bot reply
-                if client.user == message.author:
+                if client.user == target_discord_msg.author:
                     # if user message is hidden, then do not toggle any other bot messages
                     if user_message.hidden:
                         pass
@@ -4293,12 +4305,15 @@ if textgenwebui_enabled:
                         next_reply = all_bot_replies[-1]
 
                 if next_reply:
-                    if client.user == message.author:
+                    # If cmd was used on a bot reply, toggle next bot message (opposite value than targeted bot msg)
+                    if client.user == target_discord_msg.author:
                         toggle_hmessages(bot_message, next_reply, verb, stagger=True)
+                    # If cmd was used on a user reply, toggle appropriate bot reply with it
                     else:
                         toggle_hmessages(user_message, next_reply, verb)
                     # Add HMessages to update
                     hmessages_to_relabel.append(next_reply)
+                # if user message is hidden and being revealed - this will toggle most recent bot msg by default
                 else:
                     toggle_hmessages(bot_message, user_message, verb)
             
@@ -4312,7 +4327,7 @@ if textgenwebui_enabled:
                 if target_hmsg.related_ids:
                     msg_ids_to_edit.extend(target_hmsg.related_ids)
                 # Apply labels to all affected messages
-                await apply_labels_to_msg_list(inter, local_history, target_hmsg, msg_ids_to_edit, message)
+                await apply_labels_to_msg_list(inter, local_history, target_hmsg, msg_ids_to_edit, target_discord_msg)
 
             undeletable_message = await inter.channel.send(f"Modified message exchange pair in history for {inter.user.display_name} (messages {verb}).")
             log.info(f"Modified message exchange pair in history for {inter.user.display_name} (messages {verb}).")
@@ -4335,7 +4350,7 @@ if textgenwebui_enabled:
                 await inter.response.send_message("Message not found in current chat history.", ephemeral=True, delete_after=5)
                 return
         except Exception as e:
-            log.error(f'An error occured while getting history for "Hide History".: {e}')
+            log.error(f'An error occured while getting history for "Hide History": {e}')
 
         await ireply(inter, 'toggle as hidden') # send a response msg to the user
         async with task_semaphore:
@@ -4343,35 +4358,38 @@ if textgenwebui_enabled:
             log.info(f'{inter.user.display_name} used "hide or reveal history"')
             await apply_hide_or_reveal_history(inter, local_history, message, target_hmessage)
 
-    # Context menu command to Regenerate from selected user message and create new history
-    @client.tree.context_menu(name="regenerate create")
-    async def regen_create_llm_gen(inter: discord.Interaction, message:discord.Message):
+
+    # Regenerate text commands
+    async def init_regen_cmds(inter:discord.Interaction, message:discord.Message, mode:str='create'):
         if not (message.author == inter.user or message.author == client.user):
             await inter.response.send_message('You can only "regenerate" from messages written by yourself or from the bot.', ephemeral=True, delete_after=7)
-            return
-        else:
-            await ireply(inter, 'regenerate') # send a response msg to the user
-
+            return True
+        try:
+            local_history = bot_history.get_history_for(inter.channel.id)
+            target_hmessage = local_history.search(lambda m: m.id == message.id or message.id in m.related_ids)
+            if not target_hmessage:
+                await inter.response.send_message("Message not found in current chat history.", ephemeral=True, delete_after=5)
+                return True
+        except Exception as e:
+            log.error(f'An error occured while getting history for Regenerate ({mode}): {e}')
+        
+        await ireply(inter, 'regenerate') # send a response msg to the user
         async with task_semaphore:
             async with inter.channel.typing():
                 # offload to ai_gen queue
-                log.info(f'{inter.user.display_name} used "Regenerate (create)"')
-                await regenerate_task(inter, message, 'create')
+                log.info(f'{inter.user.display_name} used "Regenerate ({mode})"')
+                await regenerate_task(inter, local_history, message, target_hmessage, mode)
+
+    # Context menu command to Regenerate from selected user message and create new history
+    @client.tree.context_menu(name="regenerate create")
+    async def regen_create_llm_gen(inter: discord.Interaction, message:discord.Message):
+        await init_regen_cmds(inter, message, 'create')
 
     # Context menu command to Regenerate from selected user message and replace the original bot response
     @client.tree.context_menu(name="regenerate replace")
     async def regen_replace_llm_gen(inter: discord.Interaction, message:discord.Message):
-        if not (message.author == inter.user or message.author == client.user):
-            await inter.response.send_message('You can only "regenerate" from messages written by yourself or from the bot.', ephemeral=True, delete_after=7)
-            return
-        else:
-            await ireply(inter, 'regenerate') # send a response msg to the user
+        await init_regen_cmds(inter, message, 'replace')
 
-        async with task_semaphore:
-            async with inter.channel.typing():
-                # offload to ai_gen queue
-                log.info(f'{inter.user.display_name} used "Regenerate" (replace)')
-                await regenerate_task(inter, message, 'replace')
 
     # Context menu command to Continue last reply
     @client.tree.context_menu(name="continue")
