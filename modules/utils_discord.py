@@ -65,6 +65,7 @@ async def update_message_reactions(client_user:discord.ClientUser, emojis_list:l
                           bot_emojis.hidden_emoji]
 
         reactions_to_add = emojis_list
+        already_reacted = []
         reactions_to_remove = []
 
         # check for existing reactions
@@ -74,10 +75,11 @@ async def update_message_reactions(client_user:discord.ClientUser, emojis_list:l
                     if reaction.emoji not in emojis_list:
                         reactions_to_remove.append(reaction.emoji)
                     else:
-                        reactions_to_add.pop(reaction.emoji)
+                        already_reacted.append(reaction.emoji)
         
         for reaction in reactions_to_add:
-            await discord_msg.add_reaction(reaction)
+            if reaction not in already_reacted:
+                await discord_msg.add_reaction(reaction)
 
         for reaction in reactions_to_remove:
             await discord_msg.remove_reaction(reaction, client_user)
