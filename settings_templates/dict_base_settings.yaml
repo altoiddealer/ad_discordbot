@@ -138,6 +138,10 @@ llmstate:
     custom_system_message: ''
     custom_token_bans: ''
     do_sample: true
+    dry_multiplier: 0
+    dry_base: 1.75
+    dry_allowed_length: 2
+    dry_sequence_breakers: '"\\n", ":", "\\"", "*"'
     dynamic_temperature: False
     dynatemp_low: 1
     dynatemp_high: 1
