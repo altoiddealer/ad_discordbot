@@ -214,8 +214,8 @@ class Database(BaseFileMemory):
         if save_now:
             self.save()
 
-    def update_voice_channels(self, guild_id, channel, save_now=True):
-        self.voice_channels[guild_id] = channel
+    def update_voice_channels(self, guild_id, channel_id, save_now=True):
+        self.voice_channels[guild_id] = channel_id
         if save_now:
             self.save()
 
