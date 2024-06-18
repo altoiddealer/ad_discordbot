@@ -154,6 +154,7 @@ class Database(BaseFileMemory):
         self.last_user_msg:dict[str, float]
         self.announce_channels:list[int]
         self.main_channels:list[int]
+        self.voice_channels:dict[str, int]
         self.warned_once:dict[str, bool]
 
         super().__init__(shared_path.database, version=2, missing_okay=True)
@@ -187,6 +188,7 @@ class Database(BaseFileMemory):
         self.last_user_msg = data.pop('last_user_msg', {})
         self.announce_channels = data.pop('announce_channels', [])
         self.main_channels = data.pop('main_channels', [])
+        self.voice_channels = data.pop('voice_channels', {})
         self.warned_once = data.pop('warned_once', {})
 
 
@@ -212,6 +214,10 @@ class Database(BaseFileMemory):
         if save_now:
             self.save()
 
+    def update_voice_channels(self, guild_id, channel, save_now=True):
+        self.voice_channels[guild_id] = channel
+        if save_now:
+            self.save()
 
 class Config(BaseFileMemory):
     def __init__(self) -> None:

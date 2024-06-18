@@ -761,31 +761,31 @@ async def post_active_settings():
 #################################################################
 ######################## TTS PROCESSING #########################
 #################################################################
-voice_client = None
+voice_clients = {}
 
-async def toggle_voice_client(toggle:str=None):
-    global voice_client
+async def toggle_voice_client(guild_id, toggle:str=None):
+    global voice_clients
     try:
-        if toggle == 'enabled' and not voice_client:
-            if tts_settings.get('voice_channel', ''):
-                voice_channel = client.get_channel(tts_settings['voice_channel'])
-                voice_client = await voice_channel.connect()
+        if toggle == 'enabled' and not voice_clients.get(guild_id):
+            if bot_database.voice_channels.get(guild_id):
+                voice_channel = client.get_channel(bot_database.voice_channels[guild_id])
+                voice_clients[guild_id] = await voice_channel.connect()
             else:
-                log.warning(f'TTS is enabled for {tts_client}, but a valid voice channel is not specified in config.yaml')
+                log.warning(f'TTS enabled for {tts_client}, but a valid voice channel is not set for this server. (Use "/set_server_voice_channel")')
         if toggle == 'disabled':
-            if voice_client and voice_client.is_connected():
-                await voice_client.disconnect()
-                voice_client = None
+            if voice_clients.get(guild_id) and voice_clients[guild_id].is_connected():
+                await voice_clients[guild_id].disconnect()
+                voice_clients.pop(guild_id)
     except Exception as e:
-        log.error(f"An error occurred while toggling voice channel: {e}")
+        log.error(f'An error occurred while toggling voice channel for guild ID "{guild_id}": {e}')
 
-async def voice_channel(vc_setting):
+async def voice_channel(guild_id:discord.Guild, vc_setting):
     try:
         # Start voice client if configured, and not explicitly deactivated in character settings
-        if voice_client is None and (vc_setting is None or vc_setting) and int(tts_settings.get('play_mode', 0)) != 1:
+        if not voice_clients.get(guild_id) and (vc_setting is None or vc_setting) and int(tts_settings.get('play_mode', 0)) != 1:
             try:
                 if tts_enabled and tts_client and tts_client in shared.args.extensions:
-                    await toggle_voice_client('enabled')
+                    await toggle_voice_client(guild_id, 'enabled')
                 else:
                     if not bot_database.was_warned('char_tts'):
                         bot_database.update_was_warned('char_tts')
@@ -793,10 +793,10 @@ async def voice_channel(vc_setting):
             except Exception as e:
                 log.error(f"An error occurred while connecting to voice channel: {e}")
         # Stop voice client if explicitly deactivated in character settings
-        if voice_client and voice_client.is_connected():
+        if voice_clients.get(guild_id) and voice_clients[guild_id].is_connected():
             if vc_setting is False:
                 log.info("New context has setting to disconnect from voice channel. Disconnecting...")
-                await toggle_voice_client('disabled')
+                await toggle_voice_client(guild_id, 'disabled')
     except Exception as e:
         log.error(f"An error occurred while managing voice channel settings: {e}")
 
@@ -830,7 +830,7 @@ async def update_extensions(params):
 
 queued_tts = []  # Keep track of queued tasks
 
-def after_playback(file, error):
+def after_playback(guild_id, file, error):
     global queued_tts
     if error:
         log.info(f'Message from audio player: {error}, output: {error.stderr.decode("utf-8")}')
@@ -845,20 +845,20 @@ def after_playback(file, error):
         # Pop the first task from the queue and play it
         next_file = queued_tts.pop(0)
         source = discord.FFmpegPCMAudio(next_file)
-        voice_client.play(source, after=lambda e: after_playback(next_file, e))
+        voice_clients[guild_id].play(source, after=lambda e: after_playback(guild_id, next_file, e))
 
-async def play_in_voice_channel(file):
-    global voice_client, queued_tts
-    if voice_client is None:
-        log.warning("**tts response detected, but bot is not connected to a voice channel.**")
+async def play_in_voice_channel(guild_id, file):
+    global voice_clients, queued_tts
+    if not voice_clients.get(guild_id):
+        log.warning(f"**tts response detected, but bot is not connected to a voice channel in guild ID {guild_id}**")
         return
     # Queue the task if audio is already playing
-    if voice_client.is_playing():
+    if voice_clients[guild_id].is_playing():
         queued_tts.append(file)
     else:
         # Otherwise, play immediately
         source = discord.FFmpegPCMAudio(file)
-        voice_client.play(source, after=lambda e: after_playback(file, e))
+        voice_clients[guild_id].play(source, after=lambda e: after_playback(guild_id, file, e))
 
 
 async def upload_tts_file(channel:discord.TextChannel, bot_message:HMessage):
@@ -882,12 +882,34 @@ async def process_tts_resp(ictx:CtxInteraction, bot_message:HMessage, is_dm:bool
     if play_mode > 0:
         await upload_tts_file(ictx.channel, bot_message)
     # Play in voice channel
-    if not is_direct_message(ictx) and play_mode != 1 and (voice_client == ictx.channel.guild.voice_client):
-        await bg_task_queue.put(play_in_voice_channel(bot_message.text_visible)) # run task in background
+    if not is_direct_message(ictx) and play_mode != 1 and voice_clients.get(ictx.guild.id):
+        await bg_task_queue.put(play_in_voice_channel(ictx.guild.id, bot_message.text_visible)) # run task in background
         
     bot_message.update(spoken=True)
 
 if textgenwebui_enabled and tts_client:
+
+    @client.hybrid_command(name="set_server_voice_channel", description="Assign a channel as the voice channel for this server")
+    @app_commands.describe(channel_id='Channel ID for the voice channel.')
+    @guild_only()
+    async def set_server_voice_channel(ctx: commands.Context, channel_id: str):
+        try:
+            channel_id = int(channel_id)
+            # Fetch the channel from the guild
+            channel = ctx.guild.get_channel(channel_id)  # Returns None if the channel does not exist
+            if channel is None:
+                await ctx.send("Invalid channel ID: Channel does not exist in this guild.")
+                return
+            # Check if the channel is a voice channel
+            if isinstance(channel, discord.VoiceChannel):
+                bot_database.update_voice_channels(ctx.guild.id, channel_id)
+                await ctx.send(f"Voice channel for **{ctx.guild}** set to **{channel.name}**.", delete_after=5)
+            else:
+                await ctx.send("The provided channel ID is not a voice channel.")
+        except ValueError:
+            await ctx.send("Invalid channel ID: Please provide a valid numeric channel ID.")
+        except Exception as e:
+            await ctx.send(f"An error occurred: {str(e)}")
 
     async def process_toggle_tts(ctx: commands.Context):
         global tts_enabled
@@ -900,7 +922,7 @@ if textgenwebui_enabled and tts_client:
                 await apply_toggle_tts(toggle='on', tts_sw=True)
                 tts_enabled = True
                 message = 'enabled'
-            await toggle_voice_client(message)
+            await toggle_voice_client(ctx.guild.id, message)
             if change_embed_info:
                 # Send change embed to interaction channel
                 change_embed_info.title = f"{ctx.author.display_name} {message} TTS."
@@ -1756,9 +1778,9 @@ async def message_task(ictx: CtxInteraction, text:str, source:str='message', llm
         ## Finalize payload, generate text via TGWUI, and process responses
         # Toggle TTS off, if interaction server is not connected to Voice Channel
         tts_sw = False
-        if (not params['bot_will_do']['should_send_text']) or (
-            hasattr(ictx, 'guild') and getattr(ictx.guild, 'voice_client', None) and 
-            voice_client and (voice_client != ictx.guild.voice_client) and int(tts_settings.get('play_mode', 0)) == 0):
+        if (not params['bot_will_do']['should_send_text']) \
+            or (hasattr(ictx, 'guild') and getattr(ictx.guild, 'voice_client', None) \
+            and not voice_clients.get(ictx.guild.id) and int(tts_settings.get('play_mode', 0)) == 0):
             tts_sw = await apply_toggle_tts(toggle='off')
         # Check to apply Server Mode
         llm_payload = apply_server_mode(llm_payload, ictx)
@@ -2091,8 +2113,8 @@ async def continue_task(inter: discord.Interaction, local_history: History, targ
         ## Finalize payload, generate text via TGWUI, and process responses
         # Toggle TTS off, if interaction server is not connected to Voice Channel
         tts_sw = None
-        if voice_client and (voice_client != inter.guild.voice_client) and int(tts_settings.get('play_mode', 0)) == 0:
-            tts_sw = await apply_toggle_tts(toggle='off')
+        if not voice_clients.get(inter.guild.id) and int(tts_settings.get('play_mode', 0)) == 0:
+            tts_sw = await apply_toggle_tts(inter.guild, toggle='off')
         # Check to apply Server Mode
         llm_payload = apply_server_mode(llm_payload, inter)
         # Update names in stopping strings
@@ -4192,7 +4214,7 @@ async def main(ctx: commands.Context):
             action_message = f'Added {ctx.channel.mention} to main channels. Use "/main" again to remove it.'
 
         bot_database.save()
-        await ctx.reply(action_message)
+        await ctx.reply(action_message, delete_after=5)
     except Exception as e:
         log.error(f"Error toggling main channel setting: {e}")
 
@@ -4502,7 +4524,8 @@ async def character_loader(char_name, channel=None):
                 await update_extensions(value)
                 char_llmcontext['extensions'] = value
             elif key == 'use_voice_channel':
-                await voice_channel(value)
+                for guild_id in bot_database.voice_channels:
+                    await voice_channel(guild_id, value)
                 char_llmcontext['use_voice_channel'] = value
             elif key == 'tags':
                 value = await update_tags(value) # Unpack any tag presets
@@ -5022,7 +5045,7 @@ async def process_user_voice(ctx: commands.Context, voice_input=None):
 async def process_speak(ctx: commands.Context, input_text, selected_voice=None, lang=None, voice_input=None):
     try:
         # Only generate TTS for the server conntected to Voice Channel
-        if voice_client and (is_direct_message(ctx) or (voice_client != ctx.guild.voice_client)) \
+        if (is_direct_message(ctx) or not voice_clients.get(ctx.guild.id)) \
             and int(tts_settings.get('play_mode', 0)) == 0:
             await ctx.send('Voice Channel is not enabled on this server', ephemeral=True, delete_after=5)
             return
