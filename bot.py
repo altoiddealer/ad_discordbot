@@ -40,10 +40,11 @@ sys.path.append("ad_discordbot")
 from modules.database import Database, ActiveSettings, Config, StarBoard, Statistics
 from modules.utils_shared import task_semaphore, shared_path, patterns, bot_emojis
 from modules.utils_misc import fix_dict, update_dict, sum_update_dict, update_dict_matched_keys, format_time  # noqa: F401
-from modules.utils_discord import guild_only, configurable_for_dm_if, is_direct_message, ireply, sleep_delete_message, send_long_message, EditMessageModal, SelectedListItem, SelectOptionsView, get_user_ctx_inter, get_message_ctx_inter, react_to_user_message, MAX_MESSAGE_LENGTH  # noqa: F401
+from modules.utils_discord import guild_only, configurable_for_dm_if, is_direct_message, ireply, sleep_delete_message, send_long_message, EditMessageModal, SelectedListItem, SelectOptionsView, get_user_ctx_inter, get_message_ctx_inter, get_hmessage_emojis, update_message_reactions, MAX_MESSAGE_LENGTH  # noqa: F401
 from modules.utils_files import load_file, merge_base, save_yaml_file  # noqa: F401
 from modules.utils_aspect_ratios import round_to_precision, res_to_model_fit, dims_from_ar, avg_from_dims, get_aspect_ratio_parts, calculate_aspect_ratio_sizes  # noqa: F401
 from modules.history import HistoryManager, History, HMessage, cnf
+from modules.typing import TAG_LIST, TAG_LIST_DICT, SORTED_TAGS
 
 from modules.logs import import_track, get_logger, log_file_handler, log_file_formatter; import_track(__file__, fp=True); log = get_logger(__name__)  # noqa: E702
 logging = log
@@ -760,31 +761,31 @@ async def post_active_settings():
 #################################################################
 ######################## TTS PROCESSING #########################
 #################################################################
-voice_client = None
+voice_clients = {}
 
-async def toggle_voice_client(toggle:str=None):
-    global voice_client
+async def toggle_voice_client(guild_id, toggle:str=None):
+    global voice_clients
     try:
-        if toggle == 'enabled' and not voice_client:
-            if tts_settings.get('voice_channel', ''):
-                voice_channel = client.get_channel(tts_settings['voice_channel'])
-                voice_client = await voice_channel.connect()
+        if toggle == 'enabled' and not voice_clients.get(guild_id):
+            if bot_database.voice_channels.get(guild_id):
+                voice_channel = client.get_channel(bot_database.voice_channels[guild_id])
+                voice_clients[guild_id] = await voice_channel.connect()
             else:
-                log.warning(f'TTS is enabled for {tts_client}, but a valid voice channel is not specified in config.yaml')
+                log.warning(f'TTS enabled for {tts_client}, but a valid voice channel is not set for this server. (Use "/set_server_voice_channel")')
         if toggle == 'disabled':
-            if voice_client and voice_client.is_connected():
-                await voice_client.disconnect()
-                voice_client = None
+            if voice_clients.get(guild_id) and voice_clients[guild_id].is_connected():
+                await voice_clients[guild_id].disconnect()
+                voice_clients.pop(guild_id)
     except Exception as e:
-        log.error(f"An error occurred while toggling voice channel: {e}")
+        log.error(f'An error occurred while toggling voice channel for guild ID "{guild_id}": {e}')
 
-async def voice_channel(vc_setting):
+async def voice_channel(guild_id:discord.Guild, vc_setting):
     try:
         # Start voice client if configured, and not explicitly deactivated in character settings
-        if voice_client is None and (vc_setting is None or vc_setting) and int(tts_settings.get('play_mode', 0)) != 1:
+        if not voice_clients.get(guild_id) and (vc_setting is None or vc_setting) and int(tts_settings.get('play_mode', 0)) != 1:
             try:
                 if tts_enabled and tts_client and tts_client in shared.args.extensions:
-                    await toggle_voice_client('enabled')
+                    await toggle_voice_client(guild_id, 'enabled')
                 else:
                     if not bot_database.was_warned('char_tts'):
                         bot_database.update_was_warned('char_tts')
@@ -792,10 +793,10 @@ async def voice_channel(vc_setting):
             except Exception as e:
                 log.error(f"An error occurred while connecting to voice channel: {e}")
         # Stop voice client if explicitly deactivated in character settings
-        if voice_client and voice_client.is_connected():
+        if voice_clients.get(guild_id) and voice_clients[guild_id].is_connected():
             if vc_setting is False:
                 log.info("New context has setting to disconnect from voice channel. Disconnecting...")
-                await toggle_voice_client('disabled')
+                await toggle_voice_client(guild_id, 'disabled')
     except Exception as e:
         log.error(f"An error occurred while managing voice channel settings: {e}")
 
@@ -829,7 +830,7 @@ async def update_extensions(params):
 
 queued_tts = []  # Keep track of queued tasks
 
-def after_playback(file, error):
+def after_playback(guild_id, file, error):
     global queued_tts
     if error:
         log.info(f'Message from audio player: {error}, output: {error.stderr.decode("utf-8")}')
@@ -844,20 +845,20 @@ def after_playback(file, error):
         # Pop the first task from the queue and play it
         next_file = queued_tts.pop(0)
         source = discord.FFmpegPCMAudio(next_file)
-        voice_client.play(source, after=lambda e: after_playback(next_file, e))
+        voice_clients[guild_id].play(source, after=lambda e: after_playback(guild_id, next_file, e))
 
-async def play_in_voice_channel(file):
-    global voice_client, queued_tts
-    if voice_client is None:
-        log.warning("**tts response detected, but bot is not connected to a voice channel.**")
+async def play_in_voice_channel(guild_id, file):
+    global voice_clients, queued_tts
+    if not voice_clients.get(guild_id):
+        log.warning(f"**tts response detected, but bot is not connected to a voice channel in guild ID {guild_id}**")
         return
     # Queue the task if audio is already playing
-    if voice_client.is_playing():
+    if voice_clients[guild_id].is_playing():
         queued_tts.append(file)
     else:
         # Otherwise, play immediately
         source = discord.FFmpegPCMAudio(file)
-        voice_client.play(source, after=lambda e: after_playback(file, e))
+        voice_clients[guild_id].play(source, after=lambda e: after_playback(guild_id, file, e))
 
 
 async def upload_tts_file(channel:discord.TextChannel, bot_message:HMessage):
@@ -881,12 +882,34 @@ async def process_tts_resp(ictx:CtxInteraction, bot_message:HMessage, is_dm:bool
     if play_mode > 0:
         await upload_tts_file(ictx.channel, bot_message)
     # Play in voice channel
-    if not is_direct_message(ictx) and play_mode != 1 and (voice_client == ictx.channel.guild.voice_client):
-        await bg_task_queue.put(play_in_voice_channel(bot_message.text_visible)) # run task in background
+    if not is_direct_message(ictx) and play_mode != 1 and voice_clients.get(ictx.guild.id):
+        await bg_task_queue.put(play_in_voice_channel(ictx.guild.id, bot_message.text_visible)) # run task in background
         
     bot_message.update(spoken=True)
 
 if textgenwebui_enabled and tts_client:
+
+    @client.hybrid_command(name="set_server_voice_channel", description="Assign a channel as the voice channel for this server")
+    @app_commands.describe(channel_id='Channel ID for the voice channel.')
+    @guild_only()
+    async def set_server_voice_channel(ctx: commands.Context, channel_id: str):
+        try:
+            channel_id = int(channel_id)
+            # Fetch the channel from the guild
+            channel = ctx.guild.get_channel(channel_id)  # Returns None if the channel does not exist
+            if channel is None:
+                await ctx.send("Invalid channel ID: Channel does not exist in this guild.")
+                return
+            # Check if the channel is a voice channel
+            if isinstance(channel, discord.VoiceChannel):
+                bot_database.update_voice_channels(ctx.guild.id, channel_id)
+                await ctx.send(f"Voice channel for **{ctx.guild}** set to **{channel.name}**.", delete_after=5)
+            else:
+                await ctx.send("The provided channel ID is not a voice channel.")
+        except ValueError:
+            await ctx.send("Invalid channel ID: Please provide a valid numeric channel ID.")
+        except Exception as e:
+            await ctx.send(f"An error occurred: {str(e)}")
 
     async def process_toggle_tts(ctx: commands.Context):
         global tts_enabled
@@ -899,7 +922,7 @@ if textgenwebui_enabled and tts_client:
                 await apply_toggle_tts(toggle='on', tts_sw=True)
                 tts_enabled = True
                 message = 'enabled'
-            await toggle_voice_client(message)
+            await toggle_voice_client(ctx.guild.id, message)
             if change_embed_info:
                 # Send change embed to interaction channel
                 change_embed_info.title = f"{ctx.author.display_name} {message} TTS."
@@ -1142,7 +1165,7 @@ async def process_llm_payload_tags(ictx: CtxInteraction, llm_payload:dict, llm_p
         log.error(f"Error processing LLM tags: {e}")
         return llm_payload, llm_prompt, {}
 
-def collect_llm_tag_values(tags, params):
+def collect_llm_tag_values(tags: SORTED_TAGS, params:dict):
     llm_payload_mods = {}
     formatting = {}
     try:
@@ -1208,11 +1231,11 @@ def collect_llm_tag_values(tags, params):
         log.error(f"Error collecting LLM tag values: {e}")
     return llm_payload_mods, formatting, params
 
-def process_tag_insertions(prompt:str, tags:dict):
+def process_tag_insertions(prompt:str, tags:SORTED_TAGS) -> tuple[str, SORTED_TAGS]:
     try:
         # iterate over a copy of the matches, preserving the structure of the original matches list
-        tuple_matches = copy.deepcopy(tags['matches'])
-        tuple_matches = [item for item in tuple_matches if isinstance(item, tuple)]  # Filter out only tuples
+        tuple_matches = copy.deepcopy(tags['matches']) # type: ignore
+        tuple_matches: list[tuple[dict, int, int]] = [item for item in tuple_matches if isinstance(item, tuple)]  # Filter out only tuples
         tuple_matches.sort(key=lambda x: -x[1])  # Sort the tuple matches in reverse order by their second element (start index)
         for item in tuple_matches:
             tag, start, end = item # unpack tuple
@@ -1241,8 +1264,8 @@ def process_tag_insertions(prompt:str, tags:dict):
         updated_matches = []
         for item in tags['matches']:
             if isinstance(item, tuple):
-                tag, start, end = item
-            else:
+                tag, start, end = item # TODO Use a class
+            elif isinstance(item, dict): # fixes pylance
                 tag = item
             phase = tag.get('phase', 'user')
             if phase == 'llm':
@@ -1259,21 +1282,21 @@ def process_tag_insertions(prompt:str, tags:dict):
         log.error(f"Error processing LLM prompt tags: {e}")
         return prompt, tags
 
-def process_tag_trumps(matches:list, trump_params:Optional[list]=None):
+def process_tag_trumps(matches:list, trump_params:TAG_LIST|None=None) -> tuple[TAG_LIST, TAG_LIST]:
     trump_params = trump_params or []
     try:
         # Collect all 'trump' parameters for all matched tags
-        trump_params = set(trump_params)
+        trump_params_set = set(trump_params)
         for tag in matches:
             if isinstance(tag, tuple):
                 tag_dict = tag[0]  # get tag value if tuple
             else:
                 tag_dict = tag
             if 'trumps' in tag_dict:
-                trump_params.update([param.strip().lower() for param in tag_dict['trumps'].split(',')])
+                trump_params_set.update([param.strip().lower() for param in tag_dict['trumps'].split(',')])
                 del tag_dict['trumps']
-        # Remove duplicates from the trump_params set
-        trump_params = set(trump_params)
+        # Remove duplicates from the trump_params_set
+        trump_params_set = set(trump_params_set)
         # Iterate over all tags in 'matches' and remove 'trumped' tags
         untrumped_matches = []
         for tag in matches:
@@ -1281,30 +1304,36 @@ def process_tag_trumps(matches:list, trump_params:Optional[list]=None):
                 tag_dict = tag[0]  # get tag value if tuple
             else:
                 tag_dict = tag
-            if any(trigger.strip().lower() == trump.strip().lower() for trigger in tag_dict.get('trigger', '').split(',') for trump in trump_params):
+            if any(trigger.strip().lower() == trump.strip().lower() for trigger in tag_dict.get('trigger', '').split(',') for trump in trump_params_set): # TODO line too long and hard to follow
                 log.info(f'''[TAGS] Tag with triggers "{tag_dict['trigger']}" was trumped by another tag.''')
             else:
                 untrumped_matches.append(tag)
-        return untrumped_matches, trump_params
+        return untrumped_matches, list(trump_params_set)
     except Exception as e:
         log.error(f"Error processing matched tags: {e}")
-        return matches  # return original matches if error occurs
+        # return original matches if error occurs
+        # also return empty set for trump_tags which is expected
+        return matches, []
 
-def match_tags(search_text:str, tags:dict, phase='llm') -> dict:
+def match_tags(search_text:str, tags:SORTED_TAGS, phase='llm') -> SORTED_TAGS:
     try:
         # Remove 'llm' tags if pre-LLM phase, to be added back to unmatched tags list at the end of function
         if phase == 'llm':
-            llm_tags = tags['unmatched'].pop('llm', []) if 'user' in tags['unmatched'] else []
-        updated_tags = copy.deepcopy(tags)
-        matches = updated_tags['matches']
-        unmatched = updated_tags['unmatched']
-        for list_name, unmatched_list in tags['unmatched'].items():
+            llm_tags = tags['unmatched'].pop('llm', []) if 'user' in tags['unmatched'] else [] # type: ignore
+            
+        updated_tags:SORTED_TAGS = copy.deepcopy(tags)
+        matches:TAG_LIST = updated_tags['matches'] # type: ignore
+        unmatched:TAG_LIST_DICT = updated_tags['unmatched'] # type: ignore
+        for list_name, unmatched_list in tags['unmatched'].items(): # type: ignore
+            unmatched_list: TAG_LIST
+            
             for tag in unmatched_list:
                 if 'trigger' not in tag:
                     unmatched[list_name].remove(tag)
-                    tag['phase'] = phase
+                    tag['phase'] = phase # TODO warning: this updates the original tag before deepcopy
                     matches.append(tag)
                     continue
+                
                 case_sensitive = tag.get('case_sensitive', False)
                 triggers = [t.strip() for t in tag['trigger'].split(',')]
                 for index, trigger in enumerate(triggers):
@@ -1320,6 +1349,7 @@ def match_tags(search_text:str, tags:dict, phase='llm') -> dict:
                             tag['matched_trigger'] = trigger  # retain the matched trigger phrase
                             if (('insert_text' in tag and phase == 'llm') or ('positive_prompt' in tag and phase == 'img')):
                                 matches.append((tag, trigger_match.start(), trigger_match.end()))  # Add as a tuple with start/end indexes if inserting text later
+                                # TODO tag class
                             else:
                                 if 'positive_prompt' in tag:
                                     tag['imgtag_matched_early'] = True
@@ -1330,7 +1360,7 @@ def match_tags(search_text:str, tags:dict, phase='llm') -> dict:
                             tag['imgtag_uninserted'] = True
                             matches.append(tag)
         if matches:
-            updated_tags['matches'], updated_tags['trump_params'] = process_tag_trumps(matches, tags['trump_params']) # trump tags
+            updated_tags['matches'], updated_tags['trump_params'] = process_tag_trumps(matches, tags['trump_params']) # type: ignore # trump tags
         # Add LLM sublist back to unmatched tags list if LLM phase
         if phase == 'llm':
             unmatched['llm'] = llm_tags
@@ -1342,26 +1372,27 @@ def match_tags(search_text:str, tags:dict, phase='llm') -> dict:
         log.error(f"Error matching tags: {e}")
         return tags
 
-def sort_tags(all_tags: list) -> Union[list, dict]:
-    try:
-        sorted_tags = {'matches': [], 'unmatched': {'user': [], 'llm': [], 'userllm': []}, 'trump_params': []}
-        for tag in all_tags:
-            if 'random' in tag:
-                if not isinstance(tag['random'], (int, float)):
-                    log.error("Error: Value for 'random' in tags should be float value (ex: 0.8).")
-                    continue # Skip this tag
-                if not random.random() < tag['random']:
-                    continue # Skip this tag
-            search_mode = tag.get('search_mode', 'userllm')  # Default to 'userllm' if 'search_mode' is not present
-            if search_mode in sorted_tags['unmatched']:
-                sorted_tags['unmatched'][search_mode].append({k: v for k, v in tag.items() if k != 'search_mode'})
-            else:
-                log.warning(f"Ignoring unknown search_mode: {search_mode}")
-        return sorted_tags
 
-    except Exception as e:
-        log.error(f"Error sorting tags: {e}")
-        return all_tags
+def sort_tags(all_tags: TAG_LIST) -> SORTED_TAGS:
+    sorted_tags = {'matches': [], 'unmatched': {'user': [], 'llm': [], 'userllm': []}, 'trump_params': []}
+    
+    for tag in all_tags:
+        if 'random' in tag.keys():
+            if not isinstance(tag['random'], (int, float)):
+                log.error("Error: Value for 'random' in tags should be float value (ex: 0.8).")
+                continue # Skip this tag
+            if not random.random() < tag['random']:
+                continue # Skip this tag
+            
+        search_mode = tag.get('search_mode', 'userllm')  # Default to 'userllm' if 'search_mode' is not present
+        if search_mode in sorted_tags['unmatched']:
+            sorted_tags['unmatched'][search_mode].append({k: v for k, v in tag.items() if k != 'search_mode'})
+            
+        else:
+            log.warning(f"Ignoring unknown search_mode: {search_mode}")
+            
+    return sorted_tags
+
 
 
 def _expand_value(value:str) -> str:
@@ -1469,7 +1500,7 @@ def parse_key_pair_from_text(kv_pair):
 
 # Matches [[this:syntax]] and creates 'tags' from matches
 # Can handle any structure including dictionaries, lists, even nested sublists.
-def get_tags_from_text(text):
+def get_tags_from_text(text) -> tuple[str, list[dict]]:
     try:
         tags_from_text = []
         matches = patterns.instant_tags.findall(text)
@@ -1488,7 +1519,7 @@ def get_tags_from_text(text):
         log.error(f"Error getting tags from text: {e}")
         return text, []
 
-async def get_tags(text):
+async def get_tags(text) -> tuple[str, SORTED_TAGS]:
     try:
         flow_step_tags = []
         if flow_queue.qsize() > 0:
@@ -1502,7 +1533,7 @@ async def get_tags(text):
         return detagged_text, sorted_tags
     except Exception as e:
         log.error(f"Error getting tags: {e}")
-        return text, []
+        return text, {}
 
 async def init_llm_payload(ictx: CtxInteraction, user_name:str, text:str) -> dict:
     llm_payload = copy.deepcopy(bot_settings.settings['llmstate'])
@@ -1531,7 +1562,6 @@ def get_wildcard_value(matched_text, dir_path=None):
         selected_file = random.choice(txt_files)
         with open(selected_file, 'r') as file:
             lines = file.readlines()
-            # filtered_lines = [line.strip() for line in lines if not line.startswith("#")] # TODO UNUSED
             selected_option = random.choice(lines).strip()
     else:
         # If no matching .txt file is found, try to find a subdirectory
@@ -1543,7 +1573,6 @@ def get_wildcard_value(matched_text, dir_path=None):
                     selected_file = random.choice(subdir_files)
                     with open(selected_file, 'r') as file:
                         lines = file.readlines()
-                        # filtered_lines = [line.strip() for line in lines if not line.startswith("#")] # TODO UNUSED
                         selected_option = random.choice(lines).strip()
     # Check if selected option has braces pattern
     if selected_option:
@@ -1555,7 +1584,6 @@ def get_wildcard_value(matched_text, dir_path=None):
         if selected_option.startswith('__') and selected_option.endswith('__'):
             # Extract nested directory path from the nested value
             nested_dir = selected_option[2:-2]  # Strip the first 2 and last 2 characters
-            # nested_dir_path = os.path.join(dir_path, nested_dir)  # Use os.path.join for correct path joining # TODO UNUSED
             # Get the last component of the nested directory path
             search_phrase = os.path.split(nested_dir)[-1]
             # Remove the last component from the nested directory path
@@ -1683,7 +1711,7 @@ async def on_message(message: discord.Message):
         async with task_semaphore:
             async with message.channel.typing():
                 log.info(f'reply requested: {message.author.display_name} said: "{text}"')
-                await message_task(message, text, 'on_message', llm_payload=None, params={}, tags={})
+                await message_task(message, text, 'on_message')
                 await run_flow_if_any(message, 'on_message', text)
 
     except Exception as e:
@@ -1692,7 +1720,9 @@ async def on_message(message: discord.Message):
 #################################################################
 ######################## QUEUED MESSAGE #########################
 #################################################################
-async def message_task(ictx: CtxInteraction, text:str, source:str='message', llm_payload:dict=None, params:dict={}, tags:dict={}) -> tuple[HMessage, HMessage]:
+async def message_task(ictx: CtxInteraction, text:str, source:str='message', llm_payload:dict|None=None, params:dict|None=None) -> tuple[HMessage, HMessage]:
+    params = params or {}
+    tags = {} # just incase there's an exception.
     user_name = get_user_ctx_inter(ictx).display_name
     channel = ictx.channel
 
@@ -1704,22 +1734,23 @@ async def message_task(ictx: CtxInteraction, text:str, source:str='message', llm
 
     async def send_responses(params:dict, bot_message:HMessage, local_history:History) -> HMessage:
         if bot_message:
+            ref_message = params.get('ref_message', None) # pass to send_long_message()
             # Process any TTS response
             if bot_message.text_visible:
                 await process_tts_resp(ictx, bot_message)
             if params['bot_will_do']['should_send_text']:
-                # Apply any labels applicable to message
-                labeled_resp = local_history.get_labeled_history_text(bot_message, bot_message.text)
                 # @mention non-consecutive users
-                mention_labeled_resp = update_mention(get_user_ctx_inter(ictx).mention, labeled_resp)
-                await send_long_message(channel, mention_labeled_resp, bot_message=bot_message)
+                mention_resp = update_mention(get_user_ctx_inter(ictx).mention, bot_message.text)
+                await send_long_message(channel, mention_resp, bot_message, ref_message)
+                # Apply any reactions applicable to message
+                await apply_reactions_to_messages(ictx, bot_message)
         # send any user images
         send_user_image = params.get('send_user_image', [])
         if send_user_image:
             await channel.send(file=send_user_image) if len(send_user_image) == 1 else await channel.send(files=send_user_image)
         return bot_message
 
-    async def message_img_task(tags:dict, params:dict, bot_message:HMessage):
+    async def message_img_task(tags:SORTED_TAGS, params:dict, bot_message:HMessage):
         nonlocal img_gen_embed
         tags = match_img_tags(bot_message.text, tags)
         params['bot_will_do'] = bot_should_do(tags, params['bot_will_do']) # check for updates from tags
@@ -1747,11 +1778,10 @@ async def message_task(ictx: CtxInteraction, text:str, source:str='message', llm
         ## Finalize payload, generate text via TGWUI, and process responses
         # Toggle TTS off, if interaction server is not connected to Voice Channel
         tts_sw = False
-        if (not params['bot_will_do']['should_send_text']) or (
-            hasattr(ictx, 'guild') and getattr(ictx.guild, 'voice_client', None) and 
-            voice_client and (voice_client != ictx.guild.voice_client) and int(tts_settings.get('play_mode', 0)) == 0):
+        if (not params['bot_will_do']['should_send_text']) \
+            or (hasattr(ictx, 'guild') and getattr(ictx.guild, 'voice_client', None) \
+            and not voice_clients.get(ictx.guild.id) and int(tts_settings.get('play_mode', 0)) == 0):
             tts_sw = await apply_toggle_tts(toggle='off')
-        save_to_history = params.get('save_to_history', True)
         # Check to apply Server Mode
         llm_payload = apply_server_mode(llm_payload, ictx)
         # Update names in stopping strings
@@ -1763,8 +1793,8 @@ async def message_task(ictx: CtxInteraction, text:str, source:str='message', llm
             local_history = bot_history.get_history_for(ictx.channel.id)
         # Create user message in HManager
         user_message = None
-        if not params.get('skip_create_user'):
-            user_message = await create_user_message(local_history, llm_payload, save_to_history, ictx)
+        if not params.get('skip_create_user_msg'):
+            user_message = await create_user_message(local_history, llm_payload, params, ictx)
         # generate text with text-generation-webui
         last_resp, tts_resp = await llm_gen(llm_payload)
         # Create bot message in HManager, unless replacing original bot message via "regenerate replace"
@@ -1772,7 +1802,7 @@ async def message_task(ictx: CtxInteraction, text:str, source:str='message', llm
             bot_message = await replace_msg_in_history_and_discord(ictx, params, last_resp, tts_resp)
             params['bot_will_do']['should_send_text'] = False
         else:
-            bot_message = await create_bot_message(user_message, local_history, save_to_history, last_resp, tts_resp, ictx)
+            bot_message = await create_bot_message(user_message, local_history, params, last_resp, tts_resp, ictx)
         # Toggle TTS back on if it was toggled off
         await apply_toggle_tts(toggle='on', tts_sw=tts_sw)
 
@@ -1808,7 +1838,7 @@ async def message_task(ictx: CtxInteraction, text:str, source:str='message', llm
             await change_embed.delete()
         return llm_model_mode, original_llmmodel
 
-    async def build_llm_payload(text:str, llm_payload:dict, tags:dict, params:dict):
+    async def build_llm_payload(text:str, llm_payload:dict|None, tags:SORTED_TAGS, params:dict):
         # Use predefined LLM payload or initialize with defaults
         if llm_payload is None:
             llm_payload = await init_llm_payload(ictx, user_name, text)
@@ -1841,7 +1871,7 @@ async def message_task(ictx: CtxInteraction, text:str, source:str='message', llm
                 if params['bot_will_do']['should_gen_image']:
                     await init_img_embed()                                                          # Create a "prompting" embed for image gen
                 params, bot_message, user_message, local_history = await message_llm_task(llm_payload, params)
-                await react_to_user_message(client.user, channel, user_message)                          # add a reaction to any hidden user message
+                await apply_reactions_to_messages(ictx, user_message)                               # add a reaction to any hidden user message
                 if llmmodel_params and llm_model_mode == 'swap':
                     params = await llmmodel_swap_back(params, original_llmmodel)                    # if LLM model swapping was triggered
             if sd_enabled:
@@ -1948,8 +1978,9 @@ async def apply_toggle_tts(toggle:str='on', tts_sw:bool=False):
     return False
 
 # Creates user message in HManager
-async def create_user_message(local_history, llm_payload:dict, save_to_history=True, ictx:Optional[CtxInteraction]=None):
+async def create_user_message(local_history, llm_payload:dict, params:dict, ictx:Optional[CtxInteraction]=None):
     try:
+        save_to_history = params.get('save_to_history', True)
         # Add user message before processing bot reply.
         # this gives time for other messages to accrue before the bot's response, as in realistic chat scenario.
         user = get_user_ctx_inter(ictx)
@@ -1958,7 +1989,7 @@ async def create_user_message(local_history, llm_payload:dict, save_to_history=T
         user_message.id = message.id if hasattr(message, 'id') else None
         # set history flag
         if not save_to_history:
-            user_message.hidden = True
+            user_message.update(hidden=True)
         if is_direct_message(ictx):
             user_message.dont_save()
             await warn_direct_channel(ictx)
@@ -2015,13 +2046,19 @@ async def warn_direct_channel(ictx: CtxInteraction):
             await ictx.channel.send("This conversation will not be saved. ***However***, your interactions will be included in the bot's general logging.")
 
 # Process responses from text-generation-webui
-async def create_bot_message(user_message:Optional[HMessage], local_history:Optional[History], save_to_history:bool=True, last_resp:str='', tts_resp:str='', ictx:Optional[CtxInteraction]=None) -> HMessage:
+async def create_bot_message(user_message:Optional[HMessage], local_history:Optional[History], params:dict, last_resp:str='', tts_resp:str='', ictx:Optional[CtxInteraction]=None) -> HMessage:
     try:
+        save_to_history = params.get('save_to_history', True)
+        # custom handlings, mainly from 'regenerate'
+        bot_msg_hidden = params.get('bot_msg_hidden', False)
+        regenerated = params.get('regenerated', None)
         bot_message = local_history.new_message(bot_settings.name, last_resp, 'assistant', bot_settings._bot_id, text_visible=tts_resp)
         if user_message:
             bot_message.mark_as_reply_for(user_message)
-        if not save_to_history:
-            bot_message.hidden = True
+        if regenerated:
+            bot_message.mark_as_regeneration_for(regenerated)
+        if bot_msg_hidden or not save_to_history:
+            bot_message.update(hidden=True)
         if is_direct_message(ictx):
             bot_message.dont_save()
 
@@ -2035,30 +2072,38 @@ async def create_bot_message(user_message:Optional[HMessage], local_history:Opti
         log.error(f'An error occurred while creating bot message: {e}')
         return None
 
-async def continue_task(inter:discord.Interaction, target_discord_msg:discord.Message):
+async def continue_task(inter: discord.Interaction, local_history: History, target_discord_msg: discord.Message, target_hmessage:HMessage):
     user_name = get_user_ctx_inter(inter).display_name
     channel = inter.channel
     system_embed = None
     try:
-        # collect relevant history and messages
-        local_history = bot_history.get_history_for(inter.channel.id)
-        if not local_history:
-            await inter.followup.send("There is currently no chat history to continue from.", ephemeral=True)
-            return
         original_user_message, original_bot_message = local_history.get_history_pair_from_msg_id(target_discord_msg.id)
         # Requires finding original bot message in history
         if not original_bot_message:
             await inter.followup.send('Message not found in current chat history. Try using "continue" on a response from the character.', ephemeral=True)
             return
-        # build new payload. 'text' parameter not important for "Continue"
+
+        # To continue, both messages must be visible
+        temp_reveal_user_msg = True if original_user_message.hidden else False
+        if temp_reveal_user_msg:
+            original_user_message.update(hidden=False)
+        temp_reveal_bot_msg = True if original_bot_message.hidden else False
+        if temp_reveal_bot_msg:
+            original_bot_message.update(hidden=False)
+        # Prepare payload. 'text' parameter unimportant (only used for logging)
         original_user_text = original_user_message.text if original_user_message else (target_discord_msg.clean_content or '')
         llm_payload = await init_llm_payload(inter, user_name, original_user_text)
         sliced_history = original_bot_message.new_history_end_here()
         sliced_i, _ = sliced_history.render_to_tgwui_tuple()
-        # using original 'visible' produces wonky TTS responses combined with "Continue" function
+        # using original 'visible' produces wonky TTS responses combined with "Continue" function. Using 'internal' for both.
         llm_payload['state']['history']['internal'] = copy.deepcopy(sliced_i)
         llm_payload['state']['history']['visible'] = copy.deepcopy(sliced_i)
-        llm_payload['_continue'] = True
+        llm_payload['_continue'] = True # let TGWUI handle the continue function
+        # Restore hidden status
+        if temp_reveal_user_msg:
+            original_user_message.update(hidden=True)
+        if temp_reveal_bot_msg:
+            original_bot_message.update(hidden=True)
 
         if system_embed_info:
             system_embed_info.title = 'Continuing ... '
@@ -2068,8 +2113,8 @@ async def continue_task(inter:discord.Interaction, target_discord_msg:discord.Me
         ## Finalize payload, generate text via TGWUI, and process responses
         # Toggle TTS off, if interaction server is not connected to Voice Channel
         tts_sw = None
-        if voice_client and (voice_client != inter.guild.voice_client) and int(tts_settings.get('play_mode', 0)) == 0:
-            tts_sw = await apply_toggle_tts(toggle='off')
+        if not voice_clients.get(inter.guild.id) and int(tts_settings.get('play_mode', 0)) == 0:
+            tts_sw = await apply_toggle_tts(inter.guild, toggle='off')
         # Check to apply Server Mode
         llm_payload = apply_server_mode(llm_payload, inter)
         # Update names in stopping strings
@@ -2102,24 +2147,31 @@ async def continue_task(inter:discord.Interaction, target_discord_msg:discord.Me
 
         # Update the original message in history manager
         updated_bot_message = original_bot_message
-
+        
+        new_discord_msg = None
         if not continued_text.strip():
             await inter.followup.send(':warning: Generation was continued, but nothing new was added.')
         else:
+            # Mark original message as being continued and update reactions for it
+            original_bot_message.is_continued = True
+            await apply_reactions_to_messages(inter, original_bot_message, [original_bot_message.id], ref_message)
+
             # Add previous last message id to related ids
-            updated_bot_message.related_ids.append(updated_bot_message.id)
-            updated_bot_message.is_continued = True
-            # Apply any labels applicable to message
-            labeled_continued_text = local_history.get_labeled_history_text(updated_bot_message, continued_text)
+            updated_bot_message.related_ids.append(original_bot_message.id)
+
             if len(continued_text) < MAX_MESSAGE_LENGTH:
-                new_discord_msg = await channel.send(content=labeled_continued_text, reference=ref_message)
+                new_discord_msg = await channel.send(content=continued_text, reference=ref_message)
                 # replace original id with new
                 updated_bot_message.update(id=new_discord_msg.id)
             else:
                 # Pass to send_long_message which will add more ids and update last.
-                await send_long_message(channel, labeled_continued_text, bot_message=updated_bot_message)
+                await send_long_message(channel, continued_text, bot_message=updated_bot_message)
 
         updated_bot_message.update(text=last_resp, text_visible=tts_resp)
+
+        # Apply any reactions applicable to message
+        msg_ids_to_edit = [updated_bot_message.id] + updated_bot_message.related_ids
+        await apply_reactions_to_messages(inter, updated_bot_message, msg_ids_to_edit, new_discord_msg)
 
         # process any tts resp
         if tts_resp:
@@ -2136,7 +2188,9 @@ async def continue_task(inter:discord.Interaction, target_discord_msg:discord.Me
 async def replace_msg_in_history_and_discord(ictx:CtxInteraction, params:dict, text:str, text_visible:str) -> Optional[HMessage]:
     channel = ictx.channel
     updated_message: Optional[HMessage] = params.get('user_message_to_update') or params.get('bot_message_to_update')
+    msg_hidden = params.get('user_msg_hidden') or params.get('bot_msg_hidden') or False
     target_discord_msg_id = params.get('target_discord_msg_id')
+    ref_message = params.get('ref_message')
     try:
         target_discord_msg = await channel.fetch_message(target_discord_msg_id)
         # Collect all messages that are part of the original message
@@ -2150,23 +2204,22 @@ async def replace_msg_in_history_and_discord(ictx:CtxInteraction, params:dict, t
             if local_message:
                 await local_message.delete()
         # Clear related IDs attribute
-        updated_message.related_ids.clear() # TODO maybe add a fresh method to HMessage?
-        
-        # Update original discord message, or send new one if too long
-        local_history = bot_history.get_history_for(ictx.channel.id)
-        # Apply any labels applicable to message
-        labeled_text = local_history.get_labeled_history_text(updated_message, text)
+        updated_message.related_ids.clear() # TODO maybe add a 'fresh' method to HMessage? - For Reality
 
+        # Update original discord message, or send new one if too long
         if len(text) < MAX_MESSAGE_LENGTH:
             await target_discord_msg.edit(content=text)
         else:
             await target_discord_msg.delete()
             if params.get('bot_message_to_update'):
-                await send_long_message(channel, labeled_text, bot_message=updated_message)
+                await send_long_message(channel, text, bot_message=updated_message, ref_message=ref_message)
             else:
-                await send_long_message(channel, labeled_text)
+                await send_long_message(channel, text, bot_message=None, ref_message=ref_message)
 
-        updated_message.update(text=text, text_visible=text_visible)
+        updated_message.update(text=text, text_visible=text_visible, hidden=msg_hidden)
+
+        # Apply any reactions applicable to message
+        await apply_reactions_to_messages(ictx, updated_message)
 
         return updated_message
     except Exception as e:
@@ -2174,39 +2227,62 @@ async def replace_msg_in_history_and_discord(ictx:CtxInteraction, params:dict, t
         return None
 
 
-async def regenerate_task(inter:discord.Interaction, inter_discord_msg:discord.Message, mode:str='create'):
+async def regenerate_task(inter: discord.Interaction, local_history: History, target_discord_msg: discord.Message, target_hmessage:HMessage, mode:str='create'):
     user_name = get_user_ctx_inter(inter).display_name
     channel = inter.channel
     system_embed = None
     try:
-        # collect relevant history and messages
-        local_history = bot_history.get_history_for(inter.channel.id)
-        if not local_history:
-            await inter.followup.send("There is currently no chat history to regenerate from.", ephemeral=True)
-            return
-        original_user_message, original_bot_message = local_history.get_history_pair_from_msg_id(inter_discord_msg.id)
+        user_message, bot_message = local_history.get_history_pair_from_msg_id(target_discord_msg.id, user_msg_attr='regenerated_from', bot_msg_list_attr='regenerations')
 
         # Replace method requires finding original bot message in history
-        if mode == 'replace' and not original_bot_message:
+        if mode == 'replace' and not bot_message:
             await inter.followup.send("Message not found in current chat history.", ephemeral=True)
             return
         
-        target_discord_msg = inter_discord_msg
+        # Original user text is needed for both 'create' and 'replace'
+        # For create, `target_bot_message` will hide the currently revealed message.
+        # For replace, `target_bot_message` will replace the currently revealed message.
+        all_bot_regens = user_message.regenerations
+        # Update attributes
+        if not all_bot_regens and mode == 'create':
+            bot_message.mark_as_regeneration_for(user_message)
 
-        # Get original user text from discord message, and target the bot message to edit
-        if inter.user == inter_discord_msg.author:                  # if command used on user's own message
-            original_user_text = inter_discord_msg.clean_content    # get the message contents
-            target_discord_msg = await channel.fetch_message(original_bot_message.id) # set the target message to the bot message
-        else:
-            if not original_user_message or isinstance(original_user_message, str): # will be uuid text string if message failed to be found
+        # if command used on user's own message
+        if inter.user == target_discord_msg.author:
+            original_user_text = target_discord_msg.clean_content   # get the message contents for prompt
+            target_bot_message = bot_message                 # set to most recent bot regeneration
+            if all_bot_regens:
+                for i in range(len(all_bot_regens)):
+                    if not all_bot_regens[i].hidden:
+                        target_bot_message = all_bot_regens[i] # set the target message to a non-hidden bot message
+                        break
+        # if command used on a bot regen
+        elif client.user == target_discord_msg.author:
+            if not user_message or isinstance(user_message, str): # will be uuid text string if message failed to be found
                 await inter.followup.send("Original user prompt is required, which could not be found from the selected message or in current chat history. Please try again, using the command on your own message.", ephemeral=True)
                 return
-            else:
-                original_message = await channel.fetch_message(original_user_message.id)
-                original_user_text = original_message.clean_content
+            # default the target hmessage to the one associated with the message selected via cmd
+            target_bot_message = target_hmessage
+            # get the user's message contents for prompt
+            original_message = await channel.fetch_message(user_message.id)
+            original_user_text = original_message.clean_content
+            # If other regens, change target to the unhidden regenerated message
+            if target_bot_message.hidden and all_bot_regens and mode == 'create':
+                for i in range(len(all_bot_regens)):
+                    if not all_bot_regens[i].hidden:
+                        target_bot_message = all_bot_regens[i] # set to first non-hidden bot message
+                        break
+        else:
+            return # invalid user
         
+        # To regenerate, both messages must be visible
+        temp_reveal_msgs = True if (user_message.hidden and target_bot_message.hidden) else False
+        if temp_reveal_msgs:
+            user_message.update(hidden=False)
+            target_bot_message.update(hidden=False)
+
         # Initialize payload with sliced history
-        message_for_slicing = original_user_message or original_bot_message
+        message_for_slicing = user_message or bot_message
         llm_payload = await init_llm_payload(inter, user_name, original_user_text)
         sliced_history = message_for_slicing.new_history_end_here(include_self=False) # Exclude the original exchange pair
         sliced_i, _ = sliced_history.render_to_tgwui_tuple()
@@ -2218,27 +2294,42 @@ async def regenerate_task(inter:discord.Interaction, inter_discord_msg:discord.M
             system_embed_info.description = f'Regenerating text for {user_name}'
             system_embed = await channel.send(embed=system_embed_info)
 
-        # Flag to skip message logging
+        # Flags to skip message logging/special message handling
         params = {}
         if mode == 'create':
-            params['skip_create_user'] = True
+            params['skip_create_user_msg'] = True
+            params['ref_message'] = original_message
+            params['regenerated'] = user_message
+            params['bot_msg_hidden'] = temp_reveal_msgs # Hide new bot message if regenerating from hidden exchange
 
         if mode == 'replace':
-            params['skip_create_user'] = True
-            params['bot_message_to_update'] = original_bot_message
-            params['target_discord_msg_id'] = target_discord_msg.id
+            params['skip_create_user_msg'] = True
+            params['ref_message'] = original_message
+            params['bot_message_to_update'] = target_bot_message
+            params['target_discord_msg_id'] = target_bot_message.id
+            params['bot_msg_hidden'] = temp_reveal_msgs # Hide new bot message if regenerating from hidden exchange
 
-        _, new_bot_message = await message_task(inter, original_user_text, 'regenerate', llm_payload, params, tags={})
+        # Regenerate the reply
+        _, new_bot_message = await message_task(inter, original_user_text, 'regenerate', llm_payload, params)
 
-        # Update the user message hidden status depending on bot message status
-        original_user_message.update(hidden=new_bot_message.hidden)
+        # Mark as reply
+        new_bot_message.mark_as_reply_for(user_message)
 
-        # Adjust reaction if applicable
-        await react_to_user_message(client.user, inter.channel, original_user_message)
+        # Update the messages hidden statuses
+        user_message.update(hidden=new_bot_message.hidden)
+        # If set to toggle, make hidden again regardless of what was set during regeneration
+        if temp_reveal_msgs:
+            user_message.update(hidden=True)
 
-        # Update the new user message with the original discord message ID
         if mode == 'create':
-            new_bot_message.mark_as_reply_for(original_user_message)
+            new_bot_message.mark_as_regeneration_for(user_message)
+            # Adjust attributes/reactions for prior active bot reply/regeneration
+            target_bot_message.update(hidden=True) # always hide previous regen when creating
+            target_bot_message_ids = [target_bot_message.id] + target_bot_message.related_ids
+            await apply_reactions_to_messages(inter, target_bot_message, target_bot_message_ids, target_discord_msg)
+
+        # Update reactions for user message
+        await apply_reactions_to_messages(inter, user_message)
 
         if system_embed:
             await system_embed.delete()
@@ -2249,7 +2340,6 @@ async def regenerate_task(inter:discord.Interaction, inter_discord_msg:discord.M
         await inter.followup.send(e_msg, silent=True)
         if system_embed:
             await system_embed.delete()
-
 
 async def speak_task(ctx: commands.Context, text:str, params:dict):
     user_name = ctx.author.display_name
@@ -2610,7 +2700,6 @@ async def format_next_flow(ictx, next_flow, user_name:str, text:str):
 async def peek_flow_queue(ictx, queue, user_name:str, text:str):
     temp_queue = asyncio.Queue()
     total_queue_size = queue.qsize()
-    # first_flow = None # TODO UNUSED
     while queue.qsize() > 0:
         if queue.qsize() == total_queue_size:
             item = await queue.get()
@@ -2643,7 +2732,7 @@ async def flow_task(ictx: CtxInteraction, source:str, text:str):
                 flow_embed_info.description += f'**Processing Step {total_flow_steps + 1 - remaining_flow_steps}/{total_flow_steps}**{flow_name}\n'
                 if flow_embed: 
                     await flow_embed.edit(embed=flow_embed_info)
-            await message_task(ictx, text, source, llm_payload=None, params={}, tags={})
+            await message_task(ictx, text, source)
         if flow_embed_info:
             flow_embed_info.title = f"Flow completed for {user_name}"
             flow_embed_info.description = flow_embed_info.description.replace("**Processing", ":white_check_mark: **")
@@ -2974,7 +3063,7 @@ def clean_img_payload(img_payload):
         log.error(f"An error occurred when cleaning img_payload: {e}")
     return img_payload
 
-def apply_loractl(tags):
+def apply_loractl(tags: SORTED_TAGS):# -> SORTED_TAGS:
     try:
         if SD_CLIENT != 'A1111 SD WebUI':
             if not bot_database.was_warned('loractl'):
@@ -3499,12 +3588,11 @@ def init_img_payload(img_prompt:str, neg_prompt:str) -> dict:
     except Exception as e:
         log.error(f"Error initializing img payload: {e}")
 
-def match_img_tags(img_prompt:str, tags:dict) -> dict:
+def match_img_tags(img_prompt:str, tags:SORTED_TAGS) -> SORTED_TAGS:
     try:
         # Unmatch any previously matched tags which try to insert text into the img_prompt
-        for tag in tags['matches'][:]:  # Iterate over a copy of the list
-            tag:dict
-
+        matches_:TAG_LIST = tags['matches'] # type: ignore
+        for tag in matches_[:]:  # Iterate over a copy of the list
             if tag.get('imgtag_matched_early'): # extract text insertion key pairs from previously matched tags
                 new_tag = {}
                 tag_copy = copy.copy(tag)
@@ -3531,7 +3619,8 @@ def match_img_tags(img_prompt:str, tags:dict) -> dict:
 
     return tags
 
-async def img_gen_task(source:str, img_prompt:str, params:dict, ictx:CtxInteraction, tags={}):
+async def img_gen_task(source:str, img_prompt:str, params:dict, ictx:CtxInteraction, tags: SORTED_TAGS|None=None):
+    tags = tags or {}
     user_name = get_user_ctx_inter(ictx).display_name or None
     channel = ictx.channel
     bot_will_do = params.get('bot_will_do', {})
@@ -4125,7 +4214,7 @@ async def main(ctx: commands.Context):
             action_message = f'Added {ctx.channel.mention} to main channels. Use "/main" again to remove it.'
 
         bot_database.save()
-        await ctx.reply(action_message)
+        await ctx.reply(action_message, delete_after=5)
     except Exception as e:
         log.error(f"Error toggling main channel setting: {e}")
 
@@ -4191,68 +4280,138 @@ if textgenwebui_enabled:
             log.info(f'{inter.user.display_name} used "edit history"')
             modal = EditMessageModal(client.user, matched_hmessage, target_message=message, local_history=local_history)
             await inter.response.send_modal(modal)
-
-    async def apply_labels_to_msg_list(ictx:CtxInteraction, local_history:History, hmsg:HMessage, msg_id_list:list, ictx_msg:discord.Message=None):
+    
+    # Applies history reactions to a list of discord messages, such as all related messages from 'Continue' function
+    async def apply_reactions_to_messages(ictx:CtxInteraction, hmsg:HMessage=None, msg_id_list:list=None, ictx_msg:discord.Message=None):
         try:
+            if hmsg is None:
+                return
+            if msg_id_list is None:
+                msg_id_list = [hmsg.id]
+
+            # Get correct emojis for current message
+            emojis_for_msg = get_hmessage_emojis(hmsg)
+            
+            # Iterate over list of discord message IDs and update reactions for the discord message objects
             for msg_id in msg_id_list:
-                # skip fetching message if provided and matched
+                # skip fetching ictx message if provided and matched
                 if ictx_msg and msg_id == ictx_msg.id:
-                    msg_to_edit = ictx_msg
+                    discord_msg = ictx_msg
                 # fetch message object from id
                 else:
-                    msg_to_edit = await ictx.channel.fetch_message(msg_id)
-                # Apply any labels applicable to message, while replacing any mentions
-                labeled_text = local_history.get_labeled_history_text(hmsg, msg_to_edit.content, mention_mode='remention', label_mode='relabel')
-                if len(labeled_text) >= 2000:
-                    log.warning('Could not edit a message to include history labels due to Discord message length limit.')
-                    continue
-                await msg_to_edit.edit(content=labeled_text)
+                    discord_msg = await ictx.channel.fetch_message(msg_id)
+                # Update reactions for the message
+                await update_message_reactions(client.user, emojis_for_msg, discord_msg)
         except Exception as e:
-            log.error(f'Failed to edit message content for id {msg_id}: {e}')
+            log.error(f'Error while processing reactions for messages: {e}')
 
-    async def apply_hide_or_reveal_history(inter: discord.Interaction, local_history: History, message: discord.Message, target_message:HMessage):
+    async def apply_hide_or_reveal_history(inter: discord.Interaction, local_history: History, target_discord_msg: discord.Message, target_hmessage:HMessage):
         try:
-            user_message, bot_message = local_history.get_history_pair_from_msg_id(message.id)
+            user_message, bot_message = local_history.get_history_pair_from_msg_id(target_discord_msg.id)
 
-            # Prevent user message from being automatically hidden while open bot replies
-            all_bot_replies = user_message.replies
-            num_bot_open_msgs = len(all_bot_replies)
-            for bot_msg in all_bot_replies:
-                if bot_msg.hidden:
-                    num_bot_open_msgs -= 1
-
-            # Apply command
-            if (user_message is not None and not user_message.hidden) and (bot_message is not None and not bot_message.hidden):
-                verb = 'hidden'
-                if num_bot_open_msgs <= 1:
-                    user_message.update(hidden=True)
-                bot_message.update(hidden=True)
-                
-            elif (user_message is not None and user_message.hidden) and (bot_message is not None and bot_message.hidden):
-                verb = 'revealed'
-                user_message.update(hidden=False)
-                bot_message.update(hidden=False)
-                
-            else:
-                await inter.response.send_message("A valid message pair could not be found for the target message.", ephemeral=True, delete_after=5)
+            # determine outcome
+            if user_message is None or bot_message is None:
+                undeletable_message = await inter.followup.send("A valid message pair could not be found for the target message.", ephemeral=True)
+                await bg_task_queue.put(sleep_delete_message(undeletable_message))
                 return
+            verb = 'hidden' if not target_hmessage.hidden else 'revealed'
+
+            # Helper function to toggle two messages (bot/user or bot/bot)
+            def toggle_hmessages(bot_message:HMessage, other_message:HMessage, verb:str, stagger:bool=False):
+                if verb == 'hidden':
+                    bot_message.update(hidden=True)
+                    other_message.update(hidden=True if not stagger else False)
+                else:
+                    bot_message.update(hidden=False)
+                    other_message.update(hidden=False if not stagger else True)
+
+            # List of HMessages to update associated discord messages for. Do not edit a user message.
+            bot_hmsgs_to_react = [target_hmessage] if client.user == target_discord_msg.author else []
+
+            # Get all bot regenerations
+            all_bot_regens = user_message.regenerations
+
+            # If 0-1 regenerations (1 should not be possible...), toggle with user message
+            if len(all_bot_regens) <= 1:
+                toggle_hmessages(bot_message, user_message, verb)
+                bot_hmsgs_to_react = [bot_message]
+
+            # If multiple regenerations, get next regen and toggle with it
+            elif len(all_bot_regens) > 1:
+                next_reply = None
+                # If command was used on user message
+                if inter.user == target_discord_msg.author:
+                    if verb == 'hidden':
+                        for i in range(len(all_bot_regens)):
+                            if not all_bot_regens[i].hidden: # get revealed bot message
+                                next_reply = all_bot_regens[i]
+                                break
+                    elif verb == 'revealed':
+                        next_reply = all_bot_regens[-1] # get last regen
+
+                # If command was used on a bot reply
+                elif client.user == target_discord_msg.author:
+                    # if user message is hidden, then do not toggle any other bot messages
+                    if user_message.hidden:
+                        bot_hmsgs_to_react = [target_hmessage]
+                    # if user message is revealed, determine next bot message to toggle
+                    else:
+                        if verb == 'hidden':
+                            for i in range(len(all_bot_regens)):
+                                if all_bot_regens[i] == bot_message:
+                                    # There's a more recent reply
+                                    if i + 1 < len(all_bot_regens):
+                                        next_reply = all_bot_regens[i + 1]
+                                    # Selected reply is the last one
+                                    else:
+                                        next_reply = all_bot_regens[i - 1]
+                                    break
+                        elif verb == 'revealed':
+                            for i in range(len(all_bot_regens)):
+                                if all_bot_regens[i] == bot_message:
+                                    for j in range(i + 1, len(all_bot_regens)):
+                                        if not all_bot_regens[j].hidden:
+                                            next_reply = all_bot_regens[j]
+                                            break
+                                    if not next_reply and i > 0:
+                                        for j in range(i - 1, -1, -1):
+                                            if not all_bot_regens[j].hidden:
+                                                next_reply = all_bot_regens[j]
+                                                break
+                                    break
+                else:
+                    return # invalid user
+
+
+                if next_reply:
+                    # If cmd was used on a bot reply, toggle next bot message (opposite value than targeted bot msg)
+                    if client.user == target_discord_msg.author:
+                        toggle_hmessages(bot_message, next_reply, verb, stagger=True)
+                    # If cmd was used on a user reply, toggle appropriate bot reply with it
+                    else:
+                        toggle_hmessages(user_message, next_reply, verb)
+                    # Add HMessages to update
+                    bot_hmsgs_to_react.append(next_reply)
+                # if user message is hidden and being revealed - this will toggle most recent bot msg by default
+                else:
+                    toggle_hmessages(bot_message, user_message, verb)
+            
 
             # Apply reaction to user message
-            await react_to_user_message(client.user, inter.channel, user_message)
+            await apply_reactions_to_messages(inter, user_message)
 
-            # Change target message to the bot's response, if the original target message was user's message
-            if client.user != message.author:
-                target_message = bot_message
-
-            # Iterate over all messages and update the labels
-            msg_ids_to_edit = [target_message.id]
-            if target_message.related_ids:
-                msg_ids_to_edit = [target_message.id] + target_message.related_ids
-            await apply_labels_to_msg_list(inter, local_history, bot_message, msg_ids_to_edit, message)
-
-            undeletable_message = await inter.channel.send(f"Modified message exchange pair in history for {inter.user.display_name} (messages {verb}).")
-            log.info(f"Modified message exchange pair in history for {inter.user.display_name} (messages {verb}).")
-
+            # Process all messages that need label updates
+            for target_hmsg in bot_hmsgs_to_react:
+                msg_ids_to_edit = []
+                msg_ids_to_edit.append(target_hmsg.id)
+                if target_hmsg.related_ids:
+                    msg_ids_to_edit.extend(target_hmsg.related_ids)
+                # Process reactions for all affected messages
+                await apply_reactions_to_messages(inter, target_hmsg, msg_ids_to_edit, target_discord_msg)
+            
+            result = f"**Modified message exchange pair in history for {inter.user.display_name}** (messages {verb})."
+            log.info(result)
+            undeletable_message = await inter.channel.send(result)
             await bg_task_queue.put(sleep_delete_message(undeletable_message))
 
         except Exception as e:
@@ -4266,65 +4425,60 @@ if textgenwebui_enabled:
             return
         try:
             local_history = bot_history.get_history_for(inter.channel.id)
-            target_message = local_history.search(lambda m: m.id == message.id or message.id in m.related_ids)
-            if not target_message:
+            target_hmessage = local_history.search(lambda m: m.id == message.id or message.id in m.related_ids)
+            if not target_hmessage:
                 await inter.response.send_message("Message not found in current chat history.", ephemeral=True, delete_after=5)
                 return
         except Exception as e:
-            log.error(f'An error occured while getting history for "Hide History".: {e}')
+            log.error(f'An error occured while getting history for "Hide History": {e}')
 
         await ireply(inter, 'toggle as hidden') # send a response msg to the user
         async with task_semaphore:
             # offload to ai_gen queue
             log.info(f'{inter.user.display_name} used "hide or reveal history"')
-            await apply_hide_or_reveal_history(inter, local_history, message, target_message)
+            await apply_hide_or_reveal_history(inter, local_history, message, target_hmessage)
+
+
+    # Initialize Continue/Regenerate Context commands
+    async def process_cont_regen_cmds(inter:discord.Interaction, message:discord.Message, cmd:str, mode:str=None):
+        if not (message.author == inter.user or message.author == client.user):
+            await inter.response.send_message(f'You can only "{cmd}" from messages written by yourself or from the bot.', ephemeral=True, delete_after=7)
+            return
+        local_history = bot_history.get_history_for(inter.channel.id)
+        if not local_history:
+            await inter.response.send(f'There is currently no chat history to "{cmd}" from.', ephemeral=True, delete_after=5)
+            return
+        target_hmessage = local_history.search(lambda m: m.id == message.id or message.id in m.related_ids)
+        if not target_hmessage:
+            await inter.response.send_message("Message not found in current chat history.", ephemeral=True, delete_after=5)
+            return
+
+        await ireply(inter, 'regenerate') # send a response msg to the user
+        async with task_semaphore:
+            async with inter.channel.typing():
+                # offload to ai_gen queue
+                if cmd == 'Continue':
+                    log.info(f'{inter.user.display_name} used "{cmd}"')
+                    await continue_task(inter, local_history, message, target_hmessage)
+                else:
+                    log.info(f'{inter.user.display_name} used "{cmd} ({mode})"')
+                    await regenerate_task(inter, local_history, message, target_hmessage, mode)
 
     # Context menu command to Regenerate from selected user message and create new history
     @client.tree.context_menu(name="regenerate create")
     async def regen_create_llm_gen(inter: discord.Interaction, message:discord.Message):
-        if not (message.author == inter.user or message.author == client.user):
-            await inter.response.send_message('You can only "regenerate" from messages written by yourself or from the bot.', ephemeral=True, delete_after=7)
-            return
-        else:
-            await ireply(inter, 'regenerate') # send a response msg to the user
-        #await inter.response.defer(thinking=False)
-
-        async with task_semaphore:
-            async with inter.channel.typing():
-                # offload to ai_gen queue
-                log.info(f'{inter.user.display_name} used "Regenerate (create)"')
-                await regenerate_task(inter, message, 'create')
+        await process_cont_regen_cmds(inter, message, 'Regenerate', 'create')
 
     # Context menu command to Regenerate from selected user message and replace the original bot response
     @client.tree.context_menu(name="regenerate replace")
     async def regen_replace_llm_gen(inter: discord.Interaction, message:discord.Message):
-        if not (message.author == inter.user or message.author == client.user):
-            await inter.response.send_message('You can only "regenerate" from messages written by yourself or from the bot.', ephemeral=True, delete_after=7)
-            return
-        else:
-            await ireply(inter, 'regenerate') # send a response msg to the user
-        #await inter.response.defer(thinking=False)
-
-        async with task_semaphore:
-            async with inter.channel.typing():
-                # offload to ai_gen queue
-                log.info(f'{inter.user.display_name} used "Regenerate" (replace)')
-                await regenerate_task(inter, message, 'replace')
+        await process_cont_regen_cmds(inter, message, 'Regenerate', 'replace')
 
     # Context menu command to Continue last reply
     @client.tree.context_menu(name="continue")
     async def continue_llm_gen(inter: discord.Interaction, message:discord.Message):
-        if not (message.author == inter.user or message.author == client.user):
-            await inter.response.send_message('You can only "continue" from messages written by yourself or from the bot.', ephemeral=True, delete_after=7)
-            return
-        else:
-            await ireply(inter, 'continue') # send a response msg to the user
+        await process_cont_regen_cmds(inter, message, 'Continue')
 
-        async with task_semaphore:
-            async with inter.channel.typing():
-                # offload to ai_gen queue
-                log.info(f'{inter.user.display_name} used "Continue"')
-                await continue_task(inter, message)
 
 async def load_character_data(char_name):
     char_data = None
@@ -4370,7 +4524,8 @@ async def character_loader(char_name, channel=None):
                 await update_extensions(value)
                 char_llmcontext['extensions'] = value
             elif key == 'use_voice_channel':
-                await voice_channel(value)
+                for guild_id in bot_database.voice_channels:
+                    await voice_channel(guild_id, value)
                 char_llmcontext['use_voice_channel'] = value
             elif key == 'tags':
                 value = await update_tags(value) # Unpack any tag presets
@@ -4890,7 +5045,7 @@ async def process_user_voice(ctx: commands.Context, voice_input=None):
 async def process_speak(ctx: commands.Context, input_text, selected_voice=None, lang=None, voice_input=None):
     try:
         # Only generate TTS for the server conntected to Voice Channel
-        if voice_client and (is_direct_message(ctx) or (voice_client != ctx.guild.voice_client)) \
+        if (is_direct_message(ctx) or not voice_clients.get(ctx.guild.id)) \
             and int(tts_settings.get('play_mode', 0)) == 0:
             await ctx.send('Voice Channel is not enabled on this server', ephemeral=True, delete_after=5)
             return
@@ -4913,7 +5068,6 @@ async def process_speak(ctx: commands.Context, input_text, selected_voice=None, 
 async def fetch_speak_options():
     try:
         lang_list = []
-        # all_voicess = [] # TODO UNUSED
         if tts_client == 'coqui_tts' or tts_client == 'alltalk_tts':
             lang_list = ['Arabic', 'Chinese', 'Czech', 'Dutch', 'English', 'French', 'German', 'Hungarian', 'Italian', 'Japanese', 'Korean', 'Polish', 'Portuguese', 'Russian', 'Spanish', 'Turkish']
             if tts_client == 'coqui_tts':
@@ -5176,6 +5330,10 @@ class LLMState:
             'custom_system_message': '',
             'custom_token_bans': '',
             'do_sample': True,
+            'dry_multiplier': 0,
+            'dry_base': 1.75,
+            'dry_allowed_length': 2,
+            'dry_sequence_breakers': '"\\n", ":", "\\"", "*"',
             'dynamic_temperature': False,
             'dynatemp_low': 1,
             'dynatemp_high': 1,
@@ -5442,13 +5600,13 @@ class CustomHistoryManager(HistoryManager):
         return history
     
     
-    def new_history_for(self, id_: ChannelID, character=None, mode=None) -> CustomHistory:
+    def new_history_for(self, id_: Optional[ChannelID|int], character=None, mode=None) -> CustomHistory:
         id_, character, mode = self.get_id_parts(id_, character, mode)
         full_id = f'{id_}_{character}_{mode}'
         return super().new_history_for(full_id) # type: ignore
     
     
-    def get_id_parts(self, id_: ChannelID, character=None, mode=None):
+    def get_id_parts(self, id_: Optional[ChannelID|int], character=None, mode=None):
         state_dict = bot_settings.settings['llmstate']['state']
         mode = mode or state_dict['mode']
         character = character or state_dict["character_menu"] or 'unknown_character'

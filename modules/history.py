@@ -93,9 +93,6 @@ def cnf(default=None, default_list:Optional[tuple]=None, check_bool=True, encode
             return True
         return False
     
-    # if decoder is None and decode_pass: # TODO test this?
-    #     decoder = cls_get_pass
-    
     exclude = exclude or exclude_func
     if dont_save:
         encoder = cls_get_none
@@ -109,7 +106,7 @@ def cnf(default=None, default_list:Optional[tuple]=None, check_bool=True, encode
 @dataclass
 class HMessage:
     history: 'History'                  = field(metadata=cnf(dont_save=True))
-    # TODO make history optional
+    # TODO make history optional - For Reality
     # so that HMessage could be subclassed to fill out items like role
     # then the message has an .add_to_history(history) method
     # which will assign it, and grab a uuid
@@ -122,6 +119,9 @@ class HMessage:
     replies: list['HMessage']           = field(default_factory=list,   metadata=cnf(dont_save=True))
     reply_to: Optional['HMessage']      = field(default=None,           metadata=cnf(encoder=cls_get_id, decoder=str))
     
+    regenerations: list['HMessage']     = field(default_factory=list,   metadata=cnf(dont_save=True))
+    regenerated_from: Optional['HMessage'] = field(default=None,        metadata=cnf(encoder=cls_get_id, decoder=str))
+
     # continue_next: Optional['HMessage'] = field(default=None,           metadata=cnf(encoder=cls_get_id, decoder=str))
     # continue_prev: Optional['HMessage'] = field(default=None,           metadata=cnf(encoder=cls_get_id, decoder=str))
     # _continue_root: Optional['HMessage']= field(default=None,           metadata=cnf(dont_save=True))
@@ -134,7 +134,7 @@ class HMessage:
     text_visible: str                   = field(default='',     metadata=cnf())
     id: Optional[MessageID]             = field(default=None,   metadata=cnf(check_bool=False)) # because id's could be "0"
     audio_id: Optional[MessageID]       = field(default=None,   metadata=cnf(dont_save=True))
-    related_ids: list[MessageID]        = field(default_factory=list,   metadata=cnf()) # TODO add update tracking here.
+    related_ids: list[MessageID]        = field(default_factory=list,   metadata=cnf()) # TODO add update tracking here. - For Reality
     
     typing: bool                        = field(default=False,  metadata=cnf(False))
     spoken: bool                        = field(default=False,  metadata=cnf(False))
@@ -149,7 +149,7 @@ class HMessage:
     # def __post_init__(self):
     #     if self.uuid is None:
     #         pass
-        # TODO should get new id from history a local counter
+        # TODO should get new id from history a local counter - For Reality
 
 
     ##################
@@ -181,7 +181,7 @@ class HMessage:
         self.history.append(self)
         
         
-    def update(self, **kw): # TODO could replace all attrs with private internals so users don't accidentally set them.
+    def update(self, **kw): # TODO could replace all attrs with private internals so users don't accidentally set them. - For Reality
         for k, v in kw.items():
             setattr(self, k, v)
             
@@ -193,18 +193,18 @@ class HMessage:
 
     ###############
     # relationships
-    def mark_as_reply_for(self, message: 'HMessage', save=True):
+    def mark_as_reply_for(self, message: 'HMessage|None', save=True):
         if not message:
             return self
         
         assert isinstance(message, self.__class__), f'HMessage.mark_as_reply_for expected {self.__class__} type, got {type(message)}'
         
         self.reply_to = message
-        message.replies.append(self)
+        if self not in message.replies:
+            message.replies.append(self)
         if save:
             self.history.event_save.set()
         return self
-
 
     def unmark_reply(self, save=True):
         message:Optional[HMessage] = self.reply_to
@@ -217,6 +217,19 @@ class HMessage:
             self.history.event_save.set()
         return self
     
+
+    def mark_as_regeneration_for(self, message: 'HMessage|None', save=True):
+        if not message:
+            return self
+        
+        assert isinstance(message, self.__class__), f'HMessage.mark_as_regeneration_for expected {self.__class__} type, got {type(message)}'
+        
+        self.regenerated_from = message
+        if self not in message.regenerations:
+            message.regenerations.append(self)
+        if save:
+            self.history.event_save.set()
+        return self
     
     # @property
     # def is_root_of_continue_chain(self):
@@ -250,7 +263,7 @@ class HMessage:
         
     #     if message:
     #         message.continue_prev = None
-    #         message._continue_root = None # TODO this should propagate up the chain
+    #         message._continue_root = None # TODO this should propagate up the chain - For Reality
         
     #     if save:
     #         self.history.event_save.set()
@@ -336,7 +349,7 @@ class HMessage:
         index = new_history.index(self)
         if not include_self:
             index -= 1
-        new_history._items = new_history._items[:index+1] # TODO write internal methods to set/get items
+        new_history._items = new_history._items[:index+1] # TODO write internal methods to set/get items - For Reality
 
         return new_history
     
@@ -349,7 +362,7 @@ class HMessage:
         index = new_history.index(self)
         if not include_self:
             index += 1
-        new_history._items = new_history._items[index:] # TODO write internal methods to set/get items
+        new_history._items = new_history._items[index:] # TODO write internal methods to set/get items - For Reality
 
         return new_history
 
@@ -357,7 +370,7 @@ class HMessage:
     def from_ctx(self, ictx: CtxInteraction):
         self.author_id = get_user_ctx_inter(ictx).id
         self.id = get_message_ctx_inter(ictx).id
-        # self.history.event_save.set() # TODO maybe?
+        # self.history.event_save.set() # TODO maybe? - For Reality
 
 
 @dataclass
@@ -401,7 +414,7 @@ class History:
     manager: 'HistoryManager'           = field(metadata=cnf(dont_save=True))
     id: ChannelID
     
-    fp: Optional[str]                   = field(default=None, metadata=cnf(dont_save=True)) # TODO just set this on load when found correct file.
+    fp: Optional[str]                   = field(default=None, metadata=cnf(dont_save=True))
 
     _last: dict[UserID, HMessage]       = field(default_factory=dict, init=False, metadata=cnf(dont_save=True))
     _items: list[HMessage]              = field(default_factory=list, init=False, metadata=cnf(dont_save=True))
@@ -513,7 +526,7 @@ class History:
     ##########
     # Messages
     def new_message(self, name='', text='', role=None, author_id=None, save=True, **kw) -> HMessage: 
-        # TODO maybe remove this in favor of creating messages from class
+        # TODO maybe remove this in favor of creating messages from class - For Reality
         # that would allow message presets, such as AssistantHMessage, or FlowsHMessage
         # and easier sorting with isinstance()
         message = HMessage(name=name, text=text, role=role, author_id=author_id, history=self, **kw)
@@ -539,92 +552,59 @@ class History:
             
         return output
     
-    def get_history_pair_from_msg_id(self, message_id: MessageID):
+    def get_history_pair_from_msg_id(self, message_id: MessageID, user_msg_attr:str='reply_to', bot_msg_list_attr:str='replies'):
         hmessage: Optional[HMessage] = self.search(lambda m: m.id == message_id or message_id in m.related_ids)
         if not hmessage:
             return None, None
 
         if hmessage.role == 'assistant':
-            user_message = hmessage.reply_to
+            user_message = getattr(hmessage, user_msg_attr)
+            if not user_message:
+                user_message = hmessage.reply_to
             bot_message = hmessage
             return user_message, bot_message
 
         elif hmessage.role == 'user':
             user_message = hmessage
             bot_message = None
-            bot_message_list = [m for m in hmessage.replies if m.role == 'assistant']
-            if bot_message_list:
-                bot_message = bot_message_list[-1]
+            bot_message_list = [m for m in getattr(hmessage, bot_msg_list_attr) if m.role == 'assistant']
+            if not bot_message_list:
+                bot_message_list = [m for m in hmessage.replies if m.role == 'assistant']
+            bot_message = bot_message_list[-1]
             return user_message, bot_message
 
         else:
             raise Exception(f'Unknown HMessage role: {hmessage.role}, should match [user/assistant]')
         
-    def get_history_labels_for_message(self, message:HMessage) -> str:
-        assert isinstance(message, HMessage), f'History.get_history_labels_for_message expected {HMessage} type, got {type(message)}'
         
-        labels = {'is_continued': 'continued',
-                  'is_regenerated': 'regenerated',
-                  'hidden': 'hidden message'}
+    def get_history_pair_from_msg_id_as_list(self, message_id: MessageID):
+        hmessage: Optional[HMessage] = self.search(lambda m: m.id == message_id or message_id in m.related_ids)
+        if not hmessage:
+            return [], []
 
-        labels_for_message = []
-        
-        for key, value in labels.items():
-            if getattr(message, key, False):
-                labels_for_message.append(value)
+        if hmessage.role == 'assistant':
+            user_message = hmessage.reply_to
+            bot_message = hmessage
+            return [user_message], [bot_message]
 
-        labels_for_message = ', '.join(labels_for_message)
+        elif hmessage.role == 'user':
+            user_message = hmessage
+            bot_message = None
+            bot_message_list = [m for m in hmessage.replies if m.role == 'assistant']
+            return [user_message], bot_message_list
 
-        if labels_for_message:
-            labels_for_message = f'*`({labels_for_message})`*'
-        
-        return labels_for_message
+        else:
+            raise Exception(f'Unknown HMessage role: {hmessage.role}, should match [user/assistant]')
+
     
-    def get_labeled_history_text(self, message:Optional[HMessage], input_text:str='', mention_mode:Optional[str]=None, label_mode:Optional[str]=None):
-        # assert is handled by get_history_labels for now.
-        history_labels = self.get_history_labels_for_message(message)
-
-        ##########
-        # return labels only
-        if not input_text:
-            return history_labels
-        
-        # Default behavior: Just apply label to text    
-        mention_mode = mention_mode or None
-        label_mode = label_mode or 'label'
-
-        ##########
-        # return text with labels
+    def remove_bot_mention_from_message(self, message:Optional[HMessage], input_text:str=''):
         output_text = input_text
-        mention = ''
-        # remove/extract mention
-        try:
-            if mention_mode is not None:
-                # Check to see if prefixed @mention is not just cosmetically added by the bot
-                mention_in_message = None
-                if message.text:
-                    mention_in_message = patterns.mention_prefix.search(message.text)
-                if not mention_in_message:
-                    mention_in_input = patterns.mention_prefix.search(output_text)
-                    mention = mention_in_input.group(0) if mention_in_input else ''
-                    output_text = patterns.mention_prefix.sub('', output_text).strip()
-
-            # remove existing label
-            if label_mode in ['relabel', 'delabel']:
-                output_text = patterns.history_labels.sub('', output_text).strip()
-
-            # apply label
-            if history_labels and label_mode != 'delabel':
-                output_text = f'{history_labels}\n{output_text}'
-
-            # re-apply mention
-            if mention and mention_mode == 'remention':
-                output_text = f'{mention} {output_text}'
-        except Exception as e:
-            log.error(f'Failed to update text with history labels.: {e}')
-        
+        mention_in_message = None
+        if message.text:
+            mention_in_message = patterns.mention_prefix.search(message.text)
+        if not mention_in_message:
+            output_text = patterns.mention_prefix.sub('', output_text).strip()
         return output_text
-
     
     def search(self, predicate):
         return find(predicate, self._items)
@@ -647,7 +627,7 @@ class History:
 
     ###########
     # Rendering
-    def render_to_tgwui_tuple(self): # TODO create caching by storing event and clearing on render.
+    def render_to_tgwui_tuple(self): # TODO create caching by storing event and clearing on render. - For Reality
         internal = []
         visible = []
         current_pair = HistoryPairForTGWUI()
@@ -814,8 +794,9 @@ class History:
         # resolve replies and continuations
         for message in history:
             replying_to = local_message_storage.get(message.reply_to)
+            regenerating_from = local_message_storage.get(message.regenerated_from)
             message.mark_as_reply_for(replying_to, save=False) # don't save because it's already saved
-            
+            message.mark_as_regeneration_for(regenerating_from, save=False) # don't save because it's already saved
             # message.mark_as_continuation_of()
             # message.continue_prev = local_message_storage.get(message.continue_prev)
             # message.continue_next = local_message_storage.get(message.continue_next)

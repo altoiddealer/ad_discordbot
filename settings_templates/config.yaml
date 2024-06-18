@@ -51,10 +51,10 @@ textgenwebui:
 
   # Supported TTS Clients: 'alltalk_tts', 'coqui_tts', 'silero_tts', and 'elevenlabs_tts' have been tested. Other tts extensions may work.
   # REQUIRES: 'pip install pynacl' in textgen-webui venv for bot to join a voice channel
+  # Use command '/set_server_voice_channel' in each server that you want to connect to voice channel for playing TTS
   tts_settings:
     extension: ''                       # '' = Disabled. Ex: 'alltalk_tts' (Loads automatically. Don't include in '--extensions' launch flag)
     api_key: ''                         # May be required for some tts extensions (ex: elevenlabs_tts)
-    voice_channel: 11111111111111111111 # Bot requires voice & channel permissions.
     play_mode: 2                        # 0 = use voice channel / 1 = upload file to chat channel / 2 = both (use voice & upload file)
     mp3_bit_rate: 128                   # If play_mode = 1 or 2, and the output (.wav) exceeds 8MB (discord limit), it will convert to .mp3 before uploading.
     save_mode: 1                        # 0 = save outputs / 1 = try deleting outputs. Note: Can't delete outputs uploaded to channel. (../extensions/coqui_tts/outputs)
