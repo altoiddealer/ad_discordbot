@@ -24,6 +24,14 @@
 <details>
   <summary>click to expand</summary>
 
+   **06/18/2024:** Per-Server Voice Channels (TTS)
+
+    - New command to set voice channels: /set_server_voice_channel
+    - The context menu commands (regen / continue / edit history) vastly improved
+    - The bot now reacts to messages to identify their status (hidden, etc)
+
+  ---
+
    **06/14/2024:** Direct Messages Support. Image model changes.
 
     - The bot now supports Direct Messages, which have their own history!
