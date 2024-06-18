@@ -45,7 +45,7 @@ def is_direct_message(ictx: CtxInteraction):
         and hasattr(ictx, 'channel') and isinstance(ictx.channel, discord.DMChannel)
 
 
-def get_history_emojis_for_message(message:'HMessage') -> str:   
+def get_hmessage_emojis(message:'HMessage') -> str:   
     history_emojis = {'is_continued': bot_emojis.continue_emoji,
                       'regenerated_from': bot_emojis.regen_emoji,
                       'hidden': bot_emojis.hidden_emoji}
@@ -70,22 +70,23 @@ async def update_message_reactions(client_user:discord.ClientUser, emojis_list:l
 
         # check for existing reactions
         for reaction in discord_msg.reactions:
-            async for user in reaction.users():
-                if reaction.emoji in all_bot_emojis and user == client_user:
-                    if reaction.emoji not in emojis_list:
-                        reactions_to_remove.append(reaction.emoji)
-                    else:
-                        already_reacted.append(reaction.emoji)
-        
+            if reaction.emoji in all_bot_emojis:
+                async for user in reaction.users():
+                    if user == client_user:
+                        if reaction.emoji not in emojis_list:
+                            reactions_to_remove.append(reaction.emoji)
+                        else:
+                            already_reacted.append(reaction.emoji)
+
+        for reaction in reactions_to_remove:
+            await discord_msg.remove_reaction(reaction, client_user)
+
         for reaction in reactions_to_add:
             if reaction not in already_reacted:
                 await discord_msg.add_reaction(reaction)
 
-        for reaction in reactions_to_remove:
-            await discord_msg.remove_reaction(reaction, client_user)
-                
     except Exception as e:
-        log.error(f"Error reacting to message: {e}")
+        log.error(f"Error updating reactions for discord message id '{discord_msg.id}': {e}")
 
 
 # Delete discord message without "delete_after" attribute
@@ -115,7 +116,7 @@ async def ireply(ictx: 'CtxInteraction', process):
         log.error(f"Error sending message response to user's interaction command: {e}")
 
 
-async def send_long_message(channel, message_text, bot_message:Optional['HMessage']=None) -> int:
+async def send_long_message(channel, message_text, bot_message:Optional['HMessage']=None, ref_message:Optional[discord.Message]=None) -> int:
     """ Splits a longer message into parts while preserving sentence boundaries and code blocks """
     active_lang = ''
 
@@ -143,9 +144,10 @@ async def send_long_message(channel, message_text, bot_message:Optional['HMessag
         return chunk_text, code_block_inserted
 
     if len(message_text) <= MAX_MESSAGE_LENGTH:
-        sent_message = await channel.send(message_text)
+        sent_message = await channel.send(message_text, reference=ref_message)
     else:
         code_block_inserted = False  # Initialize code_block_inserted to False
+        first_chunk_sent = False
         while message_text:
             # Find the last occurrence of either a line break or the end of a sentence
             last_line_break = message_text.rfind("\n", 0, MAX_MESSAGE_LENGTH)
@@ -164,7 +166,10 @@ async def send_long_message(channel, message_text, bot_message:Optional['HMessag
                 chunk_length = MAX_MESSAGE_LENGTH # If neither was found, split at the maximum limit of 2000 characters
             chunk_text = message_text[:chunk_length]
             chunk_text, code_block_inserted = ensure_even_code_blocks(chunk_text, code_block_inserted)
-            sent_message = await channel.send(chunk_text)
+            if not first_chunk_sent:
+                sent_message = await channel.send(chunk_text, reference=ref_message)
+            else:
+                sent_message = await channel.send(chunk_text)
             if bot_message:
                 bot_message.related_ids.append(sent_message.id)
                 

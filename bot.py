@@ -40,7 +40,7 @@ sys.path.append("ad_discordbot")
 from modules.database import Database, ActiveSettings, Config, StarBoard, Statistics
 from modules.utils_shared import task_semaphore, shared_path, patterns, bot_emojis
 from modules.utils_misc import fix_dict, update_dict, sum_update_dict, update_dict_matched_keys, format_time  # noqa: F401
-from modules.utils_discord import guild_only, configurable_for_dm_if, is_direct_message, ireply, sleep_delete_message, send_long_message, EditMessageModal, SelectedListItem, SelectOptionsView, get_user_ctx_inter, get_message_ctx_inter, get_history_emojis_for_message, update_message_reactions, MAX_MESSAGE_LENGTH  # noqa: F401
+from modules.utils_discord import guild_only, configurable_for_dm_if, is_direct_message, ireply, sleep_delete_message, send_long_message, EditMessageModal, SelectedListItem, SelectOptionsView, get_user_ctx_inter, get_message_ctx_inter, get_hmessage_emojis, update_message_reactions, MAX_MESSAGE_LENGTH  # noqa: F401
 from modules.utils_files import load_file, merge_base, save_yaml_file  # noqa: F401
 from modules.utils_aspect_ratios import round_to_precision, res_to_model_fit, dims_from_ar, avg_from_dims, get_aspect_ratio_parts, calculate_aspect_ratio_sizes  # noqa: F401
 from modules.history import HistoryManager, History, HMessage, cnf
@@ -1712,13 +1712,14 @@ async def message_task(ictx: CtxInteraction, text:str, source:str='message', llm
 
     async def send_responses(params:dict, bot_message:HMessage, local_history:History) -> HMessage:
         if bot_message:
+            ref_message = params.get('ref_message', None) # pass to send_long_message()
             # Process any TTS response
             if bot_message.text_visible:
                 await process_tts_resp(ictx, bot_message)
             if params['bot_will_do']['should_send_text']:
                 # @mention non-consecutive users
-                mention_labeled_resp = update_mention(get_user_ctx_inter(ictx).mention, bot_message.text)
-                await send_long_message(channel, mention_labeled_resp, bot_message=bot_message)
+                mention_resp = update_mention(get_user_ctx_inter(ictx).mention, bot_message.text)
+                await send_long_message(channel, mention_resp, bot_message, ref_message)
                 # Apply any reactions applicable to message
                 await apply_reactions_to_messages(ictx, bot_message)
         # send any user images
@@ -2026,6 +2027,7 @@ async def warn_direct_channel(ictx: CtxInteraction):
 async def create_bot_message(user_message:Optional[HMessage], local_history:Optional[History], params:dict, last_resp:str='', tts_resp:str='', ictx:Optional[CtxInteraction]=None) -> HMessage:
     try:
         save_to_history = params.get('save_to_history', True)
+        # custom handlings, mainly from 'regenerate'
         bot_msg_hidden = params.get('bot_msg_hidden', False)
         regenerated = params.get('regenerated', None)
         bot_message = local_history.new_message(bot_settings.name, last_resp, 'assistant', bot_settings._bot_id, text_visible=tts_resp)
@@ -2058,15 +2060,28 @@ async def continue_task(inter: discord.Interaction, local_history: History, targ
         if not original_bot_message:
             await inter.followup.send('Message not found in current chat history. Try using "continue" on a response from the character.', ephemeral=True)
             return
-        # build new payload. 'text' parameter not important for "Continue"
+
+        # To continue, both messages must be visible
+        temp_reveal_user_msg = True if original_user_message.hidden else False
+        if temp_reveal_user_msg:
+            original_user_message.update(hidden=False)
+        temp_reveal_bot_msg = True if original_bot_message.hidden else False
+        if temp_reveal_bot_msg:
+            original_bot_message.update(hidden=False)
+        # Prepare payload. 'text' parameter unimportant (only used for logging)
         original_user_text = original_user_message.text if original_user_message else (target_discord_msg.clean_content or '')
         llm_payload = await init_llm_payload(inter, user_name, original_user_text)
         sliced_history = original_bot_message.new_history_end_here()
         sliced_i, _ = sliced_history.render_to_tgwui_tuple()
-        # using original 'visible' produces wonky TTS responses combined with "Continue" function
+        # using original 'visible' produces wonky TTS responses combined with "Continue" function. Using 'internal' for both.
         llm_payload['state']['history']['internal'] = copy.deepcopy(sliced_i)
         llm_payload['state']['history']['visible'] = copy.deepcopy(sliced_i)
-        llm_payload['_continue'] = True
+        llm_payload['_continue'] = True # let TGWUI handle the continue function
+        # Restore hidden status
+        if temp_reveal_user_msg:
+            original_user_message.update(hidden=True)
+        if temp_reveal_bot_msg:
+            original_bot_message.update(hidden=True)
 
         if system_embed_info:
             system_embed_info.title = 'Continuing ... '
@@ -2110,13 +2125,17 @@ async def continue_task(inter: discord.Interaction, local_history: History, targ
 
         # Update the original message in history manager
         updated_bot_message = original_bot_message
-
+        
+        new_discord_msg = None
         if not continued_text.strip():
             await inter.followup.send(':warning: Generation was continued, but nothing new was added.')
         else:
+            # Mark original message as being continued and update reactions for it
+            original_bot_message.is_continued = True
+            await apply_reactions_to_messages(inter, original_bot_message, [original_bot_message.id], ref_message)
+
             # Add previous last message id to related ids
-            updated_bot_message.related_ids.append(updated_bot_message.id)
-            updated_bot_message.is_continued = True
+            updated_bot_message.related_ids.append(original_bot_message.id)
 
             if len(continued_text) < MAX_MESSAGE_LENGTH:
                 new_discord_msg = await channel.send(content=continued_text, reference=ref_message)
@@ -2130,7 +2149,7 @@ async def continue_task(inter: discord.Interaction, local_history: History, targ
 
         # Apply any reactions applicable to message
         msg_ids_to_edit = [updated_bot_message.id] + updated_bot_message.related_ids
-        await apply_reactions_to_messages(inter, updated_bot_message, msg_ids_to_edit)
+        await apply_reactions_to_messages(inter, updated_bot_message, msg_ids_to_edit, new_discord_msg)
 
         # process any tts resp
         if tts_resp:
@@ -2149,6 +2168,7 @@ async def replace_msg_in_history_and_discord(ictx:CtxInteraction, params:dict, t
     updated_message: Optional[HMessage] = params.get('user_message_to_update') or params.get('bot_message_to_update')
     msg_hidden = params.get('user_msg_hidden') or params.get('bot_msg_hidden') or False
     target_discord_msg_id = params.get('target_discord_msg_id')
+    ref_message = params.get('ref_message')
     try:
         target_discord_msg = await channel.fetch_message(target_discord_msg_id)
         # Collect all messages that are part of the original message
@@ -2170,9 +2190,9 @@ async def replace_msg_in_history_and_discord(ictx:CtxInteraction, params:dict, t
         else:
             await target_discord_msg.delete()
             if params.get('bot_message_to_update'):
-                await send_long_message(channel, text, bot_message=updated_message)
+                await send_long_message(channel, text, bot_message=updated_message, ref_message=ref_message)
             else:
-                await send_long_message(channel, text)
+                await send_long_message(channel, text, bot_message=None, ref_message=ref_message)
 
         updated_message.update(text=text, text_visible=text_visible, hidden=msg_hidden)
 
@@ -2234,8 +2254,8 @@ async def regenerate_task(inter: discord.Interaction, local_history: History, ta
             return # invalid user
         
         # To regenerate, both messages must be visible
-        toggle_messages = True if (user_message.hidden and target_bot_message.hidden) else False
-        if toggle_messages:
+        temp_reveal_msgs = True if (user_message.hidden and target_bot_message.hidden) else False
+        if temp_reveal_msgs:
             user_message.update(hidden=False)
             target_bot_message.update(hidden=False)
 
@@ -2256,14 +2276,16 @@ async def regenerate_task(inter: discord.Interaction, local_history: History, ta
         params = {}
         if mode == 'create':
             params['skip_create_user_msg'] = True
+            params['ref_message'] = original_message
             params['regenerated'] = user_message
-            params['bot_msg_hidden'] = toggle_messages # Hide new bot message if regenerating from hidden exchange
+            params['bot_msg_hidden'] = temp_reveal_msgs # Hide new bot message if regenerating from hidden exchange
 
         if mode == 'replace':
             params['skip_create_user_msg'] = True
+            params['ref_message'] = original_message
             params['bot_message_to_update'] = target_bot_message
             params['target_discord_msg_id'] = target_bot_message.id
-            params['bot_msg_hidden'] = toggle_messages # Hide new bot message if regenerating from hidden exchange
+            params['bot_msg_hidden'] = temp_reveal_msgs # Hide new bot message if regenerating from hidden exchange
 
         # Regenerate the reply
         _, new_bot_message = await message_task(inter, original_user_text, 'regenerate', llm_payload, params)
@@ -2274,12 +2296,12 @@ async def regenerate_task(inter: discord.Interaction, local_history: History, ta
         # Update the messages hidden statuses
         user_message.update(hidden=new_bot_message.hidden)
         # If set to toggle, make hidden again regardless of what was set during regeneration
-        if toggle_messages:
+        if temp_reveal_msgs:
             user_message.update(hidden=True)
 
         if mode == 'create':
             new_bot_message.mark_as_regeneration_for(user_message)
-            # Adjust attributes/labelling for prior active bot reply/regeneration
+            # Adjust attributes/reactions for prior active bot reply/regeneration
             target_bot_message.update(hidden=True) # always hide previous regen when creating
             target_bot_message_ids = [target_bot_message.id] + target_bot_message.related_ids
             await apply_reactions_to_messages(inter, target_bot_message, target_bot_message_ids, target_discord_msg)
@@ -4239,18 +4261,18 @@ if textgenwebui_enabled:
     
     # Applies history reactions to a list of discord messages, such as all related messages from 'Continue' function
     async def apply_reactions_to_messages(ictx:CtxInteraction, hmsg:HMessage=None, msg_id_list:list=None, ictx_msg:discord.Message=None):
-        if hmsg is None:
-            return
         try:
+            if hmsg is None:
+                return
             if msg_id_list is None:
                 msg_id_list = [hmsg.id]
 
             # Get correct emojis for current message
-            emojis_for_msg = get_history_emojis_for_message(hmsg)
+            emojis_for_msg = get_hmessage_emojis(hmsg)
             
             # Iterate over list of discord message IDs and update reactions for the discord message objects
             for msg_id in msg_id_list:
-                # skip fetching message if provided and matched
+                # skip fetching ictx message if provided and matched
                 if ictx_msg and msg_id == ictx_msg.id:
                     discord_msg = ictx_msg
                 # fetch message object from id
@@ -4259,7 +4281,7 @@ if textgenwebui_enabled:
                 # Update reactions for the message
                 await update_message_reactions(client.user, emojis_for_msg, discord_msg)
         except Exception as e:
-            log.error(f'Failed to update reactions for message with id "{msg_id}": {e}')
+            log.error(f'Error while processing reactions for messages: {e}')
 
     async def apply_hide_or_reveal_history(inter: discord.Interaction, local_history: History, target_discord_msg: discord.Message, target_hmessage:HMessage):
         try:
@@ -4365,7 +4387,7 @@ if textgenwebui_enabled:
                 # Process reactions for all affected messages
                 await apply_reactions_to_messages(inter, target_hmsg, msg_ids_to_edit, target_discord_msg)
             
-            result = f"Modified message exchange pair in history for {inter.user.display_name} (messages {verb})."
+            result = f"**Modified message exchange pair in history for {inter.user.display_name}** (messages {verb})."
             log.info(result)
             undeletable_message = await inter.channel.send(result)
             await bg_task_queue.put(sleep_delete_message(undeletable_message))
@@ -4396,44 +4418,44 @@ if textgenwebui_enabled:
 
 
     # Initialize Continue/Regenerate Context commands
-    async def init_cont_regen_cmds(inter:discord.Interaction, message:discord.Message, mode:str='create'):
+    async def process_cont_regen_cmds(inter:discord.Interaction, message:discord.Message, cmd:str, mode:str=None):
         if not (message.author == inter.user or message.author == client.user):
-            await inter.response.send_message('You can only "regenerate" from messages written by yourself or from the bot.', ephemeral=True, delete_after=7)
-            return True
+            await inter.response.send_message(f'You can only "{cmd}" from messages written by yourself or from the bot.', ephemeral=True, delete_after=7)
+            return
         local_history = bot_history.get_history_for(inter.channel.id)
         if not local_history:
-            await inter.response.send(f"There is currently no chat history to {mode} from.", ephemeral=True, delete_after=5)
+            await inter.response.send(f'There is currently no chat history to "{cmd}" from.', ephemeral=True, delete_after=5)
             return
         target_hmessage = local_history.search(lambda m: m.id == message.id or message.id in m.related_ids)
         if not target_hmessage:
             await inter.response.send_message("Message not found in current chat history.", ephemeral=True, delete_after=5)
-            return True
+            return
 
         await ireply(inter, 'regenerate') # send a response msg to the user
         async with task_semaphore:
             async with inter.channel.typing():
                 # offload to ai_gen queue
-                if mode == 'Continue':
-                    log.info(f'{inter.user.display_name} used "{mode}"')
+                if cmd == 'Continue':
+                    log.info(f'{inter.user.display_name} used "{cmd}"')
                     await continue_task(inter, local_history, message, target_hmessage)
                 else:
-                    log.info(f'{inter.user.display_name} used "Regenerate ({mode})"')
+                    log.info(f'{inter.user.display_name} used "{cmd} ({mode})"')
                     await regenerate_task(inter, local_history, message, target_hmessage, mode)
 
     # Context menu command to Regenerate from selected user message and create new history
     @client.tree.context_menu(name="regenerate create")
     async def regen_create_llm_gen(inter: discord.Interaction, message:discord.Message):
-        await init_cont_regen_cmds(inter, message, 'create')
+        await process_cont_regen_cmds(inter, message, 'Regenerate', 'create')
 
     # Context menu command to Regenerate from selected user message and replace the original bot response
     @client.tree.context_menu(name="regenerate replace")
     async def regen_replace_llm_gen(inter: discord.Interaction, message:discord.Message):
-        await init_cont_regen_cmds(inter, message, 'replace')
+        await process_cont_regen_cmds(inter, message, 'Regenerate', 'replace')
 
     # Context menu command to Continue last reply
     @client.tree.context_menu(name="continue")
     async def continue_llm_gen(inter: discord.Interaction, message:discord.Message):
-        await init_cont_regen_cmds(inter, message, 'Continue')
+        await process_cont_regen_cmds(inter, message, 'Continue')
 
 
 async def load_character_data(char_name):
