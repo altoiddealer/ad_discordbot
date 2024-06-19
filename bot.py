@@ -2247,6 +2247,8 @@ async def regenerate_task(inter: discord.Interaction, local_history: History, ta
         if not all_bot_regens and mode == 'create':
             bot_message.mark_as_regeneration_for(user_message)
 
+        original_message = target_discord_msg
+
         # if command used on user's own message
         if inter.user == target_discord_msg.author:
             original_user_text = target_discord_msg.clean_content   # get the message contents for prompt
