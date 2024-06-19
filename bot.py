@@ -40,7 +40,8 @@ sys.path.append("ad_discordbot")
 from modules.database import Database, ActiveSettings, Config, StarBoard, Statistics
 from modules.utils_shared import task_semaphore, shared_path, patterns, bot_emojis
 from modules.utils_misc import fix_dict, update_dict, sum_update_dict, update_dict_matched_keys, format_time  # noqa: F401
-from modules.utils_discord import guild_only, configurable_for_dm_if, is_direct_message, ireply, sleep_delete_message, send_long_message, EditMessageModal, SelectedListItem, SelectOptionsView, get_user_ctx_inter, get_message_ctx_inter, get_hmessage_emojis, update_message_reactions, MAX_MESSAGE_LENGTH  # noqa: F401
+from modules.utils_discord import guild_only, configurable_for_dm_if, is_direct_message, ireply, sleep_delete_message, send_long_message, \
+    EditMessageModal, SelectedListItem, SelectOptionsView, get_user_ctx_inter, get_message_ctx_inter, apply_reactions_to_messages, replace_msg_in_history_and_discord, MAX_MESSAGE_LENGTH  # noqa: F401
 from modules.utils_files import load_file, merge_base, save_yaml_file  # noqa: F401
 from modules.utils_aspect_ratios import round_to_precision, res_to_model_fit, dims_from_ar, avg_from_dims, get_aspect_ratio_parts, calculate_aspect_ratio_sizes  # noqa: F401
 from modules.history import HistoryManager, History, HMessage, cnf
@@ -1743,7 +1744,7 @@ async def message_task(ictx: CtxInteraction, text:str, source:str='message', llm
                 mention_resp = update_mention(get_user_ctx_inter(ictx).mention, bot_message.text)
                 await send_long_message(channel, mention_resp, bot_message, ref_message)
                 # Apply any reactions applicable to message
-                await apply_reactions_to_messages(ictx, bot_message)
+                await apply_reactions_to_messages(client.user, ictx, bot_message)
         # send any user images
         send_user_image = params.get('send_user_image', [])
         if send_user_image:
@@ -1799,7 +1800,7 @@ async def message_task(ictx: CtxInteraction, text:str, source:str='message', llm
         last_resp, tts_resp = await llm_gen(llm_payload)
         # Create bot message in HManager, unless replacing original bot message via "regenerate replace"
         if params.get('bot_message_to_update'):
-            bot_message = await replace_msg_in_history_and_discord(ictx, params, last_resp, tts_resp)
+            bot_message = await replace_msg_in_history_and_discord(client.user, ictx, params, last_resp, tts_resp)
             params['bot_will_do']['should_send_text'] = False
         else:
             bot_message = await create_bot_message(user_message, local_history, params, last_resp, tts_resp, ictx)
@@ -1871,7 +1872,7 @@ async def message_task(ictx: CtxInteraction, text:str, source:str='message', llm
                 if params['bot_will_do']['should_gen_image']:
                     await init_img_embed()                                                          # Create a "prompting" embed for image gen
                 params, bot_message, user_message, local_history = await message_llm_task(llm_payload, params)
-                await apply_reactions_to_messages(ictx, user_message)                               # add a reaction to any hidden user message
+                await apply_reactions_to_messages(client.user, ictx, user_message)                               # add a reaction to any hidden user message
                 if llmmodel_params and llm_model_mode == 'swap':
                     params = await llmmodel_swap_back(params, original_llmmodel)                    # if LLM model swapping was triggered
             if sd_enabled:
@@ -2154,7 +2155,7 @@ async def continue_task(inter: discord.Interaction, local_history: History, targ
         else:
             # Mark original message as being continued and update reactions for it
             original_bot_message.is_continued = True
-            await apply_reactions_to_messages(inter, original_bot_message, [original_bot_message.id], ref_message)
+            await apply_reactions_to_messages(client.user, inter, original_bot_message, [original_bot_message.id], ref_message)
 
             # Add previous last message id to related ids
             updated_bot_message.related_ids.append(original_bot_message.id)
@@ -2171,7 +2172,7 @@ async def continue_task(inter: discord.Interaction, local_history: History, targ
 
         # Apply any reactions applicable to message
         msg_ids_to_edit = [updated_bot_message.id] + updated_bot_message.related_ids
-        await apply_reactions_to_messages(inter, updated_bot_message, msg_ids_to_edit, new_discord_msg)
+        await apply_reactions_to_messages(client.user, inter, updated_bot_message, msg_ids_to_edit, new_discord_msg)
 
         # process any tts resp
         if tts_resp:
@@ -2183,49 +2184,6 @@ async def continue_task(inter: discord.Interaction, local_history: History, targ
         await inter.followup.send(e_msg, silent=True)
         if system_embed:
             await system_embed.delete()
-
-# Regenerate Replace...
-async def replace_msg_in_history_and_discord(ictx:CtxInteraction, params:dict, text:str, text_visible:str) -> Optional[HMessage]:
-    channel = ictx.channel
-    updated_message: Optional[HMessage] = params.get('user_message_to_update') or params.get('bot_message_to_update')
-    msg_hidden = params.get('user_msg_hidden') or params.get('bot_msg_hidden') or False
-    target_discord_msg_id = params.get('target_discord_msg_id')
-    ref_message = params.get('ref_message')
-    try:
-        target_discord_msg = await channel.fetch_message(target_discord_msg_id)
-        # Collect all messages that are part of the original message
-        messages_to_remove = [updated_message.id] + updated_message.related_ids
-        # Remove target message from the list
-        if target_discord_msg.id in messages_to_remove:
-            messages_to_remove.remove(target_discord_msg.id)
-        # Delete all other messages from discord
-        for message_id in messages_to_remove:
-            local_message = await channel.fetch_message(message_id)
-            if local_message:
-                await local_message.delete()
-        # Clear related IDs attribute
-        updated_message.related_ids.clear() # TODO maybe add a 'fresh' method to HMessage? - For Reality
-
-        # Update original discord message, or send new one if too long
-        if len(text) < MAX_MESSAGE_LENGTH:
-            await target_discord_msg.edit(content=text)
-        else:
-            await target_discord_msg.delete()
-            if params.get('bot_message_to_update'):
-                await send_long_message(channel, text, bot_message=updated_message, ref_message=ref_message)
-            else:
-                await send_long_message(channel, text, bot_message=None, ref_message=ref_message)
-
-        updated_message.update(text=text, text_visible=text_visible, hidden=msg_hidden)
-
-        # Apply any reactions applicable to message
-        await apply_reactions_to_messages(ictx, updated_message)
-
-        return updated_message
-    except Exception as e:
-        log.error(f"An error occurred while replacing message in history and Discord: {e}")
-        return None
-
 
 async def regenerate_task(inter: discord.Interaction, local_history: History, target_discord_msg: discord.Message, target_hmessage:HMessage, mode:str='create'):
     user_name = get_user_ctx_inter(inter).display_name
@@ -2328,10 +2286,10 @@ async def regenerate_task(inter: discord.Interaction, local_history: History, ta
             # Adjust attributes/reactions for prior active bot reply/regeneration
             target_bot_message.update(hidden=True) # always hide previous regen when creating
             target_bot_message_ids = [target_bot_message.id] + target_bot_message.related_ids
-            await apply_reactions_to_messages(inter, target_bot_message, target_bot_message_ids, target_discord_msg)
+            await apply_reactions_to_messages(client.user, inter, target_bot_message, target_bot_message_ids, target_discord_msg)
 
         # Update reactions for user message
-        await apply_reactions_to_messages(inter, user_message)
+        await apply_reactions_to_messages(client.user, inter, user_message)
 
         if system_embed:
             await system_embed.delete()
@@ -4272,6 +4230,9 @@ if textgenwebui_enabled:
             await inter.response.send_message("You can only edit your own or bot's messages.", ephemeral=True, delete_after=5)
             return
         local_history = bot_history.get_history_for(inter.channel.id)
+        if not local_history:
+            await inter.response.send(f'There is currently no chat history to "edit history" from.', ephemeral=True, delete_after=5)
+            return
         matched_hmessage = local_history.search(lambda m: m.id == message.id or message.id in m.related_ids)
         if not matched_hmessage:
             await inter.response.send_message("Message not found in current chat history.", ephemeral=True, delete_after=5)
@@ -4280,32 +4241,9 @@ if textgenwebui_enabled:
         async with task_semaphore:
             # offload to ai_gen queue
             log.info(f'{inter.user.display_name} used "edit history"')
-            modal = EditMessageModal(client.user, matched_hmessage, target_message=message, local_history=local_history)
+            # Send the modal
+            modal = EditMessageModal(client.user, inter, matched_hmessage, target_message=message)
             await inter.response.send_modal(modal)
-    
-    # Applies history reactions to a list of discord messages, such as all related messages from 'Continue' function
-    async def apply_reactions_to_messages(ictx:CtxInteraction, hmsg:HMessage=None, msg_id_list:list=None, ictx_msg:discord.Message=None):
-        try:
-            if hmsg is None:
-                return
-            if msg_id_list is None:
-                msg_id_list = [hmsg.id]
-
-            # Get correct emojis for current message
-            emojis_for_msg = get_hmessage_emojis(hmsg)
-            
-            # Iterate over list of discord message IDs and update reactions for the discord message objects
-            for msg_id in msg_id_list:
-                # skip fetching ictx message if provided and matched
-                if ictx_msg and msg_id == ictx_msg.id:
-                    discord_msg = ictx_msg
-                # fetch message object from id
-                else:
-                    discord_msg = await ictx.channel.fetch_message(msg_id)
-                # Update reactions for the message
-                await update_message_reactions(client.user, emojis_for_msg, discord_msg)
-        except Exception as e:
-            log.error(f'Error while processing reactions for messages: {e}')
 
     async def apply_hide_or_reveal_history(inter: discord.Interaction, local_history: History, target_discord_msg: discord.Message, target_hmessage:HMessage):
         try:
@@ -4400,7 +4338,7 @@ if textgenwebui_enabled:
             
 
             # Apply reaction to user message
-            await apply_reactions_to_messages(inter, user_message)
+            await apply_reactions_to_messages(client.user, inter, user_message)
 
             # Process all messages that need label updates
             for target_hmsg in bot_hmsgs_to_react:
@@ -4409,7 +4347,7 @@ if textgenwebui_enabled:
                 if target_hmsg.related_ids:
                     msg_ids_to_edit.extend(target_hmsg.related_ids)
                 # Process reactions for all affected messages
-                await apply_reactions_to_messages(inter, target_hmsg, msg_ids_to_edit, target_discord_msg)
+                await apply_reactions_to_messages(client.user, inter, target_hmsg, msg_ids_to_edit, target_discord_msg)
             
             result = f"**Modified message exchange pair in history for {inter.user.display_name}** (messages {verb})."
             log.info(result)

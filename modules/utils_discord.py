@@ -89,6 +89,30 @@ async def update_message_reactions(client_user:discord.ClientUser, emojis_list:l
         log.error(f"Error updating reactions for discord message id '{discord_msg.id}': {e}")
 
 
+# Applies history reactions to a list of discord messages, such as all related messages from 'Continue' function
+async def apply_reactions_to_messages(client_user:discord.Client, ictx:CtxInteraction, hmsg:'HMessage'=None, msg_id_list:list=None, ictx_msg:discord.Message=None):
+    try:
+        if hmsg is None:
+            return
+        if msg_id_list is None:
+            msg_id_list = [hmsg.id]
+
+        # Get correct emojis for current message
+        emojis_for_msg = get_hmessage_emojis(hmsg)
+        
+        # Iterate over list of discord message IDs and update reactions for the discord message objects
+        for msg_id in msg_id_list:
+            # skip fetching ictx message if provided and matched
+            if ictx_msg and msg_id == ictx_msg.id:
+                discord_msg = ictx_msg
+            # fetch message object from id
+            else:
+                discord_msg = await ictx.channel.fetch_message(msg_id)
+            # Update reactions for the message
+            await update_message_reactions(client_user, emojis_for_msg, discord_msg)
+    except Exception as e:
+        log.error(f'Error while processing reactions for messages: {e}')
+
 # Delete discord message without "delete_after" attribute
 async def sleep_delete_message(message: discord.Message, wait:int=5):
     try:
@@ -185,61 +209,90 @@ async def send_long_message(channel, message_text, bot_message:Optional['HMessag
 
     return sent_message.id
 
+async def replace_msg_in_history_and_discord(client_user:discord.Client, ictx:CtxInteraction, params:dict, text:str, text_visible:str) -> Optional['HMessage']:
+    channel = ictx.channel
+    updated_message: Optional[HMessage] = params.get('user_message_to_update') or params.get('bot_message_to_update')
+    msg_hidden = params.get('user_msg_hidden') or params.get('bot_msg_hidden') or updated_message.hidden
+    target_discord_msg_id = params.get('target_discord_msg_id')
+    ref_message = params.get('ref_message')
+    try:
+        if not target_discord_msg_id:
+            target_discord_msg_id = updated_message.id
+        target_discord_msg = await channel.fetch_message(target_discord_msg_id)
+        # Collect all messages that are part of the original message
+        messages_to_remove = [updated_message.id] + updated_message.related_ids
+        # Remove target message from the list
+        if target_discord_msg.id in messages_to_remove:
+            messages_to_remove.remove(target_discord_msg.id)
+        # Delete all other messages from discord
+        for message_id in messages_to_remove:
+            local_message = await channel.fetch_message(message_id)
+            if local_message:
+                await local_message.delete()
+        # Clear related IDs attribute
+        updated_message.related_ids.clear() # TODO maybe add a 'fresh' method to HMessage? - For Reality
 
-# Model for editing history
+        # Update original discord message, or send new one if too long
+        if len(text) < MAX_MESSAGE_LENGTH:
+            await target_discord_msg.edit(content=text)
+        else:
+            await target_discord_msg.delete()
+            if params.get('bot_message_to_update'):
+                await send_long_message(channel, text, bot_message=updated_message, ref_message=ref_message)
+            else:
+                await send_long_message(channel, text, bot_message=None, ref_message=ref_message)
+
+        updated_message.update(text=text, text_visible=text_visible, hidden=msg_hidden)
+
+        # Apply any reactions applicable to message
+        await apply_reactions_to_messages(client_user, ictx, updated_message)
+
+        return updated_message
+    except Exception as e:
+        log.error(f"An error occurred while replacing message in history and Discord: {e}")
+        return None
+
+async def rebuild_chunked_message(ictx:CtxInteraction, msg_id_list:list=None, ictx_msg:discord.Message=None):
+    rebuilt_message = ''
+    for msg_id in msg_id_list:
+        try:
+            if msg_id == ictx_msg:
+                chunk_message = ictx_msg
+            else:
+                chunk_message = await ictx.channel.fetch_message(msg_id)
+            rebuilt_message += chunk_message.clean_content
+            print("rebuilt_message", rebuilt_message)
+        except Exception:
+            log.warning(f'Failed to get message content for id {msg_id}.')
+            rebuilt_message = ''
+            break
+    return rebuilt_message
+
+
+# Modal for editing history
 class EditMessageModal(discord.ui.Modal, title="Edit Message in History"):
-    def __init__(self, client_user: Optional[discord.ClientUser], matched_hmessage: 'HMessage', target_message: discord.Message, local_history:Optional['History']=None):
+    def __init__(self, client_user: Optional[discord.ClientUser], ictx:CtxInteraction, matched_hmessage: 'HMessage', target_message: discord.Message):
         super().__init__()
         self.target_message = target_message
         self.matched_hmessage = matched_hmessage
         self.client_user = client_user
-        
-        default_text = target_message.clean_content
-        if local_history is not None:
-            default_text = local_history.remove_bot_mention_from_message(matched_hmessage, target_message.content)
+        self.ictx = ictx
 
         # Add TextInput dynamically with default value
         self.new_content = discord.ui.TextInput(
             label='New Message Content', 
             style=discord.TextStyle.paragraph, 
             min_length=1, 
-            default=default_text)
+            default=matched_hmessage.text)
 
         self.add_item(self.new_content)
 
     async def on_submit(self, inter: discord.Interaction):
         # Update text in history
-        edited_message = self.new_content.value
-        compound_message = ''
-        # Try rebuilding text if target message was a message chunk
-        if self.matched_hmessage.related_ids:
-            all_original_msg_ids = [self.matched_hmessage.id] + self.matched_hmessage.related_ids
-            all_original_msg_ids.sort()
-            for orig_msg_id in all_original_msg_ids:
-                if self.matched_hmessage.id != orig_msg_id:
-                    try:
-                        original_chunk_message = await inter.channel.fetch_message(orig_msg_id)
-                        compound_message += original_chunk_message.clean_content
-                    except Exception:
-                        log.warning(f'Failed to get message content for id {orig_msg_id} for "Edit History".')
-                        compound_message = ''
-                        break                    
-                else:
-                    compound_message += edited_message
-        if compound_message:
-            edited_message = compound_message
-        # Update the HMessage with the new value
-        self.matched_hmessage.update(text=edited_message)
+        new_text = self.new_content.value
+        params = {'user_message_to_update': self.matched_hmessage}
+        await replace_msg_in_history_and_discord(self.client_user, self.ictx, params=params, text=new_text, text_visible=new_text)
         await inter.response.send_message("Message history has been edited successfully.", ephemeral=True, delete_after=5)
-
-        # Update text in discord message
-        if self.client_user == self.target_message.author:
-            await self.target_message.edit(content=edited_message[:2000])
-        else:
-            await inter.response.send_message("Note: The bot cannot update your message contents in Discord.", ephemeral=True, delete_after=5)
-        # Warn if text was truncated
-        if len(edited_message) >= 2000:
-            await inter.response.send_message("Message exceeded discord text limits and was truncated to 2,000 characters. It was still replaced entirely in history", ephemeral=True, delete_after=10)
 
 class SelectedListItem(discord.ui.Select):
     def __init__(self, options, placeholder, custom_id):
