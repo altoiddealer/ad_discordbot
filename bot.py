@@ -1723,17 +1723,17 @@ async def on_message(message: discord.Message):
 #################################################################
 async def message_task(ictx: CtxInteraction, text:str, source:str='message', llm_payload:dict|None=None, params:dict|None=None) -> tuple[HMessage, HMessage]:
     params = params or {}
+    params['bot_will_do'] = params.get('bot_will_do', {})
     tags = {} # just incase there's an exception.
     user_name = get_user_ctx_inter(ictx).display_name
     channel = ictx.channel
 
     change_embed = None
     img_gen_embed = None
-    local_history = None
     user_message = None
     bot_message = None
 
-    async def send_responses(params:dict, bot_message:HMessage, local_history:History) -> HMessage:
+    async def send_responses(params:dict, bot_message:HMessage) -> HMessage:
         if bot_message:
             ref_message = params.get('ref_message', None) # pass to send_long_message()
             # Process any TTS response
@@ -1751,14 +1751,15 @@ async def message_task(ictx: CtxInteraction, text:str, source:str='message', llm
             await channel.send(file=send_user_image) if len(send_user_image) == 1 else await channel.send(files=send_user_image)
         return bot_message
 
-    async def message_img_task(tags:SORTED_TAGS, params:dict, bot_message:HMessage):
+    async def message_img_task(tags:SORTED_TAGS, params:dict, bot_message:HMessage=None, img_prompt:str=None):
         nonlocal img_gen_embed
-        tags = match_img_tags(bot_message.text, tags)
+        img_prompt = img_prompt or bot_message.text
+        tags = match_img_tags(img_prompt, tags)
         params['bot_will_do'] = bot_should_do(tags, params['bot_will_do']) # check for updates from tags
         if params['bot_will_do']['should_gen_image']:
             if img_gen_embed:
                 await img_gen_embed.delete()
-            await img_gen_task(source, bot_message.text, params, ictx, tags)
+            await img_gen_task(source, img_prompt, params, ictx, tags)
         return tags, params
 
     async def llmmodel_swap_back(params:dict, original_llmmodel:str) -> dict:
@@ -1798,24 +1799,28 @@ async def message_task(ictx: CtxInteraction, text:str, source:str='message', llm
             user_message = await create_user_message(local_history, llm_payload, params, ictx)
         # generate text with text-generation-webui
         last_resp, tts_resp = await llm_gen(llm_payload)
-        # Create bot message in HManager, unless replacing original bot message via "regenerate replace"
-        if params.get('bot_message_to_update'):
-            bot_message = await replace_msg_in_history_and_discord(client.user, ictx, params, last_resp, tts_resp)
-            params['bot_will_do']['should_send_text'] = False
-        else:
-            bot_message = await create_bot_message(user_message, local_history, params, last_resp, tts_resp, ictx)
+        # Create bot message in HManager
+        bot_message = None
+        if not params.get('skip_create_bot_msg'):
+            # Replacing original bot message via "regenerate replace"
+            if params.get('bot_message_to_update'):
+                bot_message = await replace_msg_in_history_and_discord(client.user, ictx, params, last_resp, tts_resp)
+                params['bot_will_do']['should_send_text'] = False
+            else:
+                bot_message = await create_bot_message(user_message, local_history, params, last_resp, tts_resp, ictx)
         # Toggle TTS back on if it was toggled off
         await apply_toggle_tts(toggle='on', tts_sw=tts_sw)
 
+        img_prompt = last_resp
         # Log message exchange
-        if bot_message:
+        if last_resp:
             log.info(f'''{user_name}: "{llm_payload['text']}"''')
-            log.info(f'''{llm_payload['state']['name2']}: "{bot_message.text}"''')
+            log.info(f'''{llm_payload['state']['name2']}: "{last_resp}"''')
         # If no text was generated, treat user input at the response
         else:
             if params['bot_will_do']['should_gen_image'] and sd_enabled:
-                bot_message.update(text=llm_payload['text'])
-        return params, bot_message, user_message, local_history
+                img_prompt = llm_payload['text']
+        return params, bot_message, user_message, img_prompt
 
     async def init_img_embed():
         nonlocal img_gen_embed
@@ -1862,7 +1867,7 @@ async def message_task(ictx: CtxInteraction, text:str, source:str='message', llm
     try:
         text, tags = await get_tags(text)                                                           # collects all tags, sorted into sub-lists by phase (user / llm / userllm)
         tags = match_tags(text, tags, phase='llm')                                                  # match tags labeled for user / userllm.
-        params['bot_will_do'] = bot_should_do(tags)                                                 # check what bot should do
+        params['bot_will_do'] = bot_should_do(tags, params['bot_will_do'])                          # check what bot should do
         if params['bot_will_do']['should_gen_text']:                                                # If bot should generate text:
             llm_payload, tags, params = await build_llm_payload(text, llm_payload, tags, params)    # Build LLM Payload
             if textgenwebui_enabled:
@@ -1871,13 +1876,13 @@ async def message_task(ictx: CtxInteraction, text:str, source:str='message', llm
                     llm_model_mode, original_llmmodel = await llmmodel_swap_or_change(llmmodel_params) # if LLM model swap/change was triggered
                 if params['bot_will_do']['should_gen_image']:
                     await init_img_embed()                                                          # Create a "prompting" embed for image gen
-                params, bot_message, user_message, local_history = await message_llm_task(llm_payload, params)
-                await apply_reactions_to_messages(client.user, ictx, user_message)                               # add a reaction to any hidden user message
+                params, bot_message, user_message, img_prompt = await message_llm_task(llm_payload, params)
+                await apply_reactions_to_messages(client.user, ictx, user_message)                  # add a reaction to any hidden user message
                 if llmmodel_params and llm_model_mode == 'swap':
                     params = await llmmodel_swap_back(params, original_llmmodel)                    # if LLM model swapping was triggered
             if sd_enabled:
-                tags, params = await message_img_task(tags, params, bot_message)                    # process image generation (A1111 / Forge)
-            bot_message = await send_responses(params, bot_message, local_history)                  # send responses (text, TTS, images)
+                tags, params = await message_img_task(tags, params, bot_message, img_prompt)        # process image generation (A1111 / Forge)
+            bot_message = await send_responses(params, bot_message)                                 # send responses (text, TTS, images)
 
         elif params['bot_will_do']['should_gen_image']:                                             # If bot should only generate image:
             if await sd_online(channel):                                                            # Notify user their prompt will be used directly for img gen
@@ -3536,8 +3541,13 @@ def collect_img_tag_values(tags, params):
         log.error(f"Error collecting Img tag values: {e}")
     return img_payload_mods, params
 
-def init_img_payload(img_prompt:str, neg_prompt:str) -> dict:
+def init_img_payload(img_prompt:str, params:dict) -> dict:
     try:
+        neg_prompt = params.get('neg_prompt', '')
+        positive_style = params.get('style', {}).get('positive', "{}") if params.get('style') is not None else "{}"
+        negative_style = params.get('style', {}).get('negative', '') if params.get('style') is not None else "{}"
+        img_prompt = positive_style.format(img_prompt)
+        neg_prompt = f"{neg_prompt}, {negative_style}" if negative_style else neg_prompt
         # Initialize img_payload settings
         img_payload = {"prompt": img_prompt, "negative_prompt": neg_prompt}
         # Apply settings from imgmodel configuration
@@ -3591,8 +3601,7 @@ async def img_gen_task(source:str, img_prompt:str, params:dict, ictx:CtxInteract
             tags = match_img_tags(img_prompt, tags)
             bot_will_do = bot_should_do(tags)
         # Initialize img_payload
-        neg_prompt = params.get('neg_prompt', '')
-        img_payload = init_img_payload(img_prompt, neg_prompt)
+        img_payload = init_img_payload(img_prompt, params)
         # collect matched tag values
         img_payload_mods, params = collect_img_tag_values(tags, params)
         send_user_image = img_payload_mods.pop('send_user_image', [])
@@ -3633,13 +3642,14 @@ async def img_gen_task(source:str, img_prompt:str, params:dict, ictx:CtxInteract
         if (source == 'image' or (bot_will_do['should_send_text'] and not bot_will_do['should_gen_text'])) and img_send_embed_info:
             img_send_embed_info.title = f"{user_name} requested an image:"
             img_send_embed_info.description = params.get('message', img_prompt)
-            if ictx:
-                if hasattr(ictx, 'followup'): 
-                    await ictx.followup.reply(embed=img_send_embed_info)
-                else: 
-                    await ictx.reply(embed=img_send_embed_info)
-            else: 
-                await channel.send(embed=img_send_embed_info)
+            # if ictx:
+            #     if hasattr(ictx, 'followup'): 
+            #         await ictx.followup.reply(embed=img_send_embed_info)
+            #     else: 
+            #         await ictx.reply(embed=img_send_embed_info)
+            # else: 
+            await channel.send(embed=img_send_embed_info)
+            await channel.send(f">>> {img_payload['prompt']}")
         if send_user_image:
             await channel.send(file=send_user_image) if len(send_user_image) == 1 else await channel.send(files=send_user_image)
         # If switching back to original Img model
@@ -3649,6 +3659,7 @@ async def img_gen_task(source:str, img_prompt:str, params:dict, ictx:CtxInteract
             await change_imgmodel_task(swap_params, ictx)
     except Exception as e:
         log.error(f"An error occurred in img_gen_task(): {e}")
+        traceback.print_exc()
 
 #################################################################
 ######################## /IMAGE COMMAND #########################
@@ -3672,13 +3683,13 @@ if sd_enabled:
 
     async def get_imgcmd_choices(size_options, style_options) -> tuple[list[app_commands.Choice], list[app_commands.Choice]]:
         try:
-            size_choices = [
-                app_commands.Choice(name=option['name'], value=option['name'])
-                for option in size_options]
-            style_choices = [
-                app_commands.Choice(name=option['name'], value=option['name'])
-                for option in style_options]
-            return size_choices, style_choices
+            size_choices = [app_commands.Choice(name=option['name'], value=option['name'])
+                            for option in size_options]
+            style_choices = [app_commands.Choice(name=option['name'], value=option['name'])
+                             for option in style_options]
+            use_llm_choices = [app_commands.Choice(name="No, just img gen from my prompt", value="No"),
+                               app_commands.Choice(name="Yes, send my prompt to the LLM", value="Yes")]
+            return size_choices, style_choices, use_llm_choices
 
         except Exception as e:
             log.error(f"An error occurred while building choices for /image: {e}")
@@ -3746,7 +3757,7 @@ if sd_enabled:
 
     # Get size and style options for /image command
     size_options, style_options = asyncio.run(get_imgcmd_options())
-    size_choices, style_choices = asyncio.run(get_imgcmd_choices(size_options, style_options))
+    size_choices, style_choices, use_llm_choices = asyncio.run(get_imgcmd_choices(size_options, style_options))
 
     # Check if extensions enabled in config
     cnet_enabled = config.get('sd', {}).get('extensions', {}).get('controlnet_enabled', False)
@@ -3754,18 +3765,22 @@ if sd_enabled:
 
     if cnet_enabled and reactor_enabled:
         @client.hybrid_command(name="image", description=f'Generate an image using {SD_CLIENT}')
+        @app_commands.describe(use_llm='Whether to send your prompt to LLM. Results may vary!')
         @app_commands.describe(style='Applies a positive/negative prompt preset')
         @app_commands.describe(img2img='Diffuses from an input image instead of pure latent noise.')
         @app_commands.describe(img2img_mask='Masks the diffusion strength for the img2img input. Requires img2img.')
         @app_commands.describe(face_swap='For best results, attach a square (1:1) cropped image of a face, to swap into the output.')
         @app_commands.describe(controlnet='Guides image diffusion using an input image or map.')
+        @app_commands.choices(use_llm=use_llm_choices)
         @app_commands.choices(size=size_choices)
         @app_commands.choices(style=style_choices)
         @configurable_for_dm_if(lambda ctx: 'image' in config.discord_dm_setting('allowed_commands', []))
-        async def image(ctx: commands.Context, prompt: str, size: typing.Optional[app_commands.Choice[str]], style: typing.Optional[app_commands.Choice[str]], neg_prompt: typing.Optional[str], img2img: typing.Optional[discord.Attachment], img2img_mask: typing.Optional[discord.Attachment],
-            face_swap: typing.Optional[discord.Attachment], controlnet: typing.Optional[discord.Attachment]):
-            user_selections = {"prompt": prompt, "size": size.value if size else None, "style": style.value if style else None, "neg_prompt": neg_prompt, "img2img": img2img if img2img else None, "img2img_mask": img2img_mask if img2img_mask else None,
-            "face_swap": face_swap if face_swap else None, "cnet": controlnet if controlnet else None}
+        async def image(ctx: commands.Context, prompt: str, use_llm: typing.Optional[app_commands.Choice[str]], size: typing.Optional[app_commands.Choice[str]], style: typing.Optional[app_commands.Choice[str]], 
+                        neg_prompt: typing.Optional[str], img2img: typing.Optional[discord.Attachment], img2img_mask: typing.Optional[discord.Attachment], 
+                        face_swap: typing.Optional[discord.Attachment], controlnet: typing.Optional[discord.Attachment]):
+            user_selections = {"prompt": prompt, "use_llm": use_llm.value if use_llm else None, "size": size.value if size else None, "style": style.value if style else None, "neg_prompt": neg_prompt,
+                               "img2img": img2img if img2img else None, "img2img_mask": img2img_mask if img2img_mask else None,
+                               "face_swap": face_swap if face_swap else None, "cnet": controlnet if controlnet else None}
             await process_image(ctx, user_selections)
     elif cnet_enabled and not reactor_enabled:
         @client.hybrid_command(name="image", description=f'Generate an image using {SD_CLIENT}')
@@ -3773,13 +3788,14 @@ if sd_enabled:
         @app_commands.describe(img2img='Diffuses from an input image instead of pure latent noise.')
         @app_commands.describe(img2img_mask='Masks the diffusion strength for the img2img input. Requires img2img.')
         @app_commands.describe(controlnet='Guides image diffusion using an input image or map.')
+        @app_commands.choices(use_llm=use_llm_choices)
         @app_commands.choices(size=size_choices)
         @app_commands.choices(style=style_choices)
         @configurable_for_dm_if(lambda ctx: 'image' in config.discord_dm_setting('allowed_commands', []))
-        async def image(ctx: commands.Context, prompt: str, size: typing.Optional[app_commands.Choice[str]], style: typing.Optional[app_commands.Choice[str]], neg_prompt: typing.Optional[str], img2img: typing.Optional[discord.Attachment], img2img_mask: typing.Optional[discord.Attachment],
-            controlnet: typing.Optional[discord.Attachment]):
-            user_selections = {"prompt": prompt, "size": size.value if size else None, "style": style.value if style else None, "neg_prompt": neg_prompt, "img2img": img2img if img2img else None, "img2img_mask": img2img_mask if img2img_mask else None,
-            "cnet": controlnet if controlnet else None}
+        async def image(ctx: commands.Context, prompt: str, use_llm: typing.Optional[app_commands.Choice[str]], size: typing.Optional[app_commands.Choice[str]], style: typing.Optional[app_commands.Choice[str]],
+                        neg_prompt: typing.Optional[str], img2img: typing.Optional[discord.Attachment], img2img_mask: typing.Optional[discord.Attachment], controlnet: typing.Optional[discord.Attachment]):
+            user_selections = {"prompt": prompt, "use_llm": use_llm.value if use_llm else None, "size": size.value if size else None, "style": style.value if style else None, "neg_prompt": neg_prompt,
+                               "img2img": img2img if img2img else None, "img2img_mask": img2img_mask if img2img_mask else None, "cnet": controlnet if controlnet else None}
             await process_image(ctx, user_selections)
     elif reactor_enabled and not cnet_enabled:
         @client.hybrid_command(name="image", description=f'Generate an image using {SD_CLIENT}')
@@ -3787,24 +3803,28 @@ if sd_enabled:
         @app_commands.describe(img2img='Diffuses from an input image instead of pure latent noise.')
         @app_commands.describe(img2img_mask='Masks the diffusion strength for the img2img input. Requires img2img.')
         @app_commands.describe(face_swap='For best results, attach a square (1:1) cropped image of a face, to swap into the output.')
+        @app_commands.choices(use_llm=use_llm_choices)
         @app_commands.choices(size=size_choices)
         @app_commands.choices(style=style_choices)
         @configurable_for_dm_if(lambda ctx: 'image' in config.discord_dm_setting('allowed_commands', []))
-        async def image(ctx: commands.Context, prompt: str, size: typing.Optional[app_commands.Choice[str]], style: typing.Optional[app_commands.Choice[str]], neg_prompt: typing.Optional[str], img2img: typing.Optional[discord.Attachment], img2img_mask: typing.Optional[discord.Attachment],
-            face_swap: typing.Optional[discord.Attachment]):
-            user_selections = {"prompt": prompt, "size": size.value if size else None, "style": style.value if style else None, "neg_prompt": neg_prompt, "img2img": img2img if img2img else None, "img2img_mask": img2img_mask if img2img_mask else None,
-            "face_swap": face_swap if face_swap else None}
+        async def image(ctx: commands.Context, prompt: str, use_llm: typing.Optional[app_commands.Choice[str]], size: typing.Optional[app_commands.Choice[str]], style: typing.Optional[app_commands.Choice[str]],
+                        neg_prompt: typing.Optional[str], img2img: typing.Optional[discord.Attachment], img2img_mask: typing.Optional[discord.Attachment], face_swap: typing.Optional[discord.Attachment]):
+            user_selections = {"prompt": prompt, "use_llm": use_llm.value if use_llm else None, "size": size.value if size else None, "style": style.value if style else None, "neg_prompt": neg_prompt,
+                               "img2img": img2img if img2img else None, "img2img_mask": img2img_mask if img2img_mask else None, "face_swap": face_swap if face_swap else None}
             await process_image(ctx, user_selections)
     else:
         @client.hybrid_command(name="image", description=f'Generate an image using {SD_CLIENT}')
         @app_commands.describe(style='Applies a positive/negative prompt preset')
         @app_commands.describe(img2img='Diffuses from an input image instead of pure latent noise.')
         @app_commands.describe(img2img_mask='Masks the diffusion strength for the img2img input. Requires img2img.')
+        @app_commands.choices(use_llm=use_llm_choices)
         @app_commands.choices(size=size_choices)
         @app_commands.choices(style=style_choices)
         @configurable_for_dm_if(lambda ctx: 'image' in config.discord_dm_setting('allowed_commands', []))
-        async def image(ctx: commands.Context, prompt: str,  size: typing.Optional[app_commands.Choice[str]], style: typing.Optional[app_commands.Choice[str]], neg_prompt: typing.Optional[str], img2img: typing.Optional[discord.Attachment], img2img_mask: typing.Optional[discord.Attachment]):
-            user_selections = {"prompt": prompt, "size": size.value if size else None, "style": style.value if style else None, "neg_prompt": neg_prompt, "img2img": img2img if img2img else None, "img2img_mask": img2img_mask if img2img_mask else None}
+        async def image(ctx: commands.Context, prompt: str, use_llm: typing.Optional[app_commands.Choice[str]], size: typing.Optional[app_commands.Choice[str]], style: typing.Optional[app_commands.Choice[str]],
+                        neg_prompt: typing.Optional[str], img2img: typing.Optional[discord.Attachment], img2img_mask: typing.Optional[discord.Attachment]):
+            user_selections = {"prompt": prompt, "use_llm": use_llm.value if use_llm else None, "size": size.value if size else None, "style": style.value if style else None, "neg_prompt": neg_prompt,
+                               "img2img": img2img if img2img else None, "img2img_mask": img2img_mask if img2img_mask else None}
             await process_image(ctx, user_selections)
 
     async def process_image(ctx: commands.Context, selections):
@@ -3814,6 +3834,7 @@ if sd_enabled:
             return
         # User inputs from /image command
         prompt = selections.get('prompt', '')
+        use_llm = selections.get('use_llm', None)
         size = selections.get('size', None)
         style = selections.get('style', None)
         neg_prompt = selections.get('neg_prompt', '')
@@ -3823,7 +3844,6 @@ if sd_enabled:
         cnet = selections.get('cnet', None)
         # Defaults
         endpoint = '/sdapi/v1/txt2img'
-        neg_style_prompt = ""
         size_dict = {}
         faceswapimg = None
         img2img_dict = {}
@@ -3840,11 +3860,9 @@ if sd_enabled:
             if style:
                 selected_style_option = next((option for option in style_options if option['name'] == style), None)
                 if selected_style_option:
-                    prompt = selected_style_option.get('positive').format(prompt)
-                    neg_style_prompt = selected_style_option.get('negative')
+                    style = selected_style_option
                 message += f" | **Style:** {style}"
             if neg_prompt:
-                neg_style_prompt = f"{neg_prompt}, {neg_style_prompt}"
                 message += f" | **Negative Prompt:** {neg_prompt}"
             if img2img:
                 async def process_image_img2img(img2img, img2img_dict, endpoint, message):
@@ -4096,14 +4114,24 @@ if sd_enabled:
                     cnet_dict, message = await process_image_controlnet(cnet, cnet_dict, message)
                 except Exception as e:
                     log.error(f"An error occurred while configuring ControlNet for /image command: {e}")
-            params = {'neg_prompt': neg_style_prompt, 'size': size_dict, 'img2img': img2img_dict, 'face_swap': faceswapimg, 'controlnet': cnet_dict, 'endpoint': endpoint, 'message': message}
+            params = {'neg_prompt': neg_prompt, 'style': style, 'size': size_dict, 'img2img': img2img_dict,
+                      'face_swap': faceswapimg, 'controlnet': cnet_dict, 'endpoint': endpoint, 'message': message}
             await ireply(ctx, 'image') # send a response msg to the user
 
             async with task_semaphore:
                 async with ctx.channel.typing():
                     # offload to ai_gen queue
                     log.info(f'{ctx.author.display_name} used "/image": "{prompt}"')
-                    await img_gen_task('image', prompt, params, ctx, tags={})
+                    if use_llm:
+                        log.info(f'reply requested: {ctx.author.display_name} said: "{prompt}"')
+                        bot_database.update_last_user_msg(ctx.channel.id, save_now=False)
+                        params['bot_will_do'] = {'should_gen_text': True, 'should_gen_image': True}
+                        params['skip_create_user_msg'] = True
+                        params['skip_create_bot_msg'] = True
+                        params['save_to_history'] = False
+                        await message_task(ctx, prompt, 'image', llm_payload=None, params=params)
+                    else:
+                        await img_gen_task('image', prompt, params, ctx, tags={})
                     await run_flow_if_any(ctx, 'image', prompt)
 
         except Exception as e:
