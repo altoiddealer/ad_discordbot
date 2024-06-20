@@ -4124,7 +4124,6 @@ if sd_enabled:
                     log.info(f'{ctx.author.display_name} used "/image": "{prompt}"')
                     if use_llm:
                         log.info(f'reply requested: {ctx.author.display_name} said: "{prompt}"')
-                        bot_database.update_last_user_msg(ctx.channel.id, save_now=False)
                         params['bot_will_do'] = {'should_gen_text': True, 'should_gen_image': True}
                         params['skip_create_user_msg'] = True
                         params['skip_create_bot_msg'] = True
