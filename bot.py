@@ -709,7 +709,7 @@ async def on_raw_reaction_add(endorsed_img):
                 total_reaction_count += reaction.count
     else:
         for reaction in message.reactions:
-            if emoji in [bot_emojis]:
+            if reaction.emoji in [bot_emojis]:
                 continue
             total_reaction_count += reaction.count
     if total_reaction_count >= config['discord']['starboard'].get('min_reactions', 2):
