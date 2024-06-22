@@ -890,19 +890,9 @@ if textgenwebui_enabled and tts_client:
     @client.hybrid_command(name="set_server_voice_channel", description="Assign a channel as the voice channel for this server")
     @app_commands.describe(channel_id='Channel ID for the voice channel.')
     @guild_only()
-    async def set_server_voice_channel(ctx: commands.Context, channel_id: str):
-        channel_id = int(channel_id)
-        # Fetch the channel from the guild
-        channel = ctx.guild.get_channel(channel_id)  # Returns None if the channel does not exist
-        if channel is None:
-            await ctx.send("Invalid channel ID: Channel does not exist in this guild.")
-            return
-        # Check if the channel is a voice channel
-        if isinstance(channel, discord.VoiceChannel):
-            bot_database.update_voice_channels(ctx.guild.id, channel_id)
-            await ctx.send(f"Voice channel for **{ctx.guild}** set to **{channel.name}**.", delete_after=5)
-        else:
-            await ctx.send("The provided channel ID is not a voice channel.")
+    async def set_server_voice_channel(ctx: commands.Context, channel: discord.VoiceChannel):
+        bot_database.update_voice_channels(ctx.guild.id, channel.id)
+        await ctx.send(f"Voice channel for **{ctx.guild}** set to **{channel.name}**.", delete_after=5)
 
     async def process_toggle_tts(ctx: commands.Context):
         global tts_enabled
