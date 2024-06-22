@@ -668,31 +668,28 @@ async def update_tags(tags:list) -> list:
 #################################################################
 @client.event
 async def on_ready():
-    try:
-        # If first time running bot
-        if bot_database.first_run:
-            await first_run()
-        if textgenwebui_enabled:
-            char_name = get_character() # Try loading character data regardless of mode (chat/instruct)
-            if char_name:
-                await character_loader(char_name)
-                
-        # Create background task processing queue
-        client.loop.create_task(process_tasks_in_background())
-        # Start background task to sync the discord client tree
-        await bg_task_queue.put(client.tree.sync())
-        # Start background task to to change image models automatically
-        if sd_enabled:
-            imgmodels_data = load_file(shared_path.img_models, {})
-            if imgmodels_data and imgmodels_data.get('settings', {}).get('auto_change_imgmodels', {}).get('enabled', False):
-                await bg_task_queue.put(start_auto_change_imgmodels())
-        log.info("----------------------------------------------")
-        log.info("                Bot is ready")
-        log.info("    Use Ctrl+C to shutdown the bot cleanly")
-        log.info("----------------------------------------------")
-    except Exception as e:
-        log.error(f"Error with on_ready: {e}")
-        traceback.print_exc()
+    # If first time running bot
+    if bot_database.first_run:
+        await first_run()
+    if textgenwebui_enabled:
+        char_name = get_character() # Try loading character data regardless of mode (chat/instruct)
+        if char_name:
+            await character_loader(char_name)
+            
+    # Create background task processing queue
+    client.loop.create_task(process_tasks_in_background())
+    # Start background task to sync the discord client tree
+    await bg_task_queue.put(client.tree.sync())
+    # Start background task to to change image models automatically
+    if sd_enabled:
+        imgmodels_data = load_file(shared_path.img_models, {})
+        if imgmodels_data and imgmodels_data.get('settings', {}).get('auto_change_imgmodels', {}).get('enabled', False):
+            await bg_task_queue.put(start_auto_change_imgmodels())
+    
+    log.info("----------------------------------------------")
+    log.info("                Bot is ready")
+    log.info("    Use Ctrl+C to shutdown the bot cleanly")
+    log.info("----------------------------------------------")
 
 #################################################################
 ####################### DISCORD FEATURES ########################
@@ -1695,28 +1692,25 @@ async def dynamic_prompting(user_name:str, text:str, i=None):
         await i.reply(content=f"__Text with **[Dynamic Prompting](<https://github.com/altoiddealer/ad_discordbot/wiki/dynamic-prompting>)**__:\n>>> **{user_name}**: {text_with_comments}", mention_author=False, silent=True)
     return text
 
+
 @client.event
 async def on_message(message: discord.Message):
-    try:
-        text = message.clean_content # primarily converts @mentions to actual user names
-        if textgenwebui_enabled and not bot_behavior.bot_should_reply(message, text): 
-            return # Check that bot should reply or not
-        # Store the current time. The value will save locally to database.yaml at another time
-        bot_database.update_last_user_msg(message.channel.id, save_now=False)
-        # if @ mentioning bot, remove the @ mention from user prompt
-        if text.startswith(f"@{bot_database.last_character} "):
-            text = text.replace(f"@{bot_database.last_character} ", "", 1)
-        # apply wildcards
-        text = await dynamic_prompting(message.author.display_name, text, message)
-
-        async with task_semaphore:
-            async with message.channel.typing():
-                log.info(f'reply requested: {message.author.display_name} said: "{text}"')
-                await message_task(message, text, 'on_message')
-                await run_flow_if_any(message, 'on_message', text)
-
-    except Exception as e:
-        log.error(f"An error occurred in on_message: {e}")
+    text = message.clean_content # primarily converts @mentions to actual user names
+    if textgenwebui_enabled and not bot_behavior.bot_should_reply(message, text): 
+        return # Check that bot should reply or not
+    # Store the current time. The value will save locally to database.yaml at another time
+    bot_database.update_last_user_msg(message.channel.id, save_now=False)
+    # if @ mentioning bot, remove the @ mention from user prompt
+    if text.startswith(f"@{bot_database.last_character} "):
+        text = text.replace(f"@{bot_database.last_character} ", "", 1)
+    # apply wildcards
+    text = await dynamic_prompting(message.author.display_name, text, message)
+    
+    async with task_semaphore:
+        async with message.channel.typing():
+            log.info(f'reply requested: {message.author.display_name} said: "{text}"')
+            await message_task(message, text, 'on_message')
+            await run_flow_if_any(message, 'on_message', text)
 
 #################################################################
 ######################## QUEUED MESSAGE #########################
@@ -4140,6 +4134,12 @@ if sd_enabled:
 #################################################################
 ######################### MISC COMMANDS #########################
 #################################################################
+
+@client.event
+async def on_error(event_name, *args, **kwargs):
+    print(traceback.format_exc())
+    log.warning(f'Event error in {event_name}')
+
 @client.event
 async def on_command_error(ctx:commands.Context, error:Exception):
     log.debug(f'Command error: {error}')

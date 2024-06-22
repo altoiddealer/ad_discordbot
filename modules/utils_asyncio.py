@@ -73,17 +73,14 @@ class CoroHandler: # TODO move to au.aio.__init__?
     ############
     # Main tasks
     async def on_error(self, coro, exc, extra_message:str|None=None):
-        log.warning(f'Error in coro {coro}')
         traceback_str = ''.join(traceback.format_tb(exc.__traceback__))
         print(traceback_str)
-        log.warning('')
         
+        log.warning(f'Error in coro: {coro}')
         log.critical(exc)
         if extra_message:
             log.warning(extra_message)
             
-        log.warning('')
-        log.warning('')
     
     
     async def _run_wrapped_coro(self, coro, extra_message=None):
