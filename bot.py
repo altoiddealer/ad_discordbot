@@ -45,7 +45,7 @@ from modules.utils_discord import guild_only, configurable_for_dm_if, is_direct_
 from modules.utils_files import load_file, merge_base, save_yaml_file  # noqa: F401
 from modules.utils_aspect_ratios import round_to_precision, res_to_model_fit, dims_from_ar, avg_from_dims, get_aspect_ratio_parts, calculate_aspect_ratio_sizes  # noqa: F401
 from modules.history import HistoryManager, History, HMessage, cnf
-from modules.typing import TAG_LIST, TAG_LIST_DICT, SORTED_TAGS
+from modules.typing import TAG_LIST, TAG_LIST_DICT, SORTED_TAGS, AlertUserError
 
 from discord.ext.commands.errors import HybridCommandError, CommandError
 from discord.errors import DiscordException
@@ -884,15 +884,23 @@ async def process_tts_resp(ictx:CtxInteraction, bot_message:HMessage, is_dm:bool
         await bg_task_queue.put(play_in_voice_channel(ictx.guild.id, bot_message.text_visible)) # run task in background
         
     bot_message.update(spoken=True)
+    
+    
+@client.hybrid_command(name="set_server_voice_channel", description="Assign a channel as the voice channel for this server")
+@app_commands.checks.has_permissions(manage_channels=True)
+@guild_only()
+async def set_server_voice_channel(ctx: commands.Context, channel: Optional[discord.VoiceChannel]=None):
+    if isinstance(ctx.author, discord.Member) and ctx.author.voice:
+        channel = channel or ctx.author.voice.channel # type: ignore
+        
+    if channel is None:
+        raise AlertUserError('Please select or join a voice channel to set.')
+    
+    bot_database.update_voice_channels(ctx.guild.id, channel.id)
+    await ctx.send(f"Voice channel for **{ctx.guild}** set to **{channel.name}**.", delete_after=5)
+
 
 if textgenwebui_enabled and tts_client:
-
-    @client.hybrid_command(name="set_server_voice_channel", description="Assign a channel as the voice channel for this server")
-    @app_commands.checks.has_permissions(manage_channels=True)
-    @guild_only()
-    async def set_server_voice_channel(ctx: commands.Context, channel: discord.VoiceChannel):
-        bot_database.update_voice_channels(ctx.guild.id, channel.id)
-        await ctx.send(f"Voice channel for **{ctx.guild}** set to **{channel.name}**.", delete_after=5)
 
     async def process_toggle_tts(ctx: commands.Context):
         global tts_enabled
@@ -4129,6 +4137,10 @@ async def on_error(event_name, *args, **kwargs):
 async def on_command_error(ctx:commands.Context, error:Union[HybridCommandError, CommandError, AppCommandError, CommandInvokeError, DiscordException, Exception]):
     while isinstance(error, (HybridCommandError, CommandInvokeError)):
         error = error.original
+        
+    if isinstance(error, AlertUserError):
+        await ctx.reply(embed=discord.Embed(description=str(error), color=discord.Color.gold()), ephemeral=True, delete_after=15)
+        return
 
     # ignore certain errors in console
     if not isinstance(error, (
@@ -4136,11 +4148,12 @@ async def on_command_error(ctx:commands.Context, error:Union[HybridCommandError,
         commands.errors.MissingPermissions,
     )):
         print(''.join(traceback.format_tb(error.__traceback__)))
-        log.warning(f'Command /{ctx.command} failed: Error <{type(error).__name__}> {error}')
+        log.warning(f'Command /{ctx.command} failed: Error <{type(error).__name__}>')
+        log.warning(error)
+        
+    await ctx.reply(embed=discord.Embed(description=f'Command `/{ctx.command}` failed\n```\n{error}\n```', color=discord.Color.red()), ephemeral=True, delete_after=15)
 
 
-    await ctx.reply(f'Command `/{ctx.command}` failed\n```\n{error}\n```', ephemeral=True, delete_after=15)
-            
 @client.listen('on_app_command_error')
 async def on_app_command_error(inter:discord.Interaction, error:discord.app_commands.AppCommandError):
     log.debug(f'App command error: {error}')
@@ -4170,37 +4183,40 @@ if system_embed_info:
 @client.hybrid_command(description="Toggle current channel as an announcement channel for the bot (model changes)")
 @app_commands.checks.has_permissions(manage_channels=True)
 @guild_only()
-async def announce(ctx: commands.Context):
-    if ctx.channel.id in bot_database.announce_channels:
-        bot_database.announce_channels.remove(ctx.channel.id) # If the channel is already in the announce channels, remove it
-        action_message = f'Removed {ctx.channel.mention} from announce channels. Use "/announce" again if you want to add it back.'
+async def announce(ctx: commands.Context, channel:Optional[discord.TextChannel]=None):
+    channel = channel or ctx.channel # type: ignore
+    if channel.id in bot_database.announce_channels:
+        bot_database.announce_channels.remove(channel.id) # If the channel is already in the announce channels, remove it
+        action_message = f'Removed {channel.mention} from announce channels. Use "/announce" again if you want to add it back.'
     else:
         # If the channel is not in the announce channels, add it
-        bot_database.announce_channels.append(ctx.channel.id)
-        action_message = f'Added {ctx.channel.mention} to announce channels. Use "/announce" again to remove it.'
+        bot_database.announce_channels.append(channel.id)
+        action_message = f'Added {channel.mention} to announce channels. Use "/announce" again to remove it.'
 
     bot_database.save()
-    await ctx.reply(action_message)
+    await ctx.reply(action_message, delete_after=15)
 
 @client.hybrid_command(description="Toggle current channel as main channel for bot to auto-reply without needing to be called")
 @app_commands.checks.has_permissions(manage_channels=True)
 @guild_only()
-async def main(ctx: commands.Context):
-    if ctx.channel.id in bot_database.main_channels:
-        bot_database.main_channels.remove(ctx.channel.id) # If the channel is already in the main channels, remove it
-        action_message = f'Removed {ctx.channel.mention} from main channels. Use "/main" again if you want to add it back.'
+async def main(ctx: commands.Context, channel:Optional[discord.TextChannel]=None):
+    channel = channel or ctx.channel # type: ignore
+    
+    if channel.id in bot_database.main_channels:
+        bot_database.main_channels.remove(channel.id) # If the channel is already in the main channels, remove it
+        action_message = f'Removed {channel.mention} from main channels. Use "/main" again if you want to add it back.'
     else:
         # If the channel is not in the main channels, add it
-        bot_database.main_channels.append(ctx.channel.id)
-        action_message = f'Added {ctx.channel.mention} to main channels. Use "/main" again to remove it.'
+        bot_database.main_channels.append(channel.id)
+        action_message = f'Added {channel.mention} to main channels. Use "/main" again to remove it.'
 
     bot_database.save()
-    await ctx.reply(action_message, delete_after=5)
+    await ctx.reply(action_message, delete_after=15)
 
 @client.hybrid_command(description="Update dropdown menus without restarting bot script.")
 @guild_only()
 async def sync(ctx: commands.Context):
-    await ctx.reply('Syncing client tree. Note: Menus may not update instantly.', ephemeral=True, delete_after=10)
+    await ctx.reply('Syncing client tree. Note: Menus may not update instantly.', ephemeral=True, delete_after=15)
     log.info(f"{ctx.author.display_name} used '/sync' to sync the client.tree (refresh commands).")
     await bg_task_queue.put(client.tree.sync()) # Process this in the background
 
