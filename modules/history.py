@@ -206,6 +206,7 @@ class HMessage:
             self.history.event_save.set()
         return self
 
+
     def unmark_reply(self, save=True):
         message:Optional[HMessage] = self.reply_to
         self.reply_to = None
@@ -230,6 +231,19 @@ class HMessage:
         if save:
             self.history.event_save.set()
         return self
+    
+    
+    def unmark_regeneration(self, save=True):
+        message:Optional[HMessage] = self.regenerated_from
+        self.regenerated_from = None
+        
+        if message:
+            if self in message.regenerations:
+                message.regenerations.remove(self)
+        if save:
+            self.history.event_save.set()
+        return self
+    
     
     # @property
     # def is_root_of_continue_chain(self):
@@ -794,9 +808,11 @@ class History:
         # resolve replies and continuations
         for message in history:
             replying_to = local_message_storage.get(message.reply_to)
-            regenerating_from = local_message_storage.get(message.regenerated_from)
             message.mark_as_reply_for(replying_to, save=False) # don't save because it's already saved
+            
+            regenerating_from = local_message_storage.get(message.regenerated_from)
             message.mark_as_regeneration_for(regenerating_from, save=False) # don't save because it's already saved
+            
             # message.mark_as_continuation_of()
             # message.continue_prev = local_message_storage.get(message.continue_prev)
             # message.continue_next = local_message_storage.get(message.continue_next)

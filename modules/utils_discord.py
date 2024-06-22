@@ -60,17 +60,13 @@ def get_hmessage_emojis(message:'HMessage') -> str:
 
 async def update_message_reactions(client_user:discord.ClientUser, emojis_list:list, discord_msg:discord.Message):
     try:
-        all_bot_emojis = [bot_emojis.continue_emoji,
-                          bot_emojis.regen_emoji,
-                          bot_emojis.hidden_emoji]
-
         reactions_to_add = emojis_list
         already_reacted = []
         reactions_to_remove = []
 
         # check for existing reactions
         for reaction in discord_msg.reactions:
-            if reaction.emoji in all_bot_emojis:
+            if reaction.emoji in [bot_emojis]:
                 async for user in reaction.users():
                     if user == client_user:
                         if reaction.emoji not in emojis_list:
