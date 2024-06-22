@@ -47,6 +47,9 @@ from modules.utils_aspect_ratios import round_to_precision, res_to_model_fit, di
 from modules.history import HistoryManager, History, HMessage, cnf
 from modules.typing import TAG_LIST, TAG_LIST_DICT, SORTED_TAGS
 
+from discord.ext.commands.errors import HybridCommandError, CommandError
+from discord.errors import DiscordException
+from discord.app_commands import AppCommandError, CommandInvokeError
 from modules.logs import import_track, get_logger, log_file_handler, log_file_formatter; import_track(__file__, fp=True); log = get_logger(__name__)  # noqa: E702
 logging = log
 
@@ -227,44 +230,41 @@ if sd_enabled:
     @client.hybrid_command(description=f"Immediately Restarts the {SD_CLIENT} server. Requires '--api-server-stop' SD WebUI launch flag.")
     @guild_only()
     async def restart_sd_client(ctx: commands.Context):
-        try:
-            system_embed = None
-            await ctx.send(f"**`/restart_sd_client` __will not work__ unless {SD_CLIENT} was launched with flag: `--api-server-stop`**", delete_after=10)
-            await sd_api(endpoint='/sdapi/v1/server-restart', method='post', json=None, retry=False)
-            title = f"{ctx.author.display_name} used '/restart_sd_client'. Restarting {SD_CLIENT} ..."
+        system_embed = None
+        await ctx.send(f"**`/restart_sd_client` __will not work__ unless {SD_CLIENT} was launched with flag: `--api-server-stop`**", delete_after=10)
+        await sd_api(endpoint='/sdapi/v1/server-restart', method='post', json=None, retry=False)
+        title = f"{ctx.author.display_name} used '/restart_sd_client'. Restarting {SD_CLIENT} ..."
+        if system_embed_info:
+            system_embed_info.title = title
+            system_embed_info.description = 'Attempting to re-establish connection in 5 seconds (Attempt 1 of 10)'
+            system_embed = await ctx.send(embed=system_embed_info)
+        log.info(title)
+        response = None
+        retry = 1
+        while response is None and retry < 11:
+            if system_embed_info:
+                system_embed_info.description = f'Attempting to re-establish connection in 5 seconds (Attempt {retry} of 10)'
+                if system_embed: 
+                    system_embed = await system_embed.edit(embed=system_embed_info)
+            await asyncio.sleep(5)
+            response = await sd_api(endpoint='/sdapi/v1/progress', method='get', json=None, retry=False)
+            retry += 1
+        if response:
+            title = f"{SD_CLIENT} restarted successfully."
             if system_embed_info:
                 system_embed_info.title = title
-                system_embed_info.description = 'Attempting to re-establish connection in 5 seconds (Attempt 1 of 10)'
-                system_embed = await ctx.send(embed=system_embed_info)
+                system_embed_info.description = f"Connection re-established after {retry} out of 10 attempts."
+                if system_embed: 
+                    system_embed = await system_embed.edit(embed=system_embed_info)
             log.info(title)
-            response = None
-            retry = 1
-            while response is None and retry < 11:
-                if system_embed_info:
-                    system_embed_info.description = f'Attempting to re-establish connection in 5 seconds (Attempt {retry} of 10)'
-                    if system_embed: 
-                        system_embed = await system_embed.edit(embed=system_embed_info)
-                await asyncio.sleep(5)
-                response = await sd_api(endpoint='/sdapi/v1/progress', method='get', json=None, retry=False)
-                retry += 1
-            if response:
-                title = f"{SD_CLIENT} restarted successfully."
-                if system_embed_info:
-                    system_embed_info.title = title
-                    system_embed_info.description = f"Connection re-established after {retry} out of 10 attempts."
-                    if system_embed: 
-                        system_embed = await system_embed.edit(embed=system_embed_info)
-                log.info(title)
-            else:
-                title = f"{SD_CLIENT} server unresponsive after Restarting."
-                if system_embed_info:
-                    system_embed_info.title = title
-                    system_embed_info.description = "Connection was not re-established after 10 attempts."
-                    if system_embed: 
-                        system_embed = await system_embed.edit(embed=system_embed_info)
-                log.error(title)
-        except Exception as e:
-            log.error(f"Error resetting the {SD_CLIENT} server: {e}")
+        else:
+            title = f"{SD_CLIENT} server unresponsive after Restarting."
+            if system_embed_info:
+                system_embed_info.title = title
+                system_embed_info.description = "Connection was not re-established after 10 attempts."
+                if system_embed: 
+                    system_embed = await system_embed.edit(embed=system_embed_info)
+            log.error(title)
 
     if SD_CLIENT:
         log.info(f"Initializing with SD WebUI enabled: '{SD_CLIENT}'")
@@ -668,31 +668,28 @@ async def update_tags(tags:list) -> list:
 #################################################################
 @client.event
 async def on_ready():
-    try:
-        # If first time running bot
-        if bot_database.first_run:
-            await first_run()
-        if textgenwebui_enabled:
-            char_name = get_character() # Try loading character data regardless of mode (chat/instruct)
-            if char_name:
-                await character_loader(char_name)
-                
-        # Create background task processing queue
-        client.loop.create_task(process_tasks_in_background())
-        # Start background task to sync the discord client tree
-        await bg_task_queue.put(client.tree.sync())
-        # Start background task to to change image models automatically
-        if sd_enabled:
-            imgmodels_data = load_file(shared_path.img_models, {})
-            if imgmodels_data and imgmodels_data.get('settings', {}).get('auto_change_imgmodels', {}).get('enabled', False):
-                await bg_task_queue.put(start_auto_change_imgmodels())
-        log.info("----------------------------------------------")
-        log.info("                Bot is ready")
-        log.info("    Use Ctrl+C to shutdown the bot cleanly")
-        log.info("----------------------------------------------")
-    except Exception as e:
-        log.error(f"Error with on_ready: {e}")
-        traceback.print_exc()
+    # If first time running bot
+    if bot_database.first_run:
+        await first_run()
+    if textgenwebui_enabled:
+        char_name = get_character() # Try loading character data regardless of mode (chat/instruct)
+        if char_name:
+            await character_loader(char_name)
+            
+    # Create background task processing queue
+    client.loop.create_task(process_tasks_in_background())
+    # Start background task to sync the discord client tree
+    await bg_task_queue.put(client.tree.sync())
+    # Start background task to to change image models automatically
+    if sd_enabled:
+        imgmodels_data = load_file(shared_path.img_models, {})
+        if imgmodels_data and imgmodels_data.get('settings', {}).get('auto_change_imgmodels', {}).get('enabled', False):
+            await bg_task_queue.put(start_auto_change_imgmodels())
+    
+    log.info("----------------------------------------------")
+    log.info("                Bot is ready")
+    log.info("    Use Ctrl+C to shutdown the bot cleanly")
+    log.info("----------------------------------------------")
 
 #################################################################
 ####################### DISCORD FEATURES ########################
@@ -891,26 +888,11 @@ async def process_tts_resp(ictx:CtxInteraction, bot_message:HMessage, is_dm:bool
 if textgenwebui_enabled and tts_client:
 
     @client.hybrid_command(name="set_server_voice_channel", description="Assign a channel as the voice channel for this server")
-    @app_commands.describe(channel_id='Channel ID for the voice channel.')
+    @app_commands.checks.has_permissions(manage_channels=True)
     @guild_only()
-    async def set_server_voice_channel(ctx: commands.Context, channel_id: str):
-        try:
-            channel_id = int(channel_id)
-            # Fetch the channel from the guild
-            channel = ctx.guild.get_channel(channel_id)  # Returns None if the channel does not exist
-            if channel is None:
-                await ctx.send("Invalid channel ID: Channel does not exist in this guild.")
-                return
-            # Check if the channel is a voice channel
-            if isinstance(channel, discord.VoiceChannel):
-                bot_database.update_voice_channels(ctx.guild.id, channel_id)
-                await ctx.send(f"Voice channel for **{ctx.guild}** set to **{channel.name}**.", delete_after=5)
-            else:
-                await ctx.send("The provided channel ID is not a voice channel.")
-        except ValueError:
-            await ctx.send("Invalid channel ID: Please provide a valid numeric channel ID.")
-        except Exception as e:
-            await ctx.send(f"An error occurred: {str(e)}")
+    async def set_server_voice_channel(ctx: commands.Context, channel: discord.VoiceChannel):
+        bot_database.update_voice_channels(ctx.guild.id, channel.id)
+        await ctx.send(f"Voice channel for **{ctx.guild}** set to **{channel.name}**.", delete_after=5)
 
     async def process_toggle_tts(ctx: commands.Context):
         global tts_enabled
@@ -1695,28 +1677,25 @@ async def dynamic_prompting(user_name:str, text:str, i=None):
         await i.reply(content=f"__Text with **[Dynamic Prompting](<https://github.com/altoiddealer/ad_discordbot/wiki/dynamic-prompting>)**__:\n>>> **{user_name}**: {text_with_comments}", mention_author=False, silent=True)
     return text
 
+
 @client.event
 async def on_message(message: discord.Message):
-    try:
-        text = message.clean_content # primarily converts @mentions to actual user names
-        if textgenwebui_enabled and not bot_behavior.bot_should_reply(message, text): 
-            return # Check that bot should reply or not
-        # Store the current time. The value will save locally to database.yaml at another time
-        bot_database.update_last_user_msg(message.channel.id, save_now=False)
-        # if @ mentioning bot, remove the @ mention from user prompt
-        if text.startswith(f"@{bot_database.last_character} "):
-            text = text.replace(f"@{bot_database.last_character} ", "", 1)
-        # apply wildcards
-        text = await dynamic_prompting(message.author.display_name, text, message)
-
-        async with task_semaphore:
-            async with message.channel.typing():
-                log.info(f'reply requested: {message.author.display_name} said: "{text}"')
-                await message_task(message, text, 'on_message')
-                await run_flow_if_any(message, 'on_message', text)
-
-    except Exception as e:
-        log.error(f"An error occurred in on_message: {e}")
+    text = message.clean_content # primarily converts @mentions to actual user names
+    if textgenwebui_enabled and not bot_behavior.bot_should_reply(message, text): 
+        return # Check that bot should reply or not
+    # Store the current time. The value will save locally to database.yaml at another time
+    bot_database.update_last_user_msg(message.channel.id, save_now=False)
+    # if @ mentioning bot, remove the @ mention from user prompt
+    if text.startswith(f"@{bot_database.last_character} "):
+        text = text.replace(f"@{bot_database.last_character} ", "", 1)
+    # apply wildcards
+    text = await dynamic_prompting(message.author.display_name, text, message)
+    
+    async with task_semaphore:
+        async with message.channel.typing():
+            log.info(f'reply requested: {message.author.display_name} said: "{text}"')
+            await message_task(message, text, 'on_message')
+            await run_flow_if_any(message, 'on_message', text)
 
 #################################################################
 ######################## QUEUED MESSAGE #########################
@@ -4140,15 +4119,32 @@ if sd_enabled:
 #################################################################
 ######################### MISC COMMANDS #########################
 #################################################################
+
 @client.event
-async def on_command_error(ctx:commands.Context, error:Exception):
-    log.debug(f'Command error: {error}')
-    await ctx.reply(str(error), ephemeral=True, delete_after=5)
+async def on_error(event_name, *args, **kwargs):
+    print(traceback.format_exc())
+    log.warning(f'Event error in {event_name}')
+
+@client.event
+async def on_command_error(ctx:commands.Context, error:Union[HybridCommandError, CommandError, AppCommandError, CommandInvokeError, DiscordException, Exception]):
+    while isinstance(error, (HybridCommandError, CommandInvokeError)):
+        error = error.original
+
+    # ignore certain errors in console
+    if not isinstance(error, (
+        discord.app_commands.errors.MissingPermissions,
+        commands.errors.MissingPermissions,
+    )):
+        print(''.join(traceback.format_tb(error.__traceback__)))
+        log.warning(f'Command /{ctx.command} failed: Error <{type(error).__name__}> {error}')
+
+
+    await ctx.reply(f'Command `/{ctx.command}` failed\n```\n{error}\n```', ephemeral=True, delete_after=15)
             
 @client.listen('on_app_command_error')
 async def on_app_command_error(inter:discord.Interaction, error:discord.app_commands.AppCommandError):
     log.debug(f'App command error: {error}')
-    await inter.response.send_message(str(error), ephemeral=True, delete_after=5)
+    await inter.response.send_message(str(error), ephemeral=True, delete_after=15)
 
 
 if system_embed_info:
@@ -4172,48 +4168,41 @@ if system_embed_info:
         await ctx.send(embed=system_embed_info)
 
 @client.hybrid_command(description="Toggle current channel as an announcement channel for the bot (model changes)")
+@app_commands.checks.has_permissions(manage_channels=True)
 @guild_only()
 async def announce(ctx: commands.Context):
-    try:
-        if ctx.channel.id in bot_database.announce_channels:
-            bot_database.announce_channels.remove(ctx.channel.id) # If the channel is already in the announce channels, remove it
-            action_message = f'Removed {ctx.channel.mention} from announce channels. Use "/announce" again if you want to add it back.'
-        else:
-            # If the channel is not in the announce channels, add it
-            bot_database.announce_channels.append(ctx.channel.id)
-            action_message = f'Added {ctx.channel.mention} to announce channels. Use "/announce" again to remove it.'
+    if ctx.channel.id in bot_database.announce_channels:
+        bot_database.announce_channels.remove(ctx.channel.id) # If the channel is already in the announce channels, remove it
+        action_message = f'Removed {ctx.channel.mention} from announce channels. Use "/announce" again if you want to add it back.'
+    else:
+        # If the channel is not in the announce channels, add it
+        bot_database.announce_channels.append(ctx.channel.id)
+        action_message = f'Added {ctx.channel.mention} to announce channels. Use "/announce" again to remove it.'
 
-        bot_database.save()
-        await ctx.reply(action_message)
-    except Exception as e:
-        log.error(f"Error toggling announce channel setting: {e}")
+    bot_database.save()
+    await ctx.reply(action_message)
 
 @client.hybrid_command(description="Toggle current channel as main channel for bot to auto-reply without needing to be called")
+@app_commands.checks.has_permissions(manage_channels=True)
 @guild_only()
 async def main(ctx: commands.Context):
-    try:
-        if ctx.channel.id in bot_database.main_channels:
-            bot_database.main_channels.remove(ctx.channel.id) # If the channel is already in the main channels, remove it
-            action_message = f'Removed {ctx.channel.mention} from main channels. Use "/main" again if you want to add it back.'
-        else:
-            # If the channel is not in the main channels, add it
-            bot_database.main_channels.append(ctx.channel.id)
-            action_message = f'Added {ctx.channel.mention} to main channels. Use "/main" again to remove it.'
+    if ctx.channel.id in bot_database.main_channels:
+        bot_database.main_channels.remove(ctx.channel.id) # If the channel is already in the main channels, remove it
+        action_message = f'Removed {ctx.channel.mention} from main channels. Use "/main" again if you want to add it back.'
+    else:
+        # If the channel is not in the main channels, add it
+        bot_database.main_channels.append(ctx.channel.id)
+        action_message = f'Added {ctx.channel.mention} to main channels. Use "/main" again to remove it.'
 
-        bot_database.save()
-        await ctx.reply(action_message, delete_after=5)
-    except Exception as e:
-        log.error(f"Error toggling main channel setting: {e}")
+    bot_database.save()
+    await ctx.reply(action_message, delete_after=5)
 
 @client.hybrid_command(description="Update dropdown menus without restarting bot script.")
 @guild_only()
 async def sync(ctx: commands.Context):
-    try:
-        await ctx.reply('Syncing client tree. Note: Menus may not update instantly.', ephemeral=True, delete_after=10)
-        log.info(f"{ctx.author.display_name} used '/sync' to sync the client.tree (refresh commands).")
-        await bg_task_queue.put(client.tree.sync()) # Process this in the background
-    except Exception as e:
-        log.error(f"Error syncing client.tree with '/sync': {e}")
+    await ctx.reply('Syncing client tree. Note: Menus may not update instantly.', ephemeral=True, delete_after=10)
+    log.info(f"{ctx.author.display_name} used '/sync' to sync the client.tree (refresh commands).")
+    await bg_task_queue.put(client.tree.sync()) # Process this in the background
 
 #################################################################
 ######################### LLM COMMANDS ##########################
@@ -4223,32 +4212,24 @@ if textgenwebui_enabled:
     @client.hybrid_command(description="Reset the conversation with current character")
     @configurable_for_dm_if(lambda ctx: config.discord_dm_setting('allow_chatting', True))
     async def reset_conversation(ctx: commands.Context):
-        try:
-            shared.stop_everything = True
-            await ireply(ctx, 'conversation reset') # send a response msg to the user
-            # Create a new instanec of the history and set it to active
-            bot_history.get_history_for(ctx.channel.id).fresh().replace()
+        shared.stop_everything = True
+        await ireply(ctx, 'conversation reset') # send a response msg to the user
+        # Create a new instanec of the history and set it to active
+        bot_history.get_history_for(ctx.channel.id).fresh().replace()
 
-            async with task_semaphore:
-                # offload to ai_gen queue
-                log.info(f'{ctx.author.display_name} used "/reset_conversation": "{bot_database.last_character}"')
-                params = {'character': {'char_name': bot_database.last_character, 'verb': 'Resetting', 'mode': 'reset'}}
-                await change_char_task(ctx, 'reset', params)
+        async with task_semaphore:
+            # offload to ai_gen queue
+            log.info(f'{ctx.author.display_name} used "/reset_conversation": "{bot_database.last_character}"')
+            params = {'character': {'char_name': bot_database.last_character, 'verb': 'Resetting', 'mode': 'reset'}}
+            await change_char_task(ctx, 'reset', params)
 
-        except Exception as e:
-            print(traceback.format_exc())
-            log.error(f"Error with /reset_conversation: {e}")
 
     # /save_conversation command
     @client.hybrid_command(description="Saves the current conversation to a new file in text-generation-webui/logs/")
     @guild_only()
     async def save_conversation(ctx: commands.Context):
-        try:
-            await bot_history.get_history_for(ctx.channel.id).save(timeout=0, force=True)
-            await ctx.reply('Saved current conversation history', ephemeral=True)
-            
-        except Exception as e:
-            log.error(f"Error with /save_conversation: {e}")
+        await bot_history.get_history_for(ctx.channel.id).save(timeout=0, force=True)
+        await ctx.reply('Saved current conversation history', ephemeral=True)
 
     # Context menu command to edit a message
     @client.tree.context_menu(name="edit history")
@@ -4633,26 +4614,23 @@ if textgenwebui_enabled:
     @client.hybrid_command(description="Choose a character")
     @guild_only()
     async def character(ctx: commands.Context):
-        try:
-            _, filtered_characters = get_all_characters()
-            if filtered_characters:
-                items_for_character = [i['name'] for i in filtered_characters]
-                warned_too_many_character = False # TODO use the warned_once feature?
-                characters_view = SelectOptionsView(items_for_character,
-                                                custom_id_prefix='characters',
-                                                placeholder_prefix='Characters: ',
-                                                unload_item=None,
-                                                warned=warned_too_many_character)
-                view_message = await ctx.send('### Select a Character.', view=characters_view, ephemeral=True)
-                await characters_view.wait()
+        _, filtered_characters = get_all_characters()
+        if filtered_characters:
+            items_for_character = [i['name'] for i in filtered_characters]
+            warned_too_many_character = False # TODO use the warned_once feature?
+            characters_view = SelectOptionsView(items_for_character,
+                                            custom_id_prefix='characters',
+                                            placeholder_prefix='Characters: ',
+                                            unload_item=None,
+                                            warned=warned_too_many_character)
+            view_message = await ctx.send('### Select a Character.', view=characters_view, ephemeral=True)
+            await characters_view.wait()
 
-                selected_item = characters_view.get_selected()
-                await view_message.delete()
-                await process_character(ctx, selected_item)
-            else:
-                await ctx.send('There are no characters available', ephemeral=True)
-        except Exception as e:
-            log.error(f"An error occurred while selecting a Character from '/characters' command: {e}")
+            selected_item = characters_view.get_selected()
+            await view_message.delete()
+            await process_character(ctx, selected_item)
+        else:
+            await ctx.send('There are no characters available', ephemeral=True)
 
 #################################################################
 ####################### /IMGMODEL COMMAND #######################
@@ -4835,25 +4813,22 @@ if sd_enabled:
     @client.hybrid_command(description="Choose an Img Model")
     @guild_only()
     async def imgmodel(ctx: commands.Context):
-        try:
-            all_imgmodels = await fetch_imgmodels()
-            if all_imgmodels:
-                items_for_img_model = [i["imgmodel_name"] for i in all_imgmodels]
-                warned_too_many_img_model = False # TODO use the warned_once feature?
-                imgmodels_view = SelectOptionsView(items_for_img_model,
-                                                custom_id_prefix='imgmodels',
-                                                placeholder_prefix='ImgModels: ',
-                                                unload_item=None,
-                                                warned=warned_too_many_img_model)
-                view_message = await ctx.send('### Select an Image Model.', view=imgmodels_view, ephemeral=True)
-                await imgmodels_view.wait()
-                selected_item = imgmodels_view.get_selected()
-                await view_message.delete()
-                await process_imgmodel(ctx, selected_item)
-            else:
-                await ctx.send('There are no Img models available', ephemeral=True)
-        except Exception as e:
-            log.error(f"An error occurred while selecting an Img model from '/imgmodel' command: {e}")
+        all_imgmodels = await fetch_imgmodels()
+        if all_imgmodels:
+            items_for_img_model = [i["imgmodel_name"] for i in all_imgmodels]
+            warned_too_many_img_model = False # TODO use the warned_once feature?
+            imgmodels_view = SelectOptionsView(items_for_img_model,
+                                            custom_id_prefix='imgmodels',
+                                            placeholder_prefix='ImgModels: ',
+                                            unload_item=None,
+                                            warned=warned_too_many_img_model)
+            view_message = await ctx.send('### Select an Image Model.', view=imgmodels_view, ephemeral=True)
+            await imgmodels_view.wait()
+            selected_item = imgmodels_view.get_selected()
+            await view_message.delete()
+            await process_imgmodel(ctx, selected_item)
+        else:
+            await ctx.send('There are no Img models available', ephemeral=True)
 
 #################################################################
 ####################### /LLMMODEL COMMAND #######################
@@ -4880,26 +4855,23 @@ if textgenwebui_enabled:
     @client.hybrid_command(description="Choose an LLM Model")
     @guild_only()
     async def llmmodel(ctx: commands.Context):
-        try:
-            all_llmmodels = utils.get_available_models()
-            if all_llmmodels:
-                items_for_llm_model = [i for i in all_llmmodels]
-                unload_llmmodel = items_for_llm_model.pop(0)
-                warned_too_many_llm_model = False # TODO use the warned_once feature?
-                llmmodels_view = SelectOptionsView(items_for_llm_model,
-                                                custom_id_prefix='llmmodels',
-                                                placeholder_prefix='LLMModels: ',
-                                                unload_item=unload_llmmodel,
-                                                warned=warned_too_many_llm_model)
-                view_message = await ctx.send('### Select an LLM Model.', view=llmmodels_view, ephemeral=True)
-                await llmmodels_view.wait()
-                selected_item = llmmodels_view.get_selected()
-                await view_message.delete()
-                await process_llmmodel(ctx, selected_item)
-            else:
-                await ctx.send('There are no LLM models available', ephemeral=True)
-        except Exception as e:
-            log.error(f"An error occurred while selecting an LLM model from '/llmmodel' command: {e}")
+        all_llmmodels = utils.get_available_models()
+        if all_llmmodels:
+            items_for_llm_model = [i for i in all_llmmodels]
+            unload_llmmodel = items_for_llm_model.pop(0)
+            warned_too_many_llm_model = False # TODO use the warned_once feature?
+            llmmodels_view = SelectOptionsView(items_for_llm_model,
+                                            custom_id_prefix='llmmodels',
+                                            placeholder_prefix='LLMModels: ',
+                                            unload_item=unload_llmmodel,
+                                            warned=warned_too_many_llm_model)
+            view_message = await ctx.send('### Select an LLM Model.', view=llmmodels_view, ephemeral=True)
+            await llmmodels_view.wait()
+            selected_item = llmmodels_view.get_selected()
+            await view_message.delete()
+            await process_llmmodel(ctx, selected_item)
+        else:
+            await ctx.send('There are no LLM models available', ephemeral=True)
 
 #################################################################
 ####################### /SPEAK COMMAND #######################
