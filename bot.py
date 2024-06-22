@@ -888,7 +888,7 @@ async def process_tts_resp(ictx:CtxInteraction, bot_message:HMessage, is_dm:bool
 if textgenwebui_enabled and tts_client:
 
     @client.hybrid_command(name="set_server_voice_channel", description="Assign a channel as the voice channel for this server")
-    @app_commands.describe(channel_id='Channel ID for the voice channel.')
+    @app_commands.checks.has_permissions(manage_channels=True)
     @guild_only()
     async def set_server_voice_channel(ctx: commands.Context, channel: discord.VoiceChannel):
         bot_database.update_voice_channels(ctx.guild.id, channel.id)
@@ -4130,8 +4130,14 @@ async def on_command_error(ctx:commands.Context, error:Union[HybridCommandError,
     while isinstance(error, (HybridCommandError, CommandInvokeError)):
         error = error.original
 
-    print(''.join(traceback.format_tb(error.__traceback__)))
-    log.warning(f'Command /{ctx.command} failed: Error {error}')
+    # ignore certain errors in console
+    if not isinstance(error, (
+        discord.app_commands.errors.MissingPermissions,
+        commands.errors.MissingPermissions,
+    )):
+        print(''.join(traceback.format_tb(error.__traceback__)))
+        log.warning(f'Command /{ctx.command} failed: Error <{type(error).__name__}> {error}')
+
 
     await ctx.reply(f'Command `/{ctx.command}` failed\n```\n{error}\n```', ephemeral=True, delete_after=15)
             
@@ -4162,6 +4168,7 @@ if system_embed_info:
         await ctx.send(embed=system_embed_info)
 
 @client.hybrid_command(description="Toggle current channel as an announcement channel for the bot (model changes)")
+@app_commands.checks.has_permissions(manage_channels=True)
 @guild_only()
 async def announce(ctx: commands.Context):
     if ctx.channel.id in bot_database.announce_channels:
@@ -4176,6 +4183,7 @@ async def announce(ctx: commands.Context):
     await ctx.reply(action_message)
 
 @client.hybrid_command(description="Toggle current channel as main channel for bot to auto-reply without needing to be called")
+@app_commands.checks.has_permissions(manage_channels=True)
 @guild_only()
 async def main(ctx: commands.Context):
     if ctx.channel.id in bot_database.main_channels:
