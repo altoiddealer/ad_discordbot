@@ -3628,15 +3628,9 @@ async def img_gen_task(source:str, img_prompt:str, params:dict, ictx:CtxInteract
         await process_image_gen(img_payload, channel, params)
         if (source == 'image' or (bot_will_do['should_send_text'] and not bot_will_do['should_gen_text'])) and img_send_embed_info:
             img_send_embed_info.title = f"{user_name} requested an image:"
-            img_send_embed_info.description = params.get('message', img_prompt)
-            # if ictx:
-            #     if hasattr(ictx, 'followup'): 
-            #         await ictx.followup.reply(embed=img_send_embed_info)
-            #     else: 
-            #         await ictx.reply(embed=img_send_embed_info)
-            # else: 
+            img_send_embed_info.description = params.get('message', img_prompt)[:2000]
             await channel.send(embed=img_send_embed_info)
-            await channel.send(f">>> {img_payload['prompt']}")
+            await channel.send(f">>> {img_payload['prompt']}"[:2000])
         if send_user_image:
             await channel.send(file=send_user_image) if len(send_user_image) == 1 else await channel.send(files=send_user_image)
         # If switching back to original Img model
