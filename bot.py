@@ -634,7 +634,7 @@ async def first_run():
 async def update_tags(tags:list) -> list:
     if not isinstance(tags, list):
         log.warning('''One or more "tags" are improperly formatted. Please ensure each tag is formatted as a list item designated with a hyphen (-)''')
-        return tags
+        return []
     try:
         tags_data = load_file(shared_path.tags, {})
         global_tag_keys = tags_data.get('global_tag_keys', [])
@@ -4745,7 +4745,7 @@ async def change_imgmodel(selected_imgmodel_params:dict):
             return updated_imgmodel_params, imgmodel_tags
         except Exception as e:
             log.error(f"Error merging selected imgmodel data with base imgmodel data: {e}")
-            return {}
+            return {}, []
 
     # Save new Img model data
     async def save_new_imgmodel_settings(load_new_model, updated_imgmodel_params, imgmodel_tags):
