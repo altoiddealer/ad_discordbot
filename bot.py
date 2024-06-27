@@ -3475,22 +3475,22 @@ def collect_img_tag_values(tags, params):
                     controlnet_args.setdefault(index, {}).update({key.split('_', 1)[-1]: value})   # Update controlnet args at the specified index
                 # get any layerdiffuse extension params
                 elif key == 'layerdiffuse' and extensions.get('layerdiffuse_enabled'):
-                    img_payload_mods['layerdiffuse']['method'] = str(value)
+                    layerdiffuse_args['method'] = str(value)
                 elif key.startswith('laydiff_') and extensions.get('layerdiffuse_enabled'):
                     laydiff_key = key[len('laydiff_'):]
                     layerdiffuse_args[laydiff_key] = value
                 # get any ReActor extension params
                 elif key == 'reactor' and extensions.get('reactor_enabled'):
-                    img_payload_mods['reactor']['image'] = value
+                    reactor_args['image'] = value
                 elif key.startswith('reactor_') and extensions.get('reactor_enabled'):
                     reactor_key = key[len('reactor_'):]
                     reactor_args[reactor_key] = value
                 # get any Forge Couple extension params
                 elif key == 'forge_couple' and extensions.get('forgecouple_enabled'):
                     if value.startswith('['):
-                        img_payload_mods['forge_couple']['maps'] = list(value)
+                        forge_couple_args['maps'] = list(value)
                     else: 
-                        img_payload_mods['forge_couple']['direction'] = str(value)
+                        forge_couple_args['direction'] = str(value)
                 elif key.startswith('couple_') and extensions.get('forgecouple_enabled'):
                     forge_couple_key = key[len('couple_'):]
                     if value.startswith('['):
