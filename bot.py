@@ -555,7 +555,7 @@ if sd_enabled:
             imgmodel_update_task.cancel()
             await ctx.send("Auto-change Imgmodels task was cancelled.", ephemeral=True, delete_after=5)
             log.info("Auto-change Imgmodels task was cancelled via '/toggle_auto_change_imgmodels_task'")
-            
+
         else:
             await bg_task_queue.put(start_auto_change_imgmodels())
             await ctx.send("Auto-change Img models task was started.", ephemeral=True, delete_after=5)
@@ -4778,7 +4778,12 @@ async def change_imgmodel(selected_imgmodel_params:dict):
     updated_imgmodel_params, imgmodel_tags = await merge_new_imgmodel_data(selected_imgmodel_params)
     # Save settings
     await save_new_imgmodel_settings(load_new_model, updated_imgmodel_params, imgmodel_tags)
-
+    # Restart auto-change imgmodel task
+    global imgmodel_update_task
+    if imgmodel_update_task and not imgmodel_update_task.done():
+        imgmodel_update_task.cancel()
+        await bg_task_queue.put(start_auto_change_imgmodels())
+        log.info("Auto-change Imgmodels task was restarted")
 
 async def get_selected_imgmodel_params(selected_imgmodel_value:str) -> dict:
     try:
