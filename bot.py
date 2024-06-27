@@ -2320,11 +2320,11 @@ async def speak_task(ctx: commands.Context, text:str, params:dict):
         llm_payload = extra_stopping_strings(llm_payload)
         # Get history for interaction channel
         local_history = bot_history.get_history_for(ctx.channel.id)
-        user_message = await create_user_message(local_history, llm_payload, False, ctx)
+        user_message = await create_user_message(local_history, llm_payload, params, ctx)
         # generate text with text-generation-webui
         last_resp, tts_resp = await llm_gen(llm_payload)
         # Process responses
-        bot_message = await create_bot_message(user_message, local_history, False, last_resp, tts_resp, ctx)
+        bot_message = await create_bot_message(user_message, local_history, params, last_resp, tts_resp, ctx)
 
         if system_embed:
             await system_embed.delete()
