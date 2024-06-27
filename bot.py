@@ -555,7 +555,7 @@ if sd_enabled:
             imgmodel_update_task.cancel()
             await ctx.send("Auto-change Imgmodels task was cancelled.", ephemeral=True, delete_after=5)
             log.info("Auto-change Imgmodels task was cancelled via '/toggle_auto_change_imgmodels_task'")
-            
+
         else:
             await bg_task_queue.put(start_auto_change_imgmodels())
             await ctx.send("Auto-change Img models task was started.", ephemeral=True, delete_after=5)
@@ -2389,7 +2389,7 @@ async def change_imgmodel_task(params:dict, ictx=None):
             return True
 
         # Change Image model
-        await change_imgmodel(imgmodel_params)
+        await change_imgmodel(imgmodel_params, ictx)
 
         if channel and change_embed:
             await change_embed.delete()
@@ -3475,22 +3475,22 @@ def collect_img_tag_values(tags, params):
                     controlnet_args.setdefault(index, {}).update({key.split('_', 1)[-1]: value})   # Update controlnet args at the specified index
                 # get any layerdiffuse extension params
                 elif key == 'layerdiffuse' and extensions.get('layerdiffuse_enabled'):
-                    img_payload_mods['layerdiffuse']['method'] = str(value)
+                    layerdiffuse_args['method'] = str(value)
                 elif key.startswith('laydiff_') and extensions.get('layerdiffuse_enabled'):
                     laydiff_key = key[len('laydiff_'):]
                     layerdiffuse_args[laydiff_key] = value
                 # get any ReActor extension params
                 elif key == 'reactor' and extensions.get('reactor_enabled'):
-                    img_payload_mods['reactor']['image'] = value
+                    reactor_args['image'] = value
                 elif key.startswith('reactor_') and extensions.get('reactor_enabled'):
                     reactor_key = key[len('reactor_'):]
                     reactor_args[reactor_key] = value
                 # get any Forge Couple extension params
                 elif key == 'forge_couple' and extensions.get('forgecouple_enabled'):
                     if value.startswith('['):
-                        img_payload_mods['forge_couple']['maps'] = list(value)
+                        forge_couple_args['maps'] = list(value)
                     else: 
-                        img_payload_mods['forge_couple']['direction'] = str(value)
+                        forge_couple_args['direction'] = str(value)
                 elif key.startswith('couple_') and extensions.get('forgecouple_enabled'):
                     forge_couple_key = key[len('couple_'):]
                     if value.startswith('['):
@@ -4722,7 +4722,7 @@ async def guess_model_data(selected_imgmodel, presets):
         log.error(f"Error guessing selected imgmodel data: {e}")
 
 
-async def change_imgmodel(selected_imgmodel_params:dict):
+async def change_imgmodel(selected_imgmodel_params:dict, ictx:CtxInteraction=None):
 
     # Merge selected imgmodel/tag data with base settings
     async def merge_new_imgmodel_data(selected_imgmodel_params:dict):
@@ -4778,7 +4778,13 @@ async def change_imgmodel(selected_imgmodel_params:dict):
     updated_imgmodel_params, imgmodel_tags = await merge_new_imgmodel_data(selected_imgmodel_params)
     # Save settings
     await save_new_imgmodel_settings(load_new_model, updated_imgmodel_params, imgmodel_tags)
-
+    # Restart auto-change imgmodel task if triggered by a user interaction
+    if ictx:
+        global imgmodel_update_task
+        if imgmodel_update_task and not imgmodel_update_task.done():
+            imgmodel_update_task.cancel()
+            await bg_task_queue.put(start_auto_change_imgmodels())
+            log.info("Auto-change Imgmodels task was restarted")
 
 async def get_selected_imgmodel_params(selected_imgmodel_value:str) -> dict:
     try:
@@ -5248,7 +5254,7 @@ class ImgModel:
                 'image': '', 'enabled': False, 'source_faces': '0', 'target_faces': '0', 'model': 'inswapper_128.onnx', 'restore_face': 'CodeFormer', 'restore_visibility': 1,
                 'restore_upscale': True, 'upscaler': '4x_NMKD-Superscale-SP_178000_G', 'scale': 1.5, 'upscaler_visibility': 1, 'swap_in_source_img': False, 'swap_in_gen_img': True, 'log_level': 1,
                 'gender_detect_source': 0, 'gender_detect_target': 0, 'save_original': False, 'codeformer_weight': 0.8, 'source_img_hash_check': False, 'target_img_hash_check': False, 'system': 'CUDA',
-                'face_mask_correction': True, 'source_type': 0, 'face_model': '', 'source_folder': '', 'multiple_source_images': None, 'random_img': True, 'force_upscale': True, 'threshold': 0.6, 'max_faces': 2}}
+                'face_mask_correction': True, 'source_type': 0, 'face_model': '', 'source_folder': '', 'multiple_source_images': None, 'random_img': True, 'force_upscale': True, 'threshold': 0.6, 'max_faces': 2, 'tab_single': None}}
             if SD_CLIENT:
                 log.info('"ReActor" extension support is enabled and active.')
             

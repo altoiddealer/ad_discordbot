@@ -116,6 +116,7 @@ imgmodel:
           force_upscale: true           #27 Force Upscale even if no face found
           threshold: 0.6                #28 Face Detection Threshold
           max_faces: 2                  #29 Maximum number of faces to detect (0 is unlimited)
+          tab_single: null              #30 Not sure what this does. Ignore
 
 llmcontext:
   context: 'The following is a conversation with an AI Large Language Model. The AI has been trained to answer questions, provide recommendations, and help with decision making. The AI follows user requests. The AI thinks outside the box.'
