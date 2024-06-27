@@ -2389,7 +2389,7 @@ async def change_imgmodel_task(params:dict, ictx=None):
             return True
 
         # Change Image model
-        await change_imgmodel(imgmodel_params)
+        await change_imgmodel(imgmodel_params, ictx)
 
         if channel and change_embed:
             await change_embed.delete()
@@ -4722,7 +4722,7 @@ async def guess_model_data(selected_imgmodel, presets):
         log.error(f"Error guessing selected imgmodel data: {e}")
 
 
-async def change_imgmodel(selected_imgmodel_params:dict):
+async def change_imgmodel(selected_imgmodel_params:dict, ictx:CtxInteraction=None):
 
     # Merge selected imgmodel/tag data with base settings
     async def merge_new_imgmodel_data(selected_imgmodel_params:dict):
@@ -4778,12 +4778,13 @@ async def change_imgmodel(selected_imgmodel_params:dict):
     updated_imgmodel_params, imgmodel_tags = await merge_new_imgmodel_data(selected_imgmodel_params)
     # Save settings
     await save_new_imgmodel_settings(load_new_model, updated_imgmodel_params, imgmodel_tags)
-    # Restart auto-change imgmodel task
-    global imgmodel_update_task
-    if imgmodel_update_task and not imgmodel_update_task.done():
-        imgmodel_update_task.cancel()
-        await bg_task_queue.put(start_auto_change_imgmodels())
-        log.info("Auto-change Imgmodels task was restarted")
+    # Restart auto-change imgmodel task if triggered by a user interaction
+    if ictx:
+        global imgmodel_update_task
+        if imgmodel_update_task and not imgmodel_update_task.done():
+            imgmodel_update_task.cancel()
+            await bg_task_queue.put(start_auto_change_imgmodels())
+            log.info("Auto-change Imgmodels task was restarted")
 
 async def get_selected_imgmodel_params(selected_imgmodel_value:str) -> dict:
     try:
