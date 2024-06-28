@@ -4411,7 +4411,7 @@ if textgenwebui_enabled:
             await inter.response.send_message("Message not found in current chat history.", ephemeral=True, delete_after=5)
             return
 
-        await ireply(inter, 'regenerate') # send a response msg to the user
+        await ireply(inter, cmd) # send a response msg to the user
         async with task_semaphore:
             async with inter.channel.typing():
                 # offload to ai_gen queue
