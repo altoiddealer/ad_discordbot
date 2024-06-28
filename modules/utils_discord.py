@@ -215,29 +215,33 @@ async def replace_msg_in_history_and_discord(client_user:discord.Client, ictx:Ct
         if not target_discord_msg_id:
             target_discord_msg_id = updated_message.id
         target_discord_msg = await channel.fetch_message(target_discord_msg_id)
-        # Collect all messages that are part of the original message
-        messages_to_remove = [updated_message.id] + updated_message.related_ids
-        # Remove target message from the list
-        if target_discord_msg.id in messages_to_remove:
-            messages_to_remove.remove(target_discord_msg.id)
-        # Delete all other messages from discord
-        for message_id in messages_to_remove:
-            local_message = await channel.fetch_message(message_id)
-            if local_message:
-                await local_message.delete()
+
+        # Only modify discord message(s) if they are responses from the bot
+        if target_discord_msg.author == client_user:
+            # Collect all messages that are part of the original message
+            messages_to_remove = [updated_message.id] + updated_message.related_ids
+            # Remove target message from the list
+            if target_discord_msg.id in messages_to_remove:
+                messages_to_remove.remove(target_discord_msg.id)
+            # Delete all other messages from discord
+            for message_id in messages_to_remove:
+                local_message = await channel.fetch_message(message_id)
+                if local_message:
+                    await local_message.delete()
+
+            # Update original discord message, or send new one if too long
+            if len(text) < MAX_MESSAGE_LENGTH:
+                await target_discord_msg.edit(content=text)
+            else:
+                await target_discord_msg.delete()
+                if params.get('bot_message_to_update'):
+                    await send_long_message(channel, text, bot_message=updated_message, ref_message=ref_message)
+                else:
+                    await send_long_message(channel, text, bot_message=None, ref_message=ref_message)
+
         # Clear related IDs attribute
         updated_message.related_ids.clear() # TODO maybe add a 'fresh' method to HMessage? - For Reality
-
-        # Update original discord message, or send new one if too long
-        if len(text) < MAX_MESSAGE_LENGTH:
-            await target_discord_msg.edit(content=text)
-        else:
-            await target_discord_msg.delete()
-            if params.get('bot_message_to_update'):
-                await send_long_message(channel, text, bot_message=updated_message, ref_message=ref_message)
-            else:
-                await send_long_message(channel, text, bot_message=None, ref_message=ref_message)
-
+        # Update the HMessage
         updated_message.update(text=text, text_visible=text_visible, hidden=msg_hidden)
 
         # Apply any reactions applicable to message
@@ -288,7 +292,10 @@ class EditMessageModal(discord.ui.Modal, title="Edit Message in History"):
         new_text = self.new_content.value
         params = {'user_message_to_update': self.matched_hmessage}
         await replace_msg_in_history_and_discord(self.client_user, self.ictx, params=params, text=new_text, text_visible=new_text)
-        await inter.response.send_message("Message history has been edited successfully.", ephemeral=True, delete_after=5)
+        if self.target_message.author != self.client_user:
+            await inter.response.send_message("Message history has been edited successfully (Note: the bot cannot update your discord message).", ephemeral=True, delete_after=7)
+        else:
+            await inter.response.send_message("Message history has been edited successfully.", ephemeral=True, delete_after=5)
 
 class SelectedListItem(discord.ui.Select):
     def __init__(self, options, placeholder, custom_id):

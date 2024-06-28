@@ -2106,7 +2106,8 @@ async def continue_task(inter: discord.Interaction, local_history: History, targ
         ## Finalize payload, generate text via TGWUI, and process responses
         # Toggle TTS off, if interaction server is not connected to Voice Channel
         tts_sw = None
-        if not voice_clients.get(inter.guild.id) and int(tts_settings.get('play_mode', 0)) == 0:
+        if (hasattr(inter, 'guild') and getattr(inter.guild, 'voice_client', None) \
+            and not voice_clients.get(inter.guild.id) and int(tts_settings.get('play_mode', 0)) == 0):
             tts_sw = await apply_toggle_tts(inter.guild, toggle='off')
         # Check to apply Server Mode
         llm_payload = apply_server_mode(llm_payload, inter)
@@ -4411,7 +4412,7 @@ if textgenwebui_enabled:
             await inter.response.send_message("Message not found in current chat history.", ephemeral=True, delete_after=5)
             return
 
-        await ireply(inter, 'regenerate') # send a response msg to the user
+        await ireply(inter, cmd) # send a response msg to the user
         async with task_semaphore:
             async with inter.channel.typing():
                 # offload to ai_gen queue
