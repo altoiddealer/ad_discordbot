@@ -292,7 +292,7 @@ class EditMessageModal(discord.ui.Modal, title="Edit Message in History"):
         new_text = self.new_content.value
         params = {'user_message_to_update': self.matched_hmessage}
         await replace_msg_in_history_and_discord(self.client_user, self.ictx, params=params, text=new_text, text_visible=new_text)
-        if self.target_message.author != self.ictx.user:
+        if self.target_message.author != self.client_user:
             await inter.response.send_message("Message history has been edited successfully (Note: the bot cannot update your discord message).", ephemeral=True, delete_after=7)
         else:
             await inter.response.send_message("Message history has been edited successfully.", ephemeral=True, delete_after=5)
