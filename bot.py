@@ -39,7 +39,7 @@ sys.path.append("ad_discordbot")
 
 from modules.database import Database, ActiveSettings, Config, StarBoard, Statistics
 from modules.utils_shared import task_semaphore, shared_path, patterns, bot_emojis
-from modules.utils_misc import fix_dict, update_dict, sum_update_dict, update_dict_matched_keys, format_time  # noqa: F401
+from modules.utils_misc import fix_dict, update_dict, sum_update_dict, update_dict_matched_keys, format_time, format_time_difference  # noqa: F401
 from modules.utils_discord import guild_only, configurable_for_dm_if, is_direct_message, ireply, sleep_delete_message, send_long_message, \
     EditMessageModal, SelectedListItem, SelectOptionsView, get_user_ctx_inter, get_message_ctx_inter, apply_reactions_to_messages, replace_msg_in_history_and_discord, MAX_MESSAGE_LENGTH  # noqa: F401
 from modules.utils_files import load_file, merge_base, save_yaml_file  # noqa: F401
@@ -664,6 +664,53 @@ async def update_tags(tags:list) -> list:
         return tags
 
 #################################################################
+#################### SPONTANEOUS MESSAGING ######################
+#################################################################
+spontaneous_msg_tasks = {}
+
+async def spontaneous_message_task(ictx:CtxInteraction, prompt:str, wait:float):
+    global spontaneous_msg_tasks
+    task, tally = spontaneous_msg_tasks[ictx.channel.id]
+
+    await asyncio.sleep(wait)
+    try:
+        async with task_semaphore:
+            async with ictx.channel.typing():
+                log.info(f'Prompting for a spontaneous message: "{prompt}"')
+                await message_task(ictx, prompt, 'spontaneous_prompt')
+                await run_flow_if_any(ictx, 'spontaneous_prompt', prompt)
+                spontaneous_msg_tasks[ictx.channel.id] = (task, tally + 1)
+    except Exception as e:
+        log.error(f"Error while processing a Spontaneous Message: {e}")
+        if tally == 0:
+            spontaneous_msg_tasks.pop(ictx.channel.id)
+
+# Task to auto-prompt the LLM for a spontaneous message, based on current Behaviors
+async def spontaneous_messaging(ictx:CtxInteraction=None, source:str=None):
+    global spontaneous_msg_tasks
+    # if not (source and source == 'spontaneous_prompt') \
+    # First conditional check
+    if ictx and (random.random() < bot_behavior.spontaneous_msg_chance):
+        # Get any existing message task
+        current_chan_msg_task = spontaneous_msg_tasks.get(ictx.channel.id, (None, 0))
+        task, tally = current_chan_msg_task
+        # Second conditional check
+        if task is None or bot_behavior.spontaneous_msg_max_consecutive == -1 \
+            or tally + 1 < bot_behavior.spontaneous_msg_max_consecutive:
+            # Determine the wait duration and select a random prompt
+            wait = random.uniform(bot_behavior.spontaneous_msg_min_wait, bot_behavior.spontaneous_msg_max_wait)
+            random_prompt = random.choice(bot_behavior.spontaneous_msg_prompts)
+            if not random_prompt:
+                random_prompt = '''[SYSTEM] The conversation has been inactive for {time_since_last_user_msg}, so you should say something.'''
+            # Cancel existing task
+            if task and not task.done():
+                task.cancel()
+            new_task = asyncio.create_task(spontaneous_message_task(ictx, random_prompt, wait*60))
+            spontaneous_msg_tasks[ictx.channel.id] = (new_task, tally)
+
+            log.info(f"Created a spontaneous msg task (channel: {ictx.channel.id}, delay: {wait*60}).") # Debug because we want surprises from this feature
+
+#################################################################
 ########################### ON READY ############################
 #################################################################
 @client.event
@@ -1017,28 +1064,35 @@ def format_prompt_with_recent_output(ictx: CtxInteraction, user_name:str, prompt
         return prompt
 
 def process_tag_formatting(ictx, user_name:str, prompt:str, formatting:dict):
-    try:
-        updated_prompt = prompt
-        format_prompt = formatting.get('format_prompt', [])
-        time_offset = formatting.get('time_offset', None)
-        time_format = formatting.get('time_format', None)
-        date_format = formatting.get('date_format', None)
-        # Tag handling for prompt formatting
-        if format_prompt:
-            for fmt_prompt in format_prompt:
-                updated_prompt = fmt_prompt.replace('{prompt}', updated_prompt)
-        # format prompt with any defined recent messages
-        updated_prompt = format_prompt_with_recent_output(ictx, user_name, updated_prompt)
-        # Format time if defined
-        new_time, new_date = get_time(time_offset, time_format, date_format)
-        updated_prompt = updated_prompt.replace('{time}', new_time)
-        updated_prompt = updated_prompt.replace('{date}', new_date)
-        if updated_prompt != prompt:
-            log.info(f'Prompt was formatted: {updated_prompt}')
-        return updated_prompt
-    except Exception as e:
-        log.error(f"Error formatting LLM prompt: {e}")
-        return prompt
+    updated_prompt = prompt
+    # Only try formatting text if there is at least one instance of {variable syntax}
+    possible_variables = patterns.single_braces.search(prompt)
+    if possible_variables:
+        try:
+            format_prompt = formatting.get('format_prompt', [])
+            time_offset = formatting.get('time_offset', None)
+            time_format = formatting.get('time_format', None)
+            date_format = formatting.get('date_format', None)
+            # Tag handling for prompt formatting
+            if format_prompt:
+                for fmt_prompt in format_prompt:
+                    updated_prompt = fmt_prompt.replace('{prompt}', updated_prompt)
+            # format prompt with any defined recent messages
+            updated_prompt = format_prompt_with_recent_output(ictx, user_name, updated_prompt)
+            # format prompt with last time
+            time_since_last_user_msg = bot_database.last_user_msg.get(ictx.channel.id, '')
+            if time_since_last_user_msg:
+                time_since_last_user_msg = format_time_difference(time.time(), bot_database.last_user_msg[ictx.channel.id])
+            updated_prompt = updated_prompt.replace('{time_since_last_user_msg}', time_since_last_user_msg)
+            # Format time if defined
+            new_time, new_date = get_time(time_offset, time_format, date_format)
+            updated_prompt = updated_prompt.replace('{time}', new_time)
+            updated_prompt = updated_prompt.replace('{date}', new_date)
+            if updated_prompt != prompt:
+                log.info(f'Prompt was formatted: {updated_prompt}')
+        except Exception as e:
+            log.error(f"Error formatting LLM prompt: {e}")
+    return updated_prompt
 
 async def build_flow_queue(input_flow):
     try:
@@ -1715,6 +1769,8 @@ async def message_task(ictx: CtxInteraction, text:str, source:str='message', llm
     user_name = get_user_ctx_inter(ictx).display_name
     channel = ictx.channel
 
+    current_task.set(channel, 'message') # Note current bot task
+
     change_embed = None
     img_gen_embed = None
     user_message = None
@@ -1877,9 +1933,12 @@ async def message_task(ictx: CtxInteraction, text:str, source:str='message', llm
                                 **Processing image generation using your input as the prompt ...**', delete_after=5)
             await img_gen_task(source, text, params, ictx, tags)                                    # process image gen task
         
+        await spontaneous_messaging(ictx, source) # trigger spontaneous message from bot, as configured
+        
         return user_message, bot_message
 
     except Exception as e:
+        current_task.clear()
         print(traceback.format_exc())
         log.error(f'An error occurred while processing "{source}" request: {e}')
         if img_gen_embed_info:
@@ -4118,6 +4177,7 @@ if sd_enabled:
         except Exception as e:
             log.error(f"An error occurred in image(): {e}")
             traceback.print_exc()
+            current_task.clear()
 
 #################################################################
 ######################### MISC COMMANDS #########################
@@ -5132,6 +5192,24 @@ if textgenwebui_enabled and tts_client and tts_client in supported_tts_clients:
             await process_speak(ctx, input_text, selected_voice, lang, voice_input)
 
 #################################################################
+######################## TASK TRACKING ##########################
+#################################################################
+class CurrentTask:
+    def __init__(self):
+        self.task_channel = None
+        self.task_name = None
+    
+    def set(self, channel:discord.TextChannel, task:str):
+        self.task_channel = channel
+        self.task_name = task
+
+    def clear(self):
+        self.task_channel = None
+        self.task_name = None
+
+current_task = CurrentTask()
+
+#################################################################
 ####################### DEFAULT SETTINGS ########################
 #################################################################
 class Behavior:
@@ -5153,7 +5231,7 @@ class Behavior:
         self.spontaneous_msg_max_consecutive = -1
         self.spontaneous_msg_min_wait = 10.0
         self.spontaneous_msg_max_wait = 60.0
-        self.spontaneous_msg_prompts = {}
+        self.spontaneous_msg_prompts = []
 
     def update_behavior(self, behavior):
         for key, value in behavior.items():
@@ -5392,7 +5470,6 @@ class Settings:
     def __str__(self):
         attributes = ", ".join(f"{attr}={getattr(self, attr)}" for attr in dir(self) if not callable(getattr(self, attr)) and not attr.startswith("__"))
         return f"{self.__class__.__name__}({attributes})"
-    
 
 @dataclass_json
 @dataclass
@@ -5576,7 +5653,6 @@ class CustomHistoryManager(HistoryManager):
         
         return id_, character, mode
 
-        
 bot_behavior = Behavior() # needs to be loaded before settings
 bot_settings = Settings(bot_behavior=bot_behavior)
 bot_history = CustomHistoryManager(class_builder_history=CustomHistory, **config.get('textgenwebui', {}).get('chat_history', {}))
