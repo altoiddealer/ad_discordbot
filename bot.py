@@ -1898,12 +1898,10 @@ async def message_task(ictx: CtxInteraction, text:str, llm_payload:dict|None=Non
         return user_message, bot_message
 
     except Exception as e:
-        source = current_task.name
-        current_task.clear()
         print(traceback.format_exc())
-        log.error(f'An error occurred while processing "{source}" request: {e}')
+        log.error(f'An error occurred while processing "{current_task.name}" request: {e}')
         if img_gen_embed_info:
-            img_gen_embed_info.title = f'An error occurred while processing "{source}" request'
+            img_gen_embed_info.title = f'An error occurred while processing "{current_task.name}" request'
             img_gen_embed_info.description = e
             if img_gen_embed:
                 await img_gen_embed.edit(embed=img_gen_embed_info)
@@ -1911,6 +1909,7 @@ async def message_task(ictx: CtxInteraction, text:str, llm_payload:dict|None=Non
                 await channel.send(embed=img_gen_embed_info)
         if change_embed:
             await change_embed.delete()
+        current_task.clear()
     
     return None, None
 
