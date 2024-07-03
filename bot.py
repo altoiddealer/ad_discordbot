@@ -1544,6 +1544,8 @@ async def init_llm_payload(ictx: CtxInteraction, user_name:str, text:str) -> dic
     llm_payload['state']['name1_instruct'] = name1
     llm_payload['state']['name2_instruct'] = name2
     llm_payload['state']['character_menu'] = name2
+    if current_task.name == 'on_message' and bot_behavior.maximum_typing_speed > 0:
+        llm_payload['state']['max_tokens_second'] = round((bot_behavior.maximum_typing_speed*4)/60)
     llm_payload['state']['context'] = context
     ictx_history = bot_history.get_history_for(ictx.channel.id).render_to_tgwui()
     llm_payload['state']['history'] = ictx_history
@@ -1709,13 +1711,14 @@ async def on_message(message: discord.Message):
     async with task_semaphore:
         async with message.channel.typing():
             log.info(f'reply requested: {message.author.display_name} said: "{text}"')
-            await message_task(message, text, 'on_message')
-            await run_flow_if_any(message, 'on_message', text)
+            current_task.set(message.channel, 'on_message')
+            await message_task(message, text)
+            await run_flow_if_any(message, text)
 
 #################################################################
 ######################## QUEUED MESSAGE #########################
 #################################################################
-async def message_task(ictx: CtxInteraction, text:str, source:str='message', llm_payload:dict|None=None, params:dict|None=None) -> tuple[HMessage, HMessage]:
+async def message_task(ictx: CtxInteraction, text:str, llm_payload:dict|None=None, params:dict|None=None) -> tuple[HMessage, HMessage]:
     params = params or {}
     params['bot_will_do'] = params.get('bot_will_do', {})
     tags = {} # just incase there's an exception.
@@ -1754,7 +1757,7 @@ async def message_task(ictx: CtxInteraction, text:str, source:str='message', llm
         if params['bot_will_do']['should_gen_image']:
             if img_gen_embed:
                 await img_gen_embed.delete()
-            await img_gen_task(source, img_prompt, params, ictx, tags)
+            await img_gen_task(img_prompt, params, ictx, tags)
         return tags, params
 
     async def llmmodel_swap_back(params:dict, original_llmmodel:str) -> dict:
@@ -1862,7 +1865,7 @@ async def message_task(ictx: CtxInteraction, text:str, source:str='message', llm
 
     try:
         current_task.set(channel, 'message')                        # Note current bot task
-        await spontaneous_messaging.reset_for_channel(ictx, source) # Stop any pending spontaneous message task for current channel
+        await spontaneous_messaging.reset_for_channel(ictx)         # Stop any pending spontaneous message task for current channel
 
         text, tags = await get_tags(text)                                                           # collects all tags, sorted into sub-lists by phase (user / llm / userllm)
         tags = match_tags(text, tags, phase='llm')                                                  # match tags labeled for user / userllm.
@@ -1888,13 +1891,14 @@ async def message_task(ictx: CtxInteraction, text:str, source:str='message', llm
             if await sd_online(channel):                                                            # Notify user their prompt will be used directly for img gen
                 await channel.send('Bot was triggered by Tags to not respond with text.\n \
                                 **Processing image generation using your input as the prompt ...**', delete_after=5)
-            await img_gen_task(source, text, params, ictx, tags)                                    # process image gen task
+            await img_gen_task(text, params, ictx, tags)                                    # process image gen task
         
-        await spontaneous_messaging.set_for_channel(ictx, source) # trigger spontaneous message from bot, as configured
-        
+        await spontaneous_messaging.set_for_channel(ictx) # trigger spontaneous message from bot, as configured
+
         return user_message, bot_message
 
     except Exception as e:
+        source = current_task.name
         current_task.clear()
         print(traceback.format_exc())
         log.error(f'An error occurred while processing "{source}" request: {e}')
@@ -2281,7 +2285,8 @@ async def regenerate_task(inter: discord.Interaction, local_history: History, ta
             params['bot_msg_hidden'] = temp_reveal_msgs # Hide new bot message if regenerating from hidden exchange
 
         # Regenerate the reply
-        _, new_bot_message = await message_task(inter, original_user_text, 'regenerate', llm_payload, params)
+        current_task.set(inter.channel, 'regenerate')
+        _, new_bot_message = await message_task(inter, original_user_text, llm_payload, params)
 
         # Mark as reply
         new_bot_message.mark_as_reply_for(user_message)
@@ -2313,6 +2318,7 @@ async def regenerate_task(inter: discord.Interaction, local_history: History, ta
         await inter.followup.send(e_msg, silent=True)
         if system_embed:
             await system_embed.delete()
+    current_task.clear()
 
 async def speak_task(ctx: commands.Context, text:str, params:dict):
     user_name = ctx.author.display_name
@@ -2548,7 +2554,7 @@ async def announce_changes(ictx: CtxInteraction, change_label:str, change_name:s
     except Exception as e:
         log.error(f'An error occurred while announcing changes to announce channels: {e}')
 
-async def change_char_task(ictx: CtxInteraction, source:str, params:dict):
+async def change_char_task(ictx: CtxInteraction, params:dict):
     user_name = get_user_ctx_inter(ictx).display_name
     channel = ictx.channel
     change_embed = None
@@ -2588,7 +2594,8 @@ async def change_char_task(ictx: CtxInteraction, source:str, params:dict):
         await send_char_greeting_or_history(ictx, char_name)
         log.info(f"Character loaded: {char_name}")
     except Exception as e:
-        log.error(f'An error occurred while loading character for "{source}": {e}')
+        log.error(f'An error occurred while loading character for "{current_task.name}": {e}')
+        current_task.clear()
         if change_embed_info:
             change_embed_info.title = "An error occurred while loading character"
             change_embed_info.description = e
@@ -2686,9 +2693,10 @@ async def peek_flow_queue(ictx, queue, user_name:str, text:str):
         await queue.put(item_to_put_back)
     return flow_name, formatted_text
 
-async def flow_task(ictx: CtxInteraction, source:str, text:str):
+async def flow_task(ictx: CtxInteraction, text:str):
     user_name = get_user_ctx_inter(ictx).display_name
     channel = ictx.channel
+    current_task.set(ictx.channel, 'flows')
     try:
         global flow_event
         flow_embed = None
@@ -2705,14 +2713,12 @@ async def flow_task(ictx: CtxInteraction, source:str, text:str):
                 flow_embed_info.description += f'**Processing Step {total_flow_steps + 1 - remaining_flow_steps}/{total_flow_steps}**{flow_name}\n'
                 if flow_embed: 
                     await flow_embed.edit(embed=flow_embed_info)
-            await message_task(ictx, text, source)
+            await message_task(ictx, text)
         if flow_embed_info:
             flow_embed_info.title = f"Flow completed for {user_name}"
             flow_embed_info.description = flow_embed_info.description.replace("**Processing", ":white_check_mark: **")
             if flow_embed: 
                 await flow_embed.edit(embed=flow_embed_info)
-        flow_event.clear()              # flag that flow is no longer processing
-        flow_queue.task_done()          # flow queue task is complete
     except Exception as e:
         log.error(f"An error occurred while processing a Flow: {e}")
         if flow_embed_info:
@@ -2722,14 +2728,15 @@ async def flow_task(ictx: CtxInteraction, source:str, text:str):
                 await flow_embed.edit(embed=flow_embed_info)
             else: 
                 await channel.send(embed=flow_embed_info)
-        flow_event.clear()
-        flow_queue.task_done()
+    current_task.clear()
+    flow_event.clear()              # flag that flow is no longer processing
+    flow_queue.task_done()          # flow queue task is complete
 
 
-async def run_flow_if_any(ictx: CtxInteraction, source:str, text:str):
+async def run_flow_if_any(ictx:CtxInteraction, text:str):
     if flow_queue.qsize() > 0:
         # flows are activated in process_llm_payload_tags(), and is where the flow queue is populated
-        await flow_task(ictx, source, text)
+        await flow_task(ictx, text)
 
 #################################################################
 #################### QUEUED IMAGE GENERATION ####################
@@ -3597,7 +3604,7 @@ def match_img_tags(img_prompt:str, tags:SORTED_TAGS) -> SORTED_TAGS:
 
     return tags
 
-async def img_gen_task(source:str, img_prompt:str, params:dict, ictx:CtxInteraction, tags: SORTED_TAGS|None=None):
+async def img_gen_task(img_prompt:str, params:dict, ictx:CtxInteraction, tags: SORTED_TAGS|None=None):
     tags = tags or {}
     user_name = get_user_ctx_inter(ictx).display_name or None
     channel = ictx.channel
@@ -3647,7 +3654,7 @@ async def img_gen_task(source:str, img_prompt:str, params:dict, ictx:CtxInteract
         # Generate and send images
         params['bot_will_do'] = bot_will_do
         await process_image_gen(img_payload, channel, params)
-        if (source == 'image' or (bot_will_do['should_send_text'] and not bot_will_do['should_gen_text'])) and img_send_embed_info:
+        if (current_task.name == 'image' or (bot_will_do['should_send_text'] and not bot_will_do['should_gen_text'])) and img_send_embed_info:
             img_send_embed_info.title = f"{user_name} requested an image:"
             img_send_embed_info.description = params.get('message', img_prompt)[:2000]
             await channel.send(embed=img_send_embed_info)
@@ -3662,6 +3669,7 @@ async def img_gen_task(source:str, img_prompt:str, params:dict, ictx:CtxInteract
     except Exception as e:
         log.error(f"An error occurred in img_gen_task(): {e}")
         traceback.print_exc()
+        current_task.clear()
 
 #################################################################
 ######################## /IMAGE COMMAND #########################
@@ -4130,10 +4138,11 @@ if sd_enabled:
                         params['skip_create_user_msg'] = True
                         params['skip_create_bot_msg'] = True
                         params['save_to_history'] = False
-                        await message_task(ctx, prompt, 'image', llm_payload=None, params=params)
+                        current_task.set(ctx.channel, 'image')
+                        await message_task(ctx, prompt, llm_payload=None, params=params)
                     else:
                         await img_gen_task('image', prompt, params, ctx, tags={})
-                    await run_flow_if_any(ctx, 'image', prompt)
+                    await run_flow_if_any(ctx, prompt)
 
         except Exception as e:
             log.error(f"An error occurred in image(): {e}")
@@ -5037,10 +5046,12 @@ async def process_speak(ctx: commands.Context, input_text, selected_voice=None, 
                 # offload to ai_gen queue
                 log.info(f'{ctx.author.display_name} used "/speak": "{input_text}"')
                 params = {'tts_args': tts_args, 'user_voice': user_voice}
+                current_task.set(ctx.channel, 'speak')
                 await speak_task(ctx, input_text, params)
-                await run_flow_if_any(ctx, 'speak', input_text)
+                await run_flow_if_any(ctx, input_text)
 
     except Exception as e:
+        current_task.clear()
         log.error(f"Error processing tts request: {e}")
         await ctx.send(f"Error processing tts request: {e}", ephemeral=True)
 
@@ -5159,16 +5170,16 @@ if textgenwebui_enabled and tts_client and tts_client in supported_tts_clients:
 #################################################################
 class CurrentTask:
     def __init__(self):
-        self.task_channel = None
-        self.task_name = None
+        self.channel = None
+        self.name = None
     
     def set(self, channel:discord.TextChannel, task:str):
-        self.task_channel = channel
-        self.task_name = task
+        self.channel = channel
+        self.name = task
 
     def clear(self):
-        self.task_channel = None
-        self.task_name = None
+        self.channel = None
+        self.name = None
 
 current_task = CurrentTask()
 
@@ -5179,9 +5190,9 @@ class SpontaneousMessaging():
     def __init__(self):
         self.tasks = {}
 
-    async def reset_for_channel(self, ictx:CtxInteraction, source:str):
+    async def reset_for_channel(self, ictx:CtxInteraction):
         # Only reset from discord message or '/prompt' cmd
-        if source in ['on_message', 'prompt']:
+        if current_task.name in ['on_message', 'prompt']:
             current_chan_msg_task = self.tasks.get(ictx.channel.id, (None, 0))
             task, _ = current_chan_msg_task
             if task:
@@ -5196,13 +5207,15 @@ class SpontaneousMessaging():
             async with task_semaphore:
                 async with ictx.channel.typing():
                     log.info(f'Prompting for a spontaneous message: "{prompt}"')
-                    await message_task(ictx, prompt, 'spontaneous message')
-                    await run_flow_if_any(ictx, 'spontaneous message', prompt)
+                    current_task.set(ictx.channel, 'spontaneous message')
+                    await message_task(ictx, prompt)
+                    await run_flow_if_any(ictx, prompt)
                     task, tally = self.tasks[ictx.channel.id]
                     self.tasks[ictx.channel.id] = (task, tally + 1)
 
         except Exception as e:
             log.error(f"Error while processing a Spontaneous Message: {e}")
+            current_task.clear()
 
     async def init_task(self, ictx:CtxInteraction, task, tally:int):
         # Randomly select wait duration from start/end range 
@@ -5221,8 +5234,7 @@ class SpontaneousMessaging():
         self.tasks[ictx.channel.id] = (new_task, tally)
         log.debug(f"Created a spontaneous msg task (channel: {ictx.channel.id}, delay: {wait_secs}), tally: {tally}.") # Debug because we want surprises from this feature
     
-    async def set_for_channel(self, ictx:CtxInteraction, source:str=None):
-        # if not (source and source == 'spontaneous message') \
+    async def set_for_channel(self, ictx:CtxInteraction):
         # First conditional check
         if ictx and (random.random() < bot_behavior.spontaneous_msg_chance):
             # Get any existing message task
