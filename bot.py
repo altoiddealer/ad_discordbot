@@ -5319,6 +5319,7 @@ class Behavior:
         return reply
 
     def probability_to_reply(self, probability):
+        probability = max(0.0, min(1.0, probability))
         # Determine if the bot should reply based on a probability
         return random.random() < probability
 
