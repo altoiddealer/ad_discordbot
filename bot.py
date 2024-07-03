@@ -37,8 +37,8 @@ from typing import Union
 
 sys.path.append("ad_discordbot")
 
-from modules.database import Database, ActiveSettings, Config, StarBoard, Statistics
 from modules.utils_shared import task_semaphore, shared_path, patterns, bot_emojis
+from modules.database import Database, ActiveSettings, Config, StarBoard, Statistics
 from modules.utils_misc import fix_dict, update_dict, sum_update_dict, update_dict_matched_keys, format_time, format_time_difference  # noqa: F401
 from modules.utils_discord import guild_only, configurable_for_dm_if, is_direct_message, ireply, sleep_delete_message, send_long_message, \
     EditMessageModal, SelectedListItem, SelectOptionsView, get_user_ctx_inter, get_message_ctx_inter, apply_reactions_to_messages, replace_msg_in_history_and_discord, MAX_MESSAGE_LENGTH  # noqa: F401
@@ -1738,7 +1738,8 @@ async def message_task(ictx: CtxInteraction, text:str, source:str='message', llm
                 mention_resp = update_mention(get_user_ctx_inter(ictx).mention, bot_message.text)
                 await send_long_message(channel, mention_resp, bot_message, ref_message)
                 # Apply any reactions applicable to message
-                await apply_reactions_to_messages(client.user, ictx, bot_message)
+                if config.discord.get('history_reactions', {}).get('enabled', True):
+                    await apply_reactions_to_messages(client.user, ictx, bot_message)
         # send any user images
         send_user_image = params.get('send_user_image', [])
         if send_user_image:
@@ -1798,7 +1799,8 @@ async def message_task(ictx: CtxInteraction, text:str, source:str='message', llm
         if not params.get('skip_create_bot_msg'):
             # Replacing original bot message via "regenerate replace"
             if params.get('bot_message_to_update'):
-                bot_message = await replace_msg_in_history_and_discord(client.user, ictx, params, last_resp, tts_resp)
+                apply_reactions = config.discord.get('history_reactions', {}).get('enabled', True)
+                bot_message = await replace_msg_in_history_and_discord(client.user, ictx, params, last_resp, tts_resp, apply_reactions)
                 params['bot_will_do']['should_send_text'] = False
             else:
                 bot_message = await create_bot_message(user_message, local_history, params, last_resp, tts_resp, ictx)
@@ -1874,7 +1876,8 @@ async def message_task(ictx: CtxInteraction, text:str, source:str='message', llm
                 if params['bot_will_do']['should_gen_image']:
                     await init_img_embed()                                                          # Create a "prompting" embed for image gen
                 params, bot_message, user_message, img_prompt = await message_llm_task(llm_payload, params)
-                await apply_reactions_to_messages(client.user, ictx, user_message)                  # add a reaction to any hidden user message
+                if config.discord.get('history_reactions', {}).get('enabled', True):
+                    await apply_reactions_to_messages(client.user, ictx, user_message)              # add a reaction to any hidden user message
                 if llmmodel_params and llm_model_mode == 'swap':
                     params = await llmmodel_swap_back(params, original_llmmodel)                    # if LLM model swapping was triggered
             if sd_enabled:
@@ -2161,7 +2164,8 @@ async def continue_task(inter: discord.Interaction, local_history: History, targ
         else:
             # Mark original message as being continued and update reactions for it
             original_bot_message.is_continued = True
-            await apply_reactions_to_messages(client.user, inter, original_bot_message, [original_bot_message.id], ref_message)
+            if config.discord.get('history_reactions', {}).get('enabled', True):
+                await apply_reactions_to_messages(client.user, inter, original_bot_message, [original_bot_message.id], ref_message)
 
             # Add previous last message id to related ids
             updated_bot_message.related_ids.append(original_bot_message.id)
@@ -2178,7 +2182,8 @@ async def continue_task(inter: discord.Interaction, local_history: History, targ
 
         # Apply any reactions applicable to message
         msg_ids_to_edit = [updated_bot_message.id] + updated_bot_message.related_ids
-        await apply_reactions_to_messages(client.user, inter, updated_bot_message, msg_ids_to_edit, new_discord_msg)
+        if config.discord.get('history_reactions', {}).get('enabled', True):
+            await apply_reactions_to_messages(client.user, inter, updated_bot_message, msg_ids_to_edit, new_discord_msg)
 
         # process any tts resp
         if tts_resp:
@@ -2292,10 +2297,12 @@ async def regenerate_task(inter: discord.Interaction, local_history: History, ta
             # Adjust attributes/reactions for prior active bot reply/regeneration
             target_bot_message.update(hidden=True) # always hide previous regen when creating
             target_bot_message_ids = [target_bot_message.id] + target_bot_message.related_ids
-            await apply_reactions_to_messages(client.user, inter, target_bot_message, target_bot_message_ids, target_discord_msg)
+            if config.discord.get('history_reactions', {}).get('enabled', True):
+                await apply_reactions_to_messages(client.user, inter, target_bot_message, target_bot_message_ids, target_discord_msg)
 
         # Update reactions for user message
-        await apply_reactions_to_messages(client.user, inter, user_message)
+        if config.discord.get('history_reactions', {}).get('enabled', True):
+            await apply_reactions_to_messages(client.user, inter, user_message)
 
         if system_embed:
             await system_embed.delete()
@@ -4371,7 +4378,8 @@ if textgenwebui_enabled:
             
 
             # Apply reaction to user message
-            await apply_reactions_to_messages(client.user, inter, user_message)
+            if config.discord.get('history_reactions', {}).get('enabled', True):
+                await apply_reactions_to_messages(client.user, inter, user_message)
 
             # Process all messages that need label updates
             for target_hmsg in bot_hmsgs_to_react:
@@ -4380,7 +4388,8 @@ if textgenwebui_enabled:
                 if target_hmsg.related_ids:
                     msg_ids_to_edit.extend(target_hmsg.related_ids)
                 # Process reactions for all affected messages
-                await apply_reactions_to_messages(client.user, inter, target_hmsg, msg_ids_to_edit, target_discord_msg)
+                if config.discord.get('history_reactions', {}).get('enabled', True):
+                    await apply_reactions_to_messages(client.user, inter, target_hmsg, msg_ids_to_edit, target_discord_msg)
             
             result = f"**Modified message exchange pair in history for {inter.user.display_name}** (messages {verb})."
             log.info(result)

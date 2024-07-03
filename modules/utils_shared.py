@@ -80,9 +80,12 @@ class SharedRegex: # Search for [ (]r['"] in vscode
 
 patterns = SharedRegex()
 
+from modules.database import Config
+config = Config()
+
 class SharedBotEmojis:
-    hidden_emoji = '🙈'
-    regen_emoji = '🔃'
-    continue_emoji = '⏩'
+    hidden_emoji = config.discord.get('history_reactions', {}).get('hidden_emoji', '🙈')
+    regen_emoji = config.discord.get('history_reactions', {}).get('regen_emoji', '🔃')
+    continue_emoji = config.discord.get('history_reactions', {}).get('continue_emoji', '⏩')
 
 bot_emojis = SharedBotEmojis()
