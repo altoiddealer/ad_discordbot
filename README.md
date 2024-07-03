@@ -24,6 +24,14 @@
 <details>
   <summary>click to expand</summary>
 
+   **07/02/2024:** New Behaviors "Spontaneous Messaging"
+
+    - Character can now be silently prompted to say something after inactivity
+    - A few settings control the behavior
+    - It can also serve as an "Auto-prompter" generating unlimited responses
+
+  ---
+
    **06/18/2024:** Per-Server Voice Channels (TTS)
 
     - New command to set voice channels: /set_server_voice_channel
