@@ -1019,7 +1019,7 @@ def format_prompt_with_recent_output(ictx: CtxInteraction, user_name:str, prompt
 def process_tag_formatting(ictx, user_name:str, prompt:str, formatting:dict):
     updated_prompt = prompt
     # Only try formatting text if there is at least one instance of {variable syntax}
-    possible_variables = patterns.single_braces.search(prompt)
+    possible_variables = patterns.curly_brackets.search(prompt)
     if possible_variables:
         try:
             format_prompt = formatting.get('format_prompt', [])
