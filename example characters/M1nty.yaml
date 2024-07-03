@@ -53,6 +53,16 @@ behavior:
   go_wild_in_channel: true            # Whether or not the bot will always reply in the main channel
   conversation_recency: 600           # How long (in seconds) a user is determined to be "in active conversation". Only applicable if 'go_wild_in_channel' is false
 
+  # 'spontaneous_messaging' will select a random prompt from a list instead of being prompted by user message.
+  # Note that syntax for features such as Variables, Dynamic Prompting, Tags from Text, etc, can all be used in these prompts
+  spontaneous_msg_chance: 0.0         # 0.0 = never happens / 1.0 = always happens (guaranteed to happen prior to or at 'max_delay')
+  spontaneous_msg_max_consecutive: 1  # Number of allowed spontaneous messages without User activity. -1 = Unlimited / other value like 10 would be 10 messages
+  spontaneous_msg_min_wait: 10.0      # Minimum wait before bot may spontaneously message (-minutes-)
+  spontaneous_msg_max_wait: 60.0      # Maximum wait before bot may spontaneously message (-minutes-)
+  spontaneous_msg_prompts:            # Random prompt will be picked from this list if triggered
+    - '''[SYSTEM] The conversation has been inactive for {time_since_last_user_msg}, so you should say something.'''
+  # - 'another prompt' 
+
 # optional - will override settings in 'dict_base_settings.yaml'
 state:
   preset: ''

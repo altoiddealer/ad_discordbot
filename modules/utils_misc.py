@@ -64,3 +64,21 @@ def format_time(seconds):
     else:
         days = seconds / 86400
         return f"{days:.2f}", "days"
+
+def format_time_difference(start_time, end_time):
+    # Calculate difference in seconds and round to the nearest second
+    difference_seconds = round(abs(end_time - start_time))
+    
+    # Calculate minutes, hours, and remaining seconds
+    minutes, seconds = divmod(difference_seconds, 60)
+    hours, minutes = divmod(minutes, 60)
+    
+    # Format the result based on the time difference
+    if difference_seconds < 60:
+        return f"{difference_seconds} seconds"
+    elif difference_seconds < 3600:
+        return f"{minutes} minutes"
+    elif seconds == 0:
+        return f"{hours} hours"
+    else:
+        return f"{hours} hours and {minutes} minutes"
