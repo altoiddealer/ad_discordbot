@@ -664,53 +664,6 @@ async def update_tags(tags:list) -> list:
         return tags
 
 #################################################################
-#################### SPONTANEOUS MESSAGING ######################
-#################################################################
-spontaneous_msg_tasks = {}
-
-async def spontaneous_message_task(ictx:CtxInteraction, prompt:str, wait:float):
-    global spontaneous_msg_tasks
-    task, tally = spontaneous_msg_tasks[ictx.channel.id]
-
-    await asyncio.sleep(wait)
-    try:
-        async with task_semaphore:
-            async with ictx.channel.typing():
-                log.info(f'Prompting for a spontaneous message: "{prompt}"')
-                await message_task(ictx, prompt, 'spontaneous_prompt')
-                await run_flow_if_any(ictx, 'spontaneous_prompt', prompt)
-                spontaneous_msg_tasks[ictx.channel.id] = (task, tally + 1)
-    except Exception as e:
-        log.error(f"Error while processing a Spontaneous Message: {e}")
-        if tally == 0:
-            spontaneous_msg_tasks.pop(ictx.channel.id)
-
-# Task to auto-prompt the LLM for a spontaneous message, based on current Behaviors
-async def spontaneous_messaging(ictx:CtxInteraction=None, source:str=None):
-    global spontaneous_msg_tasks
-    # if not (source and source == 'spontaneous_prompt') \
-    # First conditional check
-    if ictx and (random.random() < bot_behavior.spontaneous_msg_chance):
-        # Get any existing message task
-        current_chan_msg_task = spontaneous_msg_tasks.get(ictx.channel.id, (None, 0))
-        task, tally = current_chan_msg_task
-        # Second conditional check
-        if task is None or bot_behavior.spontaneous_msg_max_consecutive == -1 \
-            or tally + 1 < bot_behavior.spontaneous_msg_max_consecutive:
-            # Determine the wait duration and select a random prompt
-            wait = random.uniform(bot_behavior.spontaneous_msg_min_wait, bot_behavior.spontaneous_msg_max_wait)
-            random_prompt = random.choice(bot_behavior.spontaneous_msg_prompts)
-            if not random_prompt:
-                random_prompt = '''[SYSTEM] The conversation has been inactive for {time_since_last_user_msg}, so you should say something.'''
-            # Cancel existing task
-            if task and not task.done():
-                task.cancel()
-            new_task = asyncio.create_task(spontaneous_message_task(ictx, random_prompt, wait*60))
-            spontaneous_msg_tasks[ictx.channel.id] = (new_task, tally)
-
-            log.info(f"Created a spontaneous msg task (channel: {ictx.channel.id}, delay: {wait*60}).") # Debug because we want surprises from this feature
-
-#################################################################
 ########################### ON READY ############################
 #################################################################
 @client.event
@@ -1769,8 +1722,6 @@ async def message_task(ictx: CtxInteraction, text:str, source:str='message', llm
     user_name = get_user_ctx_inter(ictx).display_name
     channel = ictx.channel
 
-    current_task.set(channel, 'message') # Note current bot task
-
     change_embed = None
     img_gen_embed = None
     user_message = None
@@ -1908,6 +1859,9 @@ async def message_task(ictx: CtxInteraction, text:str, source:str='message', llm
         return llm_payload, tags, params
 
     try:
+        current_task.set(channel, 'message')                        # Note current bot task
+        await spontaneous_messaging.reset_for_channel(ictx, source) # Stop any pending spontaneous message task for current channel
+
         text, tags = await get_tags(text)                                                           # collects all tags, sorted into sub-lists by phase (user / llm / userllm)
         tags = match_tags(text, tags, phase='llm')                                                  # match tags labeled for user / userllm.
         params['bot_will_do'] = bot_should_do(tags, params['bot_will_do'])                          # check what bot should do
@@ -1933,7 +1887,7 @@ async def message_task(ictx: CtxInteraction, text:str, source:str='message', llm
                                 **Processing image generation using your input as the prompt ...**', delete_after=5)
             await img_gen_task(source, text, params, ictx, tags)                                    # process image gen task
         
-        await spontaneous_messaging(ictx, source) # trigger spontaneous message from bot, as configured
+        await spontaneous_messaging.set_for_channel(ictx, source) # trigger spontaneous message from bot, as configured
         
         return user_message, bot_message
 
@@ -5210,6 +5164,70 @@ class CurrentTask:
 current_task = CurrentTask()
 
 #################################################################
+#################### SPONTANEOUS MESSAGING ######################
+#################################################################
+class SpontaneousMessaging():
+    def __init__(self):
+        self.tasks = {}
+
+    async def reset_for_channel(self, ictx:CtxInteraction, source:str):
+        # Do not reset from a spontaneous message
+        if source != 'spontaneous message':
+            current_chan_msg_task = self.tasks.get(ictx.channel.id, (None, 0))
+            task, _ = current_chan_msg_task
+            if task:
+                if not task.done():
+                    task.cancel()
+                self.tasks.pop(ictx.channel.id)
+
+    async def run_task(self, ictx:CtxInteraction, prompt:str, wait:int):
+        await asyncio.sleep(wait)
+        # create message task with the randomly selected prompt
+        try:
+            async with task_semaphore:
+                async with ictx.channel.typing():
+                    log.info(f'Prompting for a spontaneous message: "{prompt}"')
+                    await message_task(ictx, prompt, 'spontaneous message')
+                    await run_flow_if_any(ictx, 'spontaneous message', prompt)
+                    task, tally = self.tasks[ictx.channel.id]
+                    self.tasks[ictx.channel.id] = (task, tally + 1)
+
+        except Exception as e:
+            log.error(f"Error while processing a Spontaneous Message: {e}")
+
+    async def init_task(self, ictx:CtxInteraction, task, tally:int):
+        # Randomly select wait duration from start/end range 
+        wait = random.uniform(bot_behavior.spontaneous_msg_min_wait, bot_behavior.spontaneous_msg_max_wait)
+        wait_secs = round(wait*60)
+        # select a random prompt
+        random_prompt = random.choice(bot_behavior.spontaneous_msg_prompts)
+        if not random_prompt:
+            random_prompt = '''[SYSTEM] The conversation has been inactive for {time_since_last_user_msg}, so you should say something.'''
+        # Cancel any existing task (does not reset tally)
+        if task and not task.done():
+            task.cancel()
+        # Start the new task
+        new_task = asyncio.create_task(self.run_task(ictx, random_prompt, wait_secs))
+        # update self variable with new task
+        self.tasks[ictx.channel.id] = (new_task, tally)
+        log.debug(f"Created a spontaneous msg task (channel: {ictx.channel.id}, delay: {wait_secs}), tally: {tally}.") # Debug because we want surprises from this feature
+    
+    async def set_for_channel(self, ictx:CtxInteraction, source:str=None):
+        # if not (source and source == 'spontaneous message') \
+        # First conditional check
+        if ictx and (random.random() < bot_behavior.spontaneous_msg_chance):
+            # Get any existing message task
+            current_chan_msg_task = self.tasks.get(ictx.channel.id, (None, 0))
+            task, tally = current_chan_msg_task
+            # Second conditional check
+            if task is None or bot_behavior.spontaneous_msg_max_consecutive == -1 \
+                or tally + 1 < bot_behavior.spontaneous_msg_max_consecutive:
+                # Initialize the spontaneous message task
+                await self.init_task(ictx, task, tally)
+
+spontaneous_messaging = SpontaneousMessaging()
+
+#################################################################
 ####################### DEFAULT SETTINGS ########################
 #################################################################
 class Behavior:
@@ -5228,7 +5246,7 @@ class Behavior:
         self.max_reply_delay = 30.0
         self.msg_size_affects_delay = False
         self.spontaneous_msg_chance = 0.0
-        self.spontaneous_msg_max_consecutive = -1
+        self.spontaneous_msg_max_consecutive = 1
         self.spontaneous_msg_min_wait = 10.0
         self.spontaneous_msg_max_wait = 60.0
         self.spontaneous_msg_prompts = []
