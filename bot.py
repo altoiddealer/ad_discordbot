@@ -1138,7 +1138,7 @@ async def process_llm_payload_tags(ictx: CtxInteraction, llm_payload:dict, llm_p
                 if char_params == change_character:
                     verb = 'Changing'
                     char_params = {'character': {'char_name': char_params, 'mode': 'change', 'verb': verb}}
-                    await change_char_task(ictx, 'Tags', char_params)
+                    await change_char_task(ictx, char_params)
                 else:
                     verb = 'Swapping'
                     llm_payload = await swap_llm_character(swap_character, user_name, llm_payload)
@@ -1694,6 +1694,13 @@ async def dynamic_prompting(user_name:str, text:str, i=None):
         await i.reply(content=f"__Text with **[Dynamic Prompting](<https://github.com/altoiddealer/ad_discordbot/wiki/dynamic-prompting>)**__:\n>>> **{user_name}**: {text_with_comments}", mention_author=False, silent=True)
     return text
 
+def calculate_reply_delay() -> float:
+    responsiveness = max(0.0, min(1.0, bot_behavior.responsiveness)) # clamped between 0.0 and 1.0
+    skewed_value = random.random() ** (1 / (responsiveness + 1e-5))  # Add slight variation to responsiveness, avoid division by zero
+#    print("skewed_value:", skewed_value)
+    delay = skewed_value * bot_behavior.max_reply_delay               # Calculate the final delay
+#    print("delay", delay)
+    return delay
 
 @client.event
 async def on_message(message: discord.Message):
@@ -1707,8 +1714,9 @@ async def on_message(message: discord.Message):
         text = text.replace(f"@{bot_database.last_character} ", "", 1)
     # apply wildcards
     text = await dynamic_prompting(message.author.display_name, text, message)
-    
+
     async with task_semaphore:
+        await asyncio.sleep(calculate_reply_delay())
         async with message.channel.typing():
             log.info(f'reply requested: {message.author.display_name} said: "{text}"')
             current_task.set(message.channel, 'on_message')
@@ -4261,7 +4269,8 @@ if textgenwebui_enabled:
             # offload to ai_gen queue
             log.info(f'{ctx.author.display_name} used "/reset_conversation": "{bot_database.last_character}"')
             params = {'character': {'char_name': bot_database.last_character, 'verb': 'Resetting', 'mode': 'reset'}}
-            await change_char_task(ctx, 'reset', params)
+            current_task.set(ctx.channel, 'reset')
+            await change_char_task(ctx, params)
 
 
     # /save_conversation command
@@ -4623,7 +4632,8 @@ async def process_character(ctx, selected_character_value):
             # offload to ai_gen queue
             log.info(f'{ctx.author.display_name} used "/character": "{char_name}"')
             params = {'character': {'char_name': char_name, 'verb': 'Changing', 'mode': 'change'}}
-            await change_char_task(ctx, 'character', params)
+            current_task.set(ctx.channel, 'character')
+            await change_char_task(ctx, params)
 
     except Exception as e:
         log.error(f"Error processing selected character from /character command: {e}")
@@ -5263,7 +5273,7 @@ class Behavior:
         # New Behaviors
         self.maximum_typing_speed = -1
         self.responsiveness = 1.0
-        self.max_reply_delay = 30.0
+        self.max_reply_delay = 0.0
         self.msg_size_affects_delay = False
         self.spontaneous_msg_chance = 0.0
         self.spontaneous_msg_max_consecutive = 1
