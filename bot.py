@@ -5180,8 +5180,8 @@ class SpontaneousMessaging():
         self.tasks = {}
 
     async def reset_for_channel(self, ictx:CtxInteraction, source:str):
-        # Do not reset from a spontaneous message
-        if source != 'spontaneous message':
+        # Only reset from discord message or '/prompt' cmd
+        if source in ['on_message', 'prompt']:
             current_chan_msg_task = self.tasks.get(ictx.channel.id, (None, 0))
             task, _ = current_chan_msg_task
             if task:
