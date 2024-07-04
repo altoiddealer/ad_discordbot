@@ -1694,14 +1694,6 @@ async def dynamic_prompting(user_name:str, text:str, i=None):
         await i.reply(content=f"__Text with **[Dynamic Prompting](<https://github.com/altoiddealer/ad_discordbot/wiki/dynamic-prompting>)**__:\n>>> **{user_name}**: {text_with_comments}", mention_author=False, silent=True)
     return text
 
-def calculate_reply_delay() -> float:
-    responsiveness = max(0.0, min(1.0, bot_behavior.responsiveness)) # clamped between 0.0 and 1.0
-    skewed_value = random.random() ** (1 / (responsiveness + 1e-5))  # Add slight variation to responsiveness, avoid division by zero
-#    print("skewed_value:", skewed_value)
-    delay = skewed_value * bot_behavior.max_reply_delay               # Calculate the final delay
-#    print("delay", delay)
-    return delay
-
 @client.event
 async def on_message(message: discord.Message):
     text = message.clean_content # primarily converts @mentions to actual user names
@@ -1716,7 +1708,7 @@ async def on_message(message: discord.Message):
     text = await dynamic_prompting(message.author.display_name, text, message)
 
     async with task_semaphore:
-        await asyncio.sleep(calculate_reply_delay())
+        await asyncio.sleep(bot_behavior.get_response_delay(text))
         async with message.channel.typing():
             log.info(f'reply requested: {message.author.display_name} said: "{text}"')
             current_task.set(message.channel, 'on_message')
@@ -5270,11 +5262,14 @@ class Behavior:
         self.go_wild_in_channel = True
         self.conversation_recency = 600
         self.user_conversations = {}
-        # New Behaviors
+        # Behaviors to be more like a computer program or humanlike
         self.maximum_typing_speed = -1
         self.responsiveness = 1.0
         self.max_reply_delay = 0.0
         self.msg_size_affects_delay = False
+        self.response_delay_values = []     # self.response_delay_values and self.response_delay_weights
+        self.response_delay_weights = []    # are calculated from the 3 settings above them via calculate_response_delays()
+        # Spontaneous messaging
         self.spontaneous_msg_chance = 0.0
         self.spontaneous_msg_max_consecutive = 1
         self.spontaneous_msg_min_wait = 10.0
@@ -5285,10 +5280,67 @@ class Behavior:
         for key, value in behavior.items():
             if hasattr(self, key):
                 setattr(self, key, value)
+        self.calculate_response_delays()
 
     def update_user_dict(self, user_id):
         # Update the last conversation time for a user
         self.user_conversations[user_id] = datetime.now()
+
+    def calculate_response_delays(self):
+        responsiveness = max(0.0, min(1.0, self.responsiveness)) # clamped between 0.0 and 1.0
+        if responsiveness == 1.0:
+            self.response_delay_values, self.response_delay_weights = [0], [1]
+            return
+        inv_responsiveness = (1.0 - responsiveness)
+        num_values = 10 # arbitrary number of values to generate
+        # Generate evenly spaced values from 0 to max_reply_delay
+        values = [round(i * self.max_reply_delay / (num_values - 1), 3) for i in range(num_values)]
+        # Calculate weights based on inverted responsiveness (happened to figure out good calculation when responsiveness is flipped...)
+        weights = [((1 - abs(value / self.max_reply_delay - inv_responsiveness)) / inv_responsiveness) ** 2 for value in values]
+        # Normalize weights to sum up to 1.0
+        total_weight = sum(weights)
+        weights = [weight / total_weight for weight in weights]
+        # Update self variables
+        self.response_delay_values = values
+        self.response_delay_weights = weights
+
+    def get_complex_response_delay(self, text):
+        text_length = len(text)
+        print("text_length", text_length)
+        num_values = len(self.response_delay_values)
+        text_weights = []
+        # Determine the range of weights based on text length
+        min_text_length = 50
+        max_text_length = 500
+        if text_length < min_text_length:
+            text_weights = [1.0] + [0.0] * (num_values - 1)
+        elif text_length > max_text_length:
+            text_weights = [0.0] * (num_values - 1) + [1.0]
+        else:
+            range_size = max_text_length - min_text_length
+            weight_increment = 1.0 / (num_values - 1)
+            index = int((text_length - min_text_length) / range_size * (num_values - 1))
+            text_weights = [0.0] * index + [1 - (index * weight_increment)] + [0.0] * (num_values - index - 1)
+        print("text_weights:", text_weights)
+        
+        # Combine weights
+        combined_weights = [rw + tw for rw, tw in zip(self.response_delay_weights, text_weights)]
+        
+        # Normalize combined weights
+        total_weight = sum(combined_weights)
+        combined_weights = [weight / total_weight for weight in combined_weights]
+        print("combined_weights", combined_weights)
+        return combined_weights
+
+    def get_response_delay(self, text):
+        weights = self.response_delay_weights
+        if self.msg_size_affects_delay:
+            weights = self.get_complex_response_delay(text)
+
+        # Choose a value with weighted probability
+        chosen_delay = random.choices(self.response_delay_values, weights)[0]
+        print("chosen_delay", chosen_delay)
+        return chosen_delay
 
     def in_active_conversation(self, user_id):
         # Check if a user is in an active conversation with the bot
