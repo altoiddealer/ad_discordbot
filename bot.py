@@ -678,6 +678,8 @@ async def on_ready():
             
     # Create background task processing queue
     client.loop.create_task(process_tasks_in_background())
+    # Create task for processing messages
+    client.loop.create_task(message_manager.process_msg_queue())
     # Start background task to sync the discord client tree
     await bg_task_queue.put(client.tree.sync())
     # Start background task to to change image models automatically
@@ -1706,14 +1708,8 @@ async def on_message(message: discord.Message):
         text = text.replace(f"@{bot_database.last_character} ", "", 1)
     # apply wildcards
     text = await dynamic_prompting(message.author.display_name, text, message)
-
-    async with task_semaphore:
-        await asyncio.sleep(bot_behavior.get_response_delay(text))
-        async with message.channel.typing():
-            log.info(f'reply requested: {message.author.display_name} said: "{text}"')
-            current_task.set(message.channel, 'on_message')
-            await message_task(message, text)
-            await run_flow_if_any(message, text)
+    # Offload to message manager
+    await message_manager.queue(message, text)
 
 #################################################################
 ######################## QUEUED MESSAGE #########################
@@ -5185,6 +5181,90 @@ class CurrentTask:
 current_task = CurrentTask()
 
 #################################################################
+####################### MESSAGE MANAGER #########################
+#################################################################
+# Manages "normal" discord message requests (not from commands, "Flows", etc)
+class MessageManager():
+    def __init__(self):
+        self.counter = 0
+        self.msg_queue = asyncio.PriorityQueue()
+        self.last_channel = None
+        self.active_channels = {}
+    
+    async def run_message_task(self, message: discord.Message, text: str):
+        try:
+            async with task_semaphore:
+                async with message.channel.typing():
+                    current_task.set(message.channel, 'message')
+                    log.info(f'reply requested: {message.author.display_name} said: "{text}"')
+                    await message_task(message, text)
+                    await run_flow_if_any(message, text)
+                    self.last_channel = message.channel.id
+        except Exception as e:
+            log.error(f"Error while processing a Message: {e}")
+            current_task.clear()
+
+    async def check_for_exception(self):
+        # If the next item is not ready, check for the next task in the same channel
+        exception = None
+        temp_items = []
+
+        while not self.msg_queue.empty():
+            send_after, num, message, text, channel_id = await self.msg_queue.get()
+            if channel_id == self.last_channel:
+                exception = {'send_after': send_after, 'num': num, 'message': message, 'text': text, 'channel_id': channel_id}
+                break
+            else:
+                temp_items.append((send_after, num, message, text, channel_id))
+
+        # Re-add the temporarily removed items back to the queue
+        for item in temp_items:
+            await self.msg_queue.put(item)
+
+        return exception
+
+    async def process_msg_queue(self):
+        while True:
+            if self.msg_queue.empty():
+                await asyncio.sleep(1)
+
+            while not self.msg_queue.empty():
+                # Fetches the next item in the queue with the earliest value for 'send_after'
+                send_after, num, message, text, channel_id = await self.msg_queue.get()
+
+                current_time = time.time()
+                # Process message that is ready to send
+                if send_after <= current_time:
+                    await self.run_message_task(message, text)
+                    self.msg_queue.task_done()
+                # Check for any exceptions and process first found
+                else:
+                    exception = await self.check_for_exception()
+                    if exception:
+                        await self.run_message_task(exception['message'], exception['text'])
+                        self.msg_queue.task_done()
+                    # Wait for next item to process normally
+                    else:
+                        delay = send_after - current_time
+                        if self.msg_queue.qsize() > 0:
+                            log.info(f'Queued msg #{num} will be processed in {delay} seconds.')
+                        await asyncio.sleep(delay)
+                        await self.run_message_task(message, text)
+                        self.msg_queue.task_done()
+
+    async def queue(self, message: discord.Message, text: str):
+        delay = bot_behavior.get_response_delay(text)
+        send_after = time.time() + delay
+        self.counter += 1
+        num = self.counter
+        channel_id = message.channel.id
+
+        await self.msg_queue.put((send_after, num, message, text, channel_id))
+        log.info(f'Queued msg (#{num}): {message.author.display_name} said: "{text}".')
+
+message_manager = MessageManager()
+
+#################################################################
 #################### SPONTANEOUS MESSAGING ######################
 #################################################################
 class SpontaneousMessaging():
@@ -5777,6 +5857,7 @@ else:
 async def runner():
     async with client:
         await client.start(bot_token, reconnect=True)
+        asyncio.create_task(message_manager.process_msg_queue())
 
 discord.utils.setup_logging(
             handler=log_file_handler,
