@@ -39,7 +39,7 @@ sys.path.append("ad_discordbot")
 
 from modules.utils_shared import task_semaphore, shared_path, patterns, bot_emojis
 from modules.database import Database, ActiveSettings, Config, StarBoard, Statistics
-from modules.utils_misc import fix_dict, update_dict, sum_update_dict, update_dict_matched_keys, format_time, format_time_difference  # noqa: F401
+from modules.utils_misc import fix_dict, update_dict, sum_update_dict, update_dict_matched_keys, format_time, format_time_difference, get_normalized_weights  # noqa: F401
 from modules.utils_discord import guild_only, configurable_for_dm_if, is_direct_message, ireply, sleep_delete_message, send_long_message, \
     EditMessageModal, SelectedListItem, SelectOptionsView, get_user_ctx_inter, get_message_ctx_inter, apply_reactions_to_messages, replace_msg_in_history_and_discord, MAX_MESSAGE_LENGTH  # noqa: F401
 from modules.utils_files import load_file, merge_base, save_yaml_file  # noqa: F401
@@ -5286,61 +5286,40 @@ class Behavior:
         # Update the last conversation time for a user
         self.user_conversations[user_id] = datetime.now()
 
+    # Response delays
     def calculate_response_delays(self):
+        num_values = 10 # arbitrary number of values and weights to generate
+        # Generate evenly spaced values from 0 to max_reply_delay
+        self.response_delay_values = [round(i * self.max_reply_delay / (num_values - 1), 3) for i in range(num_values)]
+        # Assign weights to delay values based on responsiveness
         responsiveness = max(0.0, min(1.0, self.responsiveness)) # clamped between 0.0 and 1.0
         if responsiveness == 1.0:
-            self.response_delay_values, self.response_delay_weights = [0], [1]
+            # Force all weight to delay value 0.0
+            self.response_delay_weights = [1.0] + [0.0] * (num_values - 1)
             return
+        # Generate the weights from responsiveness (inverted)
         inv_responsiveness = (1.0 - responsiveness)
-        num_values = 10 # arbitrary number of values to generate
-        # Generate evenly spaced values from 0 to max_reply_delay
-        values = [round(i * self.max_reply_delay / (num_values - 1), 3) for i in range(num_values)]
-        # Calculate weights based on inverted responsiveness (happened to figure out good calculation when responsiveness is flipped...)
-        weights = [((1 - abs(value / self.max_reply_delay - inv_responsiveness)) / inv_responsiveness) ** 2 for value in values]
-        # Normalize weights to sum up to 1.0
-        total_weight = sum(weights)
-        weights = [weight / total_weight for weight in weights]
-        # Update self variables
-        self.response_delay_values = values
-        self.response_delay_weights = weights
+        self.response_delay_weights = get_normalized_weights(x = inv_responsiveness, list_len = num_values)
 
-    def get_complex_response_delay(self, text):
-        text_length = len(text)
-        print("text_length", text_length)
-        num_values = len(self.response_delay_values)
-        text_weights = []
-        # Determine the range of weights based on text length
-        min_text_length = 50
-        max_text_length = 500
-        if text_length < min_text_length:
-            text_weights = [1.0] + [0.0] * (num_values - 1)
-        elif text_length > max_text_length:
-            text_weights = [0.0] * (num_values - 1) + [1.0]
-        else:
-            range_size = max_text_length - min_text_length
-            weight_increment = 1.0 / (num_values - 1)
-            index = int((text_length - min_text_length) / range_size * (num_values - 1))
-            text_weights = [0.0] * index + [1 - (index * weight_increment)] + [0.0] * (num_values - index - 1)
-        print("text_weights:", text_weights)
-        
-        # Combine weights
-        combined_weights = [rw + tw for rw, tw in zip(self.response_delay_weights, text_weights)]
-        
-        # Normalize combined weights
-        total_weight = sum(combined_weights)
-        combined_weights = [weight / total_weight for weight in combined_weights]
-        print("combined_weights", combined_weights)
-        return combined_weights
+    def get_advanced_response_delay_weights(self, text):
+        text_len = len(text)
+        text_factor = min(max(text_len / 450, 0.0), 1.0)  # Normalize text length to [0, 1]
+        text_weights = get_normalized_weights(x = text_factor, list_len = len(self.response_delay_weights))
+        # Combine text weights with delay weights
+        combined_weights = [w1 + w2 for w1, w2 in zip(self.response_delay_weights, text_weights)]
+        # Normalize combined weights to sum up to 1.0
+        total_combined_weight = sum(combined_weights)
+        final_weights = [weight / total_combined_weight for weight in combined_weights]
+        return final_weights
 
     def get_response_delay(self, text):
         weights = self.response_delay_weights
         if self.msg_size_affects_delay:
-            weights = self.get_complex_response_delay(text)
-
+            weights = self.get_advanced_response_delay_weights(text)
         # Choose a value with weighted probability
         chosen_delay = random.choices(self.response_delay_values, weights)[0]
-        print("chosen_delay", chosen_delay)
         return chosen_delay
+
 
     def in_active_conversation(self, user_id):
         # Check if a user is in an active conversation with the bot

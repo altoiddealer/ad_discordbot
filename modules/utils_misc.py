@@ -52,7 +52,7 @@ def update_dict_matched_keys(d, u):
     return d
 
 # Converts seconds to other values
-def format_time(seconds):
+def format_time(seconds) -> str:
     if seconds < 60:
         return seconds, "secs"
     elif seconds < 3600:
@@ -65,7 +65,7 @@ def format_time(seconds):
         days = seconds / 86400
         return f"{days:.2f}", "days"
 
-def format_time_difference(start_time, end_time):
+def format_time_difference(start_time, end_time) -> str:
     # Calculate difference in seconds and round to the nearest second
     difference_seconds = round(abs(end_time - start_time))
     
@@ -82,3 +82,13 @@ def format_time_difference(start_time, end_time):
         return f"{hours} hours"
     else:
         return f"{hours} hours and {minutes} minutes"
+
+def get_normalized_weights(x:float, list_len:int) -> list:
+    # Generate normalized weights based on a triangular distribution centered around x
+    x = max(0.0, min(1.0, x)) # ensure in range of 0.0 - 1.0
+    target_index = x * (list_len - 1)
+    # Create a simple triangular distribution for weights centered around target_index
+    weights = [1.0 / (1.0 + abs(i - target_index)) for i in range(list_len)]
+    # Normalize weights to sum up to 1.0
+    total_weight = sum(weights)
+    return [weight / total_weight for weight in weights]
