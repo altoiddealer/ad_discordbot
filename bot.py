@@ -5265,8 +5265,8 @@ class Behavior:
         # Behaviors to be more like a computer program or humanlike
         self.maximum_typing_speed = -1
         self.responsiveness = 1.0
-        self.max_reply_delay = 0.0
         self.msg_size_affects_delay = False
+        self.max_reply_delay = 30.0
         self.response_delay_values = []     # self.response_delay_values and self.response_delay_weights
         self.response_delay_weights = []    # are calculated from the 3 settings above them via calculate_response_delays()
         # Spontaneous messaging
@@ -5299,12 +5299,12 @@ class Behavior:
             return
         # Generate the weights from responsiveness (inverted)
         inv_responsiveness = (1.0 - responsiveness)
-        self.response_delay_weights = get_normalized_weights(x = inv_responsiveness, list_len = num_values)
+        self.response_delay_weights = get_normalized_weights(target = inv_responsiveness, list_len = num_values)
 
     def get_advanced_response_delay_weights(self, text):
         text_len = len(text)
         text_factor = min(max(text_len / 450, 0.0), 1.0)  # Normalize text length to [0, 1]
-        text_weights = get_normalized_weights(x = text_factor, list_len = len(self.response_delay_weights))
+        text_weights = get_normalized_weights(target = text_factor, list_len = len(self.response_delay_weights), strength=2.0) # use stronger weights for text factor
         # Combine text weights with delay weights
         combined_weights = [w1 + w2 for w1, w2 in zip(self.response_delay_weights, text_weights)]
         # Normalize combined weights to sum up to 1.0

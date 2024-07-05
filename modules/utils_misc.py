@@ -83,12 +83,12 @@ def format_time_difference(start_time, end_time) -> str:
     else:
         return f"{hours} hours and {minutes} minutes"
 
-def get_normalized_weights(x:float, list_len:int) -> list:
+def get_normalized_weights(target:float, list_len:int, strength:float=1.0) -> list:
     # Generate normalized weights based on a triangular distribution centered around x
-    x = max(0.0, min(1.0, x)) # ensure in range of 0.0 - 1.0
-    target_index = x * (list_len - 1)
+    target = max(0.0, min(1.0, target)) # ensure in range of 0.0 - 1.0
+    target_index = target * (list_len - 1)
     # Create a simple triangular distribution for weights centered around target_index
-    weights = [1.0 / (1.0 + abs(i - target_index)) for i in range(list_len)]
+    weights = [1.0 / (1.0 + abs(i - target_index) ** strength) for i in range(list_len)]
     # Normalize weights to sum up to 1.0
     total_weight = sum(weights)
     return [weight / total_weight for weight in weights]
