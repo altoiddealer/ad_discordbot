@@ -1546,7 +1546,7 @@ async def init_llm_payload(ictx: CtxInteraction, user_name:str, text:str) -> dic
     llm_payload['state']['name1_instruct'] = name1
     llm_payload['state']['name2_instruct'] = name2
     llm_payload['state']['character_menu'] = name2
-    if current_task.name == 'on_message' and bot_behavior.maximum_typing_speed > 0:
+    if current_task.name == 'message' and bot_behavior.maximum_typing_speed > 0:
         llm_payload['state']['max_tokens_second'] = round((bot_behavior.maximum_typing_speed*4)/60)
     llm_payload['state']['context'] = context
     ictx_history = bot_history.get_history_for(ictx.channel.id).render_to_tgwui()
@@ -5189,8 +5189,40 @@ class MessageManager():
         self.counter = 0
         self.msg_queue = asyncio.PriorityQueue()
         self.last_channel = None
-        self.active_channels = {}
-    
+        self.afk_range = []
+        self.afk_weights = []
+        self.active_in_guild = {}
+
+    def update_afk_for_guild(self, guild_id:discord.Guild):
+        # choose a value with weighted probability based on 'responsiveness' bot behavior
+        afk_delay = random.choices(self.afk_range, self.afk_weights)[0]
+        afk_after = time.time() + afk_delay
+        self.active_in_guild[guild_id] = afk_after
+
+    def is_afk_for_guild(self, message: discord.Message):
+        if is_direct_message(message):
+            return False
+        if not self.active_in_guild.get(message.guild.id):
+            return False
+        if self.active_in_guild[message.guild.id] <= time.time():
+            return False
+        return True
+
+    def calculate_afk_delays(self):
+        num_values = 12 # arbitrary number of values and weights to generate
+        # Generate evenly spaced values in range of num_values
+        self.afk_range = [round(i * 120 / (num_values - 1), 3) for i in range(num_values)]
+        # Assign weights to delay values based on responsiveness
+        responsiveness = max(0.0, min(1.0, bot_behavior.responsiveness)) # clamped between 0.0 and 1.0
+        if responsiveness == 1.0:
+            self.afk_weights = ([0.0] * (num_values - 1)) + [1.0]
+            return
+        # Generate the weights from responsiveness
+        self.afk_weights = get_normalized_weights(target = responsiveness, list_len = num_values)
+        for guild in client.guilds:
+            self.update_afk_for_guild(guild.id)
+
+
     async def run_message_task(self, message: discord.Message, text: str):
         try:
             async with task_semaphore:
@@ -5199,7 +5231,10 @@ class MessageManager():
                     log.info(f'reply requested: {message.author.display_name} said: "{text}"')
                     await message_task(message, text)
                     await run_flow_if_any(message, text)
+
                     self.last_channel = message.channel.id
+                    if not is_direct_message(message):
+                        self.update_afk_for_guild(message.guild.id)
         except Exception as e:
             log.error(f"Error while processing a Message: {e}")
             current_task.clear()
@@ -5211,6 +5246,7 @@ class MessageManager():
 
         while not self.msg_queue.empty():
             send_after, num, message, text, channel_id = await self.msg_queue.get()
+            # Only condition to check (for now)
             if channel_id == self.last_channel:
                 exception = {'send_after': send_after, 'num': num, 'message': message, 'text': text, 'channel_id': channel_id}
                 break
@@ -5252,9 +5288,12 @@ class MessageManager():
                         await self.run_message_task(message, text)
                         self.msg_queue.task_done()
 
+
     async def queue(self, message: discord.Message, text: str):
-        delay = bot_behavior.get_response_delay(text)
-        send_after = time.time() + delay
+        send_after = time.time() # initialize to process immediately
+        if self.is_afk_for_guild(message):
+            delay = bot_behavior.get_response_delay(text)
+            send_after = time.time() + delay
         self.counter += 1
         num = self.counter
         channel_id = message.channel.id
@@ -5273,7 +5312,7 @@ class SpontaneousMessaging():
 
     async def reset_for_channel(self, ictx:CtxInteraction):
         # Only reset from discord message or '/prompt' cmd
-        if current_task.name in ['on_message', 'prompt']:
+        if current_task.name in ['message', 'prompt']:
             current_chan_msg_task = self.tasks.get(ictx.channel.id, (None, 0))
             task, _ = current_chan_msg_task
             if task:
@@ -5361,6 +5400,7 @@ class Behavior:
             if hasattr(self, key):
                 setattr(self, key, value)
         self.calculate_response_delays()
+        message_manager.calculate_afk_delays()
 
     def update_user_dict(self, user_id):
         # Update the last conversation time for a user
