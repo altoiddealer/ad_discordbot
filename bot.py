@@ -1546,8 +1546,8 @@ async def init_llm_payload(ictx: CtxInteraction, user_name:str, text:str) -> dic
     llm_payload['state']['name1_instruct'] = name1
     llm_payload['state']['name2_instruct'] = name2
     llm_payload['state']['character_menu'] = name2
-    if current_task.name == 'message' and bot_behavior.maximum_typing_speed > 0:
-        llm_payload['state']['max_tokens_second'] = round((bot_behavior.maximum_typing_speed*4)/60)
+    # if current_task.name == 'message' and bot_behavior.maximum_typing_speed > 0:
+    #     llm_payload['state']['max_tokens_second'] = round((bot_behavior.maximum_typing_speed*4)/60)
     llm_payload['state']['context'] = context
     ictx_history = bot_history.get_history_for(ictx.channel.id).render_to_tgwui()
     llm_payload['state']['history'] = ictx_history
@@ -5290,10 +5290,8 @@ class MessageManager():
 
 
     async def queue(self, message: discord.Message, text: str):
-        send_after = time.time() # initialize to process immediately
-        if self.is_afk_for_guild(message):
-            delay = bot_behavior.get_response_delay(text)
-            send_after = time.time() + delay
+        delay = bot_behavior.get_response_delay(message, text)
+        send_after = time.time() + delay
         self.counter += 1
         num = self.counter
         channel_id = message.channel.id
@@ -5402,9 +5400,6 @@ class Behavior:
         self.calculate_response_delays()
         message_manager.calculate_afk_delays()
 
-    def update_user_dict(self, user_id):
-        # Update the last conversation time for a user
-        self.user_conversations[user_id] = datetime.now()
 
     # Response delays
     def calculate_response_delays(self):
@@ -5421,25 +5416,47 @@ class Behavior:
         inv_responsiveness = (1.0 - responsiveness)
         self.response_delay_weights = get_normalized_weights(target = inv_responsiveness, list_len = num_values)
 
-    def get_advanced_response_delay_weights(self, text):
-        text_len = len(text)
-        text_factor = min(max(text_len / 450, 0.0), 1.0)  # Normalize text length to [0, 1]
-        text_weights = get_normalized_weights(target = text_factor, list_len = len(self.response_delay_weights), strength=2.0) # use stronger weights for text factor
+    def merge_weights(self, text_weights:list) -> list:
         # Combine text weights with delay weights
         combined_weights = [w1 + w2 for w1, w2 in zip(self.response_delay_weights, text_weights)]
         # Normalize combined weights to sum up to 1.0
         total_combined_weight = sum(combined_weights)
-        final_weights = [weight / total_combined_weight for weight in combined_weights]
-        return final_weights
+        merged_weights = [weight / total_combined_weight for weight in combined_weights]
+        return merged_weights
 
-    def get_response_delay(self, text):
-        weights = self.response_delay_weights
+    def get_text_weights(self, text:str) -> list:
+        text_len = len(text)
+        text_factor = min(max(text_len / 450, 0.0), 1.0)  # Normalize text length to [0, 1]
+        text_weights = get_normalized_weights(target = text_factor, list_len = len(self.response_delay_weights), strength=2.0) # use stronger weights for text factor
+        return text_weights
+
+    def get_response_delay(self, message:discord.Message, text:str) -> float:
+        num_values = len(self.response_delay_values) # length of delay values list
+
+        # default text_weights to no influence - match length of response weights
+        text_weights = [0.0] * num_values
+        # calculate text_weights for message text
         if self.msg_size_affects_delay:
-            weights = self.get_advanced_response_delay_weights(text)
-        # Choose a value with weighted probability
+            text_weights = self.get_text_weights(text)
+
+        # Factor responsiveness if "bot is AFK"
+        if message_manager.is_afk_for_guild(message):
+            weights = self.merge_weights(text_weights)
+        # Or factor text only, if configured
+        elif self.msg_size_affects_delay:
+            weights = text_weights
+        # Or force delay selection to 0.0
+        else:
+            weights = [1.0] + [0.0] * (num_values - 1)
+
         chosen_delay = random.choices(self.response_delay_values, weights)[0]
+
         return chosen_delay
 
+
+    def update_user_dict(self, user_id):
+        # Update the last conversation time for a user
+        self.user_conversations[user_id] = datetime.now()
 
     def in_active_conversation(self, user_id):
         # Check if a user is in an active conversation with the bot
