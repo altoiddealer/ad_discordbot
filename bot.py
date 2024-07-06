@@ -5223,12 +5223,12 @@ class MessageManager():
             self.update_afk_for_guild(guild.id)
 
 
-    async def run_message_task(self, message: discord.Message, text: str):
+    async def run_message_task(self, num:int, message: discord.Message, text: str):
         try:
             async with task_semaphore:
                 async with message.channel.typing():
                     current_task.set(message.channel, 'message')
-                    log.info(f'reply requested: {message.author.display_name} said: "{text}"')
+                    log.info(f'Processing queued message (#{num}) by {message.author.display_name}.')
                     await message_task(message, text)
                     await run_flow_if_any(message, text)
 
@@ -5271,13 +5271,13 @@ class MessageManager():
                 current_time = time.time()
                 # Process message that is ready to send
                 if send_after <= current_time:
-                    await self.run_message_task(message, text)
+                    await self.run_message_task(num, message, text)
                     self.msg_queue.task_done()
                 # Check for any exceptions and process first found
                 else:
                     exception = await self.check_for_exception()
                     if exception:
-                        await self.run_message_task(exception['message'], exception['text'])
+                        await self.run_message_task(exception['num'], exception['message'], exception['text'])
                         self.msg_queue.task_done()
                     # Wait for next item to process normally
                     else:
@@ -5285,7 +5285,7 @@ class MessageManager():
                         if self.msg_queue.qsize() > 0:
                             log.info(f'Queued msg #{num} will be processed in {delay} seconds.')
                         await asyncio.sleep(delay)
-                        await self.run_message_task(message, text)
+                        await self.run_message_task(num, message, text)
                         self.msg_queue.task_done()
 
 
@@ -5296,8 +5296,10 @@ class MessageManager():
         num = self.counter
         channel_id = message.channel.id
 
-        await self.msg_queue.put((send_after, num, message, text, channel_id))
-        log.info(f'Queued msg (#{num}): {message.author.display_name} said: "{text}".')
+        if delay:
+            await self.msg_queue.put((send_after, num, message, text, channel_id))
+        else:
+            await self.run_message_task(num, message, text)
 
 message_manager = MessageManager()
 
