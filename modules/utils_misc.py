@@ -1,6 +1,10 @@
 from modules.logs import import_track, get_logger; import_track(__file__, fp=True); log = get_logger(__name__)  # noqa: E702
 logging = log
 
+import datetime
+from datetime import timedelta
+import math
+
 # Adds missing keys/values
 def fix_dict(set, req):
     for k, req_v in req.items():
@@ -50,6 +54,28 @@ def update_dict_matched_keys(d, u):
         else:
             d[k] = v
     return d
+
+
+def get_time(offset=0.0, time_format=None, date_format=None):
+    try:
+        new_time = ''
+        new_date = ''
+        current_time = datetime.now()
+        if offset is not None and offset != 0.0:
+            if isinstance(offset, int):
+                current_time = datetime.now() + timedelta(days=offset)
+            elif isinstance(offset, float):
+                days = math.floor(offset)
+                hours = (offset - days) * 24
+                current_time = datetime.now() + timedelta(days=days, hours=hours)
+        time_format = time_format if time_format is not None else '%H:%M:%S'
+        date_format = date_format if date_format is not None else '%Y-%m-%d'
+        new_time = current_time.strftime(time_format)
+        new_date = current_time.strftime(date_format)
+        return new_time, new_date
+    except Exception as e:
+        log.error(f"Error when getting date/time: {e}")
+        return '', ''
 
 # Converts seconds to other values
 def format_time(seconds) -> str:
