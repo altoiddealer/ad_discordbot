@@ -1,7 +1,7 @@
 from modules.utils_shared import task_semaphore, bot_emojis
 import discord
 from discord.ext import commands
-from typing import Optional, Union
+from typing import Optional, Union, Message
 from modules.typing import CtxInteraction
 from typing import TYPE_CHECKING
 import asyncio
@@ -40,23 +40,23 @@ def configurable_for_dm_if(func):
     
     return commands.check(predicate)
 
-def is_direct_message(ictx: CtxInteraction):
-    return ictx and getattr(ictx, 'guild') is None \
-        and hasattr(ictx, 'channel') and isinstance(ictx.channel, discord.DMChannel)
+def is_direct_message(message:Message):
+    return message.ictx and getattr(message.ictx, 'guild') is None \
+        and hasattr(message.ictx, 'channel') and isinstance(message.ictx.channel, discord.DMChannel)
 
 
-def get_hmessage_emojis(message:'HMessage') -> str:   
+def get_hmessage_emojis(hmessage:'HMessage') -> str:   
     history_emojis = {'is_continued': bot_emojis.continue_emoji,
                       'regenerated_from': bot_emojis.regen_emoji,
                       'hidden': bot_emojis.hidden_emoji}
 
-    emojis_for_message = []
+    emojis_for_hmessage = []
 
     for key, value in history_emojis.items():
-        if getattr(message, key, False):
-            emojis_for_message.append(value)
+        if getattr(hmessage, key, False):
+            emojis_for_hmessage.append(value)
     
-    return emojis_for_message
+    return emojis_for_hmessage
 
 async def update_message_reactions(client_user:discord.ClientUser, emojis_list:list, discord_msg:discord.Message):
     try:
@@ -136,7 +136,7 @@ async def ireply(ictx: 'CtxInteraction', process):
         log.error(f"Error sending message response to user's interaction command: {e}")
 
 
-async def send_long_message(channel, message_text, bot_message:Optional['HMessage']=None, ref_message:Optional[discord.Message]=None) -> int:
+async def send_long_message(channel, message_text, bot_hmessage:Optional['HMessage']=None, ref_message:Optional[discord.Message]=None) -> int:
     """ Splits a longer message into parts while preserving sentence boundaries and code blocks """
     active_lang = ''
 
@@ -190,8 +190,8 @@ async def send_long_message(channel, message_text, bot_message:Optional['HMessag
                 sent_message = await channel.send(chunk_text, reference=ref_message)
             else:
                 sent_message = await channel.send(chunk_text)
-            if bot_message:
-                bot_message.related_ids.append(sent_message.id)
+            if bot_hmessage:
+                bot_hmessage.related_ids.append(sent_message.id)
                 
             message_text = message_text[chunk_length:]
             if len(message_text) <= MAX_MESSAGE_LENGTH:
@@ -200,14 +200,14 @@ async def send_long_message(channel, message_text, bot_message:Optional['HMessag
                 sent_message = await channel.send(chunk_text)
                 break
             
-    if bot_message:
-        bot_message.id = sent_message.id
+    if bot_hmessage:
+        bot_hmessage.id = sent_message.id
 
     return sent_message.id
 
 async def replace_msg_in_history_and_discord(client_user:discord.Client, ictx:CtxInteraction, params:dict, text:str, text_visible:str, apply_reactions:bool=True) -> Optional['HMessage']:
     channel = ictx.channel
-    updated_message: Optional[HMessage] = params.get('user_message_to_update') or params.get('bot_message_to_update')
+    updated_message: Optional[HMessage] = params.get('user_hmessage_to_update') or params.get('bot_hmessage_to_update')
     msg_hidden = params.get('user_msg_hidden') or params.get('bot_msg_hidden') or updated_message.hidden
     target_discord_msg_id = params.get('target_discord_msg_id')
     ref_message = params.get('ref_message')
@@ -234,10 +234,10 @@ async def replace_msg_in_history_and_discord(client_user:discord.Client, ictx:Ct
                 await target_discord_msg.edit(content=text)
             else:
                 await target_discord_msg.delete()
-                if params.get('bot_message_to_update'):
-                    await send_long_message(channel, text, bot_message=updated_message, ref_message=ref_message)
+                if params.get('bot_hmessage_to_update'):
+                    await send_long_message(channel, text, bot_hmessage=updated_message, ref_message=ref_message)
                 else:
-                    await send_long_message(channel, text, bot_message=None, ref_message=ref_message)
+                    await send_long_message(channel, text, bot_hmessage=None, ref_message=ref_message)
 
         # Clear related IDs attribute
         updated_message.related_ids.clear() # TODO maybe add a 'fresh' method to HMessage? - For Reality
@@ -272,9 +272,9 @@ async def rebuild_chunked_message(ictx:CtxInteraction, msg_id_list:list=None, ic
 
 # Modal for editing history
 class EditMessageModal(discord.ui.Modal, title="Edit Message in History"):
-    def __init__(self, client_user: Optional[discord.ClientUser], ictx:CtxInteraction, matched_hmessage: 'HMessage', target_message: discord.Message, apply_reactions:bool=True):
+    def __init__(self, client_user: Optional[discord.ClientUser], ictx:CtxInteraction, matched_hmessage: 'HMessage', target_discord_msg: discord.Message, apply_reactions:bool=True):
         super().__init__()
-        self.target_message = target_message
+        self.target_discord_msg = target_discord_msg
         self.matched_hmessage = matched_hmessage
         self.client_user = client_user
         self.ictx = ictx
@@ -292,9 +292,9 @@ class EditMessageModal(discord.ui.Modal, title="Edit Message in History"):
     async def on_submit(self, inter: discord.Interaction):
         # Update text in history
         new_text = self.new_content.value
-        params = {'user_message_to_update': self.matched_hmessage}
+        params = {'user_hmessage_to_update': self.matched_hmessage}
         await replace_msg_in_history_and_discord(self.client_user, self.ictx, params=params, text=new_text, text_visible=new_text, apply_reactions=self.apply_reactions)
-        if self.target_message.author != self.client_user:
+        if self.target_discord_msg.author != self.client_user:
             await inter.response.send_message("Message history has been edited successfully (Note: the bot cannot update your discord message).", ephemeral=True, delete_after=7)
         else:
             await inter.response.send_message("Message history has been edited successfully.", ephemeral=True, delete_after=5)
