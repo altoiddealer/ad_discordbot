@@ -299,16 +299,47 @@ from modules.prompts import count_tokens
 
 class TTS:
     def __init__(self):
+        self.enabled:bool = False
         self.settings:dict = config.get('textgenwebui', {}).get('tts_settings') or config.get('discord', {}).get('tts_settings') or {}
         self.supported_clients = ['alltalk_tts', 'coqui_tts', 'silero_tts', 'elevenlabs_tts']
-        self.enabled:bool = False
-        self.client:str = ''
+        self.client:str = self.settings.get('extension', '')
         self.api_key:str = ''
         self.voice_key:str = ''
         self.lang_key:str = ''
+    
+    # runs from TGWUI() class
+    def init_extensions(self):
+        # Get any supported TTS client found in TGWUI CMD_FLAGS
+        for extension in shared.args.extensions:
+            if extension in self.supported_tts_clients:
+                self.client = extension
+                break
+
+        # If any TTS extension defined in config.yaml, set tts bot vars and add extension to shared.args.extensions
+        if self.client:
+            if self.client not in self.supported_clients:
+                log.warning(f'tts client "{self.client}" is not yet confirmed to be work. The "/speak" command will not be registered. List of supported tts_clients: {self.supported_clients}')
+            self.enabled = True
+            self.api_key = self.settings.get('api_key', None)
+            if self.client == 'alltalk_tts':
+                self.voice_key = 'voice'
+                self.lang_key = 'language'
+            elif self.client == 'coqui_tts':
+                self.voice_key = 'voice'
+                self.lang_key = 'language'
+            elif self.client == 'silero_tts':
+                self.voice_key = 'speaker'
+                self.lang_key = 'language'
+            elif self.client == 'elevenlabs_tts':
+                self.voice_key = 'selected_voice'
+                self.lang_key = ''
+
+            if self.client not in shared.args.extensions:
+                shared.args.extensions.append(self.client)
 
 tts = TTS()
 
+# Majority of this code section is sourced from 'modules/server.py'
 class TGWUI:
     def __init__(self):
         if 'textgenwebui' not in config:
@@ -321,13 +352,17 @@ class TGWUI:
 
         if self.enabled:
             self.init_settings()
-            self.init_extensions()
-            # Get list of available models
-            self.init_llmmodels()
-            asyncio.run(self.load_llm_model())
-            shared.generation_lock = Lock()
 
-    ## Majority of this code section is sourced from 'modules/server.py'
+            # monkey patch load_extensions behavior from pre-commit b3fc2cd
+            extensions_module.load_extensions = self.load_extensions
+            self.init_extensions()  # build TGWUI extensions
+            tts.init_extensions()   # build TTS extensions in TTS()
+            self.activate_extensions() # Activate the extensions
+
+            self.init_llmmodels() # Get model from cmd args, or present model list in cmd window
+            asyncio.run(self.load_llm_model())
+
+            shared.generation_lock = Lock()
 
     def init_settings(self):
         # Loading custom settings
@@ -379,9 +414,6 @@ class TGWUI:
                     log.error(f'Failed to load the extension "{name}".')
 
     def init_extensions(self):
-        # monkey patch load_extensions behavior from pre-commit b3fc2cd
-        extensions_module.load_extensions = self.load_extensions
-
         shared.args.extensions = []
         extensions_module.available_extensions = utils.get_available_extensions()
 
@@ -391,36 +423,7 @@ class TGWUI:
             if extension not in shared.args.extensions:
                 shared.args.extensions.append(extension)
 
-        # Get any supported TTS client found in TGWUI CMD_FLAGS
-        for extension in shared.args.extensions:
-            if extension in tts.supported_tts_clients:
-                tts.client = extension
-                break
-
-        # If any TTS extension defined in config.yaml, set tts bot vars and add extension to shared.args.extensions
-        tts.client = tts.settings.get('extension') or tts.client # tts client
-        if tts.client:
-            if tts.client not in tts.supported_clients:
-                log.warning(f'tts client "{tts.client}" is not yet confirmed to be work. The "/speak" command will not be registered. List of supported tts_clients: {tts.supported_clients}')
-            tts.enabled = True
-            tts.api_key = tts.settings.get('api_key', None)
-            if tts.client == 'alltalk_tts':
-                tts.voice_key = 'voice'
-                tts.lang_key = 'language'
-            elif tts.client == 'coqui_tts':
-                tts.voice_key = 'voice'
-                tts.lang_key = 'language'
-            elif tts.client == 'silero_tts':
-                tts.voice_key = 'speaker'
-                tts.lang_key = 'language'
-            elif tts.client == 'elevenlabs_tts':
-                tts.voice_key = 'selected_voice'
-                tts.lang_key = ''
-
-            if tts.client not in shared.args.extensions:
-                shared.args.extensions.append(tts.client)
-
-        # Activate the extensions
+    def activate_extensions(self):
         if shared.args.extensions and len(shared.args.extensions) > 0:
             extensions_module.load_extensions(extensions_module.extensions, extensions_module.available_extensions)
 
