@@ -1238,6 +1238,73 @@ class CurrentTask:
 
 current_task = CurrentTask()
 
+
+class Params:
+    def __init__(self):
+        self.save_to_history:bool = True
+
+        # Behavior
+        self.should_gen_text:bool = True
+        self.should_send_text:bool = True
+        self.should_gen_image:bool = False
+        self.should_send_image:bool = True
+
+        # Image related params
+        self.size:dict = {}
+        self.neg_prompt:str = ''
+        self.style:dict = {}
+        self.face_swap:str = ''
+        self.controlnet:dict = {}
+        self.img2img:dict = {}
+        self.message:str = None # Check back on this
+        self.img_censoring:int = 0
+        self.endpoint:str = '/sdapi/v1/txt2img'
+        self.sd_output_dir:str = os.path.join(shared_path.dir_root, 'sd_outputs')
+
+        # discord/HMessage related params
+        self.ref_message:discord.Message = None
+        self.regenerated:bool = False
+        self.skip_create_user_hmsg:bool = False
+        self.skip_create_bot_hmsg:bool = False
+        self.bot_hmsg_hidden:bool = False
+        self.bot_hmessage_to_update:HMessage = None
+        self.target_discord_msg_id:discord.Message.id = None
+
+        # Model/Character Change params
+        self.character:dict = {}
+        self.llmmodel:dict = {}
+        self.imgmodel:dict = {}
+
+        # /Speak cmd
+        self.tts_args:dict = {}
+        self.user_voice:str = None
+
+        self.send_user_image:list = []
+
+    def update_bot_should_do(self, tags:Tags):
+        actions = ['should_gen_text', 'should_send_text', 'should_gen_image', 'should_send_image']
+        try:
+            # iterate through matched tags and update
+            if tags.matches:
+                for item in tags.matches:
+                    if isinstance(item, tuple):
+                        tag, _, _ = item
+                    else:
+                        tag = item
+                    for key, value in tag.items():
+                        if key in actions:
+                            self.key = value
+            # Disable things as set by config
+            if not tgwui.enabled:
+                self.should_gen_text = False
+                self.should_send_text = False
+            if not sd.enabled:
+                self.should_gen_image = False
+                self.should_send_image = False
+        except Exception as e:
+            log.error(f"An error occurred while checking if bot should do '{key}': {e}")
+
+
 #################################################################
 ####################### TASK PROCESSING #########################
 #################################################################
@@ -1245,37 +1312,39 @@ class TaskAttributes(Protocol):
     name:str
     ictx:CtxInteraction
     channel:discord.TextChannel
-    user_name:Union[discord.User, discord.Member]
+    user:Union[discord.User, discord.Member]
+    user_name:str
     embeds:Embeds
     text:str
+    llm_prompt:str
     llm_payload:dict
-    params:dict
+    params:Params
     tags:Tags
-    bot_should_do:dict
+    img_prompt:str
+    img_payload:dict
+    local_history:History
     user_hmessage:HMessage
     bot_hmessage:HMessage
 
 class TaskProcessing:
-
     ####################### MESSAGE #########################
-    async def send_responses(self:"TaskAttributes") -> HMessage:
+    async def send_responses(self:"TaskAttributes"):
         if self.bot_hmessage:
-            ref_message = self.params.get('ref_message', None) # pass to send_long_message()
             # Process any TTS response
             if self.bot_hmessage.text_visible:
                 await voice_clients.process_tts_resp(self.ictx, self.bot_hmessage)
-            if self.params['bot_should_do']['should_send_text']:
+            if self.params.should_send_text:
                 # @mention non-consecutive users
-                mention_resp = update_mention(get_user_ctx_inter(self.ictx).mention, self.bot_hmessage.text)
-                await send_long_message(self.channel, mention_resp, self.bot_hmessage, ref_message)
+                mention_resp = update_mention(self.user.mention, self.bot_hmessage.text)
+                # send responses to channel - reference a message if applicable
+                await send_long_message(self.channel, mention_resp, self.bot_hmessage, self.params.ref_message)
                 # Apply any reactions applicable to message
                 if config.discord.get('history_reactions', {}).get('enabled', True):
                     await apply_reactions_to_messages(client.user, self.ictx, self.bot_hmessage)
         # send any user images
-        send_user_image = self.params.get('send_user_image', [])
+        send_user_image = self.params.send_user_image
         if send_user_image:
             await self.channel.send(file=send_user_image) if len(send_user_image) == 1 else await self.channel.send(files=send_user_image)
-        return self.bot_hmessage
 
     async def fix_llm_payload(self:"TaskAttributes"):
         # Fix llm_payload by adding any missing required settings
@@ -1311,7 +1380,7 @@ class TaskProcessing:
             change_llmmodel = mods.get('change_llmmodel', None)
             swap_llmmodel = mods.get('swap_llmmodel', None)
             # Flow handling
-            if flow is not None and not flow_event.is_set():
+            if flow is not None and not flows.event.is_set():
                 await flows.build_queue(flow)
 
             # History handling
@@ -1448,7 +1517,7 @@ class TaskProcessing:
             log.error(f"Error collecting LLM tag values: {e}")
         return llm_payload_mods, formatting
 
-    async def init_llm_payload(self:"TaskAttributes") -> dict:
+    async def init_llm_payload(self:"TaskAttributes"):
         self.llm_payload = copy.deepcopy(bot_settings.settings['llmstate'])
         self.llm_payload['text'] = self.text
         self.llm_payload['state']['name1'] = self.user_name
@@ -1462,52 +1531,23 @@ class TaskProcessing:
         ictx_history = bot_history.get_history_for(self.ictx.channel.id).render_to_tgwui()
         self.llm_payload['state']['history'] = ictx_history
 
-        return self.llm_payload
-
-    def update_bot_should_do(self:"TaskAttributes"):
-        # Set defaults
-        if not self.bot_should_do:
-            self.bot_should_do = {'should_gen_text': True,
-                                'should_send_text': True,
-                                'should_gen_image': False,
-                                'should_send_image': True}
-        try:
-            # iterate through matched tags and update
-            if self.tags.matches:
-                for item in self.tags.matches:
-                    if isinstance(item, tuple):
-                        tag, _, _ = item
-                    else:
-                        tag = item
-                    for key, value in tag.items():
-                        if key in self.bot_should_do:
-                            self.bot_should_do[key] = value
-            # Disable things as set by config
-            if not tgwui.enabled:
-                self.bot_should_do['should_gen_text'] = False
-                self.bot_should_do['should_send_text'] = False
-            if not sd.enabled:
-                self.bot_should_do['should_gen_image'] = False
-                self.bot_should_do['should_send_image'] = False
-        except Exception as e:
-            log.error(f"An error occurred while checking if bot should do '{key}': {e}")
-
-    async def message_img_subtask(self:"TaskAttributes", img_prompt:str=None):
-        img_prompt = img_prompt or self.bot_hmessage.text
-        tags = match_img_tags(img_prompt, tags)
+    async def message_img_subtask(self:"TaskAttributes"):
+        self.img_prompt = self.img_prompt or self.bot_hmessage.text
+        self.tags.match_img_tags(self.img_prompt)
         self.update_bot_should_do() # check for updates from tags
-        if self.params['bot_should_do']['should_gen_image']:
-            if self.img_gen_embed:
-                await self.img_gen_embed.delete()
-            await img_gen_task(img_prompt, self.params, self.ictx, tags)
-        return tags, self.params
+        if self.params.should_gen_image:
+            if self.embeds.img_gen:
+                await self.embeds.img_gen.delete()
+            # CREATE NEW TASK
+            await img_gen_task(self.img_prompt, self.params, self.ictx, tags)
 
-    async def llmmodel_swap_back(self:"TaskAttributes", params:dict, original_llmmodel:str) -> dict:
-        params['llmmodel']['llmmodel_name'] = original_llmmodel
-        self.change_embed = await change_llmmodel_task(self.ictx, params) # Swap LLM Model back
-        if self.change_embed:
-            await self.change_embed.delete()                         # Delete embed again after the second call
-        return params
+    async def llmmodel_swap_back(self:"TaskAttributes", original_llmmodel:str) -> dict:
+        self.params.llmmodel['llmmodel_name'] = original_llmmodel
+        # Swap LLM Model back
+        self.embeds.change = await change_llmmodel_task(self.ictx, self.params)
+        # Delete embed again after the second call
+        if self.embeds.change:
+            await self.embeds.change.delete()
 
     async def message_llm_subtask(self:"TaskAttributes"):
         # if no LLM model is loaded, notify that no text will be generated
@@ -1518,8 +1558,7 @@ class TaskProcessing:
                 log.warning(f'Bot tried to generate text for {self.user_name}, but no LLM model was loaded')
         ## Finalize payload, generate text via TGWUI, and process responses
         # Toggle TTS off, if interaction server is not connected to Voice Channel
-        tts_sw = False
-        if (not self.bot_should_do['should_send_text']) \
+        if (not self.params.should_send_text) \
             or (hasattr(self.ictx, 'guild') and getattr(self.ictx.guild, 'voice_client', None) \
             and not voice_clients.guild_vcs.get(self.ictx.guild.id) and int(tts.settings.get('play_mode', 0)) == 0):
             tts_sw = await tts.apply_toggle_tts(toggle='off')
@@ -1534,8 +1573,8 @@ class TaskProcessing:
             local_history = bot_history.get_history_for(self.ictx.channel.id)
         # Create user message in HManager
         user_hmessage = None
-        if not params.get('skip_create_user_hmsg'):
-            user_hmessage = await create_user_hmessage(local_history, llm_payload, params, self.ictx)
+        if not self.params.skip_create_user_hmsg:
+            await self.create_user_hmessage()
         # generate text with text-generation-webui
         last_resp, tts_resp = await llm_gen(llm_payload)
         # Create Bot HMessage in HManager
@@ -1551,7 +1590,7 @@ class TaskProcessing:
         # Toggle TTS back on if it was toggled off
         await tts.apply_toggle_tts(toggle='on', tts_sw=tts_sw)
 
-        img_prompt = last_resp
+        self.img_prompt = last_resp
         # Log message exchange
         if last_resp:
             log.info(f'''{self.user_name}: "{llm_payload['text']}"''')
@@ -1559,8 +1598,7 @@ class TaskProcessing:
         # If no text was generated, treat user input at the response
         else:
             if params['bot_should_do']['should_gen_image'] and sd.enabled:
-                img_prompt = llm_payload['text']
-        return params, bot_hmessage, user_hmessage, img_prompt
+                self.img_prompt = llm_payload['text']
 
     async def init_img_embed(self:"TaskAttributes"):
         # make a 'Prompting...' embed when generating text for an image response
@@ -1568,30 +1606,30 @@ class TaskProcessing:
             if shared.model_name == 'None':
                 await self.channel.send('**Processing image generation using message as the image prompt ...**', delete_after=5) # msg for if LLM model is unloaded
             else:
-                if img_gen_embed_info:
-                    img_gen_embed_info.title = "Prompting ..."
-                    img_gen_embed_info.description = " "
-                    self.img_gen_embed = await self.channel.send(embed=img_gen_embed_info)
+                if self.embeds.img_gen:
+                    await self.channel.send(embed = self.embeds.update('img_gen', "Prompting ...", " "))
 
     async def llmmodel_swap_or_change(self:"TaskAttributes"):
         # Check params to see if an LLM model change/swap was triggered by Tags
-        llm_model_mode = self.params['llmmodel_params'].get('mode', 'change')  # default to 'change' unless a tag was triggered with 'swap'
-        original_llmmodel = copy.copy(str(shared.model_name))   # copy current LLM model name
-        change_embed = await change_llmmodel_task(self.ictx, self.params) # Change LLM model
-        if llm_model_mode == 'swap' and self.change_embed:           # Delete embed before the second call
-            await self.change_embed.delete()
+        llm_model_mode = self.params['llmmodel'].get('mode', 'change')  # default to 'change' unless a tag was triggered with 'swap'
+        original_llmmodel = copy.copy(str(shared.model_name))           # copy current LLM model name
+        # Change LLM model
+        self.embeds.change = await change_llmmodel_task(self.ictx, self.params)
+        # Delete embed before the second call
+        if llm_model_mode == 'swap' and self.embeds.change:
+            await self.embeds.change.delete()
         return llm_model_mode, original_llmmodel
 
     async def build_llm_payload(self:"TaskAttributes"):
         # Use predefined LLM payload or initialize with defaults
-        if self.llm_payload is None:
-            self.llm_payload = await self.init_llm_payload(ictx, user_name, text)
+        if not self.llm_payload:
+            await self.init_llm_payload()
         else:
             self.llm_payload['text'] = self.text
         # make working copy of user's request (without @ mention)
-        llm_prompt = text
+        self.llm_prompt = self.text
         # apply tags to prompt
-        llm_prompt, tags = process_tag_insertions(llm_prompt, tags)
+        self.tags.process_tag_insertions(self.llm_prompt)
         # collect matched tag values
         llm_payload_mods, formatting, params = collect_llm_tag_values(tags, params)
         # apply tags relevant to LLM payload
@@ -1602,194 +1640,183 @@ class TaskProcessing:
         llm_payload['text'] = llm_prompt
         return llm_payload, tags, params
 
-def apply_server_mode(llm_payload:dict, ictx=None):
-    if ictx and config.get('textgenwebui', {}).get('server_mode', False):
+    def apply_server_mode(self:"TaskAttributes"):
+        if ictx and config.get('textgenwebui', {}).get('server_mode', False):
+            try:
+                name1 = f'Server: {ictx.guild}'
+                llm_payload['state']['name1'] = name1
+                llm_payload['state']['name1_instruct'] = name1
+            except Exception as e:
+                log.error(f'An error occurred while applying Server Mode: {e}')
+        return llm_payload
+
+    # Add dynamic stopping strings
+    def extra_stopping_strings(self:"TaskAttributes"):
         try:
-            name1 = f'Server: {ictx.guild}'
-            llm_payload['state']['name1'] = name1
-            llm_payload['state']['name1_instruct'] = name1
+            name1_value = llm_payload['state']['name1']
+            name2_value = llm_payload['state']['name2']
+            # Check and replace in custom_stopping_strings
+            custom_stopping_strings = llm_payload['state']['custom_stopping_strings']
+            if "name1" in custom_stopping_strings:
+                custom_stopping_strings = custom_stopping_strings.replace("name1", name1_value)
+            if "name2" in custom_stopping_strings:
+                custom_stopping_strings = custom_stopping_strings.replace("name2", name2_value)
+            llm_payload['state']['custom_stopping_strings'] = custom_stopping_strings
+            # Check and replace in stopping_strings
+            stopping_strings = llm_payload['state']['stopping_strings']
+            if "name1" in stopping_strings:
+                stopping_strings = stopping_strings.replace("name1", name1_value)
+            if "name2" in stopping_strings:
+                stopping_strings = stopping_strings.replace("name2", name2_value)
+            llm_payload['state']['stopping_strings'] = stopping_strings
         except Exception as e:
-            log.error(f'An error occurred while applying Server Mode: {e}')
-    return llm_payload
+            log.error(f'An error occurred while updating stopping strings: {e}')
+        return llm_payload
 
-# Add dynamic stopping strings
-def extra_stopping_strings(llm_payload:dict):
-    try:
-        name1_value = llm_payload['state']['name1']
-        name2_value = llm_payload['state']['name2']
-        # Check and replace in custom_stopping_strings
-        custom_stopping_strings = llm_payload['state']['custom_stopping_strings']
-        if "name1" in custom_stopping_strings:
-            custom_stopping_strings = custom_stopping_strings.replace("name1", name1_value)
-        if "name2" in custom_stopping_strings:
-            custom_stopping_strings = custom_stopping_strings.replace("name2", name2_value)
-        llm_payload['state']['custom_stopping_strings'] = custom_stopping_strings
-        # Check and replace in stopping_strings
-        stopping_strings = llm_payload['state']['stopping_strings']
-        if "name1" in stopping_strings:
-            stopping_strings = stopping_strings.replace("name1", name1_value)
-        if "name2" in stopping_strings:
-            stopping_strings = stopping_strings.replace("name2", name2_value)
-        llm_payload['state']['stopping_strings'] = stopping_strings
-    except Exception as e:
-        log.error(f'An error occurred while updating stopping strings: {e}')
-    return llm_payload
+    # Creates User HMessage in HManager
+    async def create_user_hmessage(self:"TaskAttributes"):
+        try:
+            # Add User HMessage before processing bot reply.
+            # this gives time for other messages to accrue before the bot's response, as in realistic chat scenario.
+            message = get_message_ctx_inter(self.ictx)
+            self.user_hmessage = self.local_history.new_message(self.llm_payload['state']['name1'], self.llm_payload['text'], 'user', self.user.id)
+            self.user_hmessage.id = message.id if hasattr(message, 'id') else None
+            # set history flag
+            if not self.params.save_to_history:
+                self.user_hmessage.update(hidden=True)
+            if is_direct_message(self.ictx):
+                self.user_hmessage.dont_save()
+                await self.warn_direct_channel(self.ictx)
+        except Exception as e:
+            log.error(f'An error occurred while creating User HMessage: {e}')
 
-# Creates User HMessage in HManager
-async def create_user_hmessage(local_history):
-    try:
-        save_to_history = self.params.get('save_to_history', True)
-        # Add User HMessage before processing bot reply.
-        # this gives time for other messages to accrue before the bot's response, as in realistic chat scenario.
-        user = get_user_ctx_inter(ictx)
-        message = get_message_ctx_inter(ictx)
-        user_hmessage = local_history.new_message(llm_payload['state']['name1'], llm_payload['text'], 'user', user.id)
-        user_hmessage.id = message.id if hasattr(message, 'id') else None
-        # set history flag
-        if not save_to_history:
-            user_hmessage.update(hidden=True)
-        if is_direct_message(ictx):
-            user_hmessage.dont_save()
-            await warn_direct_channel(ictx)
-
-        return user_hmessage
-    except Exception as e:
-        log.error(f'An error occurred while creating User HMessage: {e}')
-
-# Send LLM Payload - get responses
-async def llm_gen(llm_payload:dict) -> tuple[str, str]:
-    if shared.model_name == 'None':
-        return '', ''
-    try:
-        loop = asyncio.get_event_loop()
-        # Store time for statistics
-        bot_statistics._llm_gen_time_start_last = time.time()
-        # Subprocess prevents losing discord heartbeat
-        def process_responses():
-            last_resp = ''
-            tts_resp = ''
-            for resp in chatbot_wrapper(text=llm_payload['text'], state=llm_payload['state'], regenerate=llm_payload['regenerate'], _continue=llm_payload['_continue'], loading_message=True, for_ui=False):
-                i_resp = resp.get('internal', [])
-                if len(i_resp) > 0:
-                    last_resp = i_resp[len(i_resp) - 1][1]
-                # look for tts response
-                vis_resp = resp.get('visible', [])
-                if len(vis_resp) > 0:
-                    last_vis_resp = vis_resp[-1][-1]
-                    if 'audio src=' in last_vis_resp:
-                        audio_format_match = patterns.audio_src.search(last_vis_resp)
-                        if audio_format_match:
-                            tts_resp = audio_format_match.group(1)
-            return last_resp, tts_resp  # responses from TGWUI
-        # Offload the synchronous task to a separate thread
-        last_resp, tts_resp = await loop.run_in_executor(None, process_responses)
-        if last_resp:
-            update_llm_gen_statistics(last_resp) # Update statistics
-        return last_resp, tts_resp
-    except Exception as e:
-        log.error(f'An error occurred in llm_gen(): {e}')
-        traceback.print_exc()
-        return '', ''
+    # Send LLM Payload - get responses
+    async def llm_gen(self:"TaskAttributes") -> tuple[str, str]:
+        if shared.model_name == 'None':
+            return '', ''
+        try:
+            loop = asyncio.get_event_loop()
+            # Store time for statistics
+            bot_statistics._llm_gen_time_start_last = time.time()
+            # Subprocess prevents losing discord heartbeat
+            def process_responses():
+                last_resp = ''
+                tts_resp = ''
+                for resp in chatbot_wrapper(text=llm_payload['text'], state=llm_payload['state'], regenerate=llm_payload['regenerate'], _continue=llm_payload['_continue'], loading_message=True, for_ui=False):
+                    i_resp = resp.get('internal', [])
+                    if len(i_resp) > 0:
+                        last_resp = i_resp[len(i_resp) - 1][1]
+                    # look for tts response
+                    vis_resp = resp.get('visible', [])
+                    if len(vis_resp) > 0:
+                        last_vis_resp = vis_resp[-1][-1]
+                        if 'audio src=' in last_vis_resp:
+                            audio_format_match = patterns.audio_src.search(last_vis_resp)
+                            if audio_format_match:
+                                tts_resp = audio_format_match.group(1)
+                return last_resp, tts_resp  # responses from TGWUI
+            # Offload the synchronous task to a separate thread
+            last_resp, tts_resp = await loop.run_in_executor(None, process_responses)
+            if last_resp:
+                update_llm_gen_statistics(last_resp) # Update statistics
+            return last_resp, tts_resp
+        except Exception as e:
+            log.error(f'An error occurred in llm_gen(): {e}')
+            traceback.print_exc()
+            return '', ''
     
-# Warn anyone direct messaging the bot
-async def warn_direct_channel(ictx: CtxInteraction):
-    warned_id = f'dm_{get_user_ctx_inter(ictx).id}'
-    if not bot_database.was_warned(warned_id):
-        bot_database.update_was_warned(warned_id)
-        if system_embed_info:
-            system_embed_info.title = "This conversation will not be saved, ***however***:"
-            system_embed_info.description = "Your interactions will be included in the bot's general logging."
-            await ictx.channel.send(embed=system_embed_info)
-        else:
-            await ictx.channel.send("This conversation will not be saved. ***However***, your interactions will be included in the bot's general logging.")
+    # Warn anyone direct messaging the bot
+    async def warn_direct_channel(self:"TaskAttributes"):
+        warned_id = f'dm_{get_user_ctx_inter(ictx).id}'
+        if not bot_database.was_warned(warned_id):
+            bot_database.update_was_warned(warned_id)
+            if system_embed_info:
+                system_embed_info.title = "This conversation will not be saved, ***however***:"
+                system_embed_info.description = "Your interactions will be included in the bot's general logging."
+                await ictx.channel.send(embed=system_embed_info)
+            else:
+                await ictx.channel.send("This conversation will not be saved. ***However***, your interactions will be included in the bot's general logging.")
 
-# Process responses from text-generation-webui
-async def create_bot_hmessage(user_hmessage:Optional[HMessage], local_history:Optional[History], last_resp:str='', tts_resp:str='', ictx:Optional[CtxInteraction]=None) -> HMessage:
-    try:
-        save_to_history = self.params.get('save_to_history', True)
-        # custom handlings, mainly from 'regenerate'
-        bot_hmsg_hidden = self.params.get('bot_hmsg_hidden', False)
-        regenerated = self.params.get('regenerated', None)
-        bot_hmessage = local_history.new_message(bot_settings.name, last_resp, 'assistant', bot_settings._bot_id, text_visible=tts_resp)
-        if user_hmessage:
-            bot_hmessage.mark_as_reply_for(user_hmessage)
-        if regenerated:
-            bot_hmessage.mark_as_regeneration_for(regenerated)
-        if bot_hmsg_hidden or not save_to_history:
-            bot_hmessage.update(hidden=True)
-        if is_direct_message(ictx):
-            bot_hmessage.dont_save()
+    # Process responses from text-generation-webui
+    async def create_bot_hmessage(user_hmessage:Optional[HMessage], local_history:Optional[History], last_resp:str='', tts_resp:str='', ictx:Optional[CtxInteraction]=None) -> HMessage:
+        try:
+            save_to_history = self.params.get('save_to_history', True)
+            # custom handlings, mainly from 'regenerate'
+            bot_hmsg_hidden = self.params.get('bot_hmsg_hidden', False)
+            regenerated = self.params.get('regenerated', None)
+            bot_hmessage = local_history.new_message(bot_settings.name, last_resp, 'assistant', bot_settings._bot_id, text_visible=tts_resp)
+            if user_hmessage:
+                bot_hmessage.mark_as_reply_for(user_hmessage)
+            if regenerated:
+                bot_hmessage.mark_as_regeneration_for(regenerated)
+            if bot_hmsg_hidden or not save_to_history:
+                bot_hmessage.update(hidden=True)
+            if is_direct_message(ictx):
+                bot_hmessage.dont_save()
 
-        if last_resp:
-            truncation = int(bot_settings.settings['llmstate']['state']['truncation_length'] * 4) #approx tokens
-            bot_hmessage.history.truncate(truncation)
-            client.loop.create_task(bot_hmessage.history.save())
+            if last_resp:
+                truncation = int(bot_settings.settings['llmstate']['state']['truncation_length'] * 4) #approx tokens
+                bot_hmessage.history.truncate(truncation)
+                client.loop.create_task(bot_hmessage.history.save())
 
-        return bot_hmessage
-    except Exception as e:
-        log.error(f'An error occurred while creating Bot HMessage: {e}')
-        return None
+            return bot_hmessage
+        except Exception as e:
+            log.error(f'An error occurred while creating Bot HMessage: {e}')
+            return None
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+#################################################################
+############################ TASKS ##############################
+#################################################################
 class Tasks(TaskProcessing, TaskAttributes):
-    def __init__(self, name:str, ictx:CtxInteraction, text:str|None=None, llm_payload:dict|None=None, params:dict|None=None):
+    def __init__(self, name:str, ictx:CtxInteraction, text:str|None=None, llm_payload:dict|None=None, params:Params|None=None):
         self.name:str = name
 
         self.ictx:CtxInteraction = ictx
         self.channel:discord.TextChannel = ictx.channel
-        self.user_name:Union[discord.User, discord.Member] = get_user_ctx_inter(ictx).display_name
+        self.user:Union[discord.User, discord.Member] = get_user_ctx_inter(ictx)
+        self.user_name:str = self.user.display_name
         self.embeds = Embeds(config)
 
         self.text:str = text
+        self.llm_prompt:str = None
         self.llm_payload:dict = llm_payload if llm_payload is not None else {}
-        self.params:dict = params if params is not None else {}
+        self.params:Params = params if params is not None else {}
         self.tags = Tags()
         self.bot_should_do:dict = params.get('bot_should_do') if params is not None else {}
 
+        self.img_prompt:str = None
+        self.img_payload:dict = {}
+
+        self.local_history:History = None
         self.user_hmessage:HMessage = None
         self.bot_hmessage:HMessage = None
 
     async def message_task(self) -> tuple[HMessage, HMessage]:
         try:
-            await spontaneous_messaging.reset_for_channel(self.ictx)         # Stop any pending spontaneous message task for current channel
+            await spontaneous_messaging.reset_for_channel(self.ictx)    # Stop any pending spontaneous message task for current channel
 
-        #    await self.tags.init(self.text)                                                           # collects all tags, sorted into sub-lists by phase (user / llm / userllm)
-            self.tags.match_tags(phase='llm')                                                  # match tags labeled for user / userllm.
-            self.update_bot_should_do()                          # check what bot should do
-            if self.bot_should_do['should_gen_text']:                                                # If bot should generate text:
-                await self.build_llm_payload()    # Build LLM Payload
+            self.tags.match_tags(phase='llm')       # match tags labeled for user / userllm.
+            self.params.update_bot_should_do()      # check what bot should do
+            if self.params.should_gen_text:         # If bot should generate text:
+                await self.build_llm_payload()      # Build LLM Payload
+                # process text generation
                 if tgwui.enabled:
-                    llmmodel_params = params.get('llmmodel', {})
-                    if llmmodel_params:
-                        llm_model_mode, original_llmmodel = await self.llmmodel_swap_or_change() # if LLM model swap/change was triggered
-                    if self.bot_should_do['should_gen_image']:
-                        await self.init_img_embed()                                                          # Create a "prompting" embed for image gen
-                    img_prompt = await self.message_llm_subtask()
+                    if self.params.llmmodel:        # if LLM model swap/change was triggered
+                        llm_model_mode, original_llmmodel = await self.llmmodel_swap_or_change()
+                    if self.params.should_gen_image:
+                        await self.init_img_embed() # Create a "prompting" embed for image gen
+                    await self.message_llm_subtask()
+                    # add history reactions to user message
                     if config.discord.get('history_reactions', {}).get('enabled', True):
-                        await apply_reactions_to_messages(client.user, ictx, user_hmessage)              # add a reaction to any hidden user message
-                    if llmmodel_params and llm_model_mode == 'swap':
-                        params = await self.llmmodel_swap_back(params, original_llmmodel)                    # if LLM model swapping was triggered
+                        await apply_reactions_to_messages(client.user, self.ictx, self.user_hmessage)
+                    # if LLM model swapping was triggered
+                    if self.params.llmmodel and llm_model_mode == 'swap':
+                        await self.llmmodel_swap_back(original_llmmodel)
+                # process image generation (A1111 / Forge)
                 if sd.enabled:
-                    tags, params = await self.message_img_subtask(tags, params, bot_hmessage, img_prompt)        # process image generation (A1111 / Forge)
-                bot_hmessage = await self.send_responses(params, bot_hmessage)                                 # send responses (text, TTS, images)
+                    await self.message_img_subtask()
+                # send responses (text, TTS, images)
+                await self.send_responses()
 
             elif params['bot_should_do']['should_gen_image']:                                             # If bot should only generate image:
                 if await sd_online(self.channel):                                                            # Notify user their prompt will be used directly for img gen
@@ -1799,7 +1826,7 @@ class Tasks(TaskProcessing, TaskAttributes):
             
             await spontaneous_messaging.set_for_channel(self.ictx) # trigger spontaneous message from bot, as configured
 
-            return user_hmessage, bot_hmessage
+            return self.user_hmessage, self.bot_hmessage
 
         except Exception as e:
             print(traceback.format_exc())
@@ -2081,7 +2108,7 @@ async def speak_task(ctx: commands.Context, text:str, params:dict):
         llm_payload = extra_stopping_strings(llm_payload)
         # Get history for interaction channel
         local_history = bot_history.get_history_for(ctx.channel.id)
-        user_hmessage = await create_user_hmessage(local_history, llm_payload, params, ctx)
+        await create_user_hmessage()
         # generate text with text-generation-webui
         last_resp, tts_resp = await llm_gen(llm_payload)
         # Process responses
