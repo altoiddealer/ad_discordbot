@@ -1,7 +1,7 @@
 from modules.utils_shared import task_semaphore, bot_emojis
 import discord
 from discord.ext import commands
-from typing import Optional, Union, Message
+from typing import Optional, Union
 from modules.typing import CtxInteraction
 from typing import TYPE_CHECKING
 import asyncio
@@ -40,9 +40,9 @@ def configurable_for_dm_if(func):
     
     return commands.check(predicate)
 
-def is_direct_message(message:Message):
-    return message.ictx and getattr(message.ictx, 'guild') is None \
-        and hasattr(message.ictx, 'channel') and isinstance(message.ictx.channel, discord.DMChannel)
+def is_direct_message(ictx:CtxInteraction):
+    return ictx and getattr(ictx, 'guild') is None \
+        and hasattr(ictx, 'channel') and isinstance(ictx.channel, discord.DMChannel)
 
 
 def get_hmessage_emojis(hmessage:'HMessage') -> str:   
@@ -401,3 +401,68 @@ def get_message_ctx_inter(ictx: CtxInteraction) -> discord.Message:
     if isinstance(ictx, discord.Message):
         return ictx
     return ictx.message
+
+
+class Embeds:
+    def __init__(self, config):
+        self.color:int = config['discord'].get('embed_settings', {}).get('color', 0x1e1f22)
+        self.enabled_embeds:dict = config['discord'].get('embed_settings', {}).get('show_embeds', {})
+        self.root_url:str = 'https://github.com/altoiddealer/ad_discordbot'
+
+        self.embeds:dict = {}
+
+        self.init_default_embeds()
+
+    def enabled(self, name:str) -> bool:
+        return self.enabled_embeds.get(name, True)
+
+    def init_default_embeds(self):
+        if self.enabled('system'):
+            self.system = self.create("system", "System Notification", " ", self.root_url, self.color)
+        if self.enabled('images'):
+            self.img_gen = self.create("img_gen", "Processing image generation ...", " ", self.root_url, self.color)
+            self.img_send = self.create("img_send", "User requested an image ...", " ", self.root_url, self.color)
+        if self.enabled('change'):
+            self.change = self.create("change", "Change Notification", " ", self.root_url, self.color)
+        if self.enabled('flow'):
+            self.flow = self.create("flow", "Flow Notification", " ", "/wiki/tags", self.color)
+
+    def get(self, name:str) -> discord.Embed|None:
+        return self.embeds.get(name, None)
+
+    def update(self, name:str, title:str|None=None, description:str|None=None, color:int|None=None, url_suffix:str|None=None, url:str|None=None) -> discord.Embed:
+        embed = self.embeds.get(name)
+        if title:
+            embed.title = title
+        if description:
+            embed.description = description
+        if color:
+            embed.color = color
+        if url or url_suffix:
+            embed.url = url if url else f'{self.root_url}{url_suffix}'
+        return embed
+
+    def create(self, name:str, title:str=' ', description:str=' ', color:int|None=None, url_suffix:str|None=None, url:str|None=None) -> discord.Embed:
+        if url or url_suffix:
+            url = url if url_suffix is None else f'{url}{url_suffix}'
+        self.embeds[name] = discord.Embed(title=title, description=description, url=url, color=color)
+        return self.embeds[name]
+
+    def helpmenu(self):
+        system_json = {
+            "title": "Welcome to ad_discordbot!",
+            \
+            "description": """
+            **/helpmenu** - Display this message
+            **/character** - Change character
+            **/main** - Toggle if Bot always replies, per channel
+            **/image** - prompt an image to be generated (or try "draw <subject>")
+            **/speak** - if TTS settings are enabled, the bot can speak your text
+            **__Changing settings__** ('.../ad\_discordbot/dict\_.yaml' files)
+            **/imgmodel** - Change Img model and any model-specific settings
+            """,
+            \
+            "url": self.root_url,
+            "color": self.color
+        }
+        return discord.Embed().from_dict(system_json)

@@ -40,7 +40,7 @@ sys.path.append("ad_discordbot")
 from modules.utils_shared import task_semaphore, shared_path, patterns, bot_emojis
 from modules.database import Database, ActiveSettings, Config, StarBoard, Statistics
 from modules.utils_misc import fix_dict, update_dict, sum_update_dict, update_dict_matched_keys, get_time, format_time, format_time_difference, get_normalized_weights  # noqa: F401
-from modules.utils_discord import guild_only, configurable_for_dm_if, is_direct_message, ireply, sleep_delete_message, send_long_message, \
+from modules.utils_discord import Embeds, guild_only, configurable_for_dm_if, is_direct_message, ireply, sleep_delete_message, send_long_message, \
     EditMessageModal, SelectedListItem, SelectOptionsView, get_user_ctx_inter, get_message_ctx_inter, apply_reactions_to_messages, replace_msg_in_history_and_discord, MAX_MESSAGE_LENGTH  # noqa: F401
 from modules.utils_files import load_file, merge_base, save_yaml_file  # noqa: F401
 from modules.utils_aspect_ratios import round_to_precision, res_to_model_fit, dims_from_ar, avg_from_dims, get_aspect_ratio_parts, calculate_aspect_ratio_sizes  # noqa: F401
@@ -63,6 +63,8 @@ config = Config()
 #################################################################
 #################### DISCORD / BOT STARTUP ######################
 #################################################################
+bot_embeds = Embeds(config)
+
 # Intercept custom bot arguments
 def parse_bot_args():
     bot_arg_list = ["--limit-history", "--token"]
@@ -121,74 +123,6 @@ intents.reactions = True  # Enable reaction events
 intents.guild_messages = True # Allows updating topic
 client = commands.Bot(command_prefix=".", intents=intents)
 
-#################################################################
-####################### DISCORD EMBEDS ##########################
-#################################################################
-class Embeds:
-    def __init__(self):
-        self.color:int = config['discord'].get('embed_settings', {}).get('color', 0x1e1f22)
-        self.enabled_embeds:dict = config['discord'].get('embed_settings', {}).get('show_embeds', {})
-        self.root_url:str = 'https://github.com/altoiddealer/ad_discordbot'
-
-        self.embeds:dict = {}
-
-        self.init_default_embeds()
-
-    def enabled(self, name:str) -> bool:
-        return self.enabled_embeds.get(name, True)
-
-    def init_default_embeds(self):
-        if self.enabled('system'):
-            self.system = self.create("system", "System Notification", " ", self.root_url, self.color)
-        if self.enabled('images'):
-            self.img_gen = self.create("img_gen", "Processing image generation ...", " ", self.root_url, self.color)
-            self.img_send = self.create("img_send", "User requested an image ...", " ", self.root_url, self.color)
-        if self.enabled('change'):
-            self.change = self.create("change", "Change Notification", " ", self.root_url, self.color)
-        if self.enabled('flow'):
-            self.flow = self.create("flow", "Flow Notification", " ", "/wiki/tags", self.color)
-
-    def get(self, name:str) -> discord.Embed|None:
-        return self.embeds.get(name, None)
-
-    def update(self, name:str, title:str|None=None, description:str|None=None, color:int|None=None, url_suffix:str|None=None, url:str|None=None) -> discord.Embed:
-        embed = self.embeds.get(name)
-        if title:
-            embed.title = title
-        if description:
-            embed.description = description
-        if color:
-            embed.color = color
-        if url or url_suffix:
-            embed.url = url if url else f'{self.root_url}{url_suffix}'
-        return embed
-
-    def create(self, name:str, title:str=' ', description:str=' ', color:int|None=None, url_suffix:str|None=None, url:str|None=None) -> discord.Embed:
-        if url or url_suffix:
-            url = url if url_suffix is None else f'{url}{url_suffix}'
-        self.embeds[name] = discord.Embed(title=title, description=description, url=url, color=color)
-        return self.embeds[name]
-
-    def helpmenu(self):
-        system_json = {
-            "title": "Welcome to ad_discordbot!",
-            \
-            "description": """
-            **/helpmenu** - Display this message
-            **/character** - Change character
-            **/main** - Toggle if Bot always replies, per channel
-            **/image** - prompt an image to be generated (or try "draw <subject>")
-            **/speak** - if TTS settings are enabled, the bot can speak your text
-            **__Changing settings__** ('.../ad\_discordbot/dict\_.yaml' files)
-            **/imgmodel** - Change Img model and any model-specific settings
-            """,
-            \
-            "url": self.root_url,
-            "color": self.color
-        }
-        return discord.Embed().from_dict(system_json)
-
-bot_embeds = Embeds()
 
 #################################################################
 ################### Stable Diffusion Startup ####################
@@ -511,6 +445,11 @@ async def process_tasks_in_background():
 #################################################################
 ########################## BOT STARTUP ##########################
 #################################################################
+class ImgModels
+
+class AutoSelectImgModel(ImgModels):
+
+
 ## Function to automatically change image models
 # Select imgmodel based on mode, while avoid repeating current imgmodel
 async def auto_select_imgmodel(current_imgmodel_name, mode='random'):
@@ -4981,7 +4920,7 @@ current_task = CurrentTask()
 
 
 #################################################################
-######################## QUEUED MESSAGE #########################
+######################### QUEUED TASKS ##########################
 #################################################################
 
 class TaskProcessing:
@@ -5004,10 +4943,10 @@ class TaskProcessing:
             await self.channel.send(file=send_user_image) if len(send_user_image) == 1 else await self.channel.send(files=send_user_image)
         return self.bot_hmessage
 
-class Task(TaskProcessing):
-    def __init__(self, name:str='message', message:Message|None = None):
+
+class Tasks(TaskProcessing):
+    def __init__(self, name:str='message'):
         self.name:str = name
-        self.message:Message = message
 
         # Task attributes that may be provided by message
         self.ictx:CtxInteraction = None
@@ -5255,12 +5194,12 @@ class MessageManager():
         afk_after = time.time() + afk_delay
         self.active_in_guild[guild_id] = afk_after
 
-    def is_afk_for_guild(self, message:Message):
-        if is_direct_message(message):
+    def is_afk_for_guild(self, discord_message:discord.Message):
+        if is_direct_message(discord_message):
             return False
-        if not self.active_in_guild.get(message.ictx.guild.id):
+        if not self.active_in_guild.get(discord_message.guild.id):
             return False
-        if self.active_in_guild[message.ictx.guild.id] <= time.time():
+        if self.active_in_guild[discord_message.guild.id] <= time.time():
             return False
         return True
 
@@ -5280,18 +5219,18 @@ class MessageManager():
             self.update_afk_for_guild(guild.id)
 
 
-    async def run_message_task(self, num:int, message:Message):
+    async def run_message_task(self, num:int, discord_message:discord.Message):
         try:
             async with task_semaphore:
-                async with message.ictx.channel.typing():
-                    current_task.set(message.ictx.channel, 'message')
-                    log.info(f'Processing queued message (#{num}) by {message.ictx.author.display_name}.')
-                    await message_task(message)
-                    await run_flow_if_any(message)
+                async with discord_message.channel.typing():
+                    current_task.set(discord_message.channel, 'message')
+                    log.info(f'Processing queued message (#{num}) by {discord_message.author.display_name}.')
+                    await message_task(discord_message, text)
+                    await run_flow_if_any(discord_message, text)
 
-                    self.last_channel = message.ictx.channel.id
-                    if not is_direct_message(message):
-                        self.update_afk_for_guild(message.ictx.guild.id)
+                    self.last_channel = discord_message.channel.id
+                    if not is_direct_message(discord_message):
+                        self.update_afk_for_guild(discord_message.guild.id)
         except Exception as e:
             log.error(f"Error while processing a Message: {e}")
             current_task.clear()
@@ -5346,17 +5285,17 @@ class MessageManager():
                         self.msg_queue.task_done()
 
 
-    async def queue(self, message:Message):
-        delay = bot_behavior.get_response_delay(message)
+    async def queue(self, message:discord.Message, text:str):
+        delay = bot_behavior.get_response_delay(message, text)
         send_after = time.time() + delay
         self.counter += 1
         num = self.counter
-        channel_id = message.ictx.channel.id
+        channel_id = message.channel.id
 
         if delay:
-            await self.msg_queue.put((send_after, num, message, channel_id))
+            await self.msg_queue.put((send_after, num, message, text, channel_id))
         else:
-            await self.run_message_task(num, message)
+            await self.run_message_task(num, message, text)
 
 message_manager = MessageManager()
 
