@@ -33,7 +33,7 @@ import sys
 import traceback
 from modules.typing import ChannelID, UserID, MessageID, CtxInteraction  # noqa: F401
 import signal
-from typing import Union, Protocol
+from typing import Union
 
 sys.path.append("ad_discordbot")
 
@@ -1309,7 +1309,7 @@ class Params:
 #################################################################
 ####################### TASK PROCESSING #########################
 #################################################################
-class TaskAttributes(Protocol):
+class TaskAttributes():
     name:str
     ictx:CtxInteraction
     channel:discord.TextChannel
@@ -1327,9 +1327,9 @@ class TaskAttributes(Protocol):
     user_hmessage:HMessage
     bot_hmessage:HMessage
 
-class TaskProcessing:
+class TaskProcessing(TaskAttributes):
     ####################### MESSAGE #########################
-    async def send_responses(self:"TaskAttributes"):
+    async def send_responses(self):
         if self.bot_hmessage:
             # Process any TTS response
             if self.bot_hmessage.text_visible:
@@ -1347,14 +1347,14 @@ class TaskProcessing:
         if send_user_image:
             await self.channel.send(file=send_user_image) if len(send_user_image) == 1 else await self.channel.send(files=send_user_image)
 
-    async def fix_llm_payload(self:"TaskAttributes"):
+    async def fix_llm_payload(self):
         # Fix llm_payload by adding any missing required settings
         defaults = bot_settings.settings_to_dict() # Get default settings as dict
         default_state = defaults['llmstate']['state']
         current_state = self.llm_payload['state']
         self.llm_payload['state'] = fix_dict(current_state, default_state)
 
-    async def swap_llm_character(self:"TaskAttributes", char_name:str):
+    async def swap_llm_character(self, char_name:str):
         try:
             char_data = await load_character_data(char_name)
             if char_data.get('state', {}):
@@ -1367,7 +1367,7 @@ class TaskProcessing:
         except Exception as e:
             log.error(f"An error occurred while loading the file for swap_character: {e}")
 
-    async def process_llm_payload_tags(self:"TaskAttributes", mods:dict):
+    async def process_llm_payload_tags(self, mods:dict):
         try:
             char_params = {}
             flow = mods.get('flow', None)
@@ -1455,7 +1455,7 @@ class TaskProcessing:
         except Exception as e:
             log.error(f"Error processing LLM tags: {e}")
 
-    def collect_llm_tag_values(self:"TaskAttributes") -> tuple[dict, dict]:
+    def collect_llm_tag_values(self) -> tuple[dict, dict]:
         llm_payload_mods = {}
         formatting = {}
         try:
@@ -1520,7 +1520,7 @@ class TaskProcessing:
             log.error(f"Error collecting LLM tag values: {e}")
         return llm_payload_mods, formatting
 
-    async def init_llm_payload(self:"TaskAttributes"):
+    async def init_llm_payload(self):
         self.llm_payload = copy.deepcopy(bot_settings.settings['llmstate'])
         self.llm_payload['text'] = self.text
         self.llm_payload['state']['name1'] = self.user_name
@@ -1533,10 +1533,10 @@ class TaskProcessing:
         self.llm_payload['state']['context'] = bot_settings.settings['llmcontext']['context']
         self.llm_payload['state']['history'] = self.local_history.render_to_tgwui()
 
-    async def message_img_subtask(self:"TaskAttributes"):
+    async def message_img_subtask(self):
         self.img_prompt = self.img_prompt or self.bot_hmessage.text
         self.tags.match_img_tags(self.img_prompt)
-        self.update_bot_should_do() # check for updates from tags
+        self.params.update_bot_should_do() # check for updates from tags
         if self.params.should_gen_image:
             if self.embeds.img_gen:
                 await self.embeds.img_gen.delete()
@@ -1544,7 +1544,7 @@ class TaskProcessing:
             img_gen_task = Tasks(name='img_gen', ictx=self.ictx, img_prompt=self.img_prompt, params=self.params, tags=self.tags)
             #await img_gen_task(self.img_prompt, self.params, self.ictx, tags)
 
-    async def llmmodel_swap_back(self:"TaskAttributes", original_llmmodel:str) -> dict:
+    async def llmmodel_swap_back(self, original_llmmodel:str) -> dict:
         self.params.llmmodel['llmmodel_name'] = original_llmmodel
         # Swap LLM Model back
         change_llmmodel_task = Tasks(self.ictx, self.params)
@@ -1553,7 +1553,7 @@ class TaskProcessing:
         if change_embed:
             await change_embed.delete()
 
-    async def message_llm_subtask(self:"TaskAttributes"):
+    async def message_llm_subtask(self):
         # if no LLM model is loaded, notify that no text will be generated
         if shared.model_name == 'None':
             if not bot_database.was_warned('no_llmmodel'):
@@ -1597,7 +1597,7 @@ class TaskProcessing:
             if self.params.should_gen_image and sd.enabled:
                 self.img_prompt = self.llm_payload['text']
 
-    async def init_img_embed(self:"TaskAttributes"):
+    async def init_img_embed(self):
         # make a 'Prompting...' embed when generating text for an image response
         if await sd_online(self.channel):
             if shared.model_name == 'None':
@@ -1606,7 +1606,7 @@ class TaskProcessing:
                 if self.embeds.get('img_gen'):
                     await self.channel.send(embed = self.embeds.update('img_gen', "Prompting ...", " "))
 
-    async def llmmodel_swap_or_change(self:"TaskAttributes"):
+    async def llmmodel_swap_or_change(self):
         # Check params to see if an LLM model change/swap was triggered by Tags
         llm_model_mode = self.params.llmmodel.get('mode', 'change')  # default to 'change' unless a tag was triggered with 'swap'
         original_llmmodel = copy.copy(str(shared.model_name))           # copy current LLM model name
@@ -1618,7 +1618,7 @@ class TaskProcessing:
             await self.embeds.change.delete()
         return llm_model_mode, original_llmmodel
 
-    async def build_llm_payload(self:"TaskAttributes"):
+    async def build_llm_payload(self):
         # Use predefined LLM payload or initialize with defaults
         if not self.llm_payload:
             await self.init_llm_payload()
@@ -1637,7 +1637,7 @@ class TaskProcessing:
         # offload to ai_gen queue
         self.llm_payload['text'] = self.llm_prompt
 
-    def apply_server_mode(self:"TaskAttributes"):
+    def apply_server_mode(self):
         if self.ictx and config.get('textgenwebui', {}).get('server_mode', False):
             try:
                 name1 = f'Server: {self.ictx.guild}'
@@ -1647,7 +1647,7 @@ class TaskProcessing:
                 log.error(f'An error occurred while applying Server Mode: {e}')
 
     # Add dynamic stopping strings
-    def extra_stopping_strings(self:"TaskAttributes"):
+    def extra_stopping_strings(self):
         try:
             name1_value = self.llm_payload['state']['name1']
             name2_value = self.llm_payload['state']['name2']
@@ -1669,7 +1669,7 @@ class TaskProcessing:
             log.error(f'An error occurred while updating stopping strings: {e}')
 
     # Creates User HMessage in HManager
-    async def create_user_hmessage(self:"TaskAttributes"):
+    async def create_user_hmessage(self):
         try:
             # Add User HMessage before processing bot reply.
             # this gives time for other messages to accrue before the bot's response, as in realistic chat scenario.
@@ -1686,7 +1686,7 @@ class TaskProcessing:
             log.error(f'An error occurred while creating User HMessage: {e}')
 
     # Send LLM Payload - get responses
-    async def llm_gen(self:"TaskAttributes") -> tuple[str, str]:
+    async def llm_gen(self) -> tuple[str, str]:
         if shared.model_name == 'None':
             return '', ''
         try:
@@ -1721,7 +1721,7 @@ class TaskProcessing:
             return '', ''
     
     # Warn anyone direct messaging the bot
-    async def warn_direct_channel(self:"TaskAttributes"):
+    async def warn_direct_channel(self):
         warned_id = f'dm_{self.user.id}'
         if not bot_database.was_warned(warned_id):
             bot_database.update_was_warned(warned_id)
@@ -1731,7 +1731,7 @@ class TaskProcessing:
                 await self.ictx.channel.send("This conversation will not be saved. ***However***, your interactions will be included in the bot's general logging.")
 
     # Process responses from text-generation-webui
-    async def create_bot_hmessage(self:"TaskAttributes", last_resp:str='', tts_resp:str='') -> HMessage:
+    async def create_bot_hmessage(self, last_resp:str='', tts_resp:str='') -> HMessage:
         try:
             # custom handlings, mainly from 'regenerate'
             self.bot_hmessage = self.local_history.new_message(bot_settings.name, last_resp, 'assistant', bot_settings._bot_id, text_visible=tts_resp)
@@ -1822,8 +1822,8 @@ def process_prompt_formatting(ictx:CtxInteraction, user_name:str, prompt:str, fo
 #################################################################
 ############################ TASKS ##############################
 #################################################################
-class Tasks(TaskProcessing, TaskAttributes):
-    def __init__(self, name:str, **kwargs): # ictx:CtxInteraction, text:str='', llm_payload:dict|None=None, params:Params|None=None):
+class Tasks(TaskProcessing):
+    def __init__(self, name:str, ictx:CtxInteraction, **kwargs): # text:str='', llm_payload:dict|None=None, params:Params|None=None):
         '''''''''''''''''''''''''''''''''''
         This is a "relatively crude" framework to simplify Task management which could be improved by further subclassing.
 
@@ -1838,7 +1838,7 @@ class Tasks(TaskProcessing, TaskAttributes):
         # Name of the Task
         self.name:str = name
         # Discord attributes
-        self.ictx: CtxInteraction = kwargs.get('ictx', None)
+        self.ictx: CtxInteraction = kwargs.get('ictx', ictx)
         self.channel: discord.TextChannel = self.ictx.channel if self.ictx else None
         self.user: Union[discord.User, discord.Member] = get_user_ctx_inter(self.ictx) if self.ictx else None
         self.user_name: str = self.user.display_name if self.user else ""
