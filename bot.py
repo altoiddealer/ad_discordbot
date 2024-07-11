@@ -1310,22 +1310,22 @@ class Params:
 ####################### TASK PROCESSING #########################
 #################################################################
 class TaskAttributes():
-    name:str
-    ictx:CtxInteraction
-    channel:discord.TextChannel
-    user:Union[discord.User, discord.Member]
-    user_name:str
-    embeds:Embeds
-    text:str
-    llm_prompt:str
-    llm_payload:dict
-    params:Params
-    tags:Tags
-    img_prompt:str
-    img_payload:dict
-    local_history:History
-    user_hmessage:HMessage
-    bot_hmessage:HMessage
+    name: str
+    ictx: CtxInteraction
+    channel: discord.TextChannel
+    user: Union[discord.User, discord.Member]
+    user_name: str
+    embeds: Embeds
+    text: str
+    llm_prompt: str
+    llm_payload: dict
+    params: Params
+    tags: Tags
+    img_prompt: str
+    img_payload: dict
+    local_history: History
+    user_hmessage: HMessage
+    bot_hmessage: HMessage
 
 class TaskProcessing(TaskAttributes):
     ####################### MESSAGE #########################
@@ -1538,20 +1538,18 @@ class TaskProcessing(TaskAttributes):
         self.tags.match_img_tags(self.img_prompt)
         self.params.update_bot_should_do() # check for updates from tags
         if self.params.should_gen_image:
-            if self.embeds.img_gen:
-                await self.embeds.img_gen.delete()
-            # CREATE NEW TASK
+            await self.embeds.delete('img_gen')
+            # Img Gen Task - CREATE NEW TASK AND QUEUE IT
             img_gen_task = Tasks(name='img_gen', ictx=self.ictx, img_prompt=self.img_prompt, params=self.params, tags=self.tags)
             #await img_gen_task(self.img_prompt, self.params, self.ictx, tags)
 
     async def llmmodel_swap_back(self, original_llmmodel:str) -> dict:
         self.params.llmmodel['llmmodel_name'] = original_llmmodel
-        # Swap LLM Model back
+        # Swap LLM Model back - CREATE NEW TASK AND QUEUE IT
         change_llmmodel_task = Tasks(self.ictx, self.params)
-        change_embed = await change_llmmodel_task(self.ictx, self.params)
+        await change_llmmodel_task(self.ictx, self.params)
         # Delete embed again after the second call
-        if change_embed:
-            await change_embed.delete()
+        await self.embeds.delete('change')
 
     async def message_llm_subtask(self):
         # if no LLM model is loaded, notify that no text will be generated

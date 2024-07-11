@@ -404,7 +404,8 @@ def get_message_ctx_inter(ictx: CtxInteraction) -> discord.Message:
 
 
 class Embeds:
-    def __init__(self, config:dict):
+    def __init__(self, config:dict, ictx:CtxInteraction|None=None):
+        self.channel:discord.TextChannel = ictx.channel
         self.color:int = config['discord'].get('embed_settings', {}).get('color', 0x1e1f22)
         self.enabled_embeds:dict = config['discord'].get('embed_settings', {}).get('show_embeds', {})
 
@@ -452,17 +453,37 @@ class Embeds:
             embed.url = url if url else f'{self.root_url}{url_suffix}'
         return embed
     
-    async def edit_or_send(self, ictx:CtxInteraction, name:str, title:str|None=None, description:str|None=None, color:int|None=None, url_suffix:str|None=None, url:str|None=None) -> None|discord.Embed:
+    async def edit(self, name:str, title:str|None=None, description:str|None=None, color:int|None=None, url_suffix:str|None=None, url:str|None=None) -> None|discord.Message:
         # Return if not configured
         if not self.enabled(name):
             return
         # Get the previously sent embed
         previously_sent_embed:discord.Message = self.sent_msg_embeds.pop(name, None)
+        # Retain the message while editing Embed
+        if previously_sent_embed:
+            self.sent_msg_embeds[name] = await previously_sent_embed.edit(embed = self.update(name, title, description, color, url_suffix, url))
+        return self.sent_msg_embeds[name]
+
+    async def send(self, name:str, title:str|None=None, description:str|None=None, color:int|None=None, url_suffix:str|None=None, url:str|None=None) -> None|discord.Message:
+        # Return if not configured
+        if not self.enabled(name) or self.channel is None:
+            return
         # Retain the message while sending Embed
+        self.sent_msg_embeds[name] = await self.channel.send(embed = self.update(name, title, description, color, url_suffix, url))
+        return self.sent_msg_embeds[name]
+
+    async def edit_or_send(self, name:str, title:str|None=None, description:str|None=None, color:int|None=None, url_suffix:str|None=None, url:str|None=None) -> None|discord.Embed|discord.Message:
+        # Return if not configured
+        if not self.enabled(name):
+            return
+        # Get the previously sent embed
+        previously_sent_embed:discord.Message = self.sent_msg_embeds.pop(name, None)
+        # Retain the message while sending/editing Embed
         if previously_sent_embed:
             self.sent_msg_embeds[name] = await previously_sent_embed.edit(embed = self.update(name, title, description, color, url_suffix, url))
         else:
-            self.sent_msg_embeds[name] = await ictx.channel.send(embed = self.update(name, title, description, color, url_suffix, url))
+            self.sent_msg_embeds[name] = await self.channel.send(embed = self.update(name, title, description, color, url_suffix, url))
+        return self.sent_msg_embeds[name]
 
     def create(self, name:str, title:str=' ', description:str=' ', color:int|None=None, url_suffix:str|None=None, url:str|None=None) -> discord.Embed:
         if url or url_suffix:
