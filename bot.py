@@ -4539,8 +4539,9 @@ async def character_loader(char_name, channel=None):
         update_instruct = char_instruct or instruction_template_str or None # 'instruction_template_str' is global variable
         if update_instruct:
             state_dict['instruction_template_str'] = update_instruct
-        # Update stored database value for character
+        # Update stored database / shared.settings values for character
         bot_database.set('last_character', char_name)
+        shared.settings['character'] = char_name
         # Update discord username / avatar
         await update_client_profile(char_name, channel)
         # Mirror the changes in bot_active_settings
