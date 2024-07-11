@@ -1601,8 +1601,7 @@ class TaskProcessing(TaskAttributes):
             if shared.model_name == 'None':
                 await self.channel.send('**Processing image generation using message as the image prompt ...**', delete_after=5) # msg for if LLM model is unloaded
             else:
-                if self.embeds.get('img_gen'):
-                    await self.channel.send(embed = self.embeds.update('img_gen', "Prompting ...", " "))
+                self.embeds.send('img_gen', "Prompting ...", " ")
 
     async def llmmodel_swap_or_change(self):
         # Check params to see if an LLM model change/swap was triggered by Tags
@@ -1610,10 +1609,10 @@ class TaskProcessing(TaskAttributes):
         original_llmmodel = copy.copy(str(shared.model_name))           # copy current LLM model name
         # Change LLM model
         change_llmmodel_task = Tasks('change_llmmodel', self.ictx, self.params)
-        change_embed = await change_llmmodel_task(self.ictx, self.params)
+        await change_llmmodel_task(self.ictx, self.params)
         # Delete embed before the second call
-        if llm_model_mode == 'swap' and change_embed:
-            await self.embeds.change.delete()
+        if llm_model_mode == 'swap':
+            await self.embeds.delete('change')
         return llm_model_mode, original_llmmodel
 
     async def build_llm_payload(self):
@@ -1631,8 +1630,8 @@ class TaskProcessing(TaskAttributes):
         # apply tags relevant to LLM payload
         await self.process_llm_payload_tags(llm_payload_mods)
         # apply formatting tags to LLM prompt
-        self.process_prompt_formatting(ictx, user_name, llm_prompt, formatting)
-        # offload to ai_gen queue
+        process_prompt_formatting(self.ictx, self.user_name, self.llm_prompt, formatting)
+        # assign finalized prompt to payload
         self.llm_payload['text'] = self.llm_prompt
 
     def apply_server_mode(self):
@@ -1723,8 +1722,8 @@ class TaskProcessing(TaskAttributes):
         warned_id = f'dm_{self.user.id}'
         if not bot_database.was_warned(warned_id):
             bot_database.update_was_warned(warned_id)
-            if self.embeds.get('system'):
-                await self.ictx.channel.send(embed = self.embeds.update('system', "This conversation will not be saved, ***however***:", "Your interactions will be included in the bot's general logging."))
+            if self.embeds.enabled('system'):
+                await self.embeds.send('system', "This conversation will not be saved, ***however***:", "Your interactions will be included in the bot's general logging.")
             else:
                 await self.ictx.channel.send("This conversation will not be saved. ***However***, your interactions will be included in the bot's general logging.")
 
@@ -1944,14 +1943,8 @@ class Tasks(TaskProcessing):
         except Exception as e:
             print(traceback.format_exc())
             log.error(f'An error occurred while processing "{current_task.name}" request: {e}')
-            if self.embeds.enabled('img_gen'):
-                title = f'An error occurred while processing "{current_task.name}" request'
-                if self.embeds.img_gen:
-                    await self.embeds.img_gen.edit(embed = self.embeds.img_gen, title=title, description=e)
-                else:
-                    await self.channel.send(embed = self.embeds.update('img_gen', title, e))
-            if self.embeds.change:
-                await self.embeds.change.delete()
+            await self.embeds.edit_or_send('img_gen', f'An error occurred while processing "{current_task.name}" request', e)
+            await self.embeds.delete('change')
             current_task.clear()
         
         return None, None
@@ -1961,7 +1954,6 @@ class Tasks(TaskProcessing):
     ######################### CONTINUE TASK #########################
     #################################################################
     async def continue_task(self, target_discord_msg:discord.Message):
-        system_embed = None
         try:
             original_user_hmessage, original_bot_hmessage = self.local_history.get_history_pair_from_msg_id(target_discord_msg.id)
             # Requires finding original bot HMessage in history
@@ -1991,8 +1983,7 @@ class Tasks(TaskProcessing):
             if temp_reveal_bot_hmsg:
                 original_bot_hmessage.update(hidden=True)
 
-            if self.embeds.enabled('system'):
-                system_embed = await self.channel.send(embed = self.embeds.update('system', 'Continuing ... ', f'Continuing text for {self.user_name}'))
+            await self.embeds.send('system', 'Continuing ... ', f'Continuing text for {self.user_name}')
 
             ## Finalize payload, generate text via TGWUI, and process responses
             # Toggle TTS off, if interaction server is not connected to Voice Channel
@@ -2011,16 +2002,15 @@ class Tasks(TaskProcessing):
             # Toggle TTS back on if it was toggled off
             await tts.apply_toggle_tts(toggle='on', tts_sw=tts_sw)
 
-            if system_embed:
-                await system_embed.delete()
+            await self.embeds.delete('system') # delete embed
             if not last_resp:
                 await self.ictx.followup.send('Failed to continue text.', silent=True)
                 return
 
             # Log message exchange
-            log.info(f'''{self.user_name}: "{llm_payload['text']}"''')
+            log.info(f'''{self.user_name}: "{self.llm_payload['text']}"''')
             log.info('Continued text:')
-            log.info(f'''{llm_payload['state']['name2']}: "{last_resp}"''')
+            log.info(f'''{self.llm_payload['state']['name2']}: "{last_resp}"''')
 
             # Extract the continued text from previous text
             continued_text = last_resp[len(original_bot_hmessage.text):]
@@ -2028,7 +2018,7 @@ class Tasks(TaskProcessing):
             # Get a possible message to reply to
             ref_message = target_discord_msg
             if original_bot_hmessage.id != target_discord_msg.id:
-                ref_message = await channel.fetch_message(original_bot_hmessage.id)
+                ref_message = await self.channel.fetch_message(original_bot_hmessage.id)
 
             # Update the original message in history manager
             updated_bot_hmessage = original_bot_hmessage
@@ -2046,12 +2036,12 @@ class Tasks(TaskProcessing):
                 updated_bot_hmessage.related_ids.append(original_bot_hmessage.id)
 
                 if len(continued_text) < MAX_MESSAGE_LENGTH:
-                    new_discord_msg = await channel.send(content=continued_text, reference=ref_message)
+                    new_discord_msg = await self.channel.send(content=continued_text, reference=ref_message)
                     # replace original id with new
                     updated_bot_hmessage.update(id=new_discord_msg.id)
                 else:
                     # Pass to send_long_message which will add more ids and update last.
-                    await send_long_message(channel, continued_text, bot_hmessage=updated_bot_hmessage)
+                    await send_long_message(self.channel, continued_text, bot_hmessage=updated_bot_hmessage)
 
             updated_bot_hmessage.update(text=last_resp, text_visible=tts_resp)
 
@@ -2068,35 +2058,31 @@ class Tasks(TaskProcessing):
             e_msg = 'An error occurred while processing "Continue"'
             log.error(f'{e_msg}: {e}')
             await self.ictx.followup.send(e_msg, silent=True)
-            if system_embed:
-                await system_embed.delete()
+            self.embeds.delete('system') # delete embed
 
     async def regenerate_task(self, target_discord_msg: discord.Message, target_hmessage:HMessage, mode:str='create'):
-        user_name = get_user_ctx_inter(inter).display_name
-        channel = inter.channel
-        system_embed = None
         try:
-            user_hmessage, bot_hmessage = local_history.get_history_pair_from_msg_id(target_discord_msg.id, user_hmsg_attr='regenerated_from', bot_hmsg_list_attr='regenerations')
+            self.user_hmessage, self.bot_hmessage = self.local_history.get_history_pair_from_msg_id(target_discord_msg.id, user_hmsg_attr='regenerated_from', bot_hmsg_list_attr='regenerations')
 
             # Replace method requires finding original bot HMessage in history
-            if mode == 'replace' and not bot_hmessage:
-                await inter.followup.send("Message not found in current chat history.", ephemeral=True)
+            if mode == 'replace' and not self.bot_hmessage:
+                await self.ictx.followup.send("Message not found in current chat history.", ephemeral=True)
                 return
             
             # Original user text is needed for both 'create' and 'replace'
             # For create, `target_bot_hmessage` will hide the currently revealed message.
             # For replace, `target_bot_hmessage` will replace the currently revealed message.
-            all_bot_regens = user_hmessage.regenerations
+            all_bot_regens = self.user_hmessage.regenerations
             # Update attributes
             if not all_bot_regens and mode == 'create':
-                bot_hmessage.mark_as_regeneration_for(user_hmessage)
+                self.bot_hmessage.mark_as_regeneration_for(self.user_hmessage)
 
             original_discord_msg = target_discord_msg
 
             # if command used on user's own message
-            if inter.user == target_discord_msg.author:
+            if self.user == target_discord_msg.author:
                 self.text = target_discord_msg.clean_content   # get the message contents for prompt
-                target_bot_hmessage = bot_hmessage                 # set to most recent bot regeneration
+                target_bot_hmessage = self.bot_hmessage                 # set to most recent bot regeneration
                 if all_bot_regens:
                     for i in range(len(all_bot_regens)):
                         if not all_bot_regens[i].hidden:
@@ -2104,13 +2090,13 @@ class Tasks(TaskProcessing):
                             break
             # if command used on a bot regen
             elif client.user == target_discord_msg.author:
-                if not user_hmessage or isinstance(user_hmessage, str): # will be uuid text string if message failed to be found
-                    await inter.followup.send("Original user prompt is required, which could not be found from the selected message or in current chat history. Please try again, using the command on your own message.", ephemeral=True)
+                if not self.user_hmessage or isinstance(self.user_hmessage, str): # will be uuid text string if message failed to be found
+                    await self.ictx.followup.send("Original user prompt is required, which could not be found from the selected message or in current chat history. Please try again, using the command on your own message.", ephemeral=True)
                     return
                 # default the target hmessage to the one associated with the message selected via cmd
                 target_bot_hmessage = target_hmessage
                 # get the user's message contents for prompt
-                original_discord_msg = await channel.fetch_message(user_hmessage.id)
+                original_discord_msg = await self.channel.fetch_message(self.user_hmessage.id)
                 self.text = original_discord_msg.clean_content
                 # If other regens, change target to the unhidden regenerated message
                 if target_bot_hmessage.hidden and all_bot_regens and mode == 'create':
@@ -2122,30 +2108,27 @@ class Tasks(TaskProcessing):
                 return # invalid user
             
             # To regenerate, both messages must be visible
-            temp_reveal_msgs = True if (user_hmessage.hidden and target_bot_hmessage.hidden) else False
+            temp_reveal_msgs = True if (self.user_hmessage.hidden and target_bot_hmessage.hidden) else False
             if temp_reveal_msgs:
-                user_hmessage.update(hidden=False)
+                self.user_hmessage.update(hidden=False)
                 target_bot_hmessage.update(hidden=False)
 
             # Initialize payload with sliced history
-            hmessage_for_slicing = user_hmessage or bot_hmessage
+            hmessage_for_slicing = self.user_hmessage or self.bot_hmessage
             await self.init_llm_payload()
             sliced_history = hmessage_for_slicing.new_history_end_here(include_self=False) # Exclude the original exchange pair
             sliced_i, _ = sliced_history.render_to_tgwui_tuple()
             self.llm_payload['state']['history']['internal'] = copy.deepcopy(sliced_i)
             self.llm_payload['state']['history']['visible'] = copy.deepcopy(sliced_i)
 
-            if system_embed_info:
-                system_embed_info.title = 'Regenerating ... '
-                system_embed_info.description = f'Regenerating text for {user_name}'
-                system_embed = await channel.send(embed=system_embed_info)
+            await self.embeds.send('system', 'Regenerating ... ', f'Regenerating text for {self.user_name}')
 
             # Flags to skip message logging/special message handling
             params = {}
             if mode == 'create':
                 params['skip_create_user_hmsg'] = True
                 params['ref_message'] = original_discord_msg
-                params['regenerated'] = user_hmessage
+                params['regenerated'] = self.user_hmessage
                 params['bot_hmsg_hidden'] = temp_reveal_msgs # Hide new bot HMessage if regenerating from hidden exchange
 
             if mode == 'replace':
@@ -2156,39 +2139,38 @@ class Tasks(TaskProcessing):
                 params['bot_hmsg_hidden'] = temp_reveal_msgs # Hide new bot HMessage if regenerating from hidden exchange
 
             # Regenerate the reply
-            current_task.set(inter.channel, 'regenerate')
+            current_task.set(self.channel, 'regenerate')
+            # CREATE TASK AND QUEUE IT
             _, new_bot_hmessage = await message_task(inter, original_user_text, llm_payload, params)
 
             # Mark as reply
-            new_bot_hmessage.mark_as_reply_for(user_hmessage)
+            new_bot_hmessage.mark_as_reply_for(self.user_hmessage)
 
             # Update the messages hidden statuses
-            user_hmessage.update(hidden=new_bot_hmessage.hidden)
+            self.user_hmessage.update(hidden=new_bot_hmessage.hidden)
             # If set to toggle, make hidden again regardless of what was set during regeneration
             if temp_reveal_msgs:
-                user_hmessage.update(hidden=True)
+                self.user_hmessage.update(hidden=True)
 
             if mode == 'create':
-                new_bot_hmessage.mark_as_regeneration_for(user_hmessage)
+                new_bot_hmessage.mark_as_regeneration_for(self.user_hmessage)
                 # Adjust attributes/reactions for prior active bot reply/regeneration
                 target_bot_hmessage.update(hidden=True) # always hide previous regen when creating
                 target_bot_hmessage_ids = [target_bot_hmessage.id] + target_bot_hmessage.related_ids
                 if config.discord.get('history_reactions', {}).get('enabled', True):
-                    await apply_reactions_to_messages(client.user, inter, target_bot_hmessage, target_bot_hmessage_ids, target_discord_msg)
+                    await apply_reactions_to_messages(client.user, self.ictx, target_bot_hmessage, target_bot_hmessage_ids, target_discord_msg)
 
             # Update reactions for user message
             if config.discord.get('history_reactions', {}).get('enabled', True):
-                await apply_reactions_to_messages(client.user, inter, user_hmessage)
+                await apply_reactions_to_messages(client.user, self.ictx, self.user_hmessage)
 
-            if system_embed:
-                await system_embed.delete()
+            await self.embeds.delete('system')
 
         except Exception as e:
             e_msg = 'An error occurred while processing "Regenerate"'
             log.error(f'{e_msg}: {e}')
-            await inter.followup.send(e_msg, silent=True)
-            if system_embed:
-                await system_embed.delete()
+            await self.ictx.followup.send(e_msg, silent=True)
+            await self.embeds.delete('system')
         current_task.clear()
 
     async def speak_task(ctx: commands.Context, text:str, params:dict):
