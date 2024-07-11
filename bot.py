@@ -1220,6 +1220,150 @@ class Tags:
         except Exception as e:
             log.error(f"Error matching tags: {e}")
 
+#################################################################
+###################### DYNAMIC PROMPTING ########################
+#################################################################
+def get_wildcard_value(matched_text:str, dir_path: Optional[str] = None) -> Optional[str]:
+    dir_path = dir_path or shared_path.dir_wildcards
+    selected_option: Optional[str] = None
+    search_phrase = matched_text[2:] if matched_text.startswith('##') else matched_text
+    search_path = f"{search_phrase}.txt"
+    # List files in the directory
+    txt_files = glob.glob(os.path.join(dir_path, search_path))
+    if txt_files:
+        selected_file = random.choice(txt_files)
+        with open(selected_file, 'r') as file:
+            lines = file.readlines()
+            selected_option = random.choice(lines).strip()
+    else:
+        # If no matching .txt file is found, try to find a subdirectory
+        subdirectories = glob.glob(os.path.join(dir_path, search_phrase))
+        for subdir in subdirectories:
+            if os.path.isdir(subdir):
+                subdir_files = glob.glob(os.path.join(subdir, '*.txt'))
+                if subdir_files:
+                    selected_file = random.choice(subdir_files)
+                    with open(selected_file, 'r') as file:
+                        lines = file.readlines()
+                        selected_option = random.choice(lines).strip()
+    # Check if selected option has braces pattern
+    if selected_option:
+        braces_match = patterns.braces.search(selected_option)
+        if braces_match:
+            braces_phrase = braces_match.group(1)
+            selected_option = get_braces_value(braces_phrase)
+        # Check if the selected line contains a nested value
+        if selected_option.startswith('__') and selected_option.endswith('__'):
+            # Extract nested directory path from the nested value
+            nested_dir = selected_option[2:-2]  # Strip the first 2 and last 2 characters
+            # Get the last component of the nested directory path
+            search_phrase = os.path.split(nested_dir)[-1]
+            # Remove the last component from the nested directory path
+            nested_dir = os.path.join(shared_path.dir_wildcards, os.path.dirname(nested_dir))
+            # Recursively check filenames in the nested directory
+            selected_option = get_wildcard_value(search_phrase, nested_dir)
+    return selected_option
+
+def process_dynaprompt_options(options:list[str]) -> list[tuple[float, str]]:
+    weighted_options = []
+    total_weight = 0
+    for option in options:
+        if '::' in option:
+            weight, value = option.split('::')
+            weight = float(weight)
+        else:
+            weight = 1.0
+            value = option
+        total_weight += weight
+        weighted_options.append((weight, value))
+    # Normalize weights
+    normalized_options = [(round(weight / total_weight, 2), value) for weight, value in weighted_options]
+    return normalized_options
+
+def choose_dynaprompt_option(options: list[tuple[float, str]], num_choices: int = 1) -> list[str]:
+    chosen_values = random.choices(options, weights=[weight for weight, _ in options], k=num_choices)
+    return [value for _, value in chosen_values]
+
+def get_braces_value(matched_text:str) -> str:
+    num_choices = 1
+    separator = None
+    if '$$' in matched_text:
+        num_choices_str, options_text = matched_text.split('$$', 1)  # Split by the first occurrence of $$
+        if '-' in num_choices_str:
+            min_choices, max_choices = num_choices_str.split('-')
+            min_choices = int(min_choices)
+            max_choices = int(max_choices)
+            num_choices = random.randint(min_choices, max_choices)
+        else:
+            num_choices = int(num_choices_str) if num_choices_str.isdigit() else 1  # Convert to integer if it's a valid number
+        separator_index = options_text.find('$$')
+        if separator_index != -1:
+            separator = options_text[:separator_index]
+            options_text = options_text[separator_index + 2:]
+        options = options_text.split('|')  # Extract options after $$
+    else:
+        options = matched_text.split('|')
+    # Process weighting options
+    options = process_dynaprompt_options(options)
+    # Choose option(s)
+    chosen_options = choose_dynaprompt_option(options, num_choices)
+    # Check for selected wildcards
+    for index, option in enumerate(chosen_options):
+        wildcard_match = patterns.wildcard.search(option)
+        if wildcard_match:
+            wildcard_phrase = wildcard_match.group()
+            wildcard_value = get_wildcard_value(matched_text=wildcard_phrase, dir_path=shared_path.dir_wildcards)
+            if wildcard_value:
+                chosen_options[index] = wildcard_value
+    chosen_options = [option for option in chosen_options if option is not None]
+    if separator:
+        replaced_text = separator.join(chosen_options)
+    else:
+        replaced_text = ', '.join(chosen_options) if num_choices > 1 else chosen_options[0]
+    return replaced_text
+
+async def dynamic_prompting(user_name: str, text: str, ictx: Optional[CtxInteraction] = None) -> str:
+    if not config.get('dynamic_prompting_enabled', True):
+        if not bot_database.was_warned('dynaprompt'):
+            bot_database.update_was_warned('dynaprompt')
+            log.warning(f"'{shared_path.config}' is missing a new parameter 'dynamic_prompting_enabled'. Defaulting to 'True' (enabled) ")
+            return text
+
+    # copy text for adding comments
+    text_with_comments = text
+    # Process braces patterns
+    braces_start_indexes = []
+    braces_matches = patterns.braces.finditer(text)
+    braces_matches = sorted(braces_matches, key=lambda x: -x.start())  # Sort matches in reverse order by their start indices
+    for match in braces_matches:
+        braces_start_indexes.append(match.start())  # retain all start indexes for updating 'text_with_comments' for wildcard match phase
+        matched_text = match.group(1)               # Extract the text inside the braces
+        replaced_text = get_braces_value(matched_text)
+        # Replace matched text
+        text = text.replace(match.group(0), replaced_text, 1)
+        # Update comment
+        highlighted_changes = '`' + replaced_text + '`'
+        text_with_comments = text_with_comments.replace(match.group(0), highlighted_changes, 1)
+    # Process wildcards not in braces
+    wildcard_matches = patterns.wildcard.finditer(text)
+    wildcard_matches = sorted(wildcard_matches, key=lambda x: -x.start())  # Sort matches in reverse order by their start indices
+    for match in wildcard_matches:
+        matched_text = match.group()
+        replaced_text = get_wildcard_value(matched_text=matched_text, dir_path=shared_path.dir_wildcards)
+        if replaced_text:
+            start, end = match.start(), match.end()
+            # Replace matched text
+            text = text[:start] + replaced_text + text[end:]
+            # Calculate offset based on the number of braces matches with lower start indexes
+            offset = sum(1 for idx in braces_start_indexes if idx < start) * 2
+            adjusted_start = start + offset
+            adjusted_end = end + offset
+            highlighted_changes = '`' + replaced_text + '`'
+            text_with_comments = (text_with_comments[:adjusted_start] + highlighted_changes + text_with_comments[adjusted_end:])
+    # send a message showing the selected options
+    if ictx and (braces_matches or wildcard_matches):
+        await ictx.reply(content=f"__Text with **[Dynamic Prompting](<https://github.com/altoiddealer/ad_discordbot/wiki/dynamic-prompting>)**__:\n>>> **{user_name}**: {text_with_comments}", mention_author=False, silent=True)
+    return text
 
 #################################################################
 ######################## TASK TRACKING ##########################
@@ -1607,7 +1751,7 @@ class TaskProcessing(TaskAttributes):
         # Check params to see if an LLM model change/swap was triggered by Tags
         llm_model_mode = self.params.llmmodel.get('mode', 'change')  # default to 'change' unless a tag was triggered with 'swap'
         original_llmmodel = copy.copy(str(shared.model_name))           # copy current LLM model name
-        # Change LLM model
+        # Change LLM model CREATE TASK AND QUEUE IT
         change_llmmodel_task = Tasks('change_llmmodel', self.ictx, self.params)
         await change_llmmodel_task(self.ictx, self.params)
         # Delete embed before the second call
@@ -1630,7 +1774,7 @@ class TaskProcessing(TaskAttributes):
         # apply tags relevant to LLM payload
         await self.process_llm_payload_tags(llm_payload_mods)
         # apply formatting tags to LLM prompt
-        process_prompt_formatting(self.ictx, self.user_name, self.llm_prompt, formatting)
+        self.process_prompt_formatting(self.llm_prompt, formatting)
         # assign finalized prompt to payload
         self.llm_payload['text'] = self.llm_prompt
 
@@ -1710,7 +1854,7 @@ class TaskProcessing(TaskAttributes):
             # Offload the synchronous task to a separate thread
             last_resp, tts_resp = await loop.run_in_executor(None, process_responses)
             if last_resp:
-                update_llm_gen_statistics(last_resp) # Update statistics
+                self.update_llm_gen_statistics(last_resp) # Update statistics
             return last_resp, tts_resp
         except Exception as e:
             log.error(f'An error occurred in llm_gen(): {e}')
@@ -1751,148 +1895,141 @@ class TaskProcessing(TaskAttributes):
             log.error(f'An error occurred while creating Bot HMessage: {e}')
             return None
 
-def format_prompt_with_recent_output(ictx: CtxInteraction, user_name:str, prompt:str) -> str:
-    try:
-        formatted_prompt = prompt
-        # Find all matches of {user_x} and {llm_x} in the prompt
-        matches = patterns.recent_msg_roles.findall(prompt)
-        if matches:
-            local_history = bot_history.get_history_for(ictx.channel.id)
-            user_msgs = [user_hmsg.text for user_hmsg in local_history.role_messages('user')[-10:]][::-1]
-            bot_msgs = [bot_hmsg.text for bot_hmsg in local_history.role_messages('assistant')[-10:]][::-1]
-            recent_messages = {'user': user_msgs, 'llm': bot_msgs}
-            log.debug(f"format_prompt_with_recent_output {len(user_msgs)}, {len(bot_msgs)}, {repr(user_msgs[0])}, {repr(bot_msgs[0])}")
-        # Iterate through the matches
-        for match in matches:
-            prefix, index = match
-            index = int(index)
-            if prefix in ['user', 'llm'] and 0 <= index <= 10:
-                message_list = recent_messages[prefix]
-                if not message_list or index >= len(message_list):
-                    continue
-                matched_syntax = f"{prefix}_{index}"
-                formatted_prompt = formatted_prompt.replace(f"{{{matched_syntax}}}", message_list[index])
-            elif prefix == 'history' and 0 <= index <= 10:
-                user_hmessage = recent_messages['user'][index] if index < len(recent_messages['user']) else ''
-                llm_message = recent_messages['llm'][index] if index < len(recent_messages['llm']) else ''
-                formatted_history = f'"{user_name}:" {user_hmessage}\n"{bot_database.last_character}:" {llm_message}\n'
-                matched_syntax = f"{prefix}_{index}"
-                formatted_prompt = formatted_prompt.replace(f"{{{matched_syntax}}}", formatted_history)
-        formatted_prompt = formatted_prompt.replace('{last_image}', '__temp/temp_img_0.png')
-        return formatted_prompt
-    except Exception as e:
-        log.error(f'An error occurred while formatting prompt with recent messages: {e}')
-        return prompt
-
-def process_prompt_formatting(ictx:CtxInteraction, user_name:str, prompt:str, formatting:dict) -> str:
-    updated_prompt = prompt
-    # Only try formatting text if there is at least one instance of {variable syntax}
-    possible_variables = patterns.curly_brackets.search(prompt)
-    if possible_variables:
+    def format_prompt_with_recent_output(self, prompt:str) -> str:
         try:
-            format_prompt = formatting.get('format_prompt', [])
-            time_offset = formatting.get('time_offset', None)
-            time_format = formatting.get('time_format', None)
-            date_format = formatting.get('date_format', None)
-            # Tag handling for prompt formatting
-            if format_prompt:
-                for fmt_prompt in format_prompt:
-                    updated_prompt = fmt_prompt.replace('{prompt}', updated_prompt)
-            # format prompt with any defined recent messages
-            updated_prompt = format_prompt_with_recent_output(ictx, user_name, updated_prompt)
-            # format prompt with last time
-            time_since_last_user_msg = bot_database.last_user_msg.get(ictx.channel.id, '')
-            if time_since_last_user_msg:
-                time_since_last_user_msg = format_time_difference(time.time(), bot_database.last_user_msg[ictx.channel.id])
-            updated_prompt = updated_prompt.replace('{time_since_last_user_msg}', time_since_last_user_msg)
-            # Format time if defined
-            new_time, new_date = get_time(time_offset, time_format, date_format)
-            updated_prompt = updated_prompt.replace('{time}', new_time)
-            updated_prompt = updated_prompt.replace('{date}', new_date)
-            if updated_prompt != prompt:
-                log.info(f'Prompt was formatted: {updated_prompt}')
+            formatted_prompt = prompt
+            # Find all matches of {user_x} and {llm_x} in the prompt
+            matches = patterns.recent_msg_roles.findall(prompt)
+            if matches:
+                user_msgs = [user_hmsg.text for user_hmsg in self.local_history.role_messages('user')[-10:]][::-1]
+                bot_msgs = [bot_hmsg.text for bot_hmsg in self.local_history.role_messages('assistant')[-10:]][::-1]
+                recent_messages = {'user': user_msgs, 'llm': bot_msgs}
+                log.debug(f"format_prompt_with_recent_output {len(user_msgs)}, {len(bot_msgs)}, {repr(user_msgs[0])}, {repr(bot_msgs[0])}")
+            # Iterate through the matches
+            for match in matches:
+                prefix, index = match
+                index = int(index)
+                if prefix in ['user', 'llm'] and 0 <= index <= 10:
+                    message_list = recent_messages[prefix]
+                    if not message_list or index >= len(message_list):
+                        continue
+                    matched_syntax = f"{prefix}_{index}"
+                    formatted_prompt = formatted_prompt.replace(f"{{{matched_syntax}}}", message_list[index])
+                elif prefix == 'history' and 0 <= index <= 10:
+                    user_hmessage = recent_messages['user'][index] if index < len(recent_messages['user']) else ''
+                    llm_message = recent_messages['llm'][index] if index < len(recent_messages['llm']) else ''
+                    formatted_history = f'"{self.user_name}:" {user_hmessage}\n"{bot_database.last_character}:" {llm_message}\n'
+                    matched_syntax = f"{prefix}_{index}"
+                    formatted_prompt = formatted_prompt.replace(f"{{{matched_syntax}}}", formatted_history)
+            formatted_prompt = formatted_prompt.replace('{last_image}', '__temp/temp_img_0.png')
+            return formatted_prompt
         except Exception as e:
-            log.error(f"Error formatting LLM prompt: {e}")
-    return updated_prompt
+            log.error(f'An error occurred while formatting prompt with recent messages: {e}')
+            return prompt
 
+    def process_prompt_formatting(self, prompt:str, formatting:dict) -> str:
+        updated_prompt = prompt
+        # Only try formatting text if there is at least one instance of {variable syntax}
+        possible_variables = patterns.curly_brackets.search(prompt)
+        if possible_variables:
+            try:
+                format_prompt: list[str] = formatting.get('format_prompt', [])
+                time_offset = formatting.get('time_offset', None)
+                time_format = formatting.get('time_format', None)
+                date_format = formatting.get('date_format', None)
+                # Tag handling for prompt formatting
+                if format_prompt:
+                    for fmt_prompt in format_prompt:
+                        updated_prompt = fmt_prompt.replace('{prompt}', updated_prompt)
+                # format prompt with any defined recent messages
+                updated_prompt = self.format_prompt_with_recent_output(updated_prompt)
+                # format prompt with last time
+                time_since_last_user_msg = bot_database.last_user_msg.get(self.ictx.channel.id, '')
+                if time_since_last_user_msg:
+                    time_since_last_user_msg = format_time_difference(time.time(), bot_database.last_user_msg[self.ictx.channel.id])
+                updated_prompt = updated_prompt.replace('{time_since_last_user_msg}', time_since_last_user_msg)
+                # Format time if defined
+                new_time, new_date = get_time(time_offset, time_format, date_format)
+                updated_prompt = updated_prompt.replace('{time}', new_time)
+                updated_prompt = updated_prompt.replace('{date}', new_date)
+                if updated_prompt != prompt:
+                    log.info(f'Prompt was formatted: {updated_prompt}')
+            except Exception as e:
+                log.error(f"Error formatting LLM prompt: {e}")
+        return updated_prompt
+
+    def update_llm_gen_statistics(self, last_resp:str):
+        try:
+            total_gens = bot_statistics.llm.get('generations_total', 0)
+            total_gens += 1
+            bot_statistics.llm['generations_total'] = total_gens
+            # Update tokens statistics
+            last_tokens = int(count_tokens(last_resp))
+            bot_statistics.llm['num_tokens_last'] = last_tokens
+            total_tokens = bot_statistics.llm.get('num_tokens_total', 0)
+            total_tokens += last_tokens
+            bot_statistics.llm['num_tokens_total'] = total_tokens
+            # Update time statistics
+            total_time = bot_statistics.llm.get('time_total', 0)
+            total_time += (time.time() - bot_statistics._llm_gen_time_start_last)
+            bot_statistics.llm['time_total'] = round(total_time, 4)
+            # Update averages
+            bot_statistics.llm['tokens_per_gen_avg'] = total_tokens/total_gens
+            bot_statistics.llm['tokens_per_sec_avg'] = round((total_tokens/total_time), 4)
+            bot_statistics.save()
+        except Exception as e:
+            log.error(f'An error occurred while saving LLM gen statistics: {e}')
+
+    async def send_char_greeting_or_history(self, char_name:str):
+        try:
+            # Send last_exchange to channel
+            greeting_msg = ''
+            if bot_history.greeting_or_history == 'history':
+                last_user_hmessage, last_bot_hmessage = bot_history.get_history_for(self.ictx.channel.id).last_exchange()
+                if last_user_hmessage:
+                    greeting_msg = f'__**Last message exchange**__:\n>>> **User**: "{last_user_hmessage.text_visible}"\n **{bot_database.last_character}**: "{last_bot_hmessage.text_visible}"'
+            if not greeting_msg:
+                greeting :str = bot_settings.settings['llmcontext']['greeting']
+                if greeting:
+                    greeting_msg = greeting.replace('{{user}}', 'user')
+                    greeting_msg = greeting_msg.replace('{{char}}', char_name)
+                else:
+                    greeting_msg = f'**{char_name}** has entered the chat"'
+            await send_long_message(self.channel, greeting_msg)
+        except Exception as e:
+            print(traceback.format_exc())
+            log.error(f'An error occurred while sending greeting or history for "{char_name}": {e}')
+
+async def announce_changes(ictx: CtxInteraction, change_label:str, change_name:str):
+    user_name = get_user_ctx_inter(ictx).display_name if ictx else 'Automatically'
+    bot_embeds.update('change', f"{user_name} {change_label}:", f'**{change_name}**')
+    try:
+        # adjust delay depending on how many channels there are to prevent being rate limited
+        delay = math.floor(len(bot_database.announce_channels)/2)
+        for channel_id in bot_database.announce_channels:
+            await asyncio.sleep(delay)
+            channel = await client.fetch_channel(channel_id)
+            # if Automatic imgmodel change (no interaction object)
+            if ictx is None:
+                await channel.send(embed=change_embed_info)
+            # If private channel
+            elif ictx.channel.overwrites_for(ictx.guild.default_role).read_messages is False:
+                continue
+            # Public channels in interaction server
+            elif any(channel_id == channel.id for channel in ictx.guild.channels):
+                await bot_embeds.send('change', f"{user_name} {change_label} in <#{ictx.channel.id}>:")
+            # Channel is in another server
+            elif channel_id not in [channel.id for channel in ictx.guild.channels]:
+                if change_label != 'reset the conversation':
+                    await bot_embeds.send('change', f"A user {change_label} in another bot server:")
+    except Exception as e:
+        log.error(f'An error occurred while announcing changes to announce channels: {e}')
 
 #################################################################
 ############################ TASKS ##############################
 #################################################################
+
 class Tasks(TaskProcessing):
-    def __init__(self, name:str, ictx:CtxInteraction|None=None, **kwargs): # text:str='', llm_payload:dict|None=None, params:Params|None=None):
-        '''''''''''''''''''''''''''''''''''
-        This is a "relatively crude" framework to simplify Task management which could be improved by further subclassing.
-
-        Instances of Tasks() are queued to TasksManager() queue, and processed via the myriad of methods defined in TaskProcessing().
-
-        Protocol is used to improve code clarity by applying typehinting for attributes within the methods of TaskProcessing().
-
-        Cons:
-            (1) PyLance can't link shared methods among TaskProcessing().
-            (2) Tasks are required to include all attributes defined in TaskAttributes Protocol.
-        '''''''''''''''''''''''''''''''''''
-
-        self.name: str = name
-        self.ictx: CtxInteraction = ictx
-        # TaskQueue() will initialize the Task's values before it is processed
-        self.channel: discord.TextChannel = kwargs.get('channel', None)
-        self.user: Union[discord.User, discord.Member] = kwargs.get('user', None)
-        self.user_name: str          = kwargs.get('user_name', None)
-        self.embeds: Embeds          = kwargs.get('embeds', None)
-        self.text: str               = kwargs.get('text', None)
-        self.llm_prompt: str         = kwargs.get('llm_prompt', None)
-        self.llm_payload: dict       = kwargs.get('llm_payload', None)
-        self.params: Params          = kwargs.get('params', None)
-        self.tags: Tags              = kwargs.get('tags', None)
-        self.img_prompt: str         = kwargs.get('img_prompt', None)
-        self.img_payload: dict       = kwargs.get('img_payload', None)
-        self.user_hmessage: HMessage = kwargs.get('user_hmessage', None)
-        self.bot_hmessage: HMessage  = kwargs.get('bot_hmessage', None)
-        self.local_history           = kwargs.get('local_history', None)
-
-    def init_self_values(self):
-        self.channel: discord.TextChannel = self.ictx.channel if self.ictx else None
-        self.user: Union[discord.User, discord.Member] = get_user_ctx_inter(self.ictx) if self.ictx else None
-        self.user_name: str          = self.user.display_name if self.user else ""
-        self.embeds: Embeds          = self.embeds if self.embeds else Embeds(config)
-        # The original input text
-        self.text: str               = self.text if self.text else ""
-        # TGWUI specific attributes
-        self.llm_prompt: str         = self.llm_prompt if self.llm_prompt else None
-        self.llm_payload: dict       = self.llm_payload if self.llm_payload else {}
-        # Misc parameters
-        self.params: Params          = self.params if self.params else Params()
-        self.tags: Tags              = self.tags if self.tags else Tags()
-        # Image specific attributes
-        self.img_prompt: str         = self.img_prompt if self.img_prompt else None
-        self.img_payload: dict       = self.img_payload if self.img_payload else {}
-        # History attributes
-        self.user_hmessage: HMessage = self.user_hmessage if self.user_hmessage else None
-        self.bot_hmessage: HMessage  = self.bot_hmessage if self.bot_hmessage else None
-        # Get history for interaction channel
-        if self.ictx:
-            if is_direct_message(self.ictx):
-                self.local_history = bot_history.get_history_for(self.channel.id).dont_save()
-            else:
-                self.local_history = bot_history.get_history_for(self.channel.id)
-
-    def clone(self, name:str='', ictx:CtxInteraction|None=None) -> "Tasks":
-        # Create a dictionary of the current attributes
-        current_attributes = {
-            'embeds': self.embeds,
-            'text': self.text,
-            'llm_prompt': self.llm_prompt,
-            'llm_payload': self.llm_payload,
-            'params': self.params,
-            'tags': self.tags,
-            'img_prompt': self.img_prompt,
-            'img_payload': self.img_payload,
-            'user_hmessage': self.user_hmessage,
-            'bot_hmessage': self.bot_hmessage
-        }
-        # Create a new instance with the same attributes
-        return Tasks(name=name, ictx=ictx, **current_attributes)
 
     #################################################################
     ######################### MESSAGE TASK ##########################
@@ -1948,7 +2085,6 @@ class Tasks(TaskProcessing):
             current_task.clear()
         
         return None, None
-
 
     #################################################################
     ######################### CONTINUE TASK #########################
@@ -2060,6 +2196,9 @@ class Tasks(TaskProcessing):
             await self.ictx.followup.send(e_msg, silent=True)
             self.embeds.delete('system') # delete embed
 
+    #################################################################
+    ####################### REGENERATE TASK #########################
+    #################################################################
     async def regenerate_task(self, target_discord_msg: discord.Message, target_hmessage:HMessage, mode:str='create'):
         try:
             self.user_hmessage, self.bot_hmessage = self.local_history.get_history_pair_from_msg_id(target_discord_msg.id, user_hmsg_attr='regenerated_from', bot_hmsg_list_attr='regenerations')
@@ -2068,10 +2207,11 @@ class Tasks(TaskProcessing):
             if mode == 'replace' and not self.bot_hmessage:
                 await self.ictx.followup.send("Message not found in current chat history.", ephemeral=True)
                 return
-            
-            # Original user text is needed for both 'create' and 'replace'
-            # For create, `target_bot_hmessage` will hide the currently revealed message.
-            # For replace, `target_bot_hmessage` will replace the currently revealed message.
+            '''''''''''''''''''''''''''''''''''
+            Original user text is needed for both 'create' and 'replace'
+            For create, `target_bot_hmessage` will hide the currently revealed message.
+            For replace, `target_bot_hmessage` will replace the currently revealed message.
+            '''''''''''''''''''''''''''''''''''
             all_bot_regens = self.user_hmessage.regenerations
             # Update attributes
             if not all_bot_regens and mode == 'create':
@@ -2173,145 +2313,114 @@ class Tasks(TaskProcessing):
             await self.embeds.delete('system')
         current_task.clear()
 
-    async def speak_task(ctx: commands.Context, text:str, params:dict):
-        user_name = ctx.author.display_name
-        channel = ctx.channel
+    #################################################################
+    ########################## SPEAK TASK ###########################
+    #################################################################
+    async def speak_task(self):
         try:
-            system_embed = None
             if shared.model_name == 'None':
-                await channel.send('Cannot process "/speak" request: No LLM model is currently loaded. Use "/llmmodel" to load a model.)', delete_after=5)
-                log.warning(f'Bot tried to generate tts for {user_name}, but no LLM model was loaded')
+                await self.channel.send('Cannot process "/speak" request: No LLM model is currently loaded. Use "/llmmodel" to load a model.)', delete_after=5)
+                log.warning(f'Bot tried to generate tts for {self.user_name}, but no LLM model was loaded')
                 return
-            if system_embed_info:
-                system_embed_info.title = f'{user_name} requested tts ... '
-                system_embed_info.description = ''
-                system_embed = await channel.send(embed=system_embed_info)
-            llm_payload = await init_llm_payload(ctx, user_name, text)
-            llm_payload['_continue'] = True
-            llm_payload['state']['max_new_tokens'] = 1
-            llm_payload['state']['history'] = {'internal': [[text, text]], 'visible': [[text, text]]}
-            params['save_to_history'] = False
-            tts_args = params.get('tts_args', {})
+            await self.embeds.send('system', f'{self.user_name} requested tts ... ', '')
+            await self.init_llm_payload()
+            self.llm_payload['_continue'] = True
+            self.llm_payload['state']['max_new_tokens'] = 1
+            self.llm_payload['state']['history'] = {'internal': [[self.text, self.text]], 'visible': [[self.text, self.text]]}
+            self.params.save_to_history = False
+            tts_args = self.params.tts_args
             await tgwui.update_extensions(tts_args)
 
             # Check to apply Server Mode
-            llm_payload = apply_server_mode(llm_payload, ctx)
+            self.apply_server_mode()
             # Update names in stopping strings
-            llm_payload = extra_stopping_strings(llm_payload)
+            self.extra_stopping_strings()
             # Get history for interaction channel
-            local_history = bot_history.get_history_for(ctx.channel.id)
-            await create_user_hmessage()
+            await self.create_user_hmessage()
             # generate text with text-generation-webui
-            last_resp, tts_resp = await llm_gen(llm_payload)
+            last_resp, tts_resp = await self.llm_gen()
             # Process responses
-            bot_hmessage = await create_bot_hmessage(user_hmessage, local_history, params, last_resp, tts_resp, ctx)
-
-            if system_embed:
-                await system_embed.delete()
-            if not bot_hmessage:
+            await self.create_bot_hmessage(last_resp, tts_resp)
+            await self.embeds.delete('system') # delete embed
+            if not self.bot_hmessage:
                 return
-            await voice_clients.process_tts_resp(ctx, bot_hmessage)
+            await voice_clients.process_tts_resp(self.ictx, self.bot_hmessage)
             # remove api key (don't want to share this to the world!)
             for sub_dict in tts_args.values():
                 if 'api_key' in sub_dict:
                     sub_dict.pop('api_key')
-            if system_embed_info:
-                system_embed_info.title = f'{user_name} requested tts:'
-                system_embed_info.description = f"**Params:** {tts_args}\n**Text:** {text}"
-                system_embed = await channel.send(embed=system_embed_info)
+            self.embeds.send('system', f'{self.user_name} requested tts:', f"**Params:** {tts_args}\n**Text:** {self.text}")
             await tgwui.update_extensions(bot_settings.settings['llmcontext'].get('extensions', {})) # Restore character specific extension settings
-            if params.get('user_voice'):
-                os.remove(params['user_voice'])
+            if self.params.user_voice:
+                os.remove(self.params.user_voice)
         except Exception as e:
             log.error(f"An error occurred while generating tts for '/speak': {e}")
-            if system_embed_info:
-                system_embed_info.title = "An error occurred while generating tts for '/speak'"
-                system_embed_info.description = e
-                if system_embed:
-                    await system_embed.edit(embed=system_embed_info)
+            await self.embeds.edit_or_send('system', "An error occurred while generating tts for '/speak'", e)
 
-    async def change_imgmodel_task(params:dict, ictx=None):
+    #################################################################
+    #################### CHANGE IMG MODEL TASK ######################
+    #################################################################
+    async def change_imgmodel_task(self):
         try:
-            user_name = get_user_ctx_inter(ictx).display_name if ictx else 'Automatically'
-            channel = ictx.channel if ictx else None
+            if not self.ictx:
+                self.user_name = 'Automatically'
 
-            change_embed = None
-            await sd_online(channel) # Can't change Img model if not online!
+            await sd_online(self.channel) # Can't change Img model if not online!
 
-            imgmodel_params = params.get('imgmodel', {})
+            imgmodel_params = self.params.imgmodel
             imgmodel_name = imgmodel_params.get('imgmodel_name', '')
             mode = imgmodel_params.get('mode', 'change')    # default to 'change
             verb = imgmodel_params.get('verb', 'Changing')  # default to 'Changing'
 
             # Value did not match any known model names/checkpoints
             if len(imgmodel_params) < 3:
-                if channel and change_embed_info:
-                    change_embed_info.title = 'Failed to change Img model:'
-                    change_embed_info.description = f'Img model not found: {imgmodel_name}'
-                    change_embed = await channel.send(embed=change_embed_info)
+                await self.embeds.send('change', 'Failed to change Img model:', f'Img model not found: {imgmodel_name}')
                 return False
 
-            if channel and change_embed_info:
-                change_embed_info.title = f'{verb} Img model ... '
-                change_embed_info.description = f'{verb} to {imgmodel_name}'
-                change_embed = await channel.send(embed=change_embed_info)
+            await self.embeds.send('change', f'{verb} Img model ... ', f'{verb} to {imgmodel_name}')
 
             # Swap Image model
             if mode == 'swap' or mode == 'swap_back':
                 new_model_settings = {'sd_model_checkpoint': imgmodel_params['sd_model_checkpoint']}
                 _ = await sd.api(endpoint='/sdapi/v1/options', method='post', json=new_model_settings, retry=True)
-                if change_embed:
-                    await change_embed.delete()
+                await self.embeds.delete('change') # delete embed
                 return True
 
             # Change Image model
-            await change_imgmodel(imgmodel_params, ictx)
+            await change_imgmodel(imgmodel_params, self.ictx)
 
-            if channel and change_embed:
-                await change_embed.delete()
-            if change_embed_info:
-                if channel:
-                    # Send change embed to interaction channel
-                    change_embed_info.title = f"{user_name} changed Img model:"
-                    change_embed_info.description = f'**{imgmodel_name}**'
-                    change_embed = await channel.send(embed=change_embed_info)
-                if bot_database.announce_channels:
-                    # Send embeds to announcement channels
-                    await bg_task_queue.put(announce_changes(ictx, 'changed Img model', imgmodel_name))
+            # Announce change
+            await self.embeds.delete('change') # delete any embed
+            await self.embeds.send('change', f"{self.user_name} changed Img model:", f'**{imgmodel_name}**')
+            if bot_database.announce_channels and self.embeds.enabled('change'):
+                # Send embeds to announcement channels
+                await bg_task_queue.put(announce_changes(self.ictx, 'changed Img model', imgmodel_name))
+
             log.info(f"Image model changed to: {imgmodel_name}")
             if config['discord']['post_active_settings']['enabled']:
                 await bg_task_queue.put(post_active_settings())
         except Exception as e:
             log.error(f"Error changing Img model: {e}")
             traceback.print_exc()
-            if change_embed_info:
-                change_embed_info.title = "An error occurred while changing Img model"
-                change_embed_info.description = str(e)
-                if change_embed:
-                    await change_embed.edit(embed=change_embed_info)
-                else:
-                    if channel:
-                        await channel.send(embed=change_embed_info)
+            self.embeds.edit_or_send('change', "An error occurred while changing Img model", e)
             return False
 
+    #################################################################
+    #################### CHANGE LLM MODEL TASK ######################
+    #################################################################
     # Process selected LLM model
-    async def change_llmmodel_task(ictx, params:dict):
+    async def change_llmmodel_task(self):
         try:
-            user_name = get_user_ctx_inter(ictx).display_name
-            channel = ictx.channel
-            change_embed = None
-            llmmodel_params = params.get('llmmodel', {})
+            llmmodel_params = self.params.llmmodel
             llmmodel_name = llmmodel_params.get('llmmodel_name')
             mode = llmmodel_params.get('mode', 'change')
             verb = llmmodel_params.get('verb', 'Changing')
             # Load the new model if it is different from the current one
             if shared.model_name != llmmodel_name:
-                if change_embed_info:
-                    change_embed_info.title = f'{verb} LLM model ... '
-                    change_embed_info.description = f"{verb} to {llmmodel_name}"
-                    change_embed = await channel.send(embed=change_embed_info)
+                await self.embeds.send('change', f'{verb} LLM model ... ', f"{verb} to {llmmodel_name}")
+                # If an LLM model is loaded, unload it
                 if shared.model_name != 'None':
-                    unload_model()                  # If an LLM model is loaded, unload it
+                    unload_model()
                 try:
                     shared.model_name = llmmodel_name   # set to new LLM model
                     if shared.model_name != 'None':
@@ -2319,324 +2428,138 @@ class Tasks(TaskProcessing):
                         loader = tgwui.get_llm_model_loader(llmmodel_name)    # Try getting loader from user-config.yaml to prevent errors
                         await tgwui.load_llm_model(loader)                    # Load an LLM model if specified
                 except Exception as e:
-                    if change_embed_info:
-                        change_embed_info.title = "An error occurred while changing LLM Model. No LLM Model is loaded."
-                        change_embed_info.description = e
-                        if change_embed: 
-                            await change_embed.delete()
-                        await channel.send(embed=change_embed_info)
+                    await self.embeds.delete('change')
+                    await self.embeds.send('change', "An error occurred while changing LLM Model. No LLM Model is loaded.", e)
+
                 if mode == 'swap':
-                    return change_embed             # return the embed so it can be deleted by the caller
-                if change_embed:
-                    await change_embed.delete()
+                    return
+                if self.embeds.enabled('change'):
+                    await self.embeds.delete('change')
                     # Send change embed to interaction channel
-                    if llmmodel_name == 'None':
-                        change_embed_info.title = f"{user_name} unloaded the LLM model"
-                        change_embed_info.description = 'Use "/llmmodel" to load a new one'
-                    else:
-                        change_embed_info.title = f"{user_name} changed LLM model:"
-                        change_embed_info.description = f'**{llmmodel_name}**'
-                    await channel.send(embed=change_embed_info)
+                    title = f"{self.user_name} unloaded the LLM model" if llmmodel_name == 'None' else f"{self.user_name} changed LLM model:"
+                    description = 'Use "/llmmodel" to load a new one' if llmmodel_name == 'None' else f'**{llmmodel_name}**'
+                    await self.embeds.send('change', title, description)
                     # Send embeds to announcement channels
                     if bot_database.announce_channels:
-                        await bg_task_queue.put(announce_changes(ictx, 'changed LLM model', llmmodel_name))
+                        await bg_task_queue.put(announce_changes(self.ictx, 'changed LLM model', llmmodel_name))
                 log.info(f"LLM model changed to: {llmmodel_name}")
         except Exception as e:
             log.error(f"An error occurred while changing LLM Model from '/llmmodel': {e}")
             traceback.print_exc()
-            if change_embed_info:
-                change_embed_info.title = "An error occurred while changing LLM model"
-                change_embed_info.description = e
-                if change_embed: 
-                    await change_embed.delete()
-                await channel.send(embed=change_embed_info)
+            await self.embeds.edit_or_send('change', "An error occurred while changing LLM model", e)
 
-    async def change_char_task(ictx: CtxInteraction, params:dict):
-        user_name = get_user_ctx_inter(ictx).display_name
-        channel = ictx.channel
-        change_embed = None
+    #################################################################
+    #################### CHANGE CHARACTER TASK ######################
+    #################################################################
+    async def change_char_task(self):
         try:
-
-            {'character': {'char_name': bot_database.last_character, 'verb': 'Resetting', 'mode': 'reset'}}
-
-            char_params = params.get('character', {})
+            char_params = self.params.character
             char_name = char_params.get('char_name', {})
             verb = char_params.get('verb', 'Changing')
             mode = char_params.get('mode', 'change')
-            if change_embed_info:
-                change_embed_info.title = f'{verb} character ... '
-                change_embed_info.description = f'{user_name} requested character {mode}: "{char_name}"'
-                change_embed = await channel.send(embed=change_embed_info)
+            await self.embeds.send('change', f'{verb} character ... ', f'{self.user_name} requested character {mode}: "{char_name}"')
+
             # Change character
-            await change_character(char_name, channel)
+            await change_character(char_name, self.channel)
             # Set history
             if not bot_history.autoload_history or bot_history.change_char_history_method == 'new': # if we don't keep history...
                 # create a clone with same settings but empty, and replace it in the manager
-                history = bot_history.get_history_for(ictx.channel.id, cached_only=True)
+                history = bot_history.get_history_for(self.ictx.channel.id, cached_only=True)
                 if history is None:
-                    bot_history.new_history_for(ictx.channel.id)
+                    bot_history.new_history_for(self.ictx.channel.id)
                 else:
                     history.fresh().replace()
 
-            if change_embed:
-                await change_embed.delete()
+            if self.embeds.enabled('change'):
+                await self.embeds.delete('change')
                 change_message = 'reset the conversation' if mode == 'reset' else 'changed character'
                 # Send change embed to interaction channel
-                change_embed_info.description = f'**{char_name}**'
-                change_embed_info.title = f"{user_name} {change_message}:"
-                await channel.send(embed=change_embed_info)
+                await self.embeds.send('change', f'**{char_name}**', f"{self.user_name} {change_message}:")
                 # Send embeds to announcement channels
-                if bot_database.announce_channels and not is_direct_message(ictx):
-                    await bg_task_queue.put(announce_changes(ictx, change_message, char_name))
-            await send_char_greeting_or_history(ictx, char_name)
+                if bot_database.announce_channels and not is_direct_message(self.ictx):
+                    await bg_task_queue.put(announce_changes(self.ictx, change_message, char_name))
+            await send_char_greeting_or_history(self.ictx, char_name)
             log.info(f"Character loaded: {char_name}")
         except Exception as e:
             log.error(f'An error occurred while loading character for "{current_task.name}": {e}')
             current_task.clear()
-            if change_embed_info:
-                change_embed_info.title = "An error occurred while loading character"
-                change_embed_info.description = e
-                if change_embed:
-                    await change_embed.edit(embed=change_embed_info)
+            await self.embeds.edit_or_send('change', "An error occurred while loading character", e)
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-# MISC FUNCTIONS
-def get_wildcard_value(matched_text, dir_path=None):
-    dir_path = dir_path or shared_path.dir_wildcards
-    selected_option = None
-    search_phrase = matched_text[2:] if matched_text.startswith('##') else matched_text
-    search_path = f"{search_phrase}.txt"
-    # List files in the directory
-    txt_files = glob.glob(os.path.join(dir_path, search_path))
-    if txt_files:
-        selected_file = random.choice(txt_files)
-        with open(selected_file, 'r') as file:
-            lines = file.readlines()
-            selected_option = random.choice(lines).strip()
-    else:
-        # If no matching .txt file is found, try to find a subdirectory
-        subdirectories = glob.glob(os.path.join(dir_path, search_phrase))
-        for subdir in subdirectories:
-            if os.path.isdir(subdir):
-                subdir_files = glob.glob(os.path.join(subdir, '*.txt'))
-                if subdir_files:
-                    selected_file = random.choice(subdir_files)
-                    with open(selected_file, 'r') as file:
-                        lines = file.readlines()
-                        selected_option = random.choice(lines).strip()
-    # Check if selected option has braces pattern
-    if selected_option:
-        braces_match = patterns.braces.search(selected_option)
-        if braces_match:
-            braces_phrase = braces_match.group(1)
-            selected_option = get_braces_value(braces_phrase)
-        # Check if the selected line contains a nested value
-        if selected_option.startswith('__') and selected_option.endswith('__'):
-            # Extract nested directory path from the nested value
-            nested_dir = selected_option[2:-2]  # Strip the first 2 and last 2 characters
-            # Get the last component of the nested directory path
-            search_phrase = os.path.split(nested_dir)[-1]
-            # Remove the last component from the nested directory path
-            nested_dir = os.path.join(shared_path.dir_wildcards, os.path.dirname(nested_dir))
-            # Recursively check filenames in the nested directory
-            selected_option = get_wildcard_value(search_phrase, nested_dir)
-    return selected_option
-
-def process_dynaprompt_options(options):
-    weighted_options = []
-    total_weight = 0
-    for option in options:
-        if '::' in option:
-            weight, value = option.split('::')
-            weight = float(weight)
-        else:
-            weight = 1.0
-            value = option
-        total_weight += weight
-        weighted_options.append((weight, value))
-    # Normalize weights
-    normalized_options = [(round(weight / total_weight, 2), value) for weight, value in weighted_options]
-    return normalized_options
-
-def choose_dynaprompt_option(options, num_choices=1):
-    chosen_values = random.choices(options, weights=[weight for weight, _ in options], k=num_choices)
-    return [value for _, value in chosen_values]
-
-def get_braces_value(matched_text):
-    num_choices = 1
-    separator = None
-    if '$$' in matched_text:
-        num_choices_str, options_text = matched_text.split('$$', 1)  # Split by the first occurrence of $$
-        if '-' in num_choices_str:
-            min_choices, max_choices = num_choices_str.split('-')
-            min_choices = int(min_choices)
-            max_choices = int(max_choices)
-            num_choices = random.randint(min_choices, max_choices)
-        else:
-            num_choices = int(num_choices_str) if num_choices_str.isdigit() else 1  # Convert to integer if it's a valid number
-        separator_index = options_text.find('$$')
-        if separator_index != -1:
-            separator = options_text[:separator_index]
-            options_text = options_text[separator_index + 2:]
-        options = options_text.split('|')  # Extract options after $$
-    else:
-        options = matched_text.split('|')
-    # Process weighting options
-    options = process_dynaprompt_options(options)
-    # Choose option(s)
-    chosen_options = choose_dynaprompt_option(options, num_choices)
-    # Check for selected wildcards
-    for index, option in enumerate(chosen_options):
-        wildcard_match = patterns.wildcard.search(option)
-        if wildcard_match:
-            wildcard_phrase = wildcard_match.group()
-            wildcard_value = get_wildcard_value(matched_text=wildcard_phrase, dir_path=shared_path.dir_wildcards)
-            if wildcard_value:
-                chosen_options[index] = wildcard_value
-    chosen_options = [option for option in chosen_options if option is not None]
-    if separator:
-        replaced_text = separator.join(chosen_options)
-    else:
-        replaced_text = ', '.join(chosen_options) if num_choices > 1 else chosen_options[0]
-    return replaced_text
-
-async def dynamic_prompting(user_name:str, text:str, i=None):
-    if not config.get('dynamic_prompting_enabled', True):
-        if not bot_database.was_warned('dynaprompt'):
-            bot_database.update_was_warned('dynaprompt')
-            log.warning(f"'{shared_path.config}' is missing a new parameter 'dynamic_prompting_enabled'. Defaulting to 'True' (enabled) ")
-    if not dynamic_prompting:
-        return text
-
-    # copy text for adding comments
-    text_with_comments = text
-    # Process braces patterns
-    braces_start_indexes = []
-    braces_matches = patterns.braces.finditer(text)
-    braces_matches = sorted(braces_matches, key=lambda x: -x.start())  # Sort matches in reverse order by their start indices
-    for match in braces_matches:
-        braces_start_indexes.append(match.start())  # retain all start indexes for updating 'text_with_comments' for wildcard match phase
-        matched_text = match.group(1)               # Extract the text inside the braces
-        replaced_text = get_braces_value(matched_text)
-        # Replace matched text
-        text = text.replace(match.group(0), replaced_text, 1)
-        # Update comment
-        highlighted_changes = '`' + replaced_text + '`'
-        text_with_comments = text_with_comments.replace(match.group(0), highlighted_changes, 1)
-    # Process wildcards not in braces
-    wildcard_matches = patterns.wildcard.finditer(text)
-    wildcard_matches = sorted(wildcard_matches, key=lambda x: -x.start())  # Sort matches in reverse order by their start indices
-    for match in wildcard_matches:
-        matched_text = match.group()
-        replaced_text = get_wildcard_value(matched_text=matched_text, dir_path=shared_path.dir_wildcards)
-        if replaced_text:
-            start, end = match.start(), match.end()
-            # Replace matched text
-            text = text[:start] + replaced_text + text[end:]
-            # Calculate offset based on the number of braces matches with lower start indexes
-            offset = sum(1 for idx in braces_start_indexes if idx < start) * 2
-            adjusted_start = start + offset
-            adjusted_end = end + offset
-            highlighted_changes = '`' + replaced_text + '`'
-            text_with_comments = (text_with_comments[:adjusted_start] + highlighted_changes + text_with_comments[adjusted_end:])
-    # send a message showing the selected options
-    if i and (braces_matches or wildcard_matches):
-        await i.reply(content=f"__Text with **[Dynamic Prompting](<https://github.com/altoiddealer/ad_discordbot/wiki/dynamic-prompting>)**__:\n>>> **{user_name}**: {text_with_comments}", mention_author=False, silent=True)
-    return text
-    
-def update_llm_gen_statistics(last_resp:str):
-    try:
-        total_gens = bot_statistics.llm.get('generations_total', 0)
-        total_gens += 1
-        bot_statistics.llm['generations_total'] = total_gens
-        # Update tokens statistics
-        last_tokens = int(count_tokens(last_resp))
-        bot_statistics.llm['num_tokens_last'] = last_tokens
-        total_tokens = bot_statistics.llm.get('num_tokens_total', 0)
-        total_tokens += last_tokens
-        bot_statistics.llm['num_tokens_total'] = total_tokens
-        # Update time statistics
-        total_time = bot_statistics.llm.get('time_total', 0)
-        total_time += (time.time() - bot_statistics._llm_gen_time_start_last)
-        bot_statistics.llm['time_total'] = round(total_time, 4)
-        # Update averages
-        bot_statistics.llm['tokens_per_gen_avg'] = total_tokens/total_gens
-        bot_statistics.llm['tokens_per_sec_avg'] = round((total_tokens/total_time), 4)
-        bot_statistics.save()
-    except Exception as e:
-        log.error(f'An error occurred while saving LLM gen statistics: {e}')
 
 #################################################################
-#################### QUEUED CHARACTER CHANGE ####################
+############################# TASK ##############################
 #################################################################
-async def send_char_greeting_or_history(ictx: CtxInteraction, char_name:str):
-    channel = ictx.channel
-    try:
-        # Send last_exchange to channel
-        greeting_msg = ''
-        if bot_history.greeting_or_history == 'history':
-            last_user_hmessage, last_bot_hmessage = bot_history.get_history_for(ictx.channel.id).last_exchange()
-            if last_user_hmessage:
-                greeting_msg = f'__**Last message exchange**__:\n>>> **User**: "{last_user_hmessage.text_visible}"\n **{bot_database.last_character}**: "{last_bot_hmessage.text_visible}"'
-        if not greeting_msg:
-            greeting = bot_settings.settings['llmcontext']['greeting']
-            if greeting:
-                greeting_msg = greeting.replace('{{user}}', 'user')
-                greeting_msg = greeting_msg.replace('{{char}}', char_name)
+class Task(Tasks):
+    def __init__(self, name:str, ictx:CtxInteraction|None=None, **kwargs): # text:str='', llm_payload:dict|None=None, params:Params|None=None):
+        '''''''''''''''''''''''''''''''''''
+        This is a "relatively crude" framework to simplify Task
+        management which could be improved by further subclassing.
+
+        Instances of Task() are queued to TasksManager() queue, and
+        processed via Tasks() and all the methods defined in TaskProcessing().
+        '''''''''''''''''''''''''''''''''''
+        self.name: str = name
+        self.ictx: CtxInteraction = ictx
+        # TaskQueue() will initialize the Task's values before it is processed
+        self.channel: discord.TextChannel = kwargs.get('channel', None)
+        self.user: Union[discord.User, discord.Member] = kwargs.get('user', None)
+        self.user_name: str          = kwargs.get('user_name', None)
+        self.embeds: Embeds          = kwargs.get('embeds', None)
+        self.text: str               = kwargs.get('text', None)
+        self.llm_prompt: str         = kwargs.get('llm_prompt', None)
+        self.llm_payload: dict       = kwargs.get('llm_payload', None)
+        self.params: Params          = kwargs.get('params', None)
+        self.tags: Tags              = kwargs.get('tags', None)
+        self.img_prompt: str         = kwargs.get('img_prompt', None)
+        self.img_payload: dict       = kwargs.get('img_payload', None)
+        self.user_hmessage: HMessage = kwargs.get('user_hmessage', None)
+        self.bot_hmessage: HMessage  = kwargs.get('bot_hmessage', None)
+        self.local_history           = kwargs.get('local_history', None)
+
+    def init_self_values(self):
+        self.channel: discord.TextChannel = self.ictx.channel if self.ictx else None
+        self.user: Union[discord.User, discord.Member] = get_user_ctx_inter(self.ictx) if self.ictx else None
+        self.user_name: str          = self.user.display_name if self.user else ""
+        self.embeds: Embeds          = self.embeds if self.embeds else Embeds(config)
+        # The original input text
+        self.text: str               = self.text if self.text else ""
+        # TGWUI specific attributes
+        self.llm_prompt: str         = self.llm_prompt if self.llm_prompt else None
+        self.llm_payload: dict       = self.llm_payload if self.llm_payload else {}
+        # Misc parameters
+        self.params: Params          = self.params if self.params else Params()
+        self.tags: Tags              = self.tags if self.tags else Tags()
+        # Image specific attributes
+        self.img_prompt: str         = self.img_prompt if self.img_prompt else None
+        self.img_payload: dict       = self.img_payload if self.img_payload else {}
+        # History attributes
+        self.user_hmessage: HMessage = self.user_hmessage if self.user_hmessage else None
+        self.bot_hmessage: HMessage  = self.bot_hmessage if self.bot_hmessage else None
+        # Get history for interaction channel
+        non_history_tasks = ['imgmodel', 'character'] # tasks that definitely do not need history
+        if self.ictx and self.name not in non_history_tasks:
+            if is_direct_message(self.ictx):
+                self.local_history = bot_history.get_history_for(self.channel.id).dont_save()
             else:
-                greeting_msg = f'**{char_name}** has entered the chat"'
-        await send_long_message(channel, greeting_msg)
-    except Exception as e:
-        print(traceback.format_exc())
-        log.error(f'An error occurred while sending greeting or history for "{char_name}": {e}')
+                self.local_history = bot_history.get_history_for(self.channel.id)
 
-async def announce_changes(ictx: CtxInteraction, change_label:str, change_name:str):
-    user_name = get_user_ctx_inter(ictx).display_name if ictx else 'Automatically'
-    change_embed_info.title = f"{user_name} {change_label}:"
-    change_embed_info.description = f'**{change_name}**'
-    try:
-        # adjust delay depending on how many channels there are to prevent being rate limited
-        delay = math.floor(len(bot_database.announce_channels)/2)
-        for channel_id in bot_database.announce_channels:
-            await asyncio.sleep(delay)
-            channel = await client.fetch_channel(channel_id)
-            # if Automatic imgmodel change (no interaction object)
-            if ictx is None:
-                await channel.send(embed=change_embed_info)
-            # If private channel
-            elif ictx.channel.overwrites_for(ictx.guild.default_role).read_messages is False:
-                continue
-            # Public channels in interaction server
-            elif any(channel_id == channel.id for channel in ictx.guild.channels):
-                change_embed_info.title = f"{user_name} {change_label} in <#{ictx.channel.id}>:"
-                await channel.send(embed=change_embed_info)
-            # Channel is in another server
-            elif channel_id not in [channel.id for channel in ictx.guild.channels]:
-                if change_label != 'reset the conversation':
-                    change_embed_info.title = f"A user {change_label} in another bot server:"
-                    await channel.send(embed=change_embed_info)
-    except Exception as e:
-        log.error(f'An error occurred while announcing changes to announce channels: {e}')
+    def clone(self, name:str='', ictx:CtxInteraction|None=None) -> "Tasks":
+        # Create a dictionary of the current attributes
+        current_attributes = {
+            'embeds': self.embeds,
+            'text': self.text,
+            'llm_prompt': self.llm_prompt,
+            'llm_payload': self.llm_payload,
+            'params': self.params,
+            'tags': self.tags,
+            'img_prompt': self.img_prompt,
+            'img_payload': self.img_payload,
+            'user_hmessage': self.user_hmessage,
+            'bot_hmessage': self.bot_hmessage
+        }
+        # Create a new instance with the same attributes
+        return Tasks(name=name, ictx=ictx, **current_attributes)
+
 
 #################################################################
 ######################## MAIN TASK QUEUE ########################

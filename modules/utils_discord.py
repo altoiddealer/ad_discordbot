@@ -405,7 +405,7 @@ def get_message_ctx_inter(ictx: CtxInteraction) -> discord.Message:
 
 class Embeds:
     def __init__(self, config:dict, ictx:CtxInteraction|None=None):
-        self.channel:discord.TextChannel = ictx.channel
+        self.channel:discord.TextChannel|None = ictx.channel if ictx else None
         self.color:int = config['discord'].get('embed_settings', {}).get('color', 0x1e1f22)
         self.enabled_embeds:dict = config['discord'].get('embed_settings', {}).get('show_embeds', {})
 
