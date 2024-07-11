@@ -434,6 +434,11 @@ class Embeds:
 
     def get_sent_msg(self, name:str) -> discord.Message|None:
         return self.sent_msg_embeds.get(name, None)
+    
+    async def delete(self, name:str):
+        previously_sent_embed:discord.Message = self.sent_msg_embeds.pop(name, None)
+        if previously_sent_embed:
+            await previously_sent_embed.delete()
 
     def update(self, name:str, title:str|None=None, description:str|None=None, color:int|None=None, url_suffix:str|None=None, url:str|None=None) -> discord.Embed:
         embed:discord.Embed = self.embeds.get(name)
