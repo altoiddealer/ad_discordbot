@@ -14,6 +14,15 @@ behavior:
   ignore_parentheses: true            # (Bot ignores you if you write like this)
   go_wild_in_channel: true            # Whether or not the bot will always reply in the main channel
   conversation_recency: 600           # How long (in seconds) a user is determined to be "in active conversation". Only applicable if 'go_wild_in_channel' is false
+
+  # Settings to control whether the bot behaves as a computer program (default), or optionally make the bot behave more humanlike by throttling its responses.
+  # Only affects "normal messaging" - not commands/features.
+  maximum_typing_speed: -1            # Words per Minute. 80 = 80 WPM (good typist) / -1 = no restriction (default). Basically a shortcut to the 'max_tokens_second' param (scales it to WPM).
+  # 'responsiveness' and 'msg_size_affects_delay' separately influence the weights for response timing. 'max_reply_delay' will never be exceeded.
+  responsiveness: 1.0                 # Controls "how much the character is paying attention". 0.0 = Distracted human / 1.0 = Computer program.
+  msg_size_affects_delay: true        # Will make the bot respond faster for shorter messages, and slower for longer messages.
+  max_reply_delay: 30.0               # Maximum delay before bot begins to respond (-seconds-).
+
   # 'spontaneous_messaging' will select a random prompt from a list instead of being prompted by user message.
   # Note that syntax for features such as Variables, Dynamic Prompting, Tags from Text, etc, can all be used in these prompts
   spontaneous_msg_chance: 0.0         # 0.0 = never happens / 1.0 = always happens (guaranteed to happen prior to or at 'max_delay')
@@ -22,6 +31,7 @@ behavior:
   spontaneous_msg_max_wait: 60.0      # Maximum wait before bot may spontaneously message (-minutes-)
   spontaneous_msg_prompts:            # Random prompt will be picked from this list if triggered
     - '''[SYSTEM] The conversation has been inactive for {time_since_last_user_msg}, so you should say something.'''
+  # - 'another prompt' 
 
 imgmodel:
   payload:

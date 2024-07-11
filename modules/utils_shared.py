@@ -56,8 +56,6 @@ class SharedPath:
 shared_path = SharedPath()
 
 class SharedRegex: # Search for [ (]r['"] in vscode
-    single_braces = re.compile(r'\{([^{}]+?)\}')
-
     braces = re.compile(r'{{([^{}]+?)}}(?=[^\w$:]|$$|$)') # {{this syntax|separate items can be divided|another item}}
     wildcard = re.compile(r'##[\w-]+(?=[^\w-]|$)') # ##this-syntax represents a wildcard .txt file
     audio_src = re.compile(r'audio src="file/(.*?\.(wav|mp3))"', flags=re.IGNORECASE)
@@ -80,9 +78,12 @@ class SharedRegex: # Search for [ (]r['"] in vscode
 
 patterns = SharedRegex()
 
+from modules.database import Config
+config = Config()
+
 class SharedBotEmojis:
-    hidden_emoji = '🙈'
-    regen_emoji = '🔃'
-    continue_emoji = '⏩'
+    hidden_emoji = config.discord.get('history_reactions', {}).get('hidden_emoji', '🙈')
+    regen_emoji = config.discord.get('history_reactions', {}).get('regen_emoji', '🔃')
+    continue_emoji = config.discord.get('history_reactions', {}).get('continue_emoji', '⏩')
 
 bot_emojis = SharedBotEmojis()

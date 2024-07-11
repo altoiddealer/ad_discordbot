@@ -37,9 +37,9 @@ from typing import Union
 
 sys.path.append("ad_discordbot")
 
-from modules.database import Database, ActiveSettings, Config, StarBoard, Statistics
 from modules.utils_shared import task_semaphore, shared_path, patterns, bot_emojis
-from modules.utils_misc import fix_dict, update_dict, sum_update_dict, update_dict_matched_keys, format_time, format_time_difference  # noqa: F401
+from modules.database import Database, ActiveSettings, Config, StarBoard, Statistics
+from modules.utils_misc import fix_dict, update_dict, sum_update_dict, update_dict_matched_keys, format_time, format_time_difference, get_normalized_weights  # noqa: F401
 from modules.utils_discord import guild_only, configurable_for_dm_if, is_direct_message, ireply, sleep_delete_message, send_long_message, \
     EditMessageModal, SelectedListItem, SelectOptionsView, get_user_ctx_inter, get_message_ctx_inter, apply_reactions_to_messages, replace_msg_in_history_and_discord, MAX_MESSAGE_LENGTH  # noqa: F401
 from modules.utils_files import load_file, merge_base, save_yaml_file  # noqa: F401
@@ -182,6 +182,7 @@ if sd_enabled:
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.request(method.lower(), url=f'{SD_URL}{endpoint}', json=json) as response:
+                    response_text = await response.text()
                     if response.status == 200:
                         r = await response.json()
                         if SD_CLIENT is None and endpoint != '/sdapi/v1/cmd-flags':
@@ -190,6 +191,7 @@ if sd_enabled:
                         return r
                     else:
                         log.error(f'{SD_URL}{endpoint} response: {response.status} "{response.reason}"')
+                        log.error(f'Response content: {response_text}')
                         if retry and response.status in [408, 500]:
                             log.info("Retrying the request in 3 seconds...")
                             await asyncio.sleep(3)
@@ -678,6 +680,8 @@ async def on_ready():
             
     # Create background task processing queue
     client.loop.create_task(process_tasks_in_background())
+    # Create task for processing messages
+    client.loop.create_task(message_manager.process_msg_queue())
     # Start background task to sync the discord client tree
     await bg_task_queue.put(client.tree.sync())
     # Start background task to to change image models automatically
@@ -1019,7 +1023,7 @@ def format_prompt_with_recent_output(ictx: CtxInteraction, user_name:str, prompt
 def process_tag_formatting(ictx, user_name:str, prompt:str, formatting:dict):
     updated_prompt = prompt
     # Only try formatting text if there is at least one instance of {variable syntax}
-    possible_variables = patterns.single_braces.search(prompt)
+    possible_variables = patterns.curly_brackets.search(prompt)
     if possible_variables:
         try:
             format_prompt = formatting.get('format_prompt', [])
@@ -1138,7 +1142,7 @@ async def process_llm_payload_tags(ictx: CtxInteraction, llm_payload:dict, llm_p
                 if char_params == change_character:
                     verb = 'Changing'
                     char_params = {'character': {'char_name': char_params, 'mode': 'change', 'verb': verb}}
-                    await change_char_task(ictx, 'Tags', char_params)
+                    await change_char_task(ictx, char_params)
                 else:
                     verb = 'Swapping'
                     llm_payload = await swap_llm_character(swap_character, user_name, llm_payload)
@@ -1544,6 +1548,8 @@ async def init_llm_payload(ictx: CtxInteraction, user_name:str, text:str) -> dic
     llm_payload['state']['name1_instruct'] = name1
     llm_payload['state']['name2_instruct'] = name2
     llm_payload['state']['character_menu'] = name2
+    # if current_task.name == 'message' and bot_behavior.maximum_typing_speed > 0:
+    #     llm_payload['state']['max_tokens_second'] = round((bot_behavior.maximum_typing_speed*4)/60)
     llm_payload['state']['context'] = context
     ictx_history = bot_history.get_history_for(ictx.channel.id).render_to_tgwui()
     llm_payload['state']['history'] = ictx_history
@@ -1692,7 +1698,6 @@ async def dynamic_prompting(user_name:str, text:str, i=None):
         await i.reply(content=f"__Text with **[Dynamic Prompting](<https://github.com/altoiddealer/ad_discordbot/wiki/dynamic-prompting>)**__:\n>>> **{user_name}**: {text_with_comments}", mention_author=False, silent=True)
     return text
 
-
 @client.event
 async def on_message(message: discord.Message):
     text = message.clean_content # primarily converts @mentions to actual user names
@@ -1705,17 +1710,13 @@ async def on_message(message: discord.Message):
         text = text.replace(f"@{bot_database.last_character} ", "", 1)
     # apply wildcards
     text = await dynamic_prompting(message.author.display_name, text, message)
-    
-    async with task_semaphore:
-        async with message.channel.typing():
-            log.info(f'reply requested: {message.author.display_name} said: "{text}"')
-            await message_task(message, text, 'on_message')
-            await run_flow_if_any(message, 'on_message', text)
+    # Offload to message manager
+    await message_manager.queue(message, text)
 
 #################################################################
 ######################## QUEUED MESSAGE #########################
 #################################################################
-async def message_task(ictx: CtxInteraction, text:str, source:str='message', llm_payload:dict|None=None, params:dict|None=None) -> tuple[HMessage, HMessage]:
+async def message_task(ictx: CtxInteraction, text:str, llm_payload:dict|None=None, params:dict|None=None) -> tuple[HMessage, HMessage]:
     params = params or {}
     params['bot_will_do'] = params.get('bot_will_do', {})
     tags = {} # just incase there's an exception.
@@ -1738,7 +1739,8 @@ async def message_task(ictx: CtxInteraction, text:str, source:str='message', llm
                 mention_resp = update_mention(get_user_ctx_inter(ictx).mention, bot_message.text)
                 await send_long_message(channel, mention_resp, bot_message, ref_message)
                 # Apply any reactions applicable to message
-                await apply_reactions_to_messages(client.user, ictx, bot_message)
+                if config.discord.get('history_reactions', {}).get('enabled', True):
+                    await apply_reactions_to_messages(client.user, ictx, bot_message)
         # send any user images
         send_user_image = params.get('send_user_image', [])
         if send_user_image:
@@ -1753,7 +1755,7 @@ async def message_task(ictx: CtxInteraction, text:str, source:str='message', llm
         if params['bot_will_do']['should_gen_image']:
             if img_gen_embed:
                 await img_gen_embed.delete()
-            await img_gen_task(source, img_prompt, params, ictx, tags)
+            await img_gen_task(img_prompt, params, ictx, tags)
         return tags, params
 
     async def llmmodel_swap_back(params:dict, original_llmmodel:str) -> dict:
@@ -1798,7 +1800,8 @@ async def message_task(ictx: CtxInteraction, text:str, source:str='message', llm
         if not params.get('skip_create_bot_msg'):
             # Replacing original bot message via "regenerate replace"
             if params.get('bot_message_to_update'):
-                bot_message = await replace_msg_in_history_and_discord(client.user, ictx, params, last_resp, tts_resp)
+                apply_reactions = config.discord.get('history_reactions', {}).get('enabled', True)
+                bot_message = await replace_msg_in_history_and_discord(client.user, ictx, params, last_resp, tts_resp, apply_reactions)
                 params['bot_will_do']['should_send_text'] = False
             else:
                 bot_message = await create_bot_message(user_message, local_history, params, last_resp, tts_resp, ictx)
@@ -1860,7 +1863,7 @@ async def message_task(ictx: CtxInteraction, text:str, source:str='message', llm
 
     try:
         current_task.set(channel, 'message')                        # Note current bot task
-        await spontaneous_messaging.reset_for_channel(ictx, source) # Stop any pending spontaneous message task for current channel
+        await spontaneous_messaging.reset_for_channel(ictx)         # Stop any pending spontaneous message task for current channel
 
         text, tags = await get_tags(text)                                                           # collects all tags, sorted into sub-lists by phase (user / llm / userllm)
         tags = match_tags(text, tags, phase='llm')                                                  # match tags labeled for user / userllm.
@@ -1874,7 +1877,8 @@ async def message_task(ictx: CtxInteraction, text:str, source:str='message', llm
                 if params['bot_will_do']['should_gen_image']:
                     await init_img_embed()                                                          # Create a "prompting" embed for image gen
                 params, bot_message, user_message, img_prompt = await message_llm_task(llm_payload, params)
-                await apply_reactions_to_messages(client.user, ictx, user_message)                  # add a reaction to any hidden user message
+                if config.discord.get('history_reactions', {}).get('enabled', True):
+                    await apply_reactions_to_messages(client.user, ictx, user_message)              # add a reaction to any hidden user message
                 if llmmodel_params and llm_model_mode == 'swap':
                     params = await llmmodel_swap_back(params, original_llmmodel)                    # if LLM model swapping was triggered
             if sd_enabled:
@@ -1885,18 +1889,17 @@ async def message_task(ictx: CtxInteraction, text:str, source:str='message', llm
             if await sd_online(channel):                                                            # Notify user their prompt will be used directly for img gen
                 await channel.send('Bot was triggered by Tags to not respond with text.\n \
                                 **Processing image generation using your input as the prompt ...**', delete_after=5)
-            await img_gen_task(source, text, params, ictx, tags)                                    # process image gen task
+            await img_gen_task(text, params, ictx, tags)                                    # process image gen task
         
-        await spontaneous_messaging.set_for_channel(ictx, source) # trigger spontaneous message from bot, as configured
-        
+        await spontaneous_messaging.set_for_channel(ictx) # trigger spontaneous message from bot, as configured
+
         return user_message, bot_message
 
     except Exception as e:
-        current_task.clear()
         print(traceback.format_exc())
-        log.error(f'An error occurred while processing "{source}" request: {e}')
+        log.error(f'An error occurred while processing "{current_task.name}" request: {e}')
         if img_gen_embed_info:
-            img_gen_embed_info.title = f'An error occurred while processing "{source}" request'
+            img_gen_embed_info.title = f'An error occurred while processing "{current_task.name}" request'
             img_gen_embed_info.description = e
             if img_gen_embed:
                 await img_gen_embed.edit(embed=img_gen_embed_info)
@@ -1904,6 +1907,7 @@ async def message_task(ictx: CtxInteraction, text:str, source:str='message', llm
                 await channel.send(embed=img_gen_embed_info)
         if change_embed:
             await change_embed.delete()
+        current_task.clear()
     
     return None, None
 
@@ -2161,7 +2165,8 @@ async def continue_task(inter: discord.Interaction, local_history: History, targ
         else:
             # Mark original message as being continued and update reactions for it
             original_bot_message.is_continued = True
-            await apply_reactions_to_messages(client.user, inter, original_bot_message, [original_bot_message.id], ref_message)
+            if config.discord.get('history_reactions', {}).get('enabled', True):
+                await apply_reactions_to_messages(client.user, inter, original_bot_message, [original_bot_message.id], ref_message)
 
             # Add previous last message id to related ids
             updated_bot_message.related_ids.append(original_bot_message.id)
@@ -2178,7 +2183,8 @@ async def continue_task(inter: discord.Interaction, local_history: History, targ
 
         # Apply any reactions applicable to message
         msg_ids_to_edit = [updated_bot_message.id] + updated_bot_message.related_ids
-        await apply_reactions_to_messages(client.user, inter, updated_bot_message, msg_ids_to_edit, new_discord_msg)
+        if config.discord.get('history_reactions', {}).get('enabled', True):
+            await apply_reactions_to_messages(client.user, inter, updated_bot_message, msg_ids_to_edit, new_discord_msg)
 
         # process any tts resp
         if tts_resp:
@@ -2276,7 +2282,8 @@ async def regenerate_task(inter: discord.Interaction, local_history: History, ta
             params['bot_msg_hidden'] = temp_reveal_msgs # Hide new bot message if regenerating from hidden exchange
 
         # Regenerate the reply
-        _, new_bot_message = await message_task(inter, original_user_text, 'regenerate', llm_payload, params)
+        current_task.set(inter.channel, 'regenerate')
+        _, new_bot_message = await message_task(inter, original_user_text, llm_payload, params)
 
         # Mark as reply
         new_bot_message.mark_as_reply_for(user_message)
@@ -2292,10 +2299,12 @@ async def regenerate_task(inter: discord.Interaction, local_history: History, ta
             # Adjust attributes/reactions for prior active bot reply/regeneration
             target_bot_message.update(hidden=True) # always hide previous regen when creating
             target_bot_message_ids = [target_bot_message.id] + target_bot_message.related_ids
-            await apply_reactions_to_messages(client.user, inter, target_bot_message, target_bot_message_ids, target_discord_msg)
+            if config.discord.get('history_reactions', {}).get('enabled', True):
+                await apply_reactions_to_messages(client.user, inter, target_bot_message, target_bot_message_ids, target_discord_msg)
 
         # Update reactions for user message
-        await apply_reactions_to_messages(client.user, inter, user_message)
+        if config.discord.get('history_reactions', {}).get('enabled', True):
+            await apply_reactions_to_messages(client.user, inter, user_message)
 
         if system_embed:
             await system_embed.delete()
@@ -2306,6 +2315,7 @@ async def regenerate_task(inter: discord.Interaction, local_history: History, ta
         await inter.followup.send(e_msg, silent=True)
         if system_embed:
             await system_embed.delete()
+    current_task.clear()
 
 async def speak_task(ctx: commands.Context, text:str, params:dict):
     user_name = ctx.author.display_name
@@ -2541,7 +2551,7 @@ async def announce_changes(ictx: CtxInteraction, change_label:str, change_name:s
     except Exception as e:
         log.error(f'An error occurred while announcing changes to announce channels: {e}')
 
-async def change_char_task(ictx: CtxInteraction, source:str, params:dict):
+async def change_char_task(ictx: CtxInteraction, params:dict):
     user_name = get_user_ctx_inter(ictx).display_name
     channel = ictx.channel
     change_embed = None
@@ -2581,7 +2591,8 @@ async def change_char_task(ictx: CtxInteraction, source:str, params:dict):
         await send_char_greeting_or_history(ictx, char_name)
         log.info(f"Character loaded: {char_name}")
     except Exception as e:
-        log.error(f'An error occurred while loading character for "{source}": {e}')
+        log.error(f'An error occurred while loading character for "{current_task.name}": {e}')
+        current_task.clear()
         if change_embed_info:
             change_embed_info.title = "An error occurred while loading character"
             change_embed_info.description = e
@@ -2679,9 +2690,10 @@ async def peek_flow_queue(ictx, queue, user_name:str, text:str):
         await queue.put(item_to_put_back)
     return flow_name, formatted_text
 
-async def flow_task(ictx: CtxInteraction, source:str, text:str):
+async def flow_task(ictx: CtxInteraction, text:str):
     user_name = get_user_ctx_inter(ictx).display_name
     channel = ictx.channel
+    current_task.set(ictx.channel, 'flows')
     try:
         global flow_event
         flow_embed = None
@@ -2698,14 +2710,12 @@ async def flow_task(ictx: CtxInteraction, source:str, text:str):
                 flow_embed_info.description += f'**Processing Step {total_flow_steps + 1 - remaining_flow_steps}/{total_flow_steps}**{flow_name}\n'
                 if flow_embed: 
                     await flow_embed.edit(embed=flow_embed_info)
-            await message_task(ictx, text, source)
+            await message_task(ictx, text)
         if flow_embed_info:
             flow_embed_info.title = f"Flow completed for {user_name}"
             flow_embed_info.description = flow_embed_info.description.replace("**Processing", ":white_check_mark: **")
             if flow_embed: 
                 await flow_embed.edit(embed=flow_embed_info)
-        flow_event.clear()              # flag that flow is no longer processing
-        flow_queue.task_done()          # flow queue task is complete
     except Exception as e:
         log.error(f"An error occurred while processing a Flow: {e}")
         if flow_embed_info:
@@ -2715,14 +2725,15 @@ async def flow_task(ictx: CtxInteraction, source:str, text:str):
                 await flow_embed.edit(embed=flow_embed_info)
             else: 
                 await channel.send(embed=flow_embed_info)
-        flow_event.clear()
-        flow_queue.task_done()
+    current_task.clear()
+    flow_event.clear()              # flag that flow is no longer processing
+    flow_queue.task_done()          # flow queue task is complete
 
 
-async def run_flow_if_any(ictx: CtxInteraction, source:str, text:str):
+async def run_flow_if_any(ictx:CtxInteraction, text:str):
     if flow_queue.qsize() > 0:
         # flows are activated in process_llm_payload_tags(), and is where the flow queue is populated
-        await flow_task(ictx, source, text)
+        await flow_task(ictx, text)
 
 #################################################################
 #################### QUEUED IMAGE GENERATION ####################
@@ -3590,7 +3601,7 @@ def match_img_tags(img_prompt:str, tags:SORTED_TAGS) -> SORTED_TAGS:
 
     return tags
 
-async def img_gen_task(source:str, img_prompt:str, params:dict, ictx:CtxInteraction, tags: SORTED_TAGS|None=None):
+async def img_gen_task(img_prompt:str, params:dict, ictx:CtxInteraction, tags: SORTED_TAGS|None=None):
     tags = tags or {}
     user_name = get_user_ctx_inter(ictx).display_name or None
     channel = ictx.channel
@@ -3640,7 +3651,7 @@ async def img_gen_task(source:str, img_prompt:str, params:dict, ictx:CtxInteract
         # Generate and send images
         params['bot_will_do'] = bot_will_do
         await process_image_gen(img_payload, channel, params)
-        if (source == 'image' or (bot_will_do['should_send_text'] and not bot_will_do['should_gen_text'])) and img_send_embed_info:
+        if (current_task.name == 'image' or (bot_will_do['should_send_text'] and not bot_will_do['should_gen_text'])) and img_send_embed_info:
             img_send_embed_info.title = f"{user_name} requested an image:"
             img_send_embed_info.description = params.get('message', img_prompt)[:2000]
             await channel.send(embed=img_send_embed_info)
@@ -3655,6 +3666,7 @@ async def img_gen_task(source:str, img_prompt:str, params:dict, ictx:CtxInteract
     except Exception as e:
         log.error(f"An error occurred in img_gen_task(): {e}")
         traceback.print_exc()
+        current_task.clear()
 
 #################################################################
 ######################## /IMAGE COMMAND #########################
@@ -4123,10 +4135,11 @@ if sd_enabled:
                         params['skip_create_user_msg'] = True
                         params['skip_create_bot_msg'] = True
                         params['save_to_history'] = False
-                        await message_task(ctx, prompt, 'image', llm_payload=None, params=params)
+                        current_task.set(ctx.channel, 'image')
+                        await message_task(ctx, prompt, llm_payload=None, params=params)
                     else:
                         await img_gen_task('image', prompt, params, ctx, tags={})
-                    await run_flow_if_any(ctx, 'image', prompt)
+                    await run_flow_if_any(ctx, prompt)
 
         except Exception as e:
             log.error(f"An error occurred in image(): {e}")
@@ -4246,7 +4259,8 @@ if textgenwebui_enabled:
             # offload to ai_gen queue
             log.info(f'{ctx.author.display_name} used "/reset_conversation": "{bot_database.last_character}"')
             params = {'character': {'char_name': bot_database.last_character, 'verb': 'Resetting', 'mode': 'reset'}}
-            await change_char_task(ctx, 'reset', params)
+            current_task.set(ctx.channel, 'reset')
+            await change_char_task(ctx, params)
 
 
     # /save_conversation command
@@ -4371,7 +4385,8 @@ if textgenwebui_enabled:
             
 
             # Apply reaction to user message
-            await apply_reactions_to_messages(client.user, inter, user_message)
+            if config.discord.get('history_reactions', {}).get('enabled', True):
+                await apply_reactions_to_messages(client.user, inter, user_message)
 
             # Process all messages that need label updates
             for target_hmsg in bot_hmsgs_to_react:
@@ -4380,7 +4395,8 @@ if textgenwebui_enabled:
                 if target_hmsg.related_ids:
                     msg_ids_to_edit.extend(target_hmsg.related_ids)
                 # Process reactions for all affected messages
-                await apply_reactions_to_messages(client.user, inter, target_hmsg, msg_ids_to_edit, target_discord_msg)
+                if config.discord.get('history_reactions', {}).get('enabled', True):
+                    await apply_reactions_to_messages(client.user, inter, target_hmsg, msg_ids_to_edit, target_discord_msg)
             
             result = f"**Modified message exchange pair in history for {inter.user.display_name}** (messages {verb})."
             log.info(result)
@@ -4523,8 +4539,9 @@ async def character_loader(char_name, channel=None):
         update_instruct = char_instruct or instruction_template_str or None # 'instruction_template_str' is global variable
         if update_instruct:
             state_dict['instruction_template_str'] = update_instruct
-        # Update stored database value for character
+        # Update stored database / shared.settings values for character
         bot_database.set('last_character', char_name)
+        shared.settings['character'] = char_name
         # Update discord username / avatar
         await update_client_profile(char_name, channel)
         # Mirror the changes in bot_active_settings
@@ -4606,7 +4623,8 @@ async def process_character(ctx, selected_character_value):
             # offload to ai_gen queue
             log.info(f'{ctx.author.display_name} used "/character": "{char_name}"')
             params = {'character': {'char_name': char_name, 'verb': 'Changing', 'mode': 'change'}}
-            await change_char_task(ctx, 'character', params)
+            current_task.set(ctx.channel, 'character')
+            await change_char_task(ctx, params)
 
     except Exception as e:
         log.error(f"Error processing selected character from /character command: {e}")
@@ -5028,10 +5046,12 @@ async def process_speak(ctx: commands.Context, input_text, selected_voice=None, 
                 # offload to ai_gen queue
                 log.info(f'{ctx.author.display_name} used "/speak": "{input_text}"')
                 params = {'tts_args': tts_args, 'user_voice': user_voice}
+                current_task.set(ctx.channel, 'speak')
                 await speak_task(ctx, input_text, params)
-                await run_flow_if_any(ctx, 'speak', input_text)
+                await run_flow_if_any(ctx, input_text)
 
     except Exception as e:
+        current_task.clear()
         log.error(f"Error processing tts request: {e}")
         await ctx.send(f"Error processing tts request: {e}", ephemeral=True)
 
@@ -5150,18 +5170,141 @@ if textgenwebui_enabled and tts_client and tts_client in supported_tts_clients:
 #################################################################
 class CurrentTask:
     def __init__(self):
-        self.task_channel = None
-        self.task_name = None
+        self.channel = None
+        self.name = None
     
     def set(self, channel:discord.TextChannel, task:str):
-        self.task_channel = channel
-        self.task_name = task
+        self.channel = channel
+        self.name = task
 
     def clear(self):
-        self.task_channel = None
-        self.task_name = None
+        self.channel = None
+        self.name = None
 
 current_task = CurrentTask()
+
+#################################################################
+####################### MESSAGE MANAGER #########################
+#################################################################
+# Manages "normal" discord message requests (not from commands, "Flows", etc)
+class MessageManager():
+    def __init__(self):
+        self.counter = 0
+        self.msg_queue = asyncio.PriorityQueue()
+        self.last_channel = None
+        self.afk_range = []
+        self.afk_weights = []
+        self.active_in_guild = {}
+
+    def update_afk_for_guild(self, guild_id:discord.Guild):
+        # choose a value with weighted probability based on 'responsiveness' bot behavior
+        afk_delay = random.choices(self.afk_range, self.afk_weights)[0]
+        afk_after = time.time() + afk_delay
+        self.active_in_guild[guild_id] = afk_after
+
+    def is_afk_for_guild(self, message: discord.Message):
+        if is_direct_message(message):
+            return False
+        if not self.active_in_guild.get(message.guild.id):
+            return False
+        if self.active_in_guild[message.guild.id] <= time.time():
+            return False
+        return True
+
+    def calculate_afk_delays(self):
+        num_values = 12 # arbitrary number of values and weights to generate
+        # Generate evenly spaced values in range of num_values
+        self.afk_range = [round(i * 120 / (num_values - 1), 3) for i in range(num_values)]
+        # Assign weights to delay values based on responsiveness
+        responsiveness = max(0.0, min(1.0, bot_behavior.responsiveness)) # clamped between 0.0 and 1.0
+        if responsiveness == 1.0:
+            self.afk_weights = ([0.0] * (num_values - 1)) + [1.0]
+            return
+        # Generate the weights from responsiveness
+        self.afk_weights = get_normalized_weights(target = responsiveness, list_len = num_values)
+        for guild in client.guilds:
+            self.update_afk_for_guild(guild.id)
+
+
+    async def run_message_task(self, num:int, message: discord.Message, text: str):
+        try:
+            async with task_semaphore:
+                async with message.channel.typing():
+                    current_task.set(message.channel, 'message')
+                    log.info(f'Processing queued message (#{num}) by {message.author.display_name}.')
+                    await message_task(message, text)
+                    await run_flow_if_any(message, text)
+
+                    self.last_channel = message.channel.id
+                    if not is_direct_message(message):
+                        self.update_afk_for_guild(message.guild.id)
+        except Exception as e:
+            log.error(f"Error while processing a Message: {e}")
+            current_task.clear()
+
+    async def check_for_exception(self):
+        # If the next item is not ready, check for the next task in the same channel
+        exception = None
+        temp_items = []
+
+        while not self.msg_queue.empty():
+            send_after, num, message, text, channel_id = await self.msg_queue.get()
+            # Only condition to check (for now)
+            if channel_id == self.last_channel:
+                exception = {'send_after': send_after, 'num': num, 'message': message, 'text': text, 'channel_id': channel_id}
+                break
+            else:
+                temp_items.append((send_after, num, message, text, channel_id))
+
+        # Re-add the temporarily removed items back to the queue
+        for item in temp_items:
+            await self.msg_queue.put(item)
+
+        return exception
+
+    async def process_msg_queue(self):
+        while True:
+            if self.msg_queue.empty():
+                await asyncio.sleep(1)
+
+            while not self.msg_queue.empty():
+                # Fetches the next item in the queue with the earliest value for 'send_after'
+                send_after, num, message, text, channel_id = await self.msg_queue.get()
+
+                current_time = time.time()
+                # Process message that is ready to send
+                if send_after <= current_time:
+                    await self.run_message_task(num, message, text)
+                    self.msg_queue.task_done()
+                # Check for any exceptions and process first found
+                else:
+                    exception = await self.check_for_exception()
+                    if exception:
+                        await self.run_message_task(exception['num'], exception['message'], exception['text'])
+                        self.msg_queue.task_done()
+                    # Wait for next item to process normally
+                    else:
+                        delay = send_after - current_time
+                        if self.msg_queue.qsize() > 0:
+                            log.info(f'Queued msg #{num} will be processed in {delay} seconds.')
+                        await asyncio.sleep(delay)
+                        await self.run_message_task(num, message, text)
+                        self.msg_queue.task_done()
+
+
+    async def queue(self, message: discord.Message, text: str):
+        delay = bot_behavior.get_response_delay(message, text)
+        send_after = time.time() + delay
+        self.counter += 1
+        num = self.counter
+        channel_id = message.channel.id
+
+        if delay:
+            await self.msg_queue.put((send_after, num, message, text, channel_id))
+        else:
+            await self.run_message_task(num, message, text)
+
+message_manager = MessageManager()
 
 #################################################################
 #################### SPONTANEOUS MESSAGING ######################
@@ -5170,9 +5313,9 @@ class SpontaneousMessaging():
     def __init__(self):
         self.tasks = {}
 
-    async def reset_for_channel(self, ictx:CtxInteraction, source:str):
-        # Do not reset from a spontaneous message
-        if source != 'spontaneous message':
+    async def reset_for_channel(self, ictx:CtxInteraction):
+        # Only reset from discord message or '/prompt' cmd
+        if current_task.name in ['message', 'prompt']:
             current_chan_msg_task = self.tasks.get(ictx.channel.id, (None, 0))
             task, _ = current_chan_msg_task
             if task:
@@ -5187,13 +5330,15 @@ class SpontaneousMessaging():
             async with task_semaphore:
                 async with ictx.channel.typing():
                     log.info(f'Prompting for a spontaneous message: "{prompt}"')
-                    await message_task(ictx, prompt, 'spontaneous message')
-                    await run_flow_if_any(ictx, 'spontaneous message', prompt)
+                    current_task.set(ictx.channel, 'spontaneous message')
+                    await message_task(ictx, prompt)
+                    await run_flow_if_any(ictx, prompt)
                     task, tally = self.tasks[ictx.channel.id]
                     self.tasks[ictx.channel.id] = (task, tally + 1)
 
         except Exception as e:
             log.error(f"Error while processing a Spontaneous Message: {e}")
+            current_task.clear()
 
     async def init_task(self, ictx:CtxInteraction, task, tally:int):
         # Randomly select wait duration from start/end range 
@@ -5212,8 +5357,7 @@ class SpontaneousMessaging():
         self.tasks[ictx.channel.id] = (new_task, tally)
         log.debug(f"Created a spontaneous msg task (channel: {ictx.channel.id}, delay: {wait_secs}), tally: {tally}.") # Debug because we want surprises from this feature
     
-    async def set_for_channel(self, ictx:CtxInteraction, source:str=None):
-        # if not (source and source == 'spontaneous message') \
+    async def set_for_channel(self, ictx:CtxInteraction):
         # First conditional check
         if ictx and (random.random() < bot_behavior.spontaneous_msg_chance):
             # Get any existing message task
@@ -5240,11 +5384,14 @@ class Behavior:
         self.go_wild_in_channel = True
         self.conversation_recency = 600
         self.user_conversations = {}
-        # New Behaviors
+        # Behaviors to be more like a computer program or humanlike
         self.maximum_typing_speed = -1
         self.responsiveness = 1.0
-        self.max_reply_delay = 30.0
         self.msg_size_affects_delay = False
+        self.max_reply_delay = 30.0
+        self.response_delay_values = []     # self.response_delay_values and self.response_delay_weights
+        self.response_delay_weights = []    # are calculated from the 3 settings above them via calculate_response_delays()
+        # Spontaneous messaging
         self.spontaneous_msg_chance = 0.0
         self.spontaneous_msg_max_consecutive = 1
         self.spontaneous_msg_min_wait = 10.0
@@ -5255,6 +5402,62 @@ class Behavior:
         for key, value in behavior.items():
             if hasattr(self, key):
                 setattr(self, key, value)
+        self.calculate_response_delays()
+        message_manager.calculate_afk_delays()
+
+
+    # Response delays
+    def calculate_response_delays(self):
+        num_values = 10 # arbitrary number of values and weights to generate
+        # Generate evenly spaced values from 0 to max_reply_delay
+        self.response_delay_values = [round(i * self.max_reply_delay / (num_values - 1), 3) for i in range(num_values)]
+        # Assign weights to delay values based on responsiveness
+        responsiveness = max(0.0, min(1.0, self.responsiveness)) # clamped between 0.0 and 1.0
+        if responsiveness == 1.0:
+            # Force all weight to delay value 0.0
+            self.response_delay_weights = [1.0] + [0.0] * (num_values - 1)
+            return
+        # Generate the weights from responsiveness (inverted)
+        inv_responsiveness = (1.0 - responsiveness)
+        self.response_delay_weights = get_normalized_weights(target = inv_responsiveness, list_len = num_values)
+
+    def merge_weights(self, text_weights:list) -> list:
+        # Combine text weights with delay weights
+        combined_weights = [w1 + w2 for w1, w2 in zip(self.response_delay_weights, text_weights)]
+        # Normalize combined weights to sum up to 1.0
+        total_combined_weight = sum(combined_weights)
+        merged_weights = [weight / total_combined_weight for weight in combined_weights]
+        return merged_weights
+
+    def get_text_weights(self, text:str) -> list:
+        text_len = len(text)
+        text_factor = min(max(text_len / 450, 0.0), 1.0)  # Normalize text length to [0, 1]
+        text_weights = get_normalized_weights(target = text_factor, list_len = len(self.response_delay_weights), strength=2.0) # use stronger weights for text factor
+        return text_weights
+
+    def get_response_delay(self, message:discord.Message, text:str) -> float:
+        num_values = len(self.response_delay_values) # length of delay values list
+
+        # default text_weights to no influence - match length of response weights
+        text_weights = [0.0] * num_values
+        # calculate text_weights for message text
+        if self.msg_size_affects_delay:
+            text_weights = self.get_text_weights(text)
+
+        # Factor responsiveness if "bot is AFK"
+        if message_manager.is_afk_for_guild(message):
+            weights = self.merge_weights(text_weights)
+        # Or factor text only, if configured
+        elif self.msg_size_affects_delay:
+            weights = text_weights
+        # Or force delay selection to 0.0
+        else:
+            weights = [1.0] + [0.0] * (num_values - 1)
+
+        chosen_delay = random.choices(self.response_delay_values, weights)[0]
+
+        return chosen_delay
+
 
     def update_user_dict(self, user_id):
         # Update the last conversation time for a user
@@ -5271,7 +5474,7 @@ class Behavior:
     def bot_should_reply(self, message:discord.Message, text:str) -> bool:
         main_condition = is_direct_message(message) or (message.channel.id in bot_database.main_channels)
 
-        if not config.get('discord', {}).get('direct_messages', {}).get('allow_chatting', True):
+        if is_direct_message(message) and not config.get('discord', {}).get('direct_messages', {}).get('allow_chatting', True):
             return False
         # Don't reply to @everyone or to itself
         if message.mention_everyone or (message.author == client.user and not self.probability_to_reply(self.reply_to_itself)):
@@ -5299,6 +5502,7 @@ class Behavior:
         return reply
 
     def probability_to_reply(self, probability):
+        probability = max(0.0, min(1.0, probability))
         # Determine if the bot should reply based on a probability
         return random.random() < probability
 
@@ -5715,6 +5919,7 @@ else:
 async def runner():
     async with client:
         await client.start(bot_token, reconnect=True)
+        asyncio.create_task(message_manager.process_msg_queue())
 
 discord.utils.setup_logging(
             handler=log_file_handler,

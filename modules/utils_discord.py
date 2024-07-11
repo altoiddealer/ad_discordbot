@@ -205,7 +205,7 @@ async def send_long_message(channel, message_text, bot_message:Optional['HMessag
 
     return sent_message.id
 
-async def replace_msg_in_history_and_discord(client_user:discord.Client, ictx:CtxInteraction, params:dict, text:str, text_visible:str) -> Optional['HMessage']:
+async def replace_msg_in_history_and_discord(client_user:discord.Client, ictx:CtxInteraction, params:dict, text:str, text_visible:str, apply_reactions:bool=True) -> Optional['HMessage']:
     channel = ictx.channel
     updated_message: Optional[HMessage] = params.get('user_message_to_update') or params.get('bot_message_to_update')
     msg_hidden = params.get('user_msg_hidden') or params.get('bot_msg_hidden') or updated_message.hidden
@@ -245,7 +245,8 @@ async def replace_msg_in_history_and_discord(client_user:discord.Client, ictx:Ct
         updated_message.update(text=text, text_visible=text_visible, hidden=msg_hidden)
 
         # Apply any reactions applicable to message
-        await apply_reactions_to_messages(client_user, ictx, updated_message)
+        if apply_reactions:
+            await apply_reactions_to_messages(client_user, ictx, updated_message)
 
         return updated_message
     except Exception as e:
@@ -271,12 +272,13 @@ async def rebuild_chunked_message(ictx:CtxInteraction, msg_id_list:list=None, ic
 
 # Modal for editing history
 class EditMessageModal(discord.ui.Modal, title="Edit Message in History"):
-    def __init__(self, client_user: Optional[discord.ClientUser], ictx:CtxInteraction, matched_hmessage: 'HMessage', target_message: discord.Message):
+    def __init__(self, client_user: Optional[discord.ClientUser], ictx:CtxInteraction, matched_hmessage: 'HMessage', target_message: discord.Message, apply_reactions:bool=True):
         super().__init__()
         self.target_message = target_message
         self.matched_hmessage = matched_hmessage
         self.client_user = client_user
         self.ictx = ictx
+        self.apply_reactions = apply_reactions
 
         # Add TextInput dynamically with default value
         self.new_content = discord.ui.TextInput(
@@ -291,7 +293,7 @@ class EditMessageModal(discord.ui.Modal, title="Edit Message in History"):
         # Update text in history
         new_text = self.new_content.value
         params = {'user_message_to_update': self.matched_hmessage}
-        await replace_msg_in_history_and_discord(self.client_user, self.ictx, params=params, text=new_text, text_visible=new_text)
+        await replace_msg_in_history_and_discord(self.client_user, self.ictx, params=params, text=new_text, text_visible=new_text, apply_reactions=self.apply_reactions)
         if self.target_message.author != self.client_user:
             await inter.response.send_message("Message history has been edited successfully (Note: the bot cannot update your discord message).", ephemeral=True, delete_after=7)
         else:
