@@ -1823,7 +1823,7 @@ def process_prompt_formatting(ictx:CtxInteraction, user_name:str, prompt:str, fo
 ############################ TASKS ##############################
 #################################################################
 class Tasks(TaskProcessing):
-    def __init__(self, name:str, ictx:CtxInteraction, **kwargs): # text:str='', llm_payload:dict|None=None, params:Params|None=None):
+    def __init__(self, name:str, ictx:CtxInteraction|None=None, **kwargs): # text:str='', llm_payload:dict|None=None, params:Params|None=None):
         '''''''''''''''''''''''''''''''''''
         This is a "relatively crude" framework to simplify Task management which could be improved by further subclassing.
 
@@ -1836,7 +1836,7 @@ class Tasks(TaskProcessing):
             (2) Tasks are required to include all attributes defined in TaskAttributes Protocol.
         '''''''''''''''''''''''''''''''''''
 
-        self.name:str = name
+        self.name: str = name
         self.ictx: CtxInteraction = ictx
         # TaskQueue() will initialize the Task's values before it is processed
         self.channel: discord.TextChannel = kwargs.get('channel', None)
@@ -1874,15 +1874,15 @@ class Tasks(TaskProcessing):
         self.user_hmessage: HMessage = self.user_hmessage if self.user_hmessage else None
         self.bot_hmessage: HMessage  = self.bot_hmessage if self.bot_hmessage else None
         # Get history for interaction channel
-        if is_direct_message(self.ictx):
-            self.local_history = bot_history.get_history_for(self.channel.id).dont_save()
-        else:
-            self.local_history = bot_history.get_history_for(self.channel.id)
+        if self.ictx:
+            if is_direct_message(self.ictx):
+                self.local_history = bot_history.get_history_for(self.channel.id).dont_save()
+            else:
+                self.local_history = bot_history.get_history_for(self.channel.id)
 
-    def clone(self, name:str=''):
+    def clone(self, name:str='', ictx:CtxInteraction|None=None) -> "Tasks":
         # Create a dictionary of the current attributes
         current_attributes = {
-            'ictx': self.ictx,
             'embeds': self.embeds,
             'text': self.text,
             'llm_prompt': self.llm_prompt,
@@ -1895,7 +1895,7 @@ class Tasks(TaskProcessing):
             'bot_hmessage': self.bot_hmessage
         }
         # Create a new instance with the same attributes
-        return Tasks(name=name, **current_attributes)
+        return Tasks(name=name, ictx=ictx, **current_attributes)
 
     #################################################################
     ######################### MESSAGE TASK ##########################
