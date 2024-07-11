@@ -5473,7 +5473,7 @@ class Behavior:
     def bot_should_reply(self, message:discord.Message, text:str) -> bool:
         main_condition = is_direct_message(message) or (message.channel.id in bot_database.main_channels)
 
-        if not config.get('discord', {}).get('direct_messages', {}).get('allow_chatting', True):
+        if is_direct_message(message) and not config.get('discord', {}).get('direct_messages', {}).get('allow_chatting', True):
             return False
         # Don't reply to @everyone or to itself
         if message.mention_everyone or (message.author == client.user and not self.probability_to_reply(self.reply_to_itself)):
