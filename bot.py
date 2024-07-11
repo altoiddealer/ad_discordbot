@@ -182,6 +182,7 @@ if sd_enabled:
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.request(method.lower(), url=f'{SD_URL}{endpoint}', json=json) as response:
+                    response_text = await response.text()
                     if response.status == 200:
                         r = await response.json()
                         if SD_CLIENT is None and endpoint != '/sdapi/v1/cmd-flags':
@@ -190,6 +191,7 @@ if sd_enabled:
                         return r
                     else:
                         log.error(f'{SD_URL}{endpoint} response: {response.status} "{response.reason}"')
+                        log.error(f'Response content: {response_text}')
                         if retry and response.status in [408, 500]:
                             log.info("Retrying the request in 3 seconds...")
                             await asyncio.sleep(3)
