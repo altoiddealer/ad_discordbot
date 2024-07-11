@@ -1835,28 +1835,44 @@ class Tasks(TaskProcessing):
             (1) PyLance can't link shared methods among TaskProcessing().
             (2) Tasks are required to include all attributes defined in TaskAttributes Protocol.
         '''''''''''''''''''''''''''''''''''
-        # Name of the Task
+
         self.name:str = name
-        # Discord attributes
-        self.ictx: CtxInteraction = kwargs.get('ictx', ictx)
+        self.ictx: CtxInteraction = ictx
+        # TaskQueue() will initialize the Task's values before it is processed
+        self.channel: discord.TextChannel = kwargs.get('channel', None)
+        self.user: Union[discord.User, discord.Member] = kwargs.get('user', None)
+        self.user_name: str          = kwargs.get('user_name', None)
+        self.embeds: Embeds          = kwargs.get('embeds', None)
+        self.text: str               = kwargs.get('text', None)
+        self.llm_prompt: str         = kwargs.get('llm_prompt', None)
+        self.llm_payload: dict       = kwargs.get('llm_payload', None)
+        self.params: Params          = kwargs.get('params', None)
+        self.tags: Tags              = kwargs.get('tags', None)
+        self.img_prompt: str         = kwargs.get('img_prompt', None)
+        self.img_payload: dict       = kwargs.get('img_payload', None)
+        self.user_hmessage: HMessage = kwargs.get('user_hmessage', None)
+        self.bot_hmessage: HMessage  = kwargs.get('bot_hmessage', None)
+        self.local_history           = kwargs.get('local_history', None)
+
+    def init_self_values(self):
         self.channel: discord.TextChannel = self.ictx.channel if self.ictx else None
         self.user: Union[discord.User, discord.Member] = get_user_ctx_inter(self.ictx) if self.ictx else None
-        self.user_name: str = self.user.display_name if self.user else ""
-        self.embeds: Embeds = kwargs.get('embeds', Embeds(config))
+        self.user_name: str          = self.user.display_name if self.user else ""
+        self.embeds: Embeds          = self.embeds if self.embeds else Embeds(config)
         # The original input text
-        self.text: str = kwargs.get('text', "")
+        self.text: str               = self.text if self.text else ""
         # TGWUI specific attributes
-        self.llm_prompt: str = kwargs.get('llm_prompt', None)
-        self.llm_payload: dict = kwargs.get('llm_payload', {})
+        self.llm_prompt: str         = self.llm_prompt if self.llm_prompt else None
+        self.llm_payload: dict       = self.llm_payload if self.llm_payload else {}
         # Misc parameters
-        self.params: Params = kwargs.get('params', Params())
-        self.tags: Tags = kwargs.get('tags', Tags())
+        self.params: Params          = self.params if self.params else Params()
+        self.tags: Tags              = self.tags if self.tags else Tags()
         # Image specific attributes
-        self.img_prompt: str = kwargs.get('img_prompt', None)
-        self.img_payload: dict = kwargs.get('img_payload', {})
+        self.img_prompt: str         = self.img_prompt if self.img_prompt else None
+        self.img_payload: dict       = self.img_payload if self.img_payload else {}
         # History attributes
-        self.user_hmessage: HMessage = kwargs.get('user_hmessage', None)
-        self.bot_hmessage: HMessage = kwargs.get('bot_hmessage', None)
+        self.user_hmessage: HMessage = self.user_hmessage if self.user_hmessage else None
+        self.bot_hmessage: HMessage  = self.bot_hmessage if self.bot_hmessage else None
         # Get history for interaction channel
         if is_direct_message(self.ictx):
             self.local_history = bot_history.get_history_for(self.channel.id).dont_save()
