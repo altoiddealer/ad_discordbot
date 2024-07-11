@@ -404,34 +404,39 @@ def get_message_ctx_inter(ictx: CtxInteraction) -> discord.Message:
 
 
 class Embeds:
-    def __init__(self, config):
+    def __init__(self, config:dict):
         self.color:int = config['discord'].get('embed_settings', {}).get('color', 0x1e1f22)
         self.enabled_embeds:dict = config['discord'].get('embed_settings', {}).get('show_embeds', {})
+
         self.root_url:str = 'https://github.com/altoiddealer/ad_discordbot'
 
         self.embeds:dict = {}
+        self.sent_msg_embeds:dict = {}
 
         self.init_default_embeds()
 
     def enabled(self, name:str) -> bool:
-        return self.enabled_embeds.get(name, True)
+        return self.enabled_embeds.get(name, True) # all enabled by default
 
     def init_default_embeds(self):
         if self.enabled('system'):
-            self.system = self.create("system", "System Notification", " ", self.root_url, self.color)
+            self.create("system", "System Notification", " ", self.root_url, self.color)
         if self.enabled('images'):
-            self.img_gen = self.create("img_gen", "Processing image generation ...", " ", self.root_url, self.color)
-            self.img_send = self.create("img_send", "User requested an image ...", " ", self.root_url, self.color)
+            self.create("img_gen", "Processing image generation ...", " ", self.root_url, self.color)
+            self.create("img_send", "User requested an image ...", " ", self.root_url, self.color)
         if self.enabled('change'):
-            self.change = self.create("change", "Change Notification", " ", self.root_url, self.color)
+            self.create("change", "Change Notification", " ", self.root_url, self.color)
         if self.enabled('flow'):
-            self.flow = self.create("flow", "Flow Notification", " ", "/wiki/tags", self.color)
+            self.create("flow", "Flow Notification", " ", "/wiki/tags", self.color)
 
     def get(self, name:str) -> discord.Embed|None:
         return self.embeds.get(name, None)
 
+    def get_sent_msg(self, name:str) -> discord.Message|None:
+        return self.sent_msg_embeds.get(name, None)
+
     def update(self, name:str, title:str|None=None, description:str|None=None, color:int|None=None, url_suffix:str|None=None, url:str|None=None) -> discord.Embed:
-        embed = self.embeds.get(name)
+        embed:discord.Embed = self.embeds.get(name)
         if title:
             embed.title = title
         if description:
@@ -441,6 +446,18 @@ class Embeds:
         if url or url_suffix:
             embed.url = url if url else f'{self.root_url}{url_suffix}'
         return embed
+    
+    async def edit_or_send(self, ictx:CtxInteraction, name:str, title:str|None=None, description:str|None=None, color:int|None=None, url_suffix:str|None=None, url:str|None=None) -> None|discord.Embed:
+        # Return if not configured
+        if not self.enabled(name):
+            return
+        # Get the previously sent embed
+        previously_sent_embed:discord.Message = self.sent_msg_embeds.pop(name, None)
+        # Retain the message while sending Embed
+        if previously_sent_embed:
+            self.sent_msg_embeds[name] = await previously_sent_embed.edit(embed = self.update(name, title, description, color, url_suffix, url))
+        else:
+            self.sent_msg_embeds[name] = await ictx.channel.send(embed = self.update(name, title, description, color, url_suffix, url))
 
     def create(self, name:str, title:str=' ', description:str=' ', color:int|None=None, url_suffix:str|None=None, url:str|None=None) -> discord.Embed:
         if url or url_suffix:
@@ -448,7 +465,7 @@ class Embeds:
         self.embeds[name] = discord.Embed(title=title, description=description, url=url, color=color)
         return self.embeds[name]
 
-    def helpmenu(self):
+    def helpmenu(self) -> discord.Embed:
         system_json = {
             "title": "Welcome to ad_discordbot!",
             \
