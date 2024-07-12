@@ -526,12 +526,10 @@ async def auto_update_imgmodel_task(mode, duration):
             # Select an imgmodel automatically
             selected_imgmodel = await auto_select_imgmodel(bot_database.last_imgmodel_name, mode)
 
-            async with task_semaphore:
-                # offload to ai_gen queue
-                params = {'imgmodel': selected_imgmodel}
-                # CREATE TASK AND QUEUE IT
-                await change_imgmodel_task(params=params, ictx=None)
-                log.info("Automatically updated imgmodel settings")
+            # CREATE TASK AND QUEUE IT
+            params = Params(imgmodel=selected_imgmodel)
+            change_imgmodel_task = Task('change_imgmodel', ictx=None, params=params)
+            await task_manager.queue.put(change_imgmodel_task)
 
         except Exception as e:
             log.error(f"Error automatically updating image model: {e}")
@@ -639,7 +637,9 @@ async def on_ready():
             
     # Create background task processing queue
     client.loop.create_task(process_tasks_in_background())
-    # Create task for processing messages
+    # Start the main Task Manager
+    client.loop.create_task(task_manager.process_tasks())
+    # Start the Message Manager
     client.loop.create_task(message_manager.process_msg_queue())
     # Start background task to sync the discord client tree
     await bg_task_queue.put(client.tree.sync())
@@ -881,6 +881,70 @@ if tgwui.enabled and tts.client:
 #################################################################
 ############################ TAGS ###############################
 #################################################################
+def _expand_value(value:str) -> str:
+    # Split the value on commas
+    parts = value.split(',')
+    expanded_values = []
+    for part in parts:
+        # Check if the part contains curly brackets
+        if '{' in part and '}' in part:
+            # Use regular expression to find all curly bracket groups
+            group_matches = patterns.in_curly_brackets.findall(part)
+            permutations = list(product(*[group_match.split('|') for group_match in group_matches]))
+            # Replace each curly bracket group with permutations
+            for perm in permutations:
+                expanded_part = part
+                for part_match in group_matches:
+                    expanded_part = expanded_part.replace('{' + part_match + '}', perm[group_matches.index(part_match)], 1)
+                expanded_values.append(expanded_part)
+        else:
+            expanded_values.append(part)
+    return ','.join(expanded_values)
+
+async def expand_triggers(all_tags:list) -> list:
+    try:
+        for tag in all_tags:
+            if 'trigger' in tag:
+                tag['trigger'] = _expand_value(tag['trigger'])
+
+    except Exception as e:
+        log.error(f"Error expanding tags: {e}")
+
+    return all_tags
+
+# Unpack tag presets and add global tag keys
+async def update_tags(tags:list) -> list:
+    if not isinstance(tags, list):
+        log.warning('''One or more "tags" are improperly formatted. Please ensure each tag is formatted as a list item designated with a hyphen (-)''')
+        return []
+    try:
+        tags_data = load_file(shared_path.tags, {})
+        global_tag_keys:dict = tags_data.get('global_tag_keys', {})
+        tag_presets = tags_data.get('tag_presets', [])
+        updated_tags = []
+        for tag in tags:
+            if 'tag_preset_name' in tag:
+                # Find matching tag preset in tag_presets
+                for preset in tag_presets:
+                    if 'tag_preset_name' in preset and preset['tag_preset_name'] == tag['tag_preset_name']:
+                        # Merge corresponding tag presets
+                        updated_tags.extend(preset.get('tags', []))
+                        tag.pop('tag_preset_name', None)
+                        break
+            if tag:
+                updated_tags.append(tag)
+        # Add global tag keys to each tag item
+        for tag in updated_tags:
+            for key, value in global_tag_keys.items():
+                if key not in tag:
+                    tag[key] = value
+        updated_tags = await expand_triggers(updated_tags) # expand any simplified trigger phrases
+        return updated_tags
+
+    except Exception as e:
+        log.error(f"Error loading tag presets: {e}")
+        return tags
+
 class Tags:
     def __init__(self, text:str|None=None):
         self.matches:list = []
@@ -906,70 +970,6 @@ class Tags:
                 self.unmatched[search_mode].append({k: v for k, v in tag.items() if k != 'search_mode'})
             else:
                 log.warning(f"Ignoring unknown search_mode: {search_mode}")
-
-    def _expand_value(self, value:str) -> str:
-        # Split the value on commas
-        parts = value.split(',')
-        expanded_values = []
-        for part in parts:
-            # Check if the part contains curly brackets
-            if '{' in part and '}' in part:
-                # Use regular expression to find all curly bracket groups
-                group_matches = patterns.in_curly_brackets.findall(part)
-                permutations = list(product(*[group_match.split('|') for group_match in group_matches]))
-                # Replace each curly bracket group with permutations
-                for perm in permutations:
-                    expanded_part = part
-                    for part_match in group_matches:
-                        expanded_part = expanded_part.replace('{' + part_match + '}', perm[group_matches.index(part_match)], 1)
-                    expanded_values.append(expanded_part)
-            else:
-                expanded_values.append(part)
-        return ','.join(expanded_values)
-
-    async def expand_triggers(self, all_tags:list) -> list:
-        try:
-            for tag in all_tags:
-                if 'trigger' in tag:
-                    tag['trigger'] = self._expand_value(tag['trigger'])
-
-        except Exception as e:
-            log.error(f"Error expanding tags: {e}")
-
-        return all_tags
-
-    # Unpack tag presets and add global tag keys
-    async def update_tags(self, tags:list) -> list:
-        if not isinstance(tags, list):
-            log.warning('''One or more "tags" are improperly formatted. Please ensure each tag is formatted as a list item designated with a hyphen (-)''')
-            return []
-        try:
-            tags_data = load_file(shared_path.tags, {})
-            global_tag_keys:dict = tags_data.get('global_tag_keys', {})
-            tag_presets = tags_data.get('tag_presets', [])
-            updated_tags = []
-            for tag in tags:
-                if 'tag_preset_name' in tag:
-                    # Find matching tag preset in tag_presets
-                    for preset in tag_presets:
-                        if 'tag_preset_name' in preset and preset['tag_preset_name'] == tag['tag_preset_name']:
-                            # Merge corresponding tag presets
-                            updated_tags.extend(preset.get('tags', []))
-                            tag.pop('tag_preset_name', None)
-                            break
-                if tag:
-                    updated_tags.append(tag)
-            # Add global tag keys to each tag item
-            for tag in updated_tags:
-                for key, value in global_tag_keys.items():
-                    if key not in tag:
-                        tag[key] = value
-            updated_tags = await self.expand_triggers(updated_tags) # expand any simplified trigger phrases
-            return updated_tags
-
-        except Exception as e:
-            log.error(f"Error loading tag presets: {e}")
-            return tags
 
     # Function to convert string values to bool/int/float
     def extract_value(self, value_str:str) -> Optional[Union[bool, int, float, str]]:
@@ -1426,64 +1426,59 @@ async def announce_changes(ictx: CtxInteraction, change_label:str, change_name:s
         log.error(f'An error occurred while announcing changes to announce channels: {e}')
 
 #################################################################
-######################## TASK TRACKING ##########################
+########################### PARAMS ##############################
 #################################################################
-class CurrentTask:
-    def __init__(self):
-        self.channel = None
-        self.name = None
-    
-    def set(self, channel:discord.TextChannel, task:str):
-        self.channel = channel
-        self.name = task
-
-    def clear(self):
-        self.channel = None
-        self.name = None
-
-current_task = CurrentTask()
-
 class Params:
-    def __init__(self):
-        self.save_to_history:bool = True
+    def __init__(self, **kwargs):
+        '''
+        kwargs:
+        save_to_history, should_gen_text, should_send_text, should_gen_image, should_send_image,
+        imgcmd, img_censoring, endpoint, sd_output_dir, ref_message, regenerated,
+        skip_create_user_hmsg, skip_create_bot_hmsg, bot_hmsg_hidden, bot_hmessage_to_update,
+        target_discord_msg_id, character, llmmodel, imgmodel, tts_args, user_voice, send_user_image
+        '''
+        self.save_to_history: bool      = kwargs.get('save_to_history', True)
 
         # Behavior
-        self.should_gen_text:bool = True
-        self.should_send_text:bool = True
-        self.should_gen_image:bool = False
-        self.should_send_image:bool = True
+        self.should_gen_text: bool      = kwargs.get('should_gen_text', True)
+        self.should_send_text: bool     = kwargs.get('should_send_text', True)
+        self.should_gen_image: bool     = kwargs.get('should_gen_image', False)
+        self.should_send_image: bool    = kwargs.get('should_send_image', True)
+
+        # Image command params
+        self.imgcmd: dict = kwargs.get('imgcmd', {
+            'size': None,
+            'neg_prompt': '',
+            'style': {},
+            'face_swap': None,
+            'controlnet': None,
+            'img2img': {}
+        })
 
         # Image related params
-        self.size:dict = {}
-        self.neg_prompt:str = ''
-        self.style:dict = {}
-        self.face_swap:str = ''
-        self.controlnet:dict = {}
-        self.img2img:dict = {}
-        self.message:str = None # Check back on this
-        self.img_censoring:int = 0
-        self.endpoint:str = '/sdapi/v1/txt2img'
-        self.sd_output_dir:str = os.path.join(shared_path.dir_root, 'sd_outputs')
+        self.img_censoring: int = kwargs.get('img_censoring', 0)
+        self.endpoint: str      = kwargs.get('endpoint', '/sdapi/v1/txt2img')
+        self.sd_output_dir: str = kwargs.get('sd_output_dir', (os.path.join(shared_path.dir_root, 'sd_outputs')))
 
         # discord/HMessage related params
-        self.ref_message:discord.Message = None
-        self.regenerated:bool = False
-        self.skip_create_user_hmsg:bool = False
-        self.skip_create_bot_hmsg:bool = False
-        self.bot_hmsg_hidden:bool = False
-        self.bot_hmessage_to_update:HMessage = None
-        self.target_discord_msg_id:discord.Message.id = None
+        self.ref_message                 = kwargs.get('ref_message', None)
+        self.regenerated: bool           = kwargs.get('regenerated', False)
+        self.skip_create_user_hmsg: bool = kwargs.get('skip_create_user_hmsg', False)
+        self.skip_create_bot_hmsg: bool  = kwargs.get('skip_create_bot_hmsg', False)
+        self.bot_hmsg_hidden: bool       = kwargs.get('bot_hmsg_hidden', False)
+        self.bot_hmessage_to_update      = kwargs.get('bot_hmessage_to_update', None)
+        self.target_discord_msg_id       = kwargs.get('target_discord_msg_id', None)
 
         # Model/Character Change params
-        self.character:dict = {}
-        self.llmmodel:dict = {}
-        self.imgmodel:dict = {}
+        self.character: dict = kwargs.get('character', {})
+        self.llmmodel: dict  = kwargs.get('llmmodel', {})
+        self.imgmodel: dict  = kwargs.get('imgmodel', {})
 
         # /Speak cmd
-        self.tts_args:dict = {}
-        self.user_voice:str = None
+        self.tts_args: dict        = kwargs.get('tts_args', {})
+        self.user_voice: str       = kwargs.get('user_voice', None)
 
-        self.send_user_image:list = []
+        self.send_user_image: list = kwargs.get('send_user_image', [])
 
     def update_bot_should_do(self, tags:Tags):
         actions = ['should_gen_text', 'should_send_text', 'should_gen_image', 'should_send_image']
@@ -1633,9 +1628,11 @@ class TaskProcessing(TaskAttributes):
                 else:
                     if char_params == change_character:
                         verb = 'Changing'
-                        # CREATE TASK AND QUEUE IT
+                        # CREATE TASK AND RUN IT
                         char_params = {'character': {'char_name': char_params, 'mode': 'change', 'verb': verb}}
-                        await change_char_task(self.ictx, char_params)
+                        params = Params(character=char_params)
+                        change_char_task = Task('change_character', self.ictx, params=params)
+                        await task_manager.run_subtask(change_char_task)
                     else:
                         verb = 'Swapping'
                         await self.swap_llm_character(swap_character)
@@ -2344,13 +2341,14 @@ class TaskProcessing(TaskAttributes):
         except Exception as e:
             log.error(f"An error occurred when cleaning img_payload: {e}")
 
-    def apply_loractl(self, matched_tags:list):# -> SORTED_TAGS:
+    def apply_loractl(self):# -> SORTED_TAGS:
         try:
+            matched_tags: list = self.tags.matches
             if sd.client != 'A1111 SD WebUI':
                 if not bot_database.was_warned('loractl'):
                     bot_database.update_was_warned('loractl')
                     log.warning(f'loractl is not known to be compatible with "{sd.client}". Not applying loractl...')
-                return matched_tags
+                return
             scaling_settings = [v for k, v in config['sd'].get('extensions', {}).get('lrctl', {}).items() if 'scaling' in k]
             scaling_settings = scaling_settings if scaling_settings else ['']
             # Flatten the matches dictionary values to get a list of all tags (including those within tuples)
@@ -2382,18 +2380,20 @@ class TaskProcessing(TaskAttributes):
                                         # Update the appropriate key in the tag dictionary
                                         tag[used_key] = new_positive_prompt
                                         log.info(f'''[TAGS] loractl applied: "{lora_match}" > "{updated_lora_match}"''')
-            return matched_tags
+            self.tags.matches = matched_tags
         except Exception as e:
             log.error(f"Error processing lrctl: {e}")
-            return matched_tags
+            self.tags.matches = matched_tags
 
     def apply_imgcmd_params(self):
         try:
-            size = params.get('size', None) if params else None
-            face_swap = params.get('face_swap', None) if params else None
-            controlnet = params.get('controlnet', None) if params else None
-            img2img = params.get('img2img', {})
-            img2img_mask = img2img.get('mask', '')
+            imgcmd_params              = self.params.imgcmd
+            size: Optional[dict]       = imgcmd_params['size']
+            face_swap :Optional[str]   = imgcmd_params['face_swap']
+            controlnet: Optional[dict] = imgcmd_params['controlnet']
+            img2img: dict              = imgcmd_params['img2img']
+            img2img_mask               = img2img.get('mask', '')
+
             if img2img:
                 self.img_payload['init_images'] = [img2img['image']]
                 self.img_payload['denoising_strength'] = img2img['denoising_strength']
@@ -2651,7 +2651,7 @@ class TaskProcessing(TaskAttributes):
                     self.params.endpoint = '/sdapi/v1/img2img'
                 # Inpaint Mask handling
                 if img2img_mask:
-                    img_payload['mask'] = str(img2img_mask)
+                    self.img_payload['mask'] = str(img2img_mask)
         except Exception as e:
             log.error(f"Error processing Img tags: {e}")
             traceback.print_exc()
@@ -2805,8 +2805,7 @@ class TaskProcessing(TaskAttributes):
                             forge_couple_args[forge_couple_key] = str(value)
                     # get any user image(s)
                     elif key == 'send_user_image':
-                        user_image_args = get_image_tag_args('User image', str(value), key=None, set_dir=None)
-                        user_image = discord.File(user_image_args)
+                        user_image_args = self.get_image_tag_args('User image', str(value), key=None, set_dir=None)
                         user_image = discord.File(user_image_args)
                         self.params.send_user_image.append(user_image)
                         log.info('[TAGS] Sending user image.')
@@ -2835,9 +2834,12 @@ class TaskProcessing(TaskAttributes):
 
     def init_img_payload(self):
         try:
-            neg_prompt = self.params.neg_prompt
-            positive_style = self.params.style.get('positive', "{}")
-            negative_style = self.params.style.get('negative', '')
+            # Apply values set by /image command (Additional /image cmd values are applied later)
+            imgcmd_params   = self.params.imgcmd
+            neg_prompt: str = imgcmd_params['neg_prompt']
+            style: dict     = imgcmd_params['style']
+            positive_style = style.get('positive', "{}")
+            negative_style = style.get('negative', '')
             self.img_prompt = positive_style.format(self.img_prompt)
             neg_prompt = f"{neg_prompt}, {negative_style}" if negative_style else neg_prompt
             # Initialize img_payload settings
@@ -2854,6 +2856,11 @@ class TaskProcessing(TaskAttributes):
 #################################################################
 
 class Tasks(TaskProcessing):
+    '''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+    Task management framework which could be improved by further subclassing.
+    Instances of Task() are run/queued in TasksManager() queue.
+    Each Task() is processed by Tasks() with the methods of TaskProcessing().
+    '''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
 
     #################################################################
     ######################### MESSAGE TASK ##########################
@@ -2892,10 +2899,12 @@ class Tasks(TaskProcessing):
 
             # Bot DID NOT generate text...
             elif self.params.should_gen_image:      # If bot should only generate image:
-                if await sd_online(self.channel):   # Notify user their prompt will be used directly for img gen
+                if await self.sd_online():   # Notify user their prompt will be used directly for img gen
                     await self.channel.send('Bot was triggered by Tags to not respond with text.\n \
                                     **Processing image generation using your input as the prompt ...**', delete_after=5)
-                await img_gen_task(self.ictx)       # process image gen task
+                # CREATE TASK AND RUN IT
+                img_gen_task = self.clone('img_gen', self.ictx)
+                await task_manager.run_subtask(img_gen_task)
             
             await spontaneous_messaging.set_for_channel(self.ictx) # trigger spontaneous message from bot, as configured
 
@@ -2903,10 +2912,9 @@ class Tasks(TaskProcessing):
 
         except Exception as e:
             print(traceback.format_exc())
-            log.error(f'An error occurred while processing "{current_task.name}" request: {e}')
-            await self.embeds.edit_or_send('img_gen', f'An error occurred while processing "{current_task.name}" request', e)
+            log.error(f'An error occurred while processing "{self.name}" request: {e}')
+            await self.embeds.edit_or_send('img_gen', f'An error occurred while processing "{self.name}" request', e)
             await self.embeds.delete('change')
-            current_task.clear()
         
         return None, None
 
@@ -3103,9 +3111,9 @@ class Tasks(TaskProcessing):
                 params['bot_hmsg_hidden'] = temp_reveal_msgs # Hide new bot HMessage if regenerating from hidden exchange
 
             # Regenerate the reply
-            current_task.set(self.channel, 'regenerate')
-            # CREATE TASK AND QUEUE IT
-            _, new_bot_hmessage = await message_task(inter, original_user_text, llm_payload, params)
+            # CREATE TASK AND RUN IT
+            regenerate_task = self.clone('message', self.ictx) # run a message task
+            _, new_bot_hmessage = await task_manager.run_subtask(regenerate_task)
 
             # Mark as reply
             new_bot_hmessage.mark_as_reply_for(self.user_hmessage)
@@ -3135,7 +3143,6 @@ class Tasks(TaskProcessing):
             log.error(f'{e_msg}: {e}')
             await self.ictx.followup.send(e_msg, silent=True)
             await self.embeds.delete('system')
-        current_task.clear()
 
     #################################################################
     ########################## SPEAK TASK ###########################
@@ -3189,7 +3196,7 @@ class Tasks(TaskProcessing):
             if not self.ictx:
                 self.user_name = 'Automatically'
 
-            await sd_online(self.channel) # Can't change Img model if not online!
+            await self.sd_online() # Can't change Img model if not online!
 
             imgmodel_params = self.params.imgmodel
             imgmodel_name = imgmodel_params.get('imgmodel_name', '')
@@ -3305,8 +3312,7 @@ class Tasks(TaskProcessing):
             await self.send_char_greeting_or_history(char_name)
             log.info(f"Character loaded: {char_name}")
         except Exception as e:
-            log.error(f'An error occurred while loading character for "{current_task.name}": {e}')
-            current_task.clear()
+            log.error(f'An error occurred while loading character for "{self.name}": {e}')
             await self.embeds.edit_or_send('change', "An error occurred while loading character", e)
 
     #################################################################
@@ -3319,60 +3325,56 @@ class Tasks(TaskProcessing):
                 self.tags.match_img_tags()
                 self.params.update_bot_should_do()
             # Initialize img_payload
-            init_img_payload(img_prompt, params)
+            self.init_img_payload()
             # collect matched tag values
-            img_payload_mods, params = collect_img_tag_values(tags, params)
-            send_user_image = img_payload_mods.pop('send_user_image', [])
+            img_payload_mods = self.collect_img_tag_values()
             # Apply tags relevant to Img gen
-            img_payload, params = await process_img_payload_tags(img_payload, img_payload_mods, params)
+            await self.process_img_payload_tags(img_payload_mods)
             # Check censoring
             if self.params.img_censoring == 2:
-                if img_send_embed_info:
-                    img_send_embed_info.title = "Image prompt was flagged as inappropriate."
-                    img_send_embed_info.description = ""
-                    await channel.send(embed=img_send_embed_info)
+                await self.embeds.send('img_send', "Image prompt was flagged as inappropriate.", "")
                 return
             # Process loractl
             if config['sd']['extensions'].get('lrctl', {}).get('enabled', False):
-                tags.matches = apply_loractl(tags.matches)
+                self.apply_loractl()
             # Apply tags relevant to Img prompts
-            img_payload = process_img_prompt_tags(img_payload, tags)
+            self.process_img_prompt_tags()
             # Apply menu selections from /image command
-            img_payload = apply_imgcmd_params(img_payload, params)
+            self.apply_imgcmd_params()
             # Clean anything up that gets messy
-            img_payload = clean_img_payload(img_payload)
+            self.clean_img_payload()
             # Change imgmodel if triggered by tags
             should_swap = False
-            imgmodel_params = params.get('imgmodel', {})
+            imgmodel_params = self.params.imgmodel
             if imgmodel_params:
                 # Add checkpoint to image payload (change_imgmodel_task() will change it anyway)
                 sd_model_checkpoint = imgmodel_params.get('sd_model_checkpoint', '')
-                override_settings = img_payload.setdefault('override_settings', {})
+                override_settings = self.img_payload.setdefault('override_settings', {})
                 override_settings['sd_model_checkpoint'] = sd_model_checkpoint
-                # collect params fpr event of model swapping
-                swap_params = {'imgmodel': {}}
-                swap_params['imgmodel']['imgmodel_name'] = bot_database.last_imgmodel_name
-                swap_params['imgmodel']['sd_model_checkpoint'] = bot_database.last_imgmodel_checkpoint
-                should_swap = await change_imgmodel_task(params, ictx)
+                # collect params for event of model swapping
+                swap_params: Params = Params()
+                swap_params.imgmodel['imgmodel_name'] = bot_database.last_imgmodel_name
+                swap_params.imgmodel['sd_model_checkpoint'] = bot_database.last_imgmodel_checkpoint
+                # CREATE TASK AND RUN IT
+                change_imgmodel_task = Task('change_imgmodel', self.ictx, params=self.params)
+                should_swap = await task_manager.run_subtask(change_imgmodel_task)
             # Generate and send images
-            params['bot_should_do'] = bot_should_do
-            await process_image_gen(img_payload, channel, params)
-            if (current_task.name == 'image' or (bot_should_do['should_send_text'] and not bot_should_do['should_gen_text'])) and img_send_embed_info:
-                img_send_embed_info.title = f"{user_name} requested an image:"
-                img_send_embed_info.description = params.get('message', img_prompt)[:2000]
-                await channel.send(embed=img_send_embed_info)
-                await channel.send(f">>> {img_payload['prompt']}"[:2000])
+            await self.process_image_gen()
+            if (task_manager.current_task == 'image_cmd' or (self.params.should_send_text and not self.params.should_gen_text)):
+                await self.embeds.send('img_send', f"{self.user_name} requested an image:", self.params.imgcmd.get('message', self.img_prompt)[:2000])
+                await self.channel.send(f">>> {self.img_payload['prompt']}"[:2000])
+            send_user_image = self.params.send_user_image
             if send_user_image:
-                await channel.send(file=send_user_image) if len(send_user_image) == 1 else await channel.send(files=send_user_image)
+                await self.channel.send(file=send_user_image) if len(send_user_image) == 1 else await self.channel.send(files=send_user_image)
             # If switching back to original Img model
             if should_swap:
-                swap_params['imgmodel']['mode'] = 'swap_back'
-                swap_params['imgmodel']['verb'] = 'Swapping back to'
-                await change_imgmodel_task(swap_params, ictx)
+                swap_params.imgmodel['mode'] = 'swap_back'
+                swap_params.imgmodel['verb'] = 'Swapping back to'
+                change_imgmodel_task = Task('change_imgmodel', self.ictx, params=swap_params)
+                await task_manager.run_subtask(change_imgmodel_task)
         except Exception as e:
             log.error(f"An error occurred in img_gen_task(): {e}")
             traceback.print_exc()
-            current_task.clear()
 
 
 #################################################################
@@ -3380,30 +3382,38 @@ class Tasks(TaskProcessing):
 #################################################################
 class Task(Tasks):
     def __init__(self, name:str, ictx:CtxInteraction|None=None, **kwargs): # text:str='', llm_payload:dict|None=None, params:Params|None=None):
-        '''''''''''''''''''''''''''''''''''
-        This is a "relatively crude" framework to simplify Task
-        management which could be improved by further subclassing.
+        '''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+        TaskManager.run() will use the Task() name to dynamically call a Tasks() method.
 
-        Instances of Task() are queued to TasksManager() queue, and
-        processed via Tasks() and all the methods defined in TaskProcessing().
-        '''''''''''''''''''''''''''''''''''
+        Valid names:
+        'message' / 'continue' / 'regenerate' / 'speak'
+        'change_imgmodel' / 'change_llmmodel' / 'change_char' / 'img gen'
+
+        kwargs:
+        channel, user, user_name, embeds, text, llm_prompt, llm_payload, params,
+        tags, img_prompt, img_payload, user_hmessage, bot_hmessage, local_history
+        '''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
         self.name: str = name
         self.ictx: CtxInteraction = ictx
         # TaskQueue() will initialize the Task's values before it is processed
-        self.channel: discord.TextChannel = kwargs.get('channel', None)
-        self.user: Union[discord.User, discord.Member] = kwargs.get('user', None)
-        self.user_name: str          = kwargs.get('user_name', None)
-        self.embeds: Embeds          = kwargs.get('embeds', None)
-        self.text: str               = kwargs.get('text', None)
-        self.llm_prompt: str         = kwargs.get('llm_prompt', None)
-        self.llm_payload: dict       = kwargs.get('llm_payload', None)
-        self.params: Params          = kwargs.get('params', None)
-        self.tags: Tags              = kwargs.get('tags', None)
-        self.img_prompt: str         = kwargs.get('img_prompt', None)
-        self.img_payload: dict       = kwargs.get('img_payload', None)
-        self.user_hmessage: HMessage = kwargs.get('user_hmessage', None)
-        self.bot_hmessage: HMessage  = kwargs.get('bot_hmessage', None)
-        self.local_history           = kwargs.get('local_history', None)
+        self.channel: discord.TextChannel = kwargs.pop('channel', None)
+        self.user: Union[discord.User, discord.Member] = kwargs.pop('user', None)
+        self.user_name: str          = kwargs.pop('user_name', None)
+        self.embeds: Embeds          = kwargs.pop('embeds', None)
+        self.text: str               = kwargs.pop('text', None)
+        self.llm_prompt: str         = kwargs.pop('llm_prompt', None)
+        self.llm_payload: dict       = kwargs.pop('llm_payload', None)
+        self.params: Params          = kwargs.pop('params', None)
+        self.tags: Tags              = kwargs.pop('tags', None)
+        self.img_prompt: str         = kwargs.pop('img_prompt', None)
+        self.img_payload: dict       = kwargs.pop('img_payload', None)
+        self.user_hmessage: HMessage = kwargs.pop('user_hmessage', None)
+        self.bot_hmessage: HMessage  = kwargs.pop('bot_hmessage', None)
+        self.local_history           = kwargs.pop('local_history', None)
+
+        # Dynamically assign remaining keyword arguments as attributes
+        for key, value in kwargs.items():
+            setattr(self, key, value)
 
     def init_self_values(self):
         self.channel: discord.TextChannel = self.ictx.channel if self.ictx else None
@@ -3432,7 +3442,7 @@ class Task(Tasks):
             else:
                 self.local_history = bot_history.get_history_for(self.channel.id)
 
-    def clone(self, name:str='', ictx:CtxInteraction|None=None) -> "Tasks":
+    def clone(self, name:str='', ictx:CtxInteraction|None=None) -> "Task":
         # Create a dictionary of the current attributes
         current_attributes = {
             'embeds': self.embeds,
@@ -3447,7 +3457,7 @@ class Task(Tasks):
             'bot_hmessage': self.bot_hmessage
         }
         # Create a new instance with the same attributes
-        return Tasks(name=name, ictx=ictx, **current_attributes)
+        return Task(name=name, ictx=ictx, **current_attributes)
 
 
 #################################################################
@@ -3464,6 +3474,70 @@ def update_mention(user_mention:str, last_resp:str=''):
         mention_resp = f"{user_mention} {last_resp}"
     previous_user_mention = user_mention
     return mention_resp
+
+class TaskManager(Tasks):
+    def __init__(self):
+        self.current_task: str = None
+        self.current_subtask: str = None
+        self.current_channel: discord.TextChannel = None
+        self.current_user_name: str = None
+
+        self.event = asyncio.Event()
+        self.queue = asyncio.Queue()
+
+    async def process_tasks(self):
+        try:
+            while True:
+                # Fetch item from the queue
+                task: Task = await self.queue.get()           
+                self.event.set() # Flag processing a task. Check with 'if task_manager.event.is_set():'
+
+                try:
+                    await self.run_task(task)
+                    # flows queue is populated in process_llm_payload_tags()
+                    if flows.queue.qsize() > 0:
+                        await flows.run_flow_if_any(task.text)
+                except Exception as e:
+                    logging.error(f"An error occurred while processing task {task.name}: {e}")
+
+                self.event.clear()      # Flag no longer processing task
+                self.queue.task_done()  # Accept next task
+        except Exception as e:
+            logging.error(f"An error occurred while processing a main task: {e}")
+            self.event.clear()
+
+    async def run(self, task: Task) -> Any:
+        try:
+            # Dynamically get the method and call it
+            method_name = f'{task.name}_task'
+            method = getattr(self, method_name, None)
+            if method is not None and callable(method):
+                return await method()
+            else:
+                logging.error(f"No such method: {method_name}")
+        except Exception as e:
+            logging.error(f"An error occurred while processing task {task.name}: {e}")
+
+    async def run_task(self, task: Task) -> Any:
+        '''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+        run_task() should only be called by the TaskManager()
+        Runs a method of Tasks()
+        '''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+        self.current_task = task.name
+        self.current_subtask = None
+        self.current_channel = task.channel
+        self.current_user_name = task.user_name
+        return await self.run(task)
+
+    async def run_subtask(self, subtask: Task) -> Any:
+        '''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+        run_subtask() should only be called from an in-process main Task()
+        Runs a method of Tasks()
+        '''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+        self.current_subtask = subtask.name
+        return await self.run(subtask)
+
+task_manager = TaskManager()
 
 #################################################################
 ########################## QUEUED FLOW ##########################
@@ -3545,7 +3619,6 @@ class Flows:
         return flow_name, formatted_text
 
     async def flow_task(self, text:str):
-        current_task.set(self.channel, 'flows')
         try:
             total_flow_steps = self.queue.qsize()
             descript = ''
@@ -3559,9 +3632,9 @@ class Flows:
                 descript += f'**Processing Step {total_flow_steps + 1 - remaining_flow_steps}/{total_flow_steps}**{flow_name}\n'
                 await bot_embeds.edit(name='flow', description=descript)
 
-                # CREATE TASK AND QUEUE IT
-                flow_task = Tasks('flow', ictx, text)
-                await message_task(ictx, text)
+                # CREATE TASK AND RUN IT
+                flow_task = Task('flow', self.ictx, text=text)
+                await task_manager.run_subtask(flow_task)
 
             descript = descript.replace("**Processing", ":white_check_mark: **")
             await bot_embeds.edit('flow', f"Flow completed for {self.user_name}", descript)
@@ -3570,7 +3643,6 @@ class Flows:
             log.error(f"An error occurred while processing a Flow: {e}")
             await bot_embeds.edit_or_send('flow', "An error occurred while processing a Flow", e)
 
-        current_task.clear()
         self.event.clear()              # flag that flow is no longer processing
         self.queue.task_done()          # flow queue task is complete
 
@@ -3748,8 +3820,10 @@ if sd.enabled:
             await process_image(ctx, user_selections)
 
     async def process_image(ctx: commands.Context, selections):
+        # CREATE TASK - CHECK IF ONLINE
+        image_cmd_task = Task(ctx)
         # Do not process if SD WebUI is offline
-        if not await sd_online(ctx.channel):
+        if not await image_cmd_task.sd_online():
             await ctx.defer()
             return
         # User inputs from /image command
@@ -4034,30 +4108,42 @@ if sd.enabled:
                     cnet_dict, log_msg = await process_image_controlnet(cnet, cnet_dict, log_msg)
                 except Exception as e:
                     log.error(f"An error occurred while configuring ControlNet for /image command: {e}")
-            params = {'neg_prompt': neg_prompt, 'style': style, 'size': size_dict, 'img2img': img2img_dict,
-                      'face_swap': faceswapimg, 'controlnet': cnet_dict, 'endpoint': endpoint, 'message': log_msg}
+
+            # UPDATE TASK WITH PARAMS
+            imgcmd_params: dict         = image_cmd_task.params.imgcmd
+            imgcmd_params['size']       = size
+            imgcmd_params['neg_prompt'] = neg_prompt
+            imgcmd_params['style']      = style
+            imgcmd_params['face_swap']  = faceswapimg
+            imgcmd_params['controlnet'] = cnet_dict
+            imgcmd_params['img2img']    = img2img_dict
+            imgcmd_params['message']    = log_msg
+            
+            image_cmd_task.params.endpoint = endpoint
+
             await ireply(ctx, 'image') # send a response msg to the user
 
-            async with task_semaphore:
-                async with ctx.channel.typing():
-                    # offload to ai_gen queue
-                    log.info(f'{ctx.author.display_name} used "/image": "{prompt}"')
-                    if use_llm:
-                        log.info(f'reply requested: {ctx.author.display_name} said: "{prompt}"')
-                        params['bot_should_do'] = {'should_gen_text': True, 'should_gen_image': True}
-                        params['skip_create_user_hmsg'] = True
-                        params['skip_create_bot_hmsg'] = True
-                        params['save_to_history'] = False
-                        current_task.set(ctx.channel, 'image')
-                        await message_task(ctx, prompt, llm_payload=None, params=params)
-                    else:
-                        await img_gen_task('image', prompt, params, ctx, tags={})
-                    await run_flow_if_any(ctx, prompt)
+            # QUEUE TASK
+
+            # async with task_semaphore:
+            #     async with ctx.channel.typing():
+            #         # offload to ai_gen queue
+            #         log.info(f'{ctx.author.display_name} used "/image": "{prompt}"')
+            #         if use_llm:
+            #             log.info(f'reply requested: {ctx.author.display_name} said: "{prompt}"')
+            #             params['bot_should_do'] = {'should_gen_text': True, 'should_gen_image': True}
+            #             params['skip_create_user_hmsg'] = True
+            #             params['skip_create_bot_hmsg'] = True
+            #             params['save_to_history'] = False
+            #             current_task.set(ctx.channel, 'image')
+            #             await message_task(ctx, prompt, llm_payload=None, params=params)
+            #         else:
+            #             await img_gen_task('image', prompt, params, ctx, tags={})
+            #         await run_flow_if_any(ctx, prompt)
 
         except Exception as e:
             log.error(f"An error occurred in image(): {e}")
             traceback.print_exc()
-            current_task.clear()
 
 #################################################################
 ######################### MISC COMMANDS #########################
@@ -4163,16 +4249,14 @@ if tgwui.enabled:
     async def reset_conversation(ctx: commands.Context):
         shared.stop_everything = True
         await ireply(ctx, 'conversation reset') # send a response msg to the user
-        # Create a new instanec of the history and set it to active
+        # Create a new instance of the history and set it to active
         bot_history.get_history_for(ctx.channel.id).fresh().replace()
 
-        async with task_semaphore:
-            # offload to ai_gen queue
-            log.info(f'{ctx.author.display_name} used "/reset_conversation": "{bot_database.last_character}"')
-            params = {'character': {'char_name': bot_database.last_character, 'verb': 'Resetting', 'mode': 'reset'}}
-            current_task.set(ctx.channel, 'reset')
-            await change_char_task(ctx, params)
-
+        log.info(f'{ctx.author.display_name} used "/reset_conversation": "{bot_database.last_character}"')
+        # offload to TaskManager() queue
+        change_char_params = Params(character={'char_name': bot_database.last_character, 'verb': 'Resetting', 'mode': 'reset'})
+        change_char_task = Task('change_char', ctx, params=change_char_params)
+        await task_manager.queue.put(change_char_task)
 
     # /save_conversation command
     @client.hybrid_command(description="Saves the current conversation to a new file in text-generation-webui/logs/")
@@ -4359,10 +4443,12 @@ if tgwui.enabled:
                 # offload to ai_gen queue
                 if cmd == 'Continue':
                     log.info(f'{inter.user.display_name} used "{cmd}"')
-                    await continue_task(inter, local_history, message)
+                    continue_task = Task('continue', inter, local_history=local_history, target_discord_message=message) # custom kwarg
+                    task_manager.queue.put(continue_task)
                 else:
                     log.info(f'{inter.user.display_name} used "{cmd} ({mode})"')
-                    await regenerate_task(inter, local_history, message, target_hmessage, mode)
+                    regenerate_task = Task('regenerate', inter, local_history=local_history, target_discord_msg=message, target_hmessage=target_hmessage, mode=mode) # custom kwargs
+                    task_manager.queue.put(regenerate_task)
 
     # Context menu command to Regenerate from selected user message and create new history
     @client.tree.context_menu(name="regenerate create")
@@ -4529,12 +4615,11 @@ async def process_character(ctx, selected_character_value):
         char_name = Path(selected_character_value).stem
         await ireply(ctx, 'character change') # send a response msg to the user
 
-        async with task_semaphore:
-            # offload to ai_gen queue
-            log.info(f'{ctx.author.display_name} used "/character": "{char_name}"')
-            params = {'character': {'char_name': char_name, 'verb': 'Changing', 'mode': 'change'}}
-            current_task.set(ctx.channel, 'character')
-            await change_char_task(ctx, params)
+        log.info(f'{ctx.author.display_name} used "/character": "{char_name}"')
+        # offload to TaskManager() queue
+        change_char_params = Params(character={'char_name': char_name, 'verb': 'Changing', 'mode': 'change'})
+        change_char_task = Task('change_char', ctx, params=change_char_params)
+        await task_manager.queue.put(change_char_task)
 
     except Exception as e:
         log.error(f"Error processing selected character from /character command: {e}")
@@ -4756,12 +4841,12 @@ async def process_imgmodel(ctx: commands.Context, selected_imgmodel_value:str):
             return
         await ireply(ctx, 'Img model change') # send a response msg to the user
 
-        async with task_semaphore:
-            # offload to ai_gen queue
-            log.info(f'{user_name} used "/imgmodel": "{selected_imgmodel_value}"')
-            params = {}
-            params['imgmodel'] = await get_selected_imgmodel_params(selected_imgmodel_value) # {sd_model_checkpoint, imgmodel_name, filename}
-            await change_imgmodel_task(params, ctx)
+        log.info(f'{user_name} used "/imgmodel": "{selected_imgmodel_value}"')
+        # offload to TaskManager() queue
+        params = await get_selected_imgmodel_params(selected_imgmodel_value) # {sd_model_checkpoint, imgmodel_name, filename}
+        change_imgmodel_params = Params(imgmodel=params)
+        change_imgmodel_task = Task('change_imgmodel', ctx, params=change_imgmodel_params)
+        await task_manager.queue.put(change_imgmodel_task)
 
     except Exception as e:
         log.error(f"Error processing selected imgmodel from /imgmodel command: {e}")
@@ -4799,12 +4884,11 @@ async def process_llmmodel(ctx, selected_llmmodel):
             return
         await ireply(ctx, 'LLM model change') # send a response msg to the user
 
-        async with task_semaphore:
-            # offload to ai_gen queue
-            log.info(f'{ctx.author.display_name} used "/llmmodel": "{selected_llmmodel}"')
-            params = {'llmmodel': {'llmmodel_name': selected_llmmodel, 'verb': 'Changing', 'mode': 'change'}}
-            await change_llmmodel_task(ctx, params)
-
+        log.info(f'{ctx.author.display_name} used "/llmmodel": "{selected_llmmodel}"')
+        # offload to TaskManager() queue
+        change_llmmodel_params = Params(llmmodel={'llmmodel_name': selected_llmmodel, 'verb': 'Changing', 'mode': 'change'})
+        change_llmmodel_task = Task('change_llmmodel', ctx, params=change_llmmodel_params)
+        await task_manager.queue.put(change_llmmodel_task)
     except Exception as e:
         log.error(f"Error processing /llmmodel command: {e}")
 
@@ -4950,17 +5034,13 @@ async def process_speak(ctx: commands.Context, input_text, selected_voice=None, 
         tts_args = await process_speak_args(ctx, selected_voice, lang, user_voice)
         await ireply(ctx, 'tts') # send a response msg to the user
 
-        async with task_semaphore:
-            async with ctx.channel.typing():
-                # offload to ai_gen queue
-                log.info(f'{ctx.author.display_name} used "/speak": "{input_text}"')
-                params = {'tts_args': tts_args, 'user_voice': user_voice}
-                current_task.set(ctx.channel, 'speak')
-                await speak_task(ctx, input_text, params)
-                await run_flow_if_any(ctx, input_text)
+        log.info(f'{ctx.author.display_name} used "/speak": "{input_text}"')
+        # offload to TaskManager() queue
+        speak_params = Params(tts_args=tts_args, user_voice=user_voice)
+        speak_task = Task('speak', ctx, text=input_text, params=speak_params)
+        await task_manager.queue.put(speak_task)
 
     except Exception as e:
-        current_task.clear()
         log.error(f"Error processing tts request: {e}")
         await ctx.send(f"Error processing tts request: {e}", ephemeral=True)
 
@@ -5086,7 +5166,7 @@ class MessageManager():
         self.afk_range = []
         self.afk_weights = []
         self.active_in_guild = {}
-
+    
     def update_afk_for_guild(self, guild_id:discord.Guild):
         # choose a value with weighted probability based on 'responsiveness' bot behavior
         afk_delay = random.choices(self.afk_range, self.afk_weights)[0]
@@ -5116,22 +5196,18 @@ class MessageManager():
         for guild in client.guilds:
             self.update_afk_for_guild(guild.id)
 
-
     async def run_message_task(self, num:int, message: discord.Message, text: str):
         try:
-            async with task_semaphore:
-                async with message.channel.typing():
-                    current_task.set(message.channel, 'message')
-                    log.info(f'Processing queued message (#{num}) by {message.author.display_name}.')
-                    await message_task(message, text)
-                    await run_flow_if_any(message, text)
-
-                    self.last_channel = message.channel.id
-                    if not is_direct_message(message):
-                        self.update_afk_for_guild(message.guild.id)
+            log.info(f'Processing queued message (#{num}) by {message.author.display_name}.')
+            # offload to TaskManager() queue
+            message_task = Task('message', message, text=text)
+            await task_manager.queue.put(message_task)
+            # TODO SEPARATE QUEUE/ HANDLING FOR MESSAGE TASKS
+            self.last_channel = message.channel.id
+            if not is_direct_message(message):
+                self.update_afk_for_guild(message.guild.id)
         except Exception as e:
             log.error(f"Error while processing a Message: {e}")
-            current_task.clear()
 
     async def check_for_exception(self):
         # If the next item is not ready, check for the next task in the same channel
@@ -5206,7 +5282,7 @@ class SpontaneousMessaging():
 
     async def reset_for_channel(self, ictx:CtxInteraction):
         # Only reset from discord message or '/prompt' cmd
-        if current_task.name in ['message', 'prompt']:
+        if task_manager.current_task in ['message', 'prompt']:
             current_chan_msg_task = self.tasks.get(ictx.channel.id, (None, 0))
             task, _ = current_chan_msg_task
             if task:
@@ -5218,18 +5294,15 @@ class SpontaneousMessaging():
         await asyncio.sleep(wait)
         # create message task with the randomly selected prompt
         try:
-            async with task_semaphore:
-                async with ictx.channel.typing():
-                    log.info(f'Prompting for a spontaneous message: "{prompt}"')
-                    current_task.set(ictx.channel, 'spontaneous message')
-                    await message_task(ictx, prompt)
-                    await run_flow_if_any(ictx, prompt)
-                    task, tally = self.tasks[ictx.channel.id]
-                    self.tasks[ictx.channel.id] = (task, tally + 1)
+            log.info(f'Prompting for a spontaneous message: "{prompt}"')
+            # offload to TaskManager() queue
+            spontaneous_message_task = Task('message', ictx, text=prompt)
+            await task_manager.queue.put(spontaneous_message_task)
+            task, tally = self.tasks[ictx.channel.id]
+            self.tasks[ictx.channel.id] = (task, tally + 1)
 
         except Exception as e:
             log.error(f"Error while processing a Spontaneous Message: {e}")
-            current_task.clear()
 
     async def init_task(self, ictx:CtxInteraction, task, tally:int):
         # Randomly select wait duration from start/end range 
@@ -5537,7 +5610,7 @@ class LLMState:
 class Settings:
     def __init__(self, bot_behavior):
         self._bot_id = 0
-        self.bot_behavior = bot_behavior
+        self.bot_behavior: Behavior = bot_behavior
         self.imgmodel = ImgModel()
         self.llmcontext = LLMContext()
         self.llmstate = LLMState()
