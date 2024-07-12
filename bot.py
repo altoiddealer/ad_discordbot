@@ -2836,8 +2836,8 @@ class TaskProcessing(TaskAttributes):
     def init_img_payload(self):
         try:
             neg_prompt = self.params.neg_prompt
-            positive_style = self.params.style.get('positive', "{}") if params.get('style') is not None else "{}"
-            negative_style = self.params.style.get('negative', '') if params.get('style') is not None else "{}"
+            positive_style = self.params.style.get('positive', "{}")
+            negative_style = self.params.style.get('negative', '')
             self.img_prompt = positive_style.format(self.img_prompt)
             neg_prompt = f"{neg_prompt}, {negative_style}" if negative_style else neg_prompt
             # Initialize img_payload settings
