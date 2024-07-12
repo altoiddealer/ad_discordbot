@@ -4138,7 +4138,7 @@ if sd_enabled:
                         current_task.set(ctx.channel, 'image')
                         await message_task(ctx, prompt, llm_payload=None, params=params)
                     else:
-                        await img_gen_task('image', prompt, params, ctx, tags={})
+                        await img_gen_task(prompt, params, ctx)
                     await run_flow_if_any(ctx, prompt)
 
         except Exception as e:
