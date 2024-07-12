@@ -529,6 +529,7 @@ async def auto_update_imgmodel_task(mode, duration):
             async with task_semaphore:
                 # offload to ai_gen queue
                 params = {'imgmodel': selected_imgmodel}
+                # CREATE TASK AND QUEUE IT
                 await change_imgmodel_task(params=params, ictx=None)
                 log.info("Automatically updated imgmodel settings")
 
@@ -1079,6 +1080,37 @@ class Tags:
             log.error(f"Error getting tags: {e}")
             return text
 
+    def match_img_tags(self) -> SORTED_TAGS:
+        try:
+            # Unmatch any previously matched tags which try to insert text into the img_prompt
+            matches_:TAG_LIST = self.matches # type: ignore
+            for tag in matches_[:]:  # Iterate over a copy of the list
+                if tag.get('imgtag_matched_early'): # extract text insertion key pairs from previously matched tags
+                    new_tag = {}
+                    tag_copy = copy.copy(tag)
+                    for key, value in tag_copy.items(): # Iterate over a copy of the tag
+                        if (key in ["trigger", "matched_trigger", "imgtag_matched_early", "case_sensitive", "on_prefix_only", "search_mode", "img_text_joining", "phase"]
+                            or key.startswith(('positive_prompt', 'negative_prompt'))):
+                            new_tag[key] = value
+                            if not key == 'phase':
+                                del tag[key] # Remove the key from the original tag
+                    self.unmatched['userllm'].append(new_tag) # append to unmatched list
+                    # Remove tag items from original list that became an empty list
+                    if not tag:
+                        self.matches.remove(tag)
+            # match tags for 'img' phase.
+            tags = self.match_tags(phase='img')
+            # Rematch any previously matched tags that failed to match text in img_prompt
+            for tag in self.unmatched['userllm'][:]:  # Iterate over a copy of the list
+                if tag.get('imgtag_matched_early') and tag.get('imgtag_uninserted'):
+                    self.matches.append(tag)
+                    self.unmatched['userllm'].remove(tag)
+
+        except Exception as e:
+            log.error(f"Error matching tags for img phase: {e}")
+
+        return tags
+
     def process_tag_insertions(self, prompt:str) -> str:
         try:
             # iterate over a copy of the matches, preserving the structure of the original matches list
@@ -1366,6 +1398,34 @@ async def dynamic_prompting(user_name: str, text: str, ictx: Optional[CtxInterac
     return text
 
 #################################################################
+######################### ANNOUCEMENTS ##########################
+#################################################################
+async def announce_changes(ictx: CtxInteraction, change_label:str, change_name:str):
+    user_name = get_user_ctx_inter(ictx).display_name if ictx else 'Automatically'
+    bot_embeds.update('change', f"{user_name} {change_label}:", f'**{change_name}**')
+    try:
+        # adjust delay depending on how many channels there are to prevent being rate limited
+        delay = math.floor(len(bot_database.announce_channels)/2)
+        for channel_id in bot_database.announce_channels:
+            await asyncio.sleep(delay)
+            channel = await client.fetch_channel(channel_id)
+            # if Automatic imgmodel change (no interaction object)
+            if ictx is None:
+                await channel.send(embed=change_embed_info)
+            # If private channel
+            elif ictx.channel.overwrites_for(ictx.guild.default_role).read_messages is False:
+                continue
+            # Public channels in interaction server
+            elif any(channel_id == channel.id for channel in ictx.guild.channels):
+                await bot_embeds.send('change', f"{user_name} {change_label} in <#{ictx.channel.id}>:")
+            # Channel is in another server
+            elif channel_id not in [channel.id for channel in ictx.guild.channels]:
+                if change_label != 'reset the conversation':
+                    await bot_embeds.send('change', f"A user {change_label} in another bot server:")
+    except Exception as e:
+        log.error(f'An error occurred while announcing changes to announce channels: {e}')
+
+#################################################################
 ######################## TASK TRACKING ##########################
 #################################################################
 class CurrentTask:
@@ -1382,7 +1442,6 @@ class CurrentTask:
         self.name = None
 
 current_task = CurrentTask()
-
 
 class Params:
     def __init__(self):
@@ -1449,7 +1508,6 @@ class Params:
         except Exception as e:
             log.error(f"An error occurred while checking if bot should do '{key}': {e}")
 
-
 #################################################################
 ####################### TASK PROCESSING #########################
 #################################################################
@@ -1472,7 +1530,7 @@ class TaskAttributes():
     bot_hmessage: HMessage
 
 class TaskProcessing(TaskAttributes):
-    ####################### MESSAGE #########################
+    ####################### MOSTLY TEXT GEN ORICESSING #########################
     async def send_responses(self):
         if self.bot_hmessage:
             # Process any TTS response
@@ -1513,18 +1571,18 @@ class TaskProcessing(TaskAttributes):
 
     async def process_llm_payload_tags(self, mods:dict):
         try:
-            char_params = {}
-            flow = mods.get('flow', None)
-            save_history = mods.get('save_history', None)
-            load_history = mods.get('load_history', None)
-            param_variances = mods.get('param_variances', {})
-            state = mods.get('state', {})
-            prefix_context = mods.get('prefix_context', None)
-            suffix_context = mods.get('suffix_context', None)
-            change_character = mods.get('change_character', None)
-            swap_character = mods.get('swap_character', None)
-            change_llmmodel = mods.get('change_llmmodel', None)
-            swap_llmmodel = mods.get('swap_llmmodel', None)
+            char_params: dict       = {}
+            flow: dict              = mods.get('flow', None)
+            save_history: bool      = mods.get('save_history', None)
+            load_history: bool      = mods.get('load_history', None)
+            param_variances: dict   = mods.get('param_variances', {})
+            state: dict             = mods.get('state', {})
+            prefix_context: str     = mods.get('prefix_context', None)
+            suffix_context: str     = mods.get('suffix_context', None)
+            change_character: str   = mods.get('change_character', None)
+            swap_character: str     = mods.get('swap_character', None)
+            change_llmmodel: str    = mods.get('change_llmmodel', None)
+            swap_llmmodel: str      = mods.get('swap_llmmodel', None)
             # Flow handling
             if flow is not None and not flows.event.is_set():
                 await flows.build_queue(flow)
@@ -1548,7 +1606,7 @@ class TaskProcessing(TaskAttributes):
                     log.info(f'[TAGS] History is being limited to previous {load_history} exchanges')
                     
             if param_variances:
-                processed_params = process_param_variances(param_variances)
+                processed_params = self.process_param_variances(param_variances)
                 log.info(f'[TAGS] LLM Param Variances: {processed_params}')
                 sum_update_dict(self.llm_payload['state'], processed_params) # Updates dictionary while adding floats + ints
             if state:
@@ -1575,6 +1633,7 @@ class TaskProcessing(TaskAttributes):
                 else:
                     if char_params == change_character:
                         verb = 'Changing'
+                        # CREATE TASK AND QUEUE IT
                         char_params = {'character': {'char_name': char_params, 'mode': 'change', 'verb': verb}}
                         await change_char_task(self.ictx, char_params)
                     else:
@@ -1633,7 +1692,7 @@ class TaskProcessing(TaskAttributes):
                     llm_payload_mods['suffix_context'].append(tag.pop('suffix_context'))
                 if 'send_user_image' in tag:
                     user_image_file = tag.pop('send_user_image')
-                    user_image_args = get_image_tag_args('User image', str(user_image_file), key=None, set_dir=None)
+                    user_image_args = self.get_image_tag_args('User image', str(user_image_file), key=None, set_dir=None)
                     user_image = discord.File(user_image_args)
                     self.params.send_user_image.append(user_image)
                     log.info('[TAGS] Sending user image.')
@@ -1741,7 +1800,7 @@ class TaskProcessing(TaskAttributes):
 
     async def init_img_embed(self):
         # make a 'Prompting...' embed when generating text for an image response
-        if await sd_online(self.channel):
+        if await self.sd_online():
             if shared.model_name == 'None':
                 await self.channel.send('**Processing image generation using message as the image prompt ...**', delete_after=5) # msg for if LLM model is unloaded
             else:
@@ -2000,30 +2059,795 @@ class TaskProcessing(TaskAttributes):
             print(traceback.format_exc())
             log.error(f'An error occurred while sending greeting or history for "{char_name}": {e}')
 
-async def announce_changes(ictx: CtxInteraction, change_label:str, change_name:str):
-    user_name = get_user_ctx_inter(ictx).display_name if ictx else 'Automatically'
-    bot_embeds.update('change', f"{user_name} {change_label}:", f'**{change_name}**')
-    try:
-        # adjust delay depending on how many channels there are to prevent being rate limited
-        delay = math.floor(len(bot_database.announce_channels)/2)
-        for channel_id in bot_database.announce_channels:
-            await asyncio.sleep(delay)
-            channel = await client.fetch_channel(channel_id)
-            # if Automatic imgmodel change (no interaction object)
-            if ictx is None:
-                await channel.send(embed=change_embed_info)
-            # If private channel
-            elif ictx.channel.overwrites_for(ictx.guild.default_role).read_messages is False:
-                continue
-            # Public channels in interaction server
-            elif any(channel_id == channel.id for channel in ictx.guild.channels):
-                await bot_embeds.send('change', f"{user_name} {change_label} in <#{ictx.channel.id}>:")
-            # Channel is in another server
-            elif channel_id not in [channel.id for channel in ictx.guild.channels]:
-                if change_label != 'reset the conversation':
-                    await bot_embeds.send('change', f"A user {change_label} in another bot server:")
-    except Exception as e:
-        log.error(f'An error occurred while announcing changes to announce channels: {e}')
+####################### MOSTLY IMAGE GEN ORICESSING #########################
+    async def sd_online(self):
+        try:
+            r = requests.get(f'{sd.url}/')
+            status = r.raise_for_status()
+            log.debug(f'Request status to SD: {status}')
+            return True
+        except Exception as exc:
+            log.warning(exc)
+            await self.embeds.send('system', f"{sd.client} api is not running at {sd.url}", f"Launch {sd.client} with `--api --listen` commandline arguments\n\
+                                Read more [here](https://github.com/AUTOMATIC1111/stable-diffusion-webui/wiki/API)")
+            return False
+
+    async def sd_progress_warning(self):
+        log.error('Reached maximum retry limit')
+        await self.embeds.edit_or_send('img_gen', f'Error getting progress response from {sd.client}.', 'Image generation will continue, but progress will not be tracked.')
+
+    def progress_bar(self, value, length=15):
+        try:
+            filled_length = int(length * value)
+            bar = ':black_square_button:' * filled_length + ':black_large_square:' * (length - filled_length)
+            return f'{bar}'
+        except Exception:
+            return 0
+
+    async def fetch_progress(self, session):
+        try:
+            async with session.get(f'{sd.url}/sdapi/v1/progress') as progress_response:
+                return await progress_response.json()
+        except aiohttp.ClientError as e:
+            log.warning(f'Failed to fetch progress: {e}')
+            return None
+
+    async def check_sd_progress(self, session):
+        try:
+            await self.embeds.send('img_gen', f'Waiting for {sd.client} ...', ' ')
+            await asyncio.sleep(1)
+            retry_count = 0
+            while retry_count < 5:
+                progress_data = await self.fetch_progress(session)
+                if progress_data and progress_data['progress'] != 0:
+                    break
+                log.warning(f'Waiting for progress response from {sd.client}, retrying in 1 second (attempt {retry_count + 1}/5)')
+                await asyncio.sleep(1)
+                retry_count += 1
+            else:
+                await self.sd_progress_warning()
+                return
+            retry_count = 0
+            while progress_data['state']['job_count'] > 0:
+                progress_data = await self.fetch_progress(session)
+                if progress_data:
+                    if retry_count < 5:
+                        progress = progress_data['progress'] * 100
+                        eta = progress_data['eta_relative']
+                        if eta != 0:
+                            title = f'Generating image: {progress:.0f}%'
+                            description = f"{self.progress_bar(progress_data['progress'])}"
+                        else:
+                            title = 'Generating image: 100%'
+                            description = f'{self.progress_bar(1)}'
+                        await self.embeds.edit('img_gen', title, description)
+                        await asyncio.sleep(1)
+                    else:
+                        log.warning(f'Connection closed with {sd.client}, retrying in 1 second (attempt {retry_count + 1}/5)')
+                        await asyncio.sleep(1)
+                        retry_count += 1
+                else:
+                    await self.sd_progress_warning()
+                    return
+            await self.embeds.delete('img_gen')
+        except Exception as e:
+            log.error(f'Error tracking {sd.client} image generation progress: {e}')
+
+    async def track_progress(self):
+        if self.embeds.enabled('img_gen'):
+            async with aiohttp.ClientSession() as session:
+                await self.check_sd_progress(session)
+
+    async def layerdiffuse_hack(self, temp_dir, images, pnginfo):
+        try:
+            ld_output = None
+            for i, image in enumerate(images):
+                if image.mode == 'RGBA':
+                    if i == 0:
+                        return images
+                    ld_output = images.pop(i)
+                    break
+            if ld_output is None:
+                log.warning("Failed to find layerdiffuse output image")
+                return images
+            # Workaround for layerdiffuse PNG infoReActor + layerdiffuse combination
+            reactor = self.img_payload['alwayson_scripts'].get('reactor', {})
+            if reactor and reactor['args'][1]:          # if ReActor was enabled:
+                _, _, _, alpha = ld_output.split()      # Extract alpha channel from layerdiffuse output
+                img0 = Image.open(f'{temp_dir}/temp_img_0.png') # Open first image (with ReActor output)
+                img0 = img0.convert('RGBA')             # Convert it to RGBA
+                img0.putalpha(alpha)                    # apply alpha from layerdiffuse output
+            else:                           # if ReActor was not enabled:
+                img0 = ld_output            # Just replace first image with layerdiffuse output
+            img0.save(f'{temp_dir}/temp_img_0.png', pnginfo=pnginfo) # Save the local image with correct pnginfo
+            images[0] = img0 # Update images list
+            return images
+        except Exception as e:
+            log.error(f'Error processing layerdiffuse images: {e}')
+
+    async def apply_reactor_mask(self, temp_dir, images: list[Image.Image], pnginfo, reactor_mask):
+        try:
+            reactor_mask = Image.open(io.BytesIO(base64.b64decode(reactor_mask))).convert('L')
+            orig_image = images[0]                                          # Open original image
+            face_image = images.pop(1)                                      # Open image with faceswap applied
+            face_image.putalpha(reactor_mask)                               # Apply reactor mask as alpha to faceswap image
+            orig_image.paste(face_image, (0, 0), face_image)                # Paste the masked faceswap image onto the original
+            orig_image.save(f'{temp_dir}/temp_img_0.png', pnginfo=pnginfo)  # Save the image with correct pnginfo
+            images[0] = orig_image                                          # Replace first image in images list
+            return images
+        except Exception as e:
+            log.error(f'Error masking ReActor output images: {e}')
+
+    async def save_images_and_return(self, temp_dir):
+        images = []
+        pnginfo = None
+        # save .json for debugging
+        # with open("img_payload.json", "w") as file:
+        #     json.dump(self.img_payload, file)
+        try:
+            r = await sd.api(endpoint=self.params.endpoint, method='post', json=self.img_payload, retry=True)
+            if not isinstance(r, dict):
+                return [], r
+            for i, img_data in enumerate(r.get('images')):
+                image = Image.open(io.BytesIO(base64.b64decode(img_data.split(",", 1)[0])))
+                png_payload = {"image": "data:image/png;base64," + img_data}
+                r2 = await sd.api(endpoint='/sdapi/v1/png-info', method='post', json=png_payload, retry=True)
+                if not isinstance(r2, dict):
+                    return [], r2
+                png_info_data = r2.get("info")
+                if i == 0:  # Only capture pnginfo from the first png_img_data
+                    pnginfo = PngImagePlugin.PngInfo()
+                    pnginfo.add_text("parameters", png_info_data)
+                image.save(f'{temp_dir}/temp_img_{i}.png', pnginfo=pnginfo) # save image to temp directory
+                images.append(image) # collect a list of PIL images
+        except Exception as e:
+            log.error(f'Error processing images: {e}')
+            traceback.print_exc()
+            return [], e
+        return images, pnginfo
+
+    async def sd_img_gen(self, temp_dir:str):
+        try:
+            reactor_args = self.img_payload.get('alwayson_scripts', {}).get('reactor', {}).get('args', [])
+            last_item = reactor_args[-1] if reactor_args else None
+            reactor_mask = reactor_args.pop() if isinstance(last_item, dict) else None
+            #Start progress task and generation task concurrently
+            images_task = asyncio.create_task(self.save_images_and_return(temp_dir))
+            progress_task = asyncio.create_task(self.track_progress())
+            # Wait for both tasks to complete
+            await asyncio.gather(images_task, progress_task)
+            # Get the list of images and copy of pnginfo after both tasks are done
+            images, pnginfo = await images_task
+            if not images:
+                await self.embeds.send('img_send', 'Error processing images.', f'Error: "{str(pnginfo)}"\nIf {sd.client} remains unresponsive, consider using "/restart_sd_client" command.')
+                return None
+            # Apply ReActor mask
+            reactor = self.img_payload.get('alwayson_scripts', {}).get('reactor', {})
+            if len(images) > 1 and reactor and reactor_mask:
+                images = await self.apply_reactor_mask(temp_dir, images, pnginfo, reactor_mask['mask'])
+            # Workaround for layerdiffuse output
+            layerdiffuse = self.img_payload.get('alwayson_scripts', {}).get('layerdiffuse', {})
+            if len(images) > 1 and layerdiffuse and layerdiffuse['args'][0]:
+                images = await self.layerdiffuse_hack(temp_dir, images, pnginfo)
+            return images
+        except Exception as e:
+            log.error(f'Error processing images in {sd.client} API module: {e}')
+            return []
+
+    async def process_image_gen(self):
+        try:
+            sd_output_dir = self.params.sd_output_dir
+            # Ensure the necessary directories exist
+            os.makedirs(sd_output_dir, exist_ok=True)
+            temp_dir = os.path.join(shared_path.dir_root, 'user_images', '__temp')
+            os.makedirs(temp_dir, exist_ok=True)
+            # Generate images, save locally
+            images = await self.sd_img_gen(temp_dir)
+            if not images:
+                return
+            # Send images to discord
+            # If the censor mode is 1 (blur), prefix the image file with "SPOILER_"
+            file_prefix = 'temp_img_'
+            if self.params.img_censoring == 1:
+                file_prefix = 'SPOILER_temp_img_'
+            image_files = [discord.File(f'{temp_dir}/temp_img_{idx}.png', filename=f'{file_prefix}{idx}.png') for idx in range(len(images))]
+            if self.params.should_send_image:
+                await self.channel.send(files=image_files)
+            # Save the image at index 0 with the date/time naming convention
+            timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+            last_image = f'{sd_output_dir}/{timestamp}.png'
+            os.rename(f'{temp_dir}/temp_img_0.png', last_image)
+            copyfile(last_image, f'{temp_dir}/temp_img_0.png')
+            # Delete temporary image files
+            # for tempfile in os.listdir(temp_dir):
+            #     os.remove(os.path.join(temp_dir, tempfile))
+        except Exception as e:
+            log.error(f"An error occurred when processing image generation: {e}")
+
+    def clean_img_payload(self):
+        try:
+            # Remove duplicate negative prompts
+            negative_prompt_list = self.img_payload.get('negative_prompt', '').split(', ')
+            unique_values_set = set()
+            unique_values_list = []
+            for value in negative_prompt_list:
+                if value not in unique_values_set:
+                    unique_values_set.add(value)
+                    unique_values_list.append(value)
+            processed_negative_prompt = ', '.join(unique_values_list)
+            self.img_payload['negative_prompt'] = processed_negative_prompt
+
+            # Clean up extension keys
+            extensions = config.get('sd', {}).get('extensions', {})
+            alwayson_scripts = self.img_payload.get('alwayson_scripts', {})
+            # Clean ControlNet
+            if alwayson_scripts.get('controlnet'):
+                # Delete all 'controlnet' keys if disabled by config
+                if not extensions.get('controlnet_enabled'):
+                    del alwayson_scripts['controlnet']
+            # Clean Forge Couple
+            if alwayson_scripts.get('forge_couple'):
+                # Delete all 'forge_couple' keys if disabled by config
+                if not extensions.get('forgecouple_enabled') or self.img_payload.get('init_images'):
+                    del alwayson_scripts['forge_couple']
+                else:
+                    self.img_payload['alwayson_scripts']['forge_couple']['args'] = list(self.img_payload['alwayson_scripts']['forge_couple']['args'].values()) # convert dictionary to list
+                    self.img_payload['alwayson_scripts']['forge couple'] = self.img_payload['alwayson_scripts'].pop('forge_couple') # Add the required space between "forge" and "couple" ("forge couple")
+            # Clean layerdiffuse
+            if alwayson_scripts.get('layerdiffuse'):
+                # Delete all 'layerdiffuse' keys if disabled by config
+                if not extensions.get('layerdiffuse_enabled'):
+                    del alwayson_scripts['layerdiffuse']
+                else:
+                    self.img_payload['alwayson_scripts']['layerdiffuse']['args'] = list(self.img_payload['alwayson_scripts']['layerdiffuse']['args'].values()) # convert dictionary to list
+            # Clean ReActor
+            if alwayson_scripts.get('reactor'):
+                # Delete all 'reactor' keys if disabled by config
+                if not extensions.get('reactor_enabled'):
+                    del alwayson_scripts['reactor']
+                else:
+                    self.img_payload['alwayson_scripts']['reactor']['args'] = list(self.img_payload['alwayson_scripts']['reactor']['args'].values()) # convert dictionary to list
+
+            # Workaround for denoising strength bug
+            if not self.img_payload.get('enable_hr', False) and not self.img_payload.get('init_images', False):
+                self.img_payload['denoising_strength'] = None
+
+            # Fix SD Client compatibility for sampler names / schedulers
+            sampler_name = self.img_payload.get('sampler_name', '')
+            if sampler_name:
+                known_schedulers = [' uniform', ' karras', ' exponential', ' polyexponential', ' sgm uniform']
+                for value in known_schedulers:
+                    if sampler_name.lower().endswith(value):
+                        if not bot_database.was_warned('sampler_name'):
+                            bot_database.update_was_warned('sampler_name')
+                            # Extract the value (without leading space) and set it to the 'scheduler' key
+                            self.img_payload['scheduler'] = value.strip()
+                            if sd.client == 'A1111 SD WebUI':
+                                log.warning(f'Img payload value "sampler_name": "{sampler_name}" is incompatible with current version of "{sd.client}". "{value}" must be omitted from "sampler_name", and instead used for the "scheduler" parameter. This is being corrected automatically. To avoid this warning, please update "sampler_name" parameter wherever present in your settings.')
+                                # Remove the matched part from sampler_name
+                                start_index = sampler_name.lower().rfind(value)
+                                fixed_sampler_name = sampler_name[:start_index].strip()
+                                self.img_payload['sampler_name'] = fixed_sampler_name
+                                bot_settings.settings['imgmodel']['payload']['sampler_name'] = fixed_sampler_name
+                                bot_settings.settings['imgmodel']['payload']['scheduler'] = value.strip()
+                            else:
+                                log.warning(f'Img payload value "sampler_name": "{sampler_name}" may cause an error due to the scheduler ("{value}") being part of the value. The scheduler may be expected as a separate parameter in current version of "{sd.client}".')
+                            break
+
+            # Delete all empty keys
+            keys_to_delete = []
+            for key, value in self.img_payload.items():
+                if value == "":
+                    keys_to_delete.append(key)
+            for key in keys_to_delete:
+                del self.img_payload[key]
+        except Exception as e:
+            log.error(f"An error occurred when cleaning img_payload: {e}")
+
+    def apply_loractl(self, matched_tags:list):# -> SORTED_TAGS:
+        try:
+            if sd.client != 'A1111 SD WebUI':
+                if not bot_database.was_warned('loractl'):
+                    bot_database.update_was_warned('loractl')
+                    log.warning(f'loractl is not known to be compatible with "{sd.client}". Not applying loractl...')
+                return matched_tags
+            scaling_settings = [v for k, v in config['sd'].get('extensions', {}).get('lrctl', {}).items() if 'scaling' in k]
+            scaling_settings = scaling_settings if scaling_settings else ['']
+            # Flatten the matches dictionary values to get a list of all tags (including those within tuples)
+            all_matched_tags = [tag if isinstance(tag, dict) else tag[0] for tag in matched_tags]
+            # Filter the matched tags to include only those with certain patterns in their text fields
+            lora_tags = [tag for tag in all_matched_tags if any(patterns.sd_lora.findall(text) for text in (tag.get('positive_prompt', ''), tag.get('positive_prompt_prefix', ''), tag.get('positive_prompt_suffix', '')))]
+            if len(lora_tags) >= config['sd']['extensions']['lrctl']['min_loras']:
+                for index, tag in enumerate(lora_tags):
+                    # Determine the key with a non-empty value among the specified keys
+                    used_key = next((key for key in ['positive_prompt', 'positive_prompt_prefix', 'positive_prompt_suffix'] if tag.get(key, '')), None)
+                    if used_key:  # If a key with a non-empty value is found
+                        positive_prompt = tag[used_key]
+                        lora_matches = patterns.sd_lora.findall(positive_prompt)
+                        if lora_matches:
+                            for lora_match in lora_matches:
+                                lora_weight_match = patterns.sd_lora_weight.search(lora_match) # Extract lora weight
+                                if lora_weight_match:
+                                    lora_weight = float(lora_weight_match.group())
+                                    # Selecting the appropriate scaling based on the index
+                                    scaling_key = f'lora_{index + 1}_scaling' if index+1 < len(scaling_settings) else 'additional_loras_scaling'
+                                    scaling_values = config['sd'].get('extensions', {}).get('lrctl', {}).get(scaling_key, '')
+                                    if scaling_values:
+                                        scaling_factors = [round(float(factor.split('@')[0]) * lora_weight, 2) for factor in scaling_values.split(',')]
+                                        scaling_steps = [float(step.split('@')[1]) for step in scaling_values.split(',')]
+                                        # Construct/apply the calculated lora-weight string
+                                        new_lora_weight_str = f'{",".join(f"{factor}@{step}" for factor, step in zip(scaling_factors, scaling_steps))}'
+                                        updated_lora_match = lora_match.replace(str(lora_weight), new_lora_weight_str)
+                                        new_positive_prompt = positive_prompt.replace(lora_match, updated_lora_match)
+                                        # Update the appropriate key in the tag dictionary
+                                        tag[used_key] = new_positive_prompt
+                                        log.info(f'''[TAGS] loractl applied: "{lora_match}" > "{updated_lora_match}"''')
+            return matched_tags
+        except Exception as e:
+            log.error(f"Error processing lrctl: {e}")
+            return matched_tags
+
+    def apply_imgcmd_params(self):
+        try:
+            size = params.get('size', None) if params else None
+            face_swap = params.get('face_swap', None) if params else None
+            controlnet = params.get('controlnet', None) if params else None
+            img2img = params.get('img2img', {})
+            img2img_mask = img2img.get('mask', '')
+            if img2img:
+                self.img_payload['init_images'] = [img2img['image']]
+                self.img_payload['denoising_strength'] = img2img['denoising_strength']
+            if img2img_mask:
+                self.img_payload['mask'] = img2img_mask
+            if size: 
+                self.img_payload.update(size)
+            if face_swap:
+                self.img_payload['alwayson_scripts']['reactor']['args']['image'] = face_swap # image in base64 format
+                self.img_payload['alwayson_scripts']['reactor']['args']['enabled'] = True # Enable
+            if controlnet: 
+                self.img_payload['alwayson_scripts']['controlnet']['args'][0].update(controlnet)
+        except Exception as e:
+            log.error(f"Error initializing img payload: {e}")
+
+    def process_img_prompt_tags(self):
+        try:
+            self.img_prompt = self.tags.process_tag_insertions(self.img_payload['prompt'])
+            updated_positive_prompt = self.img_prompt
+            updated_negative_prompt = self.img_payload['negative_prompt']
+            for tag in self.tags.matches:
+                join = tag.get('img_text_joining', ' ')
+                if 'imgtag_uninserted' in tag: # was flagged as a trigger match but not inserted
+                    log.info(f'''[TAGS] "{tag['matched_trigger']}" not found in the image prompt. Appending rather than inserting.''')
+                    updated_positive_prompt = updated_positive_prompt + ", " + tag['positive_prompt']
+                if 'positive_prompt_prefix' in tag:
+                    updated_positive_prompt = tag['positive_prompt_prefix'] + join + updated_positive_prompt
+                if 'positive_prompt_suffix' in tag:
+                    updated_positive_prompt = updated_positive_prompt + join + tag['positive_prompt_suffix']
+                if 'negative_prompt_prefix' in tag:
+                    join = join if updated_negative_prompt else ''
+                    updated_negative_prompt = tag['negative_prompt_prefix'] + join + updated_negative_prompt
+                if 'negative_prompt' in tag:
+                    join = join if updated_negative_prompt else ''
+                    updated_negative_prompt = updated_negative_prompt + join + tag['negative_prompt']
+                if 'negative_prompt_suffix' in tag:
+                    join = join if updated_negative_prompt else ''
+                    updated_negative_prompt = updated_negative_prompt + join + tag['negative_prompt_suffix']
+            self.img_payload['prompt'] = updated_positive_prompt
+            self.img_payload['negative_prompt'] = updated_negative_prompt
+
+        except Exception as e:
+            log.error(f"Error processing Img prompt tags: {e}")
+
+    def process_param_variances(self, param_variances: dict) -> dict:
+        try:
+            param_variances = convert_lists_to_tuples(param_variances) # Only converts lists containing ints and floats (not strings or bools)
+            processed_params = copy.deepcopy(param_variances)
+            for key, value in param_variances.items():
+                # unpack dictionaries assuming they contain variances
+                if isinstance(value, dict):
+                    processed_params[key] = self.process_param_variances(value)
+                elif isinstance(value, tuple):
+                    processed_params[key] = random_value_from_range(value)
+                elif isinstance(value, bool):
+                    processed_params[key] = random.choice([True, False])
+                elif isinstance(value, list):
+                    if all(isinstance(item, str) for item in value):
+                        processed_params[key] = random.choice(value)
+                    elif all(isinstance(item, bool) for item in value):
+                        processed_params[key] = random.choice(value)
+                    else:
+                        log.warning(f'Invalid params "{key}", "{value}" will not be applied.')
+                        processed_params.pop(key)  # Remove invalid key
+                else:
+                    log.warning(f'Invalid params "{key}", "{value}" will not be applied.')
+                    processed_params.pop(key)  # Remove invalid key
+            return processed_params
+
+        except Exception as e:
+            log.error(f"Error processing param variances: {e}")
+            return {}
+
+    def select_random_image_or_subdir(self, directory=None, root_dir=None, key=None):
+        image_file_path = None
+        contents = os.listdir(directory)    # List all files and directories in the given directory
+        # Filter files to include only .png and .jpg extensions
+        image_files = [f for f in contents if os.path.isfile(os.path.join(directory, f)) and f.lower().endswith(('.png', '.jpg'))]
+        # If there are image files, choose one randomly
+        if image_files:
+            if key is not None:
+                for filename in image_files:
+                    filename_without_extension = os.path.splitext(filename)[0]
+                    if filename_without_extension.lower() == key.lower():
+                        image_file_path = os.path.join(directory, filename)
+                        method = 'Random from folder'
+                        return image_file_path, method
+        # If no image files and root_dir is not None, try again one time using root_dir as the directory
+        if root_dir is not None:
+            image_file_path, method = self.select_random_image_or_subdir(directory=root_dir, root_dir=None, key=None)
+            method = 'Random from folder'
+            return image_file_path, method
+        if image_files and not image_file_path:
+            random_image = random.choice(image_files)
+            image_file_path = os.path.join(directory, random_image)
+            method = 'Random from folder'
+            return image_file_path, method
+        # If no image files, check for subdirectories
+        subdirectories = [d for d in contents if os.path.isdir(os.path.join(directory, d))]
+        # If there are subdirectories, select one randomly and recursively call select_random_image
+        if subdirectories:
+            random_subdir = random.choice(subdirectories)
+            subdir_path = os.path.join(directory, random_subdir)
+            return self.select_random_image_or_subdir(directory=subdir_path, root_dir=root_dir, key=key)
+        # If neither image files nor subdirectories found, return None
+        return None, None
+
+    def get_image_tag_args(self, extension, value, key=None, set_dir=None):
+        args = {}
+        image_file_path = ''
+        method = ''
+        try:
+            home_path = os.path.join(shared_path.dir_root, 'user_images')
+            full_path = os.path.join(home_path, value)
+            # If value contains valid image extension
+            if any(ext in value for ext in (".txt", ".png", ".jpg")): # extension included in value
+                image_file_path = os.path.join(home_path, value)
+            # ReActor specific
+            elif ".safetensors" in value and extension == 'ReActor Enabled':
+                args['image'] = ''
+                args['source_type'] = 1
+                args['face_model'] = value
+                method = 'Face model'
+            # If value was a directory to choose random image from
+            elif os.path.isdir(full_path):
+                cwd_path = os.getcwd()
+                if set_dir:
+                    os_path = set_dir
+                    root_dir = full_path
+                else:
+                    os_path = os.path.join(cwd_path, full_path)
+                    root_dir = None
+                while True:
+                    image_file_path, method = self.select_random_image_or_subdir(directory=os_path, root_dir=root_dir, key=key)
+                    if image_file_path:
+                        break  # Break the loop if an image is found and selected
+                    else:
+                        if not os.listdir(os_path):
+                            log.warning(f'Valid file not found in a "{home_path}" or any subdirectories: "{value}"')
+                            break  # Break the loop if no folders or images are found
+            # If value does not specify an extension, but is also not a directory
+            else:
+                found = False
+                for ext in (".txt", ".png", ".jpg"):
+                    temp_path = os.path.join(home_path, value + ext)
+                    if os.path.exists(temp_path):
+                        image_file_path = temp_path
+                        found = True
+                        break
+                if not found:
+                    raise FileNotFoundError(f"File '{value}' not found with supported extensions (.txt, .png, .jpg)")
+            if image_file_path and os.path.isfile(image_file_path):
+                if extension == "User image":
+                    return image_file_path # user image does not need to be converted to base64
+                if image_file_path.endswith(".txt"):
+                    with open(image_file_path, "r") as txt_file:
+                        base64_img = txt_file.read()
+                        method = 'base64 from .txt'
+                else:
+                    with open(image_file_path, "rb") as image_file:
+                        image_data = image_file.read()
+                        base64_img = base64.b64encode(image_data).decode('utf-8')
+                        args['image'] = base64_img
+                        if not method: # will already have value if random img picked from dir
+                            method = 'Image file'
+            if method:
+                log.info(f'[TAGS] {extension}: "{value}" ({method}).')
+                if method == 'Random from folder':
+                    args['selected_folder'] = os.path.dirname(image_file_path)
+            return args
+        except Exception as e:
+            log.error(f"[TAGS] Error processing {extension} tag: {e}")
+            return {}
+
+    async def process_img_payload_tags(self, mods:dict):
+        try:
+            flow: dict              = mods.pop('flow', None)
+            change_imgmodel: str    = mods.pop('change_imgmodel', None)
+            swap_imgmodel: str      = mods.pop('swap_imgmodel', None)
+            payload: dict           = mods.pop('payload', None)
+            aspect_ratio: str       = mods.pop('aspect_ratio', None)
+            param_variances: dict   = mods.pop('param_variances', {})
+            controlnet: list        = mods.pop('controlnet', [])
+            forge_couple: dict      = mods.pop('forge_couple', {})
+            layerdiffuse: dict      = mods.pop('layerdiffuse', {})
+            reactor: dict           = mods.pop('reactor', {})
+            img2img: str            = mods.pop('img2img', '')
+            img2img_mask: str       = mods.pop('img2img_mask', '')
+            self.params.sd_output_dir = mods.pop('sd_output_dir', self.params.sd_output_dir)
+            self.params.img_censoring = mods.pop('img_censoring', self.params.img_censoring)
+            # Process the tag matches
+            if flow or change_imgmodel or swap_imgmodel or payload or aspect_ratio or param_variances or controlnet or forge_couple or layerdiffuse or reactor or img2img or img2img_mask:
+                # Flow handling
+                if flow is not None and not flows.event.is_set():
+                    await flows.build_queue(flow)
+                # Imgmodel handling
+                new_imgmodel = change_imgmodel or swap_imgmodel or None
+                if new_imgmodel:
+                    self.params.imgmodel = await get_selected_imgmodel_params(new_imgmodel) # {sd_model_checkpoint, imgmodel_name, filename}
+                    current_imgmodel_name = bot_database.last_imgmodel_name
+                    new_imgmodel_name = self.params.imgmodel.get('imgmodel_name', '')
+                    # Check if new model same as current model
+                    if current_imgmodel_name == new_imgmodel_name:
+                        log.info(f'[TAGS] Img model was triggered to change, but it is the same as current ("{current_imgmodel_name}").')
+                    else:
+                        mode = 'change' if new_imgmodel == change_imgmodel else 'swap'
+                        verb = 'Changing' if mode == 'change' else 'Swapping'
+                        self.params.imgmodel['current_imgmodel_name'] = current_imgmodel_name
+                        self.params.imgmodel['mode'] = mode
+                        self.params.imgmodel['verb'] = verb
+                        log.info(f'[TAGS] {verb} Img model: "{new_imgmodel_name}"')
+                # Payload handling
+                if payload:
+                    if isinstance(payload, dict):
+                        log.info(f"[TAGS] Updated payload: '{payload}'")
+                        update_dict(self.img_payload, payload)
+                    else:
+                        log.warning("A tag was matched with invalid 'payload'; must be a dictionary.")
+                # Aspect Ratio
+                if aspect_ratio:
+                    try:
+                        current_avg = get_current_avg_from_dims()
+                        n, d = get_aspect_ratio_parts(aspect_ratio)
+                        w, h = dims_from_ar(current_avg, n, d)
+                        self.img_payload['width'], self.img_payload['height'] = w, h
+                        log.info(f'[TAGS] Applied aspect ratio "{aspect_ratio}" (Width: "{w}", Height: "{h}").')
+                    except Exception:
+                        pass
+                # Param variances handling
+                if param_variances:
+                    processed_params = self.process_param_variances(param_variances)
+                    log.info(f"[TAGS] Applied Param Variances: '{processed_params}'")
+                    sum_update_dict(self.img_payload, processed_params)
+                # Controlnet handling
+                if controlnet and config['sd']['extensions'].get('controlnet_enabled', False):
+                    self.img_payload['alwayson_scripts']['controlnet']['args'] = controlnet
+                # forge_couple handling
+                if forge_couple and config['sd']['extensions'].get('forgecouple_enabled', False):
+                    self.img_payload['alwayson_scripts']['forge_couple']['args'].update(forge_couple)
+                    self.img_payload['alwayson_scripts']['forge_couple']['args']['enable'] = True
+                    log.info(f"[TAGS] Enabled forge_couple: {forge_couple}")
+                # layerdiffuse handling
+                if layerdiffuse and config['sd']['extensions'].get('layerdiffuse_enabled', False):
+                    self.img_payload['alwayson_scripts']['layerdiffuse']['args'].update(layerdiffuse)
+                    self.img_payload['alwayson_scripts']['layerdiffuse']['args']['enabled'] = True
+                    log.info(f"[TAGS] Enabled layerdiffuse: {layerdiffuse}")
+                # ReActor face swap handling
+                if reactor and config['sd']['extensions'].get('reactor_enabled', False):
+                    self.img_payload['alwayson_scripts']['reactor']['args'].update(reactor)
+                    if reactor.get('mask'):
+                        self.img_payload['alwayson_scripts']['reactor']['args']['save_original'] = True
+                # Img2Img handling
+                if img2img:
+                    self.img_payload['init_images'] = [str(img2img)]
+                    self.params.endpoint = '/sdapi/v1/img2img'
+                # Inpaint Mask handling
+                if img2img_mask:
+                    img_payload['mask'] = str(img2img_mask)
+        except Exception as e:
+            log.error(f"Error processing Img tags: {e}")
+            traceback.print_exc()
+
+    # The methods of this function allow multiple extensions with an identical "select image from random folder" value to share the first selected folder.
+    # The function will first try to find a specific image file based on the extension's key name (ex: 'canny.png' or 'img2img_mask.jpg')
+    def collect_img_extension_mods(self, mods):
+        controlnet = mods.get('controlnet', [])
+        reactor = mods.get('reactor', None)
+        img2img = mods.get('img2img', None)
+        img2img_mask = mods.get('img2img_mask', None)
+        set_dir = None
+        if img2img:
+            try:
+                img2img_args = self.get_image_tag_args('Img2Img', img2img, key='img2img', set_dir=set_dir)
+                mods['img2img'] = img2img_args.get('image', '')
+                if img2img_args:
+                    if set_dir is None:
+                        set_dir = img2img_args.get('selected_folder', None)
+                    if img2img_mask:
+                        img2img_mask_args = self.get_image_tag_args('Img2Img Mask', img2img_mask, key='img2img_mask', set_dir=set_dir)
+                        mods['img2img_mask'] = img2img_mask_args.get('image', '')
+                        if img2img_mask_args:
+                            if set_dir is None:
+                                set_dir = img2img_mask_args.get('selected_folder', None)
+            except Exception as e:
+                log.error(f"Error collecting img2img tag values: {e}")
+        if controlnet:
+            try:
+                for idx, controlnet_item in enumerate(controlnet):
+                    control_type = controlnet_item.pop('control_type', None) # remove control_type
+                    module = controlnet_item.get('module', None)
+                    prefix = control_type or module or None
+                    image = controlnet_item.get('image', None)
+                    mask_image = controlnet_item.get('mask', None) or controlnet_item.get('mask_image', None)
+                    # Update controlnet item with image information
+                    if image:
+                        cnet_args = self.get_image_tag_args('ControlNet Image', image, key=prefix, set_dir=set_dir)
+                        if not cnet_args:
+                            controlnet[idx] = {}
+                        else:
+                            if set_dir is None:
+                                set_dir = cnet_args.pop('selected_folder', None)
+                            else:
+                                cnet_args.pop('selected_folder')
+                            controlnet[idx].update(cnet_args)
+                            controlnet[idx]['enabled'] = True
+                            # Update controlnet item with mask_image information
+                            if mask_image:
+                                key = f'{prefix}_mask' if prefix else None
+                                cnet_mask_args = self.get_image_tag_args('ControlNet Mask', mask_image, key=key, set_dir=set_dir)
+                                controlnet[idx]['mask_image'] = cnet_mask_args.get('image', None)
+                                if cnet_mask_args:
+                                    if set_dir is None:
+                                        set_dir = cnet_mask_args.get('selected_folder', None)
+                mods['controlnet'] = controlnet
+            except Exception as e:
+                log.error(f"Error collecting ControlNet tag values: {e}")
+        if reactor:
+            try:
+                image = reactor.get('image', None)
+                mask_image = reactor.get('mask', None)
+                if image:
+                    reactor_args = self.get_image_tag_args('ReActor Enabled', image, key='reactor', set_dir=None)
+                    if reactor_args:
+                        reactor_args.pop('selected_folder', None)
+                        mods['reactor'].update(reactor_args)
+                        mods['reactor']['enabled'] = True
+                        if mask_image:
+                            reactor_mask_args = self.get_image_tag_args('ReActor Mask', mask_image, key='reactor_mask', set_dir=set_dir)
+                            mods['reactor']['mask'] = reactor_mask_args.get('image', '')
+                            if reactor_mask_args and set_dir is None:
+                                set_dir = reactor_mask_args.get('selected_folder', None)
+            except Exception as e:
+                log.error(f"Error collecting ReActor tag values: {e}")
+        return mods
+
+    def collect_img_tag_values(self):
+        img_payload_mods = {}
+        payload_order_hack = {}
+        controlnet_args = {}
+        forge_couple_args = {}
+        layerdiffuse_args = {}
+        reactor_args = {}
+        extensions = config.get('sd', {}).get('extensions', {})
+        accept_only_first = ['flow', 'aspect_ratio', 'img2img', 'img2img_mask', 'sd_output_dir']
+        try:
+            for tag in self.tags.matches:
+                if isinstance(tag, tuple):
+                    tag = tag[0] # For tags with prompt insertion indexes
+                for key, value in tag.items():
+                    # Accept only the first occurance
+                    if key in accept_only_first and not img_payload_mods.get(key):
+                        img_payload_mods[key] = value
+                    elif key == 'img_censoring' and not img_payload_mods.get('img_censoring'):
+                        img_payload_mods['img_censoring'] = int(value)
+                        if value != 0:
+                            log.info(f"[TAGS] Censoring: {'Image Blurred' if value == 1 else 'Generation Blocked'}")
+                    # Accept only first 'change' or 'swap'
+                    elif key == 'change_imgmodel' or key == 'swap_imgmodel' and not (img_payload_mods.get('change_imgmodel') or img_payload_mods.get('swap_imgmodel')):
+                        img_payload_mods[key] = str(value)
+                    # Allow multiple to accumulate
+                    elif key == 'payload':
+                        try:
+                            if img_payload_mods.get('payload'):
+                                payload_order_hack = dict(value)
+                                update_dict(payload_order_hack, img_payload_mods['payload'])
+                                img_payload_mods['payload'] = payload_order_hack
+                            else:
+                                img_payload_mods['payload'] = dict(value)
+                        except Exception:
+                            log.warning("Error processing a matched 'payload' tag; ensure it is a dictionary.")
+                    elif key == 'img_param_variances':
+                        img_payload_mods.setdefault('param_variances', {})
+                        try:
+                            update_dict(img_payload_mods['param_variances'], dict(value))
+                        except Exception:
+                            log.warning("Error processing a matched 'img_param_variances' tag; ensure it is a dictionary.")
+                    # get any ControlNet extension params
+                    elif key.startswith('controlnet') and extensions.get('controlnet_enabled'):
+                        index = int(key[len('controlnet'):]) if key != 'controlnet' else 0  # Determine the index (cnet unit) for main controlnet args
+                        controlnet_args.setdefault(index, {}).update({'image': value, 'enabled': True})         # Update controlnet args at the specified index
+                    elif key.startswith('cnet') and extensions.get('controlnet_enabled'):
+                        # Determine the index for controlnet_args sublist
+                        if key.startswith('cnet_'):
+                            index = int(key.split('_')[0][len('cnet'):]) if not key.startswith('cnet_') else 0  # Determine the index (cnet unit) for additional controlnet args
+                        controlnet_args.setdefault(index, {}).update({key.split('_', 1)[-1]: value})   # Update controlnet args at the specified index
+                    # get any layerdiffuse extension params
+                    elif key == 'layerdiffuse' and extensions.get('layerdiffuse_enabled'):
+                        layerdiffuse_args['method'] = str(value)
+                    elif key.startswith('laydiff_') and extensions.get('layerdiffuse_enabled'):
+                        laydiff_key = key[len('laydiff_'):]
+                        layerdiffuse_args[laydiff_key] = value
+                    # get any ReActor extension params
+                    elif key == 'reactor' and extensions.get('reactor_enabled'):
+                        reactor_args['image'] = value
+                    elif key.startswith('reactor_') and extensions.get('reactor_enabled'):
+                        reactor_key = key[len('reactor_'):]
+                        reactor_args[reactor_key] = value
+                    # get any Forge Couple extension params
+                    elif key == 'forge_couple' and extensions.get('forgecouple_enabled'):
+                        if value.startswith('['):
+                            forge_couple_args['maps'] = list(value)
+                        else: 
+                            forge_couple_args['direction'] = str(value)
+                    elif key.startswith('couple_') and extensions.get('forgecouple_enabled'):
+                        forge_couple_key = key[len('couple_'):]
+                        if value.startswith('['):
+                            forge_couple_args[forge_couple_key] = list(value)
+                        else:
+                            forge_couple_args[forge_couple_key] = str(value)
+                    # get any user image(s)
+                    elif key == 'send_user_image':
+                        user_image_args = get_image_tag_args('User image', str(value), key=None, set_dir=None)
+                        user_image = discord.File(user_image_args)
+                        user_image = discord.File(user_image_args)
+                        self.params.send_user_image.append(user_image)
+                        log.info('[TAGS] Sending user image.')
+            # Add the collected SD WebUI extension args to the img_payload_mods dict
+            if controlnet_args:
+                img_payload_mods.setdefault('controlnet', [])
+                for index in sorted(set(controlnet_args.keys())):   # This flattens down any gaps between collected ControlNet units (ensures lowest index is 0, next is 1, and so on)
+                    cnet_basesettings = copy.copy(bot_settings.settings['imgmodel']['payload']['alwayson_scripts']['controlnet']['args'][0])  # Copy of required dict items
+                    cnet_unit_args = controlnet_args.get(index, {})
+                    cnet_unit = update_dict(cnet_basesettings, cnet_unit_args)
+                    img_payload_mods['controlnet'].append(cnet_unit)
+            if forge_couple_args:
+                img_payload_mods.setdefault('forge_couple', {})
+                img_payload_mods['forge_couple'].update(forge_couple_args)
+            if layerdiffuse_args:
+                img_payload_mods.setdefault('layerdiffuse', {})
+                img_payload_mods['layerdiffuse'].update(layerdiffuse_args)
+            if reactor_args:
+                img_payload_mods.setdefault('reactor', {})
+                img_payload_mods['reactor'].update(reactor_args)
+
+            img_payload_mods = self.collect_img_extension_mods(img_payload_mods)
+        except Exception as e:
+            log.error(f"Error collecting Img tag values: {e}")
+        return img_payload_mods
+
+    def init_img_payload(self):
+        try:
+            neg_prompt = self.params.neg_prompt
+            positive_style = self.params.style.get('positive', "{}") if params.get('style') is not None else "{}"
+            negative_style = self.params.style.get('negative', '') if params.get('style') is not None else "{}"
+            self.img_prompt = positive_style.format(self.img_prompt)
+            neg_prompt = f"{neg_prompt}, {negative_style}" if negative_style else neg_prompt
+            # Initialize img_payload settings
+            self.img_payload = {"prompt": self.img_prompt, "negative_prompt": neg_prompt}
+            # Apply settings from imgmodel configuration
+            imgmodel_img_payload = copy.deepcopy(bot_settings.settings['imgmodel'].get('payload', {}))
+            self.img_payload.update(imgmodel_img_payload)
+
+        except Exception as e:
+            log.error(f"Error initializing img payload: {e}")
 
 #################################################################
 ############################ TASKS ##############################
@@ -2478,12 +3302,77 @@ class Tasks(TaskProcessing):
                 # Send embeds to announcement channels
                 if bot_database.announce_channels and not is_direct_message(self.ictx):
                     await bg_task_queue.put(announce_changes(self.ictx, change_message, char_name))
-            await send_char_greeting_or_history(self.ictx, char_name)
+            await self.send_char_greeting_or_history(char_name)
             log.info(f"Character loaded: {char_name}")
         except Exception as e:
             log.error(f'An error occurred while loading character for "{current_task.name}": {e}')
             current_task.clear()
             await self.embeds.edit_or_send('change', "An error occurred while loading character", e)
+
+    #################################################################
+    ######################## IMAGE GEN TASK #########################
+    #################################################################
+    async def img_gen_task(self):
+        try:
+            if not self.tags:
+                self.tags = Tags(self.img_prompt)
+                self.tags.match_img_tags()
+                self.params.update_bot_should_do()
+            # Initialize img_payload
+            init_img_payload(img_prompt, params)
+            # collect matched tag values
+            img_payload_mods, params = collect_img_tag_values(tags, params)
+            send_user_image = img_payload_mods.pop('send_user_image', [])
+            # Apply tags relevant to Img gen
+            img_payload, params = await process_img_payload_tags(img_payload, img_payload_mods, params)
+            # Check censoring
+            if self.params.img_censoring == 2:
+                if img_send_embed_info:
+                    img_send_embed_info.title = "Image prompt was flagged as inappropriate."
+                    img_send_embed_info.description = ""
+                    await channel.send(embed=img_send_embed_info)
+                return
+            # Process loractl
+            if config['sd']['extensions'].get('lrctl', {}).get('enabled', False):
+                tags.matches = apply_loractl(tags.matches)
+            # Apply tags relevant to Img prompts
+            img_payload = process_img_prompt_tags(img_payload, tags)
+            # Apply menu selections from /image command
+            img_payload = apply_imgcmd_params(img_payload, params)
+            # Clean anything up that gets messy
+            img_payload = clean_img_payload(img_payload)
+            # Change imgmodel if triggered by tags
+            should_swap = False
+            imgmodel_params = params.get('imgmodel', {})
+            if imgmodel_params:
+                # Add checkpoint to image payload (change_imgmodel_task() will change it anyway)
+                sd_model_checkpoint = imgmodel_params.get('sd_model_checkpoint', '')
+                override_settings = img_payload.setdefault('override_settings', {})
+                override_settings['sd_model_checkpoint'] = sd_model_checkpoint
+                # collect params fpr event of model swapping
+                swap_params = {'imgmodel': {}}
+                swap_params['imgmodel']['imgmodel_name'] = bot_database.last_imgmodel_name
+                swap_params['imgmodel']['sd_model_checkpoint'] = bot_database.last_imgmodel_checkpoint
+                should_swap = await change_imgmodel_task(params, ictx)
+            # Generate and send images
+            params['bot_should_do'] = bot_should_do
+            await process_image_gen(img_payload, channel, params)
+            if (current_task.name == 'image' or (bot_should_do['should_send_text'] and not bot_should_do['should_gen_text'])) and img_send_embed_info:
+                img_send_embed_info.title = f"{user_name} requested an image:"
+                img_send_embed_info.description = params.get('message', img_prompt)[:2000]
+                await channel.send(embed=img_send_embed_info)
+                await channel.send(f">>> {img_payload['prompt']}"[:2000])
+            if send_user_image:
+                await channel.send(file=send_user_image) if len(send_user_image) == 1 else await channel.send(files=send_user_image)
+            # If switching back to original Img model
+            if should_swap:
+                swap_params['imgmodel']['mode'] = 'swap_back'
+                swap_params['imgmodel']['verb'] = 'Swapping back to'
+                await change_imgmodel_task(swap_params, ictx)
+        except Exception as e:
+            log.error(f"An error occurred in img_gen_task(): {e}")
+            traceback.print_exc()
+            current_task.clear()
 
 
 #################################################################
@@ -2580,9 +3469,13 @@ def update_mention(user_mention:str, last_resp:str=''):
 ########################## QUEUED FLOW ##########################
 #################################################################
 class Flows:
-    def __init__(self):
-        event = asyncio.Event()
-        queue = asyncio.Queue()
+    def __init__(self, ictx:CtxInteraction):
+        self.ictx: CtxInteraction = ictx
+        self.user_name: str = get_user_ctx_inter(ictx).display_name
+        self.channel: discord.TextChannel = ictx.channel
+
+        self.event: asyncio.Event = asyncio.Event()
+        self.queue: asyncio.Queue = asyncio.Queue()
 
     async def build_queue(self, input_flow):
         try:
@@ -2610,10 +3503,9 @@ class Flows:
         except Exception as e:
             log.error(f"Error building Flow: {e}")
 
-    async def format_next_flow(self, ictx, next_flow, user_name:str, text:str):
+    async def format_next_flow(self, next_flow:dict, text:str) -> tuple[str, str]:
         flow_name = ''
         formatted_flow_tags = {}
-        tags = Tags() # Simply to access Tags methods
         for key, value in next_flow.items():
             # get name for message embed
             if key == 'flow_step':
@@ -2621,26 +3513,28 @@ class Flows:
             # format prompt before feeding it back into message_task()
             elif key == 'format_prompt':
                 formatting = {'format_prompt': [value]}
-                text = process_prompt_formatting(ictx, user_name, text, formatting)
+                text = self.process_prompt_formatting(text, formatting)
             # see if any tag values have dynamic formatting (user prompt, LLM reply, etc)
             elif isinstance(value, str):
-                formatted_value = format_prompt_with_recent_output(ictx, user_name, value)       # output will be a string
-                if formatted_value != value:                                        # if the value changed,
+                formatted_value = self.format_prompt_with_recent_output(value)       # output will be a string
+                # if the value changed...
+                if formatted_value != value:         
+                    tags = Tags() # Simply to access Tags methods
                     formatted_value = tags.parse_tag_from_text_value(formatted_value)    # convert new string to correct value type
                 formatted_flow_tags[key] = formatted_value
             # apply wildcards
-            text = await dynamic_prompting(user_name, text, i=None)
+            text = await dynamic_prompting(self.user_name, text, ictx=None)
         next_flow.update(formatted_flow_tags) # commit updates
         return flow_name, text
 
     # function to get a copy of the next queue item while maintaining the original queue
-    async def peek_flow_queue(self, ictx, user_name:str, text:str):
+    async def peek_flow_queue(self, text:str):
         temp_queue = asyncio.Queue()
         total_queue_size = self.queue.qsize()
         while self.queue.qsize() > 0:
             if self.queue.qsize() == total_queue_size:
                 item = await self.queue.get()
-                flow_name, formatted_text = await self.format_next_flow(ictx, item, user_name, text)
+                flow_name, formatted_text = await self.format_next_flow(item, text)
             else:
                 item = await self.queue.get()
             await temp_queue.put(item)
@@ -2650,962 +3544,42 @@ class Flows:
             await self.queue.put(item_to_put_back)
         return flow_name, formatted_text
 
-    async def flow_task(self, ictx: CtxInteraction, text:str):
-        user_name = get_user_ctx_inter(ictx).display_name
-        channel = ictx.channel
-        current_task.set(ictx.channel, 'flows')
+    async def flow_task(self, text:str):
+        current_task.set(self.channel, 'flows')
         try:
-            flow_embed = None
             total_flow_steps = self.queue.qsize()
-            if bot_embeds.get('flow'):
-                descript = ''
-                flow_embed = await channel.send(embed = bot_embeds.update('flow', f'Processing Flow for {user_name} with {total_flow_steps} steps', descript))
+            descript = ''
+            await bot_embeds.send('flow', f'Processing Flow for {self.user_name} with {total_flow_steps} steps', descript)
+
             while self.queue.qsize() > 0:   # flow_queue items are removed in get_tags()
-                flow_name, text = await self.peek_flow_queue(ictx, flow_queue, user_name, text)
-                remaining_flow_steps = self.flow_queue.qsize()
-                if flow_embed:
-                    descript = descript.replace("**Processing", ":white_check_mark: **")
-                    descript += f'**Processing Step {total_flow_steps + 1 - remaining_flow_steps}/{total_flow_steps}**{flow_name}\n'
-                    flow_embed = await flow_embed.edit(embed = bot_embeds.update(name='flow', description=descript))
+                flow_name, text = await self.peek_flow_queue(text)
+                remaining_flow_steps = self.queue.qsize()
+
+                descript = descript.replace("**Processing", ":white_check_mark: **")
+                descript += f'**Processing Step {total_flow_steps + 1 - remaining_flow_steps}/{total_flow_steps}**{flow_name}\n'
+                await bot_embeds.edit(name='flow', description=descript)
+
+                # CREATE TASK AND QUEUE IT
                 flow_task = Tasks('flow', ictx, text)
                 await message_task(ictx, text)
-            if flow_embed:
-                descript = descript.replace("**Processing", ":white_check_mark: **")
-                flow_embed = await flow_embed.edit(embed = bot_embeds.update('flow', f"Flow completed for {user_name}", descript))
+
+            descript = descript.replace("**Processing", ":white_check_mark: **")
+            await bot_embeds.edit('flow', f"Flow completed for {self.user_name}", descript)
+
         except Exception as e:
             log.error(f"An error occurred while processing a Flow: {e}")
-            if flow_embed:
-                await flow_embed.edit(embed = bot_embeds.update('flow', "An error occurred while processing a Flow", e))
-            else: 
-                await channel.send(f"An error occurred while processing a Flow: {e}")
+            await bot_embeds.edit_or_send('flow', "An error occurred while processing a Flow", e)
+
         current_task.clear()
         self.event.clear()              # flag that flow is no longer processing
         self.queue.task_done()          # flow queue task is complete
 
-    async def run_flow_if_any(self, ictx:CtxInteraction, text:str):
+    async def run_flow_if_any(self, text:str):
         if self.queue.qsize() > 0:
             # flows are activated in process_llm_payload_tags(), and is where the flow queue is populated
-            await self.flow_task(ictx, text)
+            await self.flow_task(text)
 
 flows = Flows()
-
-#################################################################
-#################### QUEUED IMAGE GENERATION ####################
-#################################################################
-async def sd_online(channel: discord.TextChannel):
-    try:
-        r = requests.get(f'{sd.url}/')
-        status = r.raise_for_status()
-        log.debug(f'Request status to SD: {status}')
-        return True
-    except Exception as exc:
-        log.warning(exc)
-        if channel and system_embed_info:
-            system_embed_info.title = f"{sd.client} api is not running at {sd.url}"
-            system_embed_info.description = f"Launch {sd.client} with `--api --listen` commandline arguments\nRead more [here](https://github.com/AUTOMATIC1111/stable-diffusion-webui/wiki/API)"
-            await channel.send(embed=system_embed_info)
-        return False
-
-async def sd_progress_warning(img_gen_embed):
-    log.error('Reached maximum retry limit')
-    if img_gen_embed:
-        img_gen_embed_info.title = f'Error getting progress response from {sd.client}.'
-        img_gen_embed_info.description = 'Image generation will continue, but progress will not be tracked.'
-        await img_gen_embed.edit(embed=img_gen_embed_info)
-
-def progress_bar(value, length=15):
-    try:
-        filled_length = int(length * value)
-        bar = ':black_square_button:' * filled_length + ':black_large_square:' * (length - filled_length)
-        return f'{bar}'
-    except Exception:
-        return 0
-
-async def fetch_progress(session):
-    try:
-        async with session.get(f'{sd.url}/sdapi/v1/progress') as progress_response:
-            return await progress_response.json()
-    except aiohttp.ClientError as e:
-        log.warning(f'Failed to fetch progress: {e}')
-        return None
-
-async def check_sd_progress(channel, session):
-    try:
-        img_gen_embed = None
-        img_gen_embed_info.title = f'Waiting for {sd.client} ...'
-        img_gen_embed_info.description = ' '
-        img_gen_embed = await channel.send(embed=img_gen_embed_info)
-        await asyncio.sleep(1)
-        retry_count = 0
-        while retry_count < 5:
-            progress_data = await fetch_progress(session)
-            if progress_data and progress_data['progress'] != 0:
-                break
-            log.warning(f'Waiting for progress response from {sd.client}, retrying in 1 second (attempt {retry_count + 1}/5)')
-            await asyncio.sleep(1)
-            retry_count += 1
-        else:
-            await sd_progress_warning(img_gen_embed)
-            return
-        retry_count = 0
-        while progress_data['state']['job_count'] > 0:
-            progress_data = await fetch_progress(session)
-            if progress_data:
-                if retry_count < 5:
-                    progress = progress_data['progress'] * 100
-                    eta = progress_data['eta_relative']
-                    if eta == 0:
-                        img_gen_embed_info.title = 'Generating image: 100%'
-                        img_gen_embed_info.description = f'{progress_bar(1)}'
-                    else:
-                        img_gen_embed_info.title = f'Generating image: {progress:.0f}%'
-                        img_gen_embed_info.description = f"{progress_bar(progress_data['progress'])}"
-                    if img_gen_embed: 
-                        await img_gen_embed.edit(embed=img_gen_embed_info)
-                    await asyncio.sleep(1)
-                else:
-                    log.warning(f'Connection closed with {sd.client}, retrying in 1 second (attempt {retry_count + 1}/5)')
-                    await asyncio.sleep(1)
-                    retry_count += 1
-            else:
-                await sd_progress_warning(img_gen_embed)
-                return
-        if img_gen_embed: 
-            await img_gen_embed.delete()
-    except Exception as e:
-        log.error(f'Error tracking {sd.client} image generation progress: {e}')
-
-async def track_progress(channel):
-    if img_gen_embed_info:
-        async with aiohttp.ClientSession() as session:
-            await check_sd_progress(channel, session)
-
-async def layerdiffuse_hack(temp_dir, img_payload, images, pnginfo):
-    try:
-        ld_output = None
-        for i, image in enumerate(images):
-            if image.mode == 'RGBA':
-                if i == 0:
-                    return images
-                ld_output = images.pop(i)
-                break
-        if ld_output is None:
-            log.warning("Failed to find layerdiffuse output image")
-            return images
-        # Workaround for layerdiffuse PNG infoReActor + layerdiffuse combination
-        reactor = img_payload['alwayson_scripts'].get('reactor', {})
-        if reactor and reactor['args'][1]:          # if ReActor was enabled:
-            _, _, _, alpha = ld_output.split()      # Extract alpha channel from layerdiffuse output
-            img0 = Image.open(f'{temp_dir}/temp_img_0.png') # Open first image (with ReActor output)
-            img0 = img0.convert('RGBA')             # Convert it to RGBA
-            img0.putalpha(alpha)                    # apply alpha from layerdiffuse output
-        else:                           # if ReActor was not enabled:
-            img0 = ld_output            # Just replace first image with layerdiffuse output
-        img0.save(f'{temp_dir}/temp_img_0.png', pnginfo=pnginfo) # Save the local image with correct pnginfo
-        images[0] = img0 # Update images list
-        return images
-    except Exception as e:
-        log.error(f'Error processing layerdiffuse images: {e}')
-
-async def apply_reactor_mask(temp_dir, images: list[Image.Image], pnginfo, reactor_mask):
-    try:
-        reactor_mask = Image.open(io.BytesIO(base64.b64decode(reactor_mask))).convert('L')
-        orig_image = images[0]                                          # Open original image
-        face_image = images.pop(1)                                      # Open image with faceswap applied
-        face_image.putalpha(reactor_mask)                               # Apply reactor mask as alpha to faceswap image
-        orig_image.paste(face_image, (0, 0), face_image)                # Paste the masked faceswap image onto the original
-        orig_image.save(f'{temp_dir}/temp_img_0.png', pnginfo=pnginfo)  # Save the image with correct pnginfo
-        images[0] = orig_image                                          # Replace first image in images list
-        return images
-    except Exception as e:
-        log.error(f'Error masking ReActor output images: {e}')
-
-async def save_images_and_return(temp_dir, img_payload, endpoint):
-    images = []
-    pnginfo = None
-    # save .json for debugging
-    # with open("img_payload.json", "w") as file:
-    #     json.dump(img_payload, file)
-    try:
-        r = await sd.api(endpoint=endpoint, method='post', json=img_payload, retry=True)
-        if not isinstance(r, dict):
-            return [], r
-        for i, img_data in enumerate(r.get('images')):
-            image = Image.open(io.BytesIO(base64.b64decode(img_data.split(",", 1)[0])))
-            png_payload = {"image": "data:image/png;base64," + img_data}
-            r2 = await sd.api(endpoint='/sdapi/v1/png-info', method='post', json=png_payload, retry=True)
-            if not isinstance(r2, dict):
-                return [], r2
-            png_info_data = r2.get("info")
-            if i == 0:  # Only capture pnginfo from the first png_img_data
-                pnginfo = PngImagePlugin.PngInfo()
-                pnginfo.add_text("parameters", png_info_data)
-            image.save(f'{temp_dir}/temp_img_{i}.png', pnginfo=pnginfo) # save image to temp directory
-            images.append(image) # collect a list of PIL images
-    except Exception as e:
-        log.error(f'Error processing images: {e}')
-        traceback.print_exc()
-        return [], e
-    return images, pnginfo
-
-async def sd_img_gen(channel, temp_dir:str, img_payload:dict, endpoint:str):
-    try:
-        reactor_args = img_payload.get('alwayson_scripts', {}).get('reactor', {}).get('args', [])
-        last_item = reactor_args[-1] if reactor_args else None
-        reactor_mask = reactor_args.pop() if isinstance(last_item, dict) else None
-        #Start progress task and generation task concurrently
-        images_task = asyncio.create_task(save_images_and_return(temp_dir, img_payload, endpoint))
-        progress_task = asyncio.create_task(track_progress(channel))
-        # Wait for both tasks to complete
-        await asyncio.gather(images_task, progress_task)
-        # Get the list of images and copy of pnginfo after both tasks are done
-        images, pnginfo = await images_task
-        if not images:
-            if img_send_embed_info:
-                img_send_embed_info.title = 'Error processing images.'
-                img_send_embed_info.description = f'Error: "{str(pnginfo)}"\nIf {sd.client} remains unresponsive, consider using "/restart_sd_client" command.'
-                await channel.send(embed=img_send_embed_info)
-            return None
-        # Apply ReActor mask
-        reactor = img_payload.get('alwayson_scripts', {}).get('reactor', {})
-        if len(images) > 1 and reactor and reactor_mask:
-            images = await apply_reactor_mask(temp_dir, images, pnginfo, reactor_mask['mask'])
-        # Workaround for layerdiffuse output
-        layerdiffuse = img_payload.get('alwayson_scripts', {}).get('layerdiffuse', {})
-        if len(images) > 1 and layerdiffuse and layerdiffuse['args'][0]:
-            images = await layerdiffuse_hack(temp_dir, img_payload, images, pnginfo)
-        return images
-    except Exception as e:
-        log.error(f'Error processing images in {sd.client} API module: {e}')
-        return []
-
-async def process_image_gen(img_payload:dict, channel, params:dict):
-    try:
-        bot_should_do = params.get('bot_should_do', {})
-        img_censoring = params.get('img_censoring', 0)
-        endpoint = params.get('endpoint', '/sdapi/v1/txt2img')
-        default_save_path = os.path.join(shared_path.dir_root, 'sd_outputs')
-        sd_output_dir = params.get('sd_output_dir', default_save_path)
-        # Ensure the necessary directories exist
-        os.makedirs(sd_output_dir, exist_ok=True)
-        temp_dir = os.path.join(shared_path.dir_root, 'user_images', '__temp')
-        os.makedirs(temp_dir, exist_ok=True)
-        # Generate images, save locally
-        images = await sd_img_gen(channel, temp_dir, img_payload, endpoint)
-        if not images:
-            return
-        # Send images to discord
-        # If the censor mode is 1 (blur), prefix the image file with "SPOILER_"
-        file_prefix = 'temp_img_'
-        if img_censoring == 1:
-            file_prefix = 'SPOILER_temp_img_'
-        image_files = [discord.File(f'{temp_dir}/temp_img_{idx}.png', filename=f'{file_prefix}{idx}.png') for idx in range(len(images))]
-        if bot_should_do['should_send_image']:
-            await channel.send(files=image_files)
-        # Save the image at index 0 with the date/time naming convention
-        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        last_image = f'{sd_output_dir}/{timestamp}.png'
-        os.rename(f'{temp_dir}/temp_img_0.png', last_image)
-        copyfile(last_image, f'{temp_dir}/temp_img_0.png')
-        # Delete temporary image files
-        # for tempfile in os.listdir(temp_dir):
-        #     os.remove(os.path.join(temp_dir, tempfile))
-    except Exception as e:
-        log.error(f"An error occurred when processing image generation: {e}")
-
-def clean_img_payload(img_payload):
-    try:
-        # Remove duplicate negative prompts
-        negative_prompt_list = img_payload.get('negative_prompt', '').split(', ')
-        unique_values_set = set()
-        unique_values_list = []
-        for value in negative_prompt_list:
-            if value not in unique_values_set:
-                unique_values_set.add(value)
-                unique_values_list.append(value)
-        processed_negative_prompt = ', '.join(unique_values_list)
-        img_payload['negative_prompt'] = processed_negative_prompt
-
-        # Clean up extension keys
-        extensions = config.get('sd', {}).get('extensions', {})
-        alwayson_scripts = img_payload.get('alwayson_scripts', {})
-        # Clean ControlNet
-        if alwayson_scripts.get('controlnet'):
-            # Delete all 'controlnet' keys if disabled by config
-            if not extensions.get('controlnet_enabled'):
-                del alwayson_scripts['controlnet']
-        # Clean Forge Couple
-        if alwayson_scripts.get('forge_couple'):
-            # Delete all 'forge_couple' keys if disabled by config
-            if not extensions.get('forgecouple_enabled') or img_payload.get('init_images'):
-                del alwayson_scripts['forge_couple']
-            else:
-                img_payload['alwayson_scripts']['forge_couple']['args'] = list(img_payload['alwayson_scripts']['forge_couple']['args'].values()) # convert dictionary to list
-                img_payload['alwayson_scripts']['forge couple'] = img_payload['alwayson_scripts'].pop('forge_couple') # Add the required space between "forge" and "couple" ("forge couple")
-        # Clean layerdiffuse
-        if alwayson_scripts.get('layerdiffuse'):
-            # Delete all 'layerdiffuse' keys if disabled by config
-            if not extensions.get('layerdiffuse_enabled'):
-                del alwayson_scripts['layerdiffuse']
-            else:
-                img_payload['alwayson_scripts']['layerdiffuse']['args'] = list(img_payload['alwayson_scripts']['layerdiffuse']['args'].values()) # convert dictionary to list
-        # Clean ReActor
-        if alwayson_scripts.get('reactor'):
-            # Delete all 'reactor' keys if disabled by config
-            if not extensions.get('reactor_enabled'):
-                del alwayson_scripts['reactor']
-            else:
-                img_payload['alwayson_scripts']['reactor']['args'] = list(img_payload['alwayson_scripts']['reactor']['args'].values()) # convert dictionary to list
-
-        # Workaround for denoising strength bug
-        if not img_payload.get('enable_hr', False) and not img_payload.get('init_images', False):
-            img_payload['denoising_strength'] = None
-
-        # Fix SD Client compatibility for sampler names / schedulers
-        sampler_name = img_payload.get('sampler_name', '')
-        if sampler_name:
-            known_schedulers = [' uniform', ' karras', ' exponential', ' polyexponential', ' sgm uniform']
-            for value in known_schedulers:
-                if sampler_name.lower().endswith(value):
-                    if not bot_database.was_warned('sampler_name'):
-                        bot_database.update_was_warned('sampler_name')
-                        # Extract the value (without leading space) and set it to the 'scheduler' key
-                        img_payload['scheduler'] = value.strip()
-                        if sd.client == 'A1111 SD WebUI':
-                            log.warning(f'Img payload value "sampler_name": "{sampler_name}" is incompatible with current version of "{sd.client}". "{value}" must be omitted from "sampler_name", and instead used for the "scheduler" parameter. This is being corrected automatically. To avoid this warning, please update "sampler_name" parameter wherever present in your settings.')
-                            # Remove the matched part from sampler_name
-                            start_index = sampler_name.lower().rfind(value)
-                            fixed_sampler_name = sampler_name[:start_index].strip()
-                            img_payload['sampler_name'] = fixed_sampler_name
-                            bot_settings.settings['imgmodel']['payload']['sampler_name'] = fixed_sampler_name
-                            bot_settings.settings['imgmodel']['payload']['scheduler'] = value.strip()
-                        else:
-                            log.warning(f'Img payload value "sampler_name": "{sampler_name}" may cause an error due to the scheduler ("{value}") being part of the value. The scheduler may be expected as a separate parameter in current version of "{sd.client}".')
-                        break
-
-        # Delete all empty keys
-        keys_to_delete = []
-        for key, value in img_payload.items():
-            if value == "":
-                keys_to_delete.append(key)
-        for key in keys_to_delete:
-            del img_payload[key]
-    except Exception as e:
-        log.error(f"An error occurred when cleaning img_payload: {e}")
-    return img_payload
-
-def apply_loractl(matched_tags:list):# -> SORTED_TAGS:
-    try:
-        if sd.client != 'A1111 SD WebUI':
-            if not bot_database.was_warned('loractl'):
-                bot_database.update_was_warned('loractl')
-                log.warning(f'loractl is not known to be compatible with "{sd.client}". Not applying loractl...')
-            return matched_tags
-        scaling_settings = [v for k, v in config['sd'].get('extensions', {}).get('lrctl', {}).items() if 'scaling' in k]
-        scaling_settings = scaling_settings if scaling_settings else ['']
-        # Flatten the matches dictionary values to get a list of all tags (including those within tuples)
-        all_matched_tags = [tag if isinstance(tag, dict) else tag[0] for tag in matched_tags]
-        # Filter the matched tags to include only those with certain patterns in their text fields
-        lora_tags = [tag for tag in all_matched_tags if any(patterns.sd_lora.findall(text) for text in (tag.get('positive_prompt', ''), tag.get('positive_prompt_prefix', ''), tag.get('positive_prompt_suffix', '')))]
-        if len(lora_tags) >= config['sd']['extensions']['lrctl']['min_loras']:
-            for index, tag in enumerate(lora_tags):
-                # Determine the key with a non-empty value among the specified keys
-                used_key = next((key for key in ['positive_prompt', 'positive_prompt_prefix', 'positive_prompt_suffix'] if tag.get(key, '')), None)
-                if used_key:  # If a key with a non-empty value is found
-                    positive_prompt = tag[used_key]
-                    lora_matches = patterns.sd_lora.findall(positive_prompt)
-                    if lora_matches:
-                        for lora_match in lora_matches:
-                            lora_weight_match = patterns.sd_lora_weight.search(lora_match) # Extract lora weight
-                            if lora_weight_match:
-                                lora_weight = float(lora_weight_match.group())
-                                # Selecting the appropriate scaling based on the index
-                                scaling_key = f'lora_{index + 1}_scaling' if index+1 < len(scaling_settings) else 'additional_loras_scaling'
-                                scaling_values = config['sd'].get('extensions', {}).get('lrctl', {}).get(scaling_key, '')
-                                if scaling_values:
-                                    scaling_factors = [round(float(factor.split('@')[0]) * lora_weight, 2) for factor in scaling_values.split(',')]
-                                    scaling_steps = [float(step.split('@')[1]) for step in scaling_values.split(',')]
-                                    # Construct/apply the calculated lora-weight string
-                                    new_lora_weight_str = f'{",".join(f"{factor}@{step}" for factor, step in zip(scaling_factors, scaling_steps))}'
-                                    updated_lora_match = lora_match.replace(str(lora_weight), new_lora_weight_str)
-                                    new_positive_prompt = positive_prompt.replace(lora_match, updated_lora_match)
-                                    # Update the appropriate key in the tag dictionary
-                                    tag[used_key] = new_positive_prompt
-                                    log.info(f'''[TAGS] loractl applied: "{lora_match}" > "{updated_lora_match}"''')
-        return matched_tags
-    except Exception as e:
-        log.error(f"Error processing lrctl: {e}")
-        return matched_tags
-
-def apply_imgcmd_params(img_payload, params):
-    try:
-        size = params.get('size', None) if params else None
-        face_swap = params.get('face_swap', None) if params else None
-        controlnet = params.get('controlnet', None) if params else None
-        img2img = params.get('img2img', {})
-        img2img_mask = img2img.get('mask', '')
-        if img2img:
-            img_payload['init_images'] = [img2img['image']]
-            img_payload['denoising_strength'] = img2img['denoising_strength']
-        if img2img_mask:
-            img_payload['mask'] = img2img_mask
-        if size: 
-            img_payload.update(size)
-        if face_swap:
-            img_payload['alwayson_scripts']['reactor']['args']['image'] = face_swap # image in base64 format
-            img_payload['alwayson_scripts']['reactor']['args']['enabled'] = True # Enable
-        if controlnet: 
-            img_payload['alwayson_scripts']['controlnet']['args'][0].update(controlnet)
-        return img_payload
-    except Exception as e:
-        log.error(f"Error initializing img payload: {e}")
-        return img_payload
-
-def process_img_prompt_tags(img_payload:dict, tags:dict) -> dict:
-    try:
-        img_prompt, tags = process_tag_insertions(img_payload['prompt'], tags)
-        updated_positive_prompt = img_prompt
-        updated_negative_prompt = img_payload['negative_prompt']
-        matches = tags['matches']
-        for tag in matches:
-            join = tag.get('img_text_joining', ' ')
-            if 'imgtag_uninserted' in tag: # was flagged as a trigger match but not inserted
-                log.info(f'''[TAGS] "{tag['matched_trigger']}" not found in the image prompt. Appending rather than inserting.''')
-                updated_positive_prompt = updated_positive_prompt + ", " + tag['positive_prompt']
-            if 'positive_prompt_prefix' in tag:
-                updated_positive_prompt = tag['positive_prompt_prefix'] + join + updated_positive_prompt
-            if 'positive_prompt_suffix' in tag:
-                updated_positive_prompt = updated_positive_prompt + join + tag['positive_prompt_suffix']
-            if 'negative_prompt_prefix' in tag:
-                join = join if updated_negative_prompt else ''
-                updated_negative_prompt = tag['negative_prompt_prefix'] + join + updated_negative_prompt
-            if 'negative_prompt' in tag:
-                join = join if updated_negative_prompt else ''
-                updated_negative_prompt = updated_negative_prompt + join + tag['negative_prompt']
-            if 'negative_prompt_suffix' in tag:
-                join = join if updated_negative_prompt else ''
-                updated_negative_prompt = updated_negative_prompt + join + tag['negative_prompt_suffix']
-        img_payload['prompt'] = updated_positive_prompt
-        img_payload['negative_prompt'] = updated_negative_prompt
-
-    except Exception as e:
-        log.error(f"Error processing Img prompt tags: {e}")
-
-    return img_payload
-
-
-
-def process_param_variances(param_variances: dict) -> dict:
-    try:
-        param_variances = convert_lists_to_tuples(param_variances) # Only converts lists containing ints and floats (not strings or bools)
-        processed_params = copy.deepcopy(param_variances)
-        for key, value in param_variances.items():
-            # unpack dictionaries assuming they contain variances
-            if isinstance(value, dict):
-                processed_params[key] = process_param_variances(value)
-            elif isinstance(value, tuple):
-                processed_params[key] = random_value_from_range(value)
-            elif isinstance(value, bool):
-                processed_params[key] = random.choice([True, False])
-            elif isinstance(value, list):
-                if all(isinstance(item, str) for item in value):
-                    processed_params[key] = random.choice(value)
-                elif all(isinstance(item, bool) for item in value):
-                    processed_params[key] = random.choice(value)
-                else:
-                    log.warning(f'Invalid params "{key}", "{value}" will not be applied.')
-                    processed_params.pop(key)  # Remove invalid key
-            else:
-                log.warning(f'Invalid params "{key}", "{value}" will not be applied.')
-                processed_params.pop(key)  # Remove invalid key
-        return processed_params
-
-    except Exception as e:
-        log.error(f"Error processing param variances: {e}")
-        return {}
-
-def select_random_image_or_subdir(directory=None, root_dir=None, key=None):
-    image_file_path = None
-    contents = os.listdir(directory)    # List all files and directories in the given directory
-    # Filter files to include only .png and .jpg extensions
-    image_files = [f for f in contents if os.path.isfile(os.path.join(directory, f)) and f.lower().endswith(('.png', '.jpg'))]
-    # If there are image files, choose one randomly
-    if image_files:
-        if key is not None:
-            for filename in image_files:
-                filename_without_extension = os.path.splitext(filename)[0]
-                if filename_without_extension.lower() == key.lower():
-                    image_file_path = os.path.join(directory, filename)
-                    method = 'Random from folder'
-                    return image_file_path, method
-    # If no image files and root_dir is not None, try again one time using root_dir as the directory
-    if root_dir is not None:
-        image_file_path, method = select_random_image_or_subdir(directory=root_dir, root_dir=None, key=None)
-        method = 'Random from folder'
-        return image_file_path, method
-    if image_files and not image_file_path:
-        random_image = random.choice(image_files)
-        image_file_path = os.path.join(directory, random_image)
-        method = 'Random from folder'
-        return image_file_path, method
-    # If no image files, check for subdirectories
-    subdirectories = [d for d in contents if os.path.isdir(os.path.join(directory, d))]
-    # If there are subdirectories, select one randomly and recursively call select_random_image
-    if subdirectories:
-        random_subdir = random.choice(subdirectories)
-        subdir_path = os.path.join(directory, random_subdir)
-        return select_random_image_or_subdir(directory=subdir_path, root_dir=root_dir, key=key)
-    # If neither image files nor subdirectories found, return None
-    return None, None
-
-def get_image_tag_args(extension, value, key=None, set_dir=None):
-    args = {}
-    image_file_path = ''
-    method = ''
-    try:
-        home_path = os.path.join(shared_path.dir_root, 'user_images')
-        full_path = os.path.join(home_path, value)
-        # If value contains valid image extension
-        if any(ext in value for ext in (".txt", ".png", ".jpg")): # extension included in value
-            image_file_path = os.path.join(home_path, value)
-        # ReActor specific
-        elif ".safetensors" in value and extension == 'ReActor Enabled':
-            args['image'] = ''
-            args['source_type'] = 1
-            args['face_model'] = value
-            method = 'Face model'
-        # If value was a directory to choose random image from
-        elif os.path.isdir(full_path):
-            cwd_path = os.getcwd()
-            if set_dir:
-                os_path = set_dir
-                root_dir = full_path
-            else:
-                os_path = os.path.join(cwd_path, full_path)
-                root_dir = None
-            while True:
-                image_file_path, method = select_random_image_or_subdir(directory=os_path, root_dir=root_dir, key=key)
-                if image_file_path:
-                    break  # Break the loop if an image is found and selected
-                else:
-                    if not os.listdir(os_path):
-                        log.warning(f'Valid file not found in a "{home_path}" or any subdirectories: "{value}"')
-                        break  # Break the loop if no folders or images are found
-        # If value does not specify an extension, but is also not a directory
-        else:
-            found = False
-            for ext in (".txt", ".png", ".jpg"):
-                temp_path = os.path.join(home_path, value + ext)
-                if os.path.exists(temp_path):
-                    image_file_path = temp_path
-                    found = True
-                    break
-            if not found:
-                raise FileNotFoundError(f"File '{value}' not found with supported extensions (.txt, .png, .jpg)")
-        if image_file_path and os.path.isfile(image_file_path):
-            if extension == "User image":
-                return image_file_path # user image does not need to be converted to base64
-            if image_file_path.endswith(".txt"):
-                with open(image_file_path, "r") as txt_file:
-                    base64_img = txt_file.read()
-                    method = 'base64 from .txt'
-            else:
-                with open(image_file_path, "rb") as image_file:
-                    image_data = image_file.read()
-                    base64_img = base64.b64encode(image_data).decode('utf-8')
-                    args['image'] = base64_img
-                    if not method: # will already have value if random img picked from dir
-                        method = 'Image file'
-        if method:
-            log.info(f'[TAGS] {extension}: "{value}" ({method}).')
-            if method == 'Random from folder':
-                args['selected_folder'] = os.path.dirname(image_file_path)
-        return args
-    except Exception as e:
-        log.error(f"[TAGS] Error processing {extension} tag: {e}")
-        return {}
-
-async def process_img_payload_tags(img_payload:dict, mods:dict, params:dict):
-    try:
-        flow = mods.pop('flow', None)
-        change_imgmodel = mods.pop('change_imgmodel', None)
-        swap_imgmodel = mods.pop('swap_imgmodel', None)
-        payload = mods.pop('payload', None)
-        aspect_ratio = mods.pop('aspect_ratio', None)
-        param_variances = mods.pop('param_variances', {})
-        controlnet = mods.pop('controlnet', [])
-        forge_couple = mods.pop('forge_couple', {})
-        layerdiffuse = mods.pop('layerdiffuse', {})
-        reactor = mods.pop('reactor', {})
-        img2img = mods.pop('img2img', {})
-        img2img_mask = mods.pop('img2img_mask', {})
-        # Process the tag matches
-        if flow or change_imgmodel or swap_imgmodel or payload or aspect_ratio or param_variances or controlnet or forge_couple or layerdiffuse or reactor or img2img or img2img_mask:
-            # Flow handling
-            if flow is not None and not flow_event.is_set():
-                await flows.build_queue(flow)
-            # Imgmodel handling
-            new_imgmodel = change_imgmodel or swap_imgmodel or None
-            if new_imgmodel:
-                params['imgmodel'] = await get_selected_imgmodel_params(new_imgmodel) # {sd_model_checkpoint, imgmodel_name, filename}
-                current_imgmodel_name = bot_database.last_imgmodel_name
-                new_imgmodel_name = params['imgmodel'].get('imgmodel_name', '')
-                # Check if new model same as current model
-                if current_imgmodel_name == new_imgmodel_name:
-                    log.info(f'[TAGS] Img model was triggered to change, but it is the same as current ("{current_imgmodel_name}").')
-                else:
-                    mode = 'change' if new_imgmodel == change_imgmodel else 'swap'
-                    verb = 'Changing' if mode == 'change' else 'Swapping'
-                    params['imgmodel']['current_imgmodel_name'] = current_imgmodel_name
-                    params['imgmodel']['mode'] = mode
-                    params['imgmodel']['verb'] = verb
-                    log.info(f'[TAGS] {verb} Img model: "{new_imgmodel_name}"')
-            # Payload handling
-            if payload:
-                if isinstance(payload, dict):
-                    log.info(f"[TAGS] Updated payload: '{payload}'")
-                    update_dict(img_payload, payload)
-                else:
-                    log.warning("A tag was matched with invalid 'payload'; must be a dictionary.")
-            # Aspect Ratio
-            if aspect_ratio:
-                try:
-                    current_avg = get_current_avg_from_dims()
-                    n, d = get_aspect_ratio_parts(aspect_ratio)
-                    w, h = dims_from_ar(current_avg, n, d)
-                    img_payload['width'], img_payload['height'] = w, h
-                    log.info(f'[TAGS] Applied aspect ratio "{aspect_ratio}" (Width: "{w}", Height: "{h}").')
-                except Exception:
-                    pass
-            # Param variances handling
-            if param_variances:
-                processed_params = process_param_variances(param_variances)
-                log.info(f"[TAGS] Applied Param Variances: '{processed_params}'")
-                sum_update_dict(img_payload, processed_params)
-            # Controlnet handling
-            if controlnet and config['sd']['extensions'].get('controlnet_enabled', False):
-                img_payload['alwayson_scripts']['controlnet']['args'] = controlnet
-            # forge_couple handling
-            if forge_couple and config['sd']['extensions'].get('forgecouple_enabled', False):
-                img_payload['alwayson_scripts']['forge_couple']['args'].update(forge_couple)
-                img_payload['alwayson_scripts']['forge_couple']['args']['enable'] = True
-                log.info(f"[TAGS] Enabled forge_couple: {forge_couple}")
-            # layerdiffuse handling
-            if layerdiffuse and config['sd']['extensions'].get('layerdiffuse_enabled', False):
-                img_payload['alwayson_scripts']['layerdiffuse']['args'].update(layerdiffuse)
-                img_payload['alwayson_scripts']['layerdiffuse']['args']['enabled'] = True
-                log.info(f"[TAGS] Enabled layerdiffuse: {layerdiffuse}")
-            # ReActor face swap handling
-            if reactor and config['sd']['extensions'].get('reactor_enabled', False):
-                img_payload['alwayson_scripts']['reactor']['args'].update(reactor)
-                if reactor.get('mask'):
-                    img_payload['alwayson_scripts']['reactor']['args']['save_original'] = True
-            # Img2Img handling
-            if img2img:
-                img_payload['init_images'] = [str(img2img)]
-                params['endpoint'] = '/sdapi/v1/img2img'
-            # Inpaint Mask handling
-            if img2img_mask:
-                img_payload['mask'] = str(img2img_mask)
-    except Exception as e:
-        log.error(f"Error processing Img tags: {e}")
-        traceback.print_exc()
-    return img_payload, params
-
-# The methods of this function allow multiple extensions with an identical "select image from random folder" value to share the first selected folder.
-# The function will first try to find a specific image file based on the extension's key name (ex: 'canny.png' or 'img2img_mask.jpg')
-def collect_img_extension_mods(mods):
-    controlnet = mods.get('controlnet', [])
-    reactor = mods.get('reactor', None)
-    img2img = mods.get('img2img', None)
-    img2img_mask = mods.get('img2img_mask', None)
-    set_dir = None
-    if img2img:
-        try:
-            img2img_args = get_image_tag_args('Img2Img', img2img, key='img2img', set_dir=set_dir)
-            mods['img2img'] = img2img_args.get('image', '')
-            if img2img_args:
-                if set_dir is None:
-                    set_dir = img2img_args.get('selected_folder', None)
-                if img2img_mask:
-                    img2img_mask_args = get_image_tag_args('Img2Img Mask', img2img_mask, key='img2img_mask', set_dir=set_dir)
-                    mods['img2img_mask'] = img2img_mask_args.get('image', '')
-                    if img2img_mask_args:
-                        if set_dir is None:
-                            set_dir = img2img_mask_args.get('selected_folder', None)
-        except Exception as e:
-            log.error(f"Error collecting img2img tag values: {e}")
-    if controlnet:
-        try:
-            for idx, controlnet_item in enumerate(controlnet):
-                control_type = controlnet_item.pop('control_type', None) # remove control_type
-                module = controlnet_item.get('module', None)
-                prefix = control_type or module or None
-                image = controlnet_item.get('image', None)
-                mask_image = controlnet_item.get('mask', None) or controlnet_item.get('mask_image', None)
-                # Update controlnet item with image information
-                if image:
-                    cnet_args = get_image_tag_args('ControlNet Image', image, key=prefix, set_dir=set_dir)
-                    if not cnet_args:
-                        controlnet[idx] = {}
-                    else:
-                        if set_dir is None:
-                            set_dir = cnet_args.pop('selected_folder', None)
-                        else:
-                            cnet_args.pop('selected_folder')
-                        controlnet[idx].update(cnet_args)
-                        controlnet[idx]['enabled'] = True
-                        # Update controlnet item with mask_image information
-                        if mask_image:
-                            key = f'{prefix}_mask' if prefix else None
-                            cnet_mask_args = get_image_tag_args('ControlNet Mask', mask_image, key=key, set_dir=set_dir)
-                            controlnet[idx]['mask_image'] = cnet_mask_args.get('image', None)
-                            if cnet_mask_args:
-                                if set_dir is None:
-                                    set_dir = cnet_mask_args.get('selected_folder', None)
-            mods['controlnet'] = controlnet
-        except Exception as e:
-            log.error(f"Error collecting ControlNet tag values: {e}")
-    if reactor:
-        try:
-            image = reactor.get('image', None)
-            mask_image = reactor.get('mask', None)
-            if image:
-                reactor_args = get_image_tag_args('ReActor Enabled', image, key='reactor', set_dir=None)
-                if reactor_args:
-                    reactor_args.pop('selected_folder', None)
-                    mods['reactor'].update(reactor_args)
-                    mods['reactor']['enabled'] = True
-                    if mask_image:
-                        reactor_mask_args = get_image_tag_args('ReActor Mask', mask_image, key='reactor_mask', set_dir=set_dir)
-                        mods['reactor']['mask'] = reactor_mask_args.get('image', '')
-                        if reactor_mask_args and set_dir is None:
-                            set_dir = reactor_mask_args.get('selected_folder', None)
-        except Exception as e:
-            log.error(f"Error collecting ReActor tag values: {e}")
-    return mods
-
-def collect_img_tag_values(tags, params):
-    img_payload_mods = {}
-    payload_order_hack = {}
-    controlnet_args = {}
-    forge_couple_args = {}
-    layerdiffuse_args = {}
-    reactor_args = {}
-    extensions = config.get('sd', {}).get('extensions', {})
-    accept_only_first = ['flow', 'aspect_ratio', 'img2img', 'img2img_mask']
-    try:
-        for tag in tags['matches']:
-            if isinstance(tag, tuple):
-                tag = tag[0] # For tags with prompt insertion indexes
-            for key, value in tag.items():
-                # Accept only the first occurance
-                if key in accept_only_first and not img_payload_mods.get(key):
-                    img_payload_mods[key] = value
-                elif key == 'sd_output_dir' and not params.get('sd_output_dir'):
-                    params['sd_output_dir'] = str(value)
-                elif key == 'img_censoring' and not params.get('img_censoring'):
-                    params['img_censoring'] = int(value)
-                    if value != 0:
-                        log.info(f"[TAGS] Censoring: {'Image Blurred' if value == 1 else 'Generation Blocked'}")
-                # Accept only first 'change' or 'swap'
-                elif key == 'change_imgmodel' or key == 'swap_imgmodel' and not (img_payload_mods.get('change_imgmodel') or img_payload_mods.get('swap_imgmodel')):
-                    img_payload_mods[key] = str(value)
-                # Allow multiple to accumulate
-                elif key == 'payload':
-                    try:
-                        if img_payload_mods.get('payload'):
-                            payload_order_hack = dict(value)
-                            update_dict(payload_order_hack, img_payload_mods['payload'])
-                            img_payload_mods['payload'] = payload_order_hack
-                        else:
-                            img_payload_mods['payload'] = dict(value)
-                    except Exception:
-                        log.warning("Error processing a matched 'payload' tag; ensure it is a dictionary.")
-                elif key == 'img_param_variances':
-                    img_payload_mods.setdefault('param_variances', {})
-                    try:
-                        update_dict(img_payload_mods['param_variances'], dict(value))
-                    except Exception:
-                        log.warning("Error processing a matched 'img_param_variances' tag; ensure it is a dictionary.")
-                # get any ControlNet extension params
-                elif key.startswith('controlnet') and extensions.get('controlnet_enabled'):
-                    index = int(key[len('controlnet'):]) if key != 'controlnet' else 0  # Determine the index (cnet unit) for main controlnet args
-                    controlnet_args.setdefault(index, {}).update({'image': value, 'enabled': True})         # Update controlnet args at the specified index
-                elif key.startswith('cnet') and extensions.get('controlnet_enabled'):
-                    # Determine the index for controlnet_args sublist
-                    if key.startswith('cnet_'):
-                        index = int(key.split('_')[0][len('cnet'):]) if not key.startswith('cnet_') else 0  # Determine the index (cnet unit) for additional controlnet args
-                    controlnet_args.setdefault(index, {}).update({key.split('_', 1)[-1]: value})   # Update controlnet args at the specified index
-                # get any layerdiffuse extension params
-                elif key == 'layerdiffuse' and extensions.get('layerdiffuse_enabled'):
-                    layerdiffuse_args['method'] = str(value)
-                elif key.startswith('laydiff_') and extensions.get('layerdiffuse_enabled'):
-                    laydiff_key = key[len('laydiff_'):]
-                    layerdiffuse_args[laydiff_key] = value
-                # get any ReActor extension params
-                elif key == 'reactor' and extensions.get('reactor_enabled'):
-                    reactor_args['image'] = value
-                elif key.startswith('reactor_') and extensions.get('reactor_enabled'):
-                    reactor_key = key[len('reactor_'):]
-                    reactor_args[reactor_key] = value
-                # get any Forge Couple extension params
-                elif key == 'forge_couple' and extensions.get('forgecouple_enabled'):
-                    if value.startswith('['):
-                        forge_couple_args['maps'] = list(value)
-                    else: 
-                        forge_couple_args['direction'] = str(value)
-                elif key.startswith('couple_') and extensions.get('forgecouple_enabled'):
-                    forge_couple_key = key[len('couple_'):]
-                    if value.startswith('['):
-                        forge_couple_args[forge_couple_key] = list(value)
-                    else:
-                        forge_couple_args[forge_couple_key] = str(value)
-                # get any user image(s)
-                elif key == 'send_user_image':
-                    user_image_args = get_image_tag_args('User image', str(value), key=None, set_dir=None)
-                    user_image = discord.File(user_image_args)
-                    user_image = discord.File(user_image_args)
-                    params.setdefault('send_user_image', [])
-                    params['send_user_image'].append(user_image)
-                    log.info('[TAGS] Sending user image.')
-        # Add the collected SD WebUI extension args to the img_payload_mods dict
-        if controlnet_args:
-            img_payload_mods.setdefault('controlnet', [])
-            for index in sorted(set(controlnet_args.keys())):   # This flattens down any gaps between collected ControlNet units (ensures lowest index is 0, next is 1, and so on)
-                cnet_basesettings = copy.copy(bot_settings.settings['imgmodel']['payload']['alwayson_scripts']['controlnet']['args'][0])  # Copy of required dict items
-                cnet_unit_args = controlnet_args.get(index, {})
-                cnet_unit = update_dict(cnet_basesettings, cnet_unit_args)
-                img_payload_mods['controlnet'].append(cnet_unit)
-        if forge_couple_args:
-            img_payload_mods.setdefault('forge_couple', {})
-            img_payload_mods['forge_couple'].update(forge_couple_args)
-        if layerdiffuse_args:
-            img_payload_mods.setdefault('layerdiffuse', {})
-            img_payload_mods['layerdiffuse'].update(layerdiffuse_args)
-        if reactor_args:
-            img_payload_mods.setdefault('reactor', {})
-            img_payload_mods['reactor'].update(reactor_args)
-
-        img_payload_mods = collect_img_extension_mods(img_payload_mods)
-    except Exception as e:
-        log.error(f"Error collecting Img tag values: {e}")
-    return img_payload_mods, params
-
-def init_img_payload(img_prompt:str, params:dict) -> dict:
-    try:
-        neg_prompt = params.get('neg_prompt', '')
-        positive_style = params.get('style', {}).get('positive', "{}") if params.get('style') is not None else "{}"
-        negative_style = params.get('style', {}).get('negative', '') if params.get('style') is not None else "{}"
-        img_prompt = positive_style.format(img_prompt)
-        neg_prompt = f"{neg_prompt}, {negative_style}" if negative_style else neg_prompt
-        # Initialize img_payload settings
-        img_payload = {"prompt": img_prompt, "negative_prompt": neg_prompt}
-        # Apply settings from imgmodel configuration
-        imgmodel_img_payload = copy.deepcopy(bot_settings.settings['imgmodel'].get('payload', {}))
-        img_payload.update(imgmodel_img_payload)
-        return img_payload
-
-    except Exception as e:
-        log.error(f"Error initializing img payload: {e}")
-
-def match_img_tags(img_prompt:str, tags:SORTED_TAGS) -> SORTED_TAGS:
-    try:
-        # Unmatch any previously matched tags which try to insert text into the img_prompt
-        matches_:TAG_LIST = tags['matches'] # type: ignore
-        for tag in matches_[:]:  # Iterate over a copy of the list
-            if tag.get('imgtag_matched_early'): # extract text insertion key pairs from previously matched tags
-                new_tag = {}
-                tag_copy = copy.copy(tag)
-                for key, value in tag_copy.items(): # Iterate over a copy of the tag
-                    if (key in ["trigger", "matched_trigger", "imgtag_matched_early", "case_sensitive", "on_prefix_only", "search_mode", "img_text_joining", "phase"]
-                        or key.startswith(('positive_prompt', 'negative_prompt'))):
-                        new_tag[key] = value
-                        if not key == 'phase':
-                            del tag[key] # Remove the key from the original tag
-                tags['unmatched']['userllm'].append(new_tag) # append to unmatched list
-                # Remove tag items from original list that became an empty list
-                if not tag:
-                    tags['matches'].remove(tag)
-        # match tags for 'img' phase.
-        tags = match_tags(img_prompt, tags, phase='img')
-        # Rematch any previously matched tags that failed to match text in img_prompt
-        for tag in tags['unmatched']['userllm'][:]:  # Iterate over a copy of the list
-            if tag.get('imgtag_matched_early') and tag.get('imgtag_uninserted'):
-                tags['matches'].append(tag)
-                tags['unmatched']['userllm'].remove(tag)
-
-    except Exception as e:
-        log.error(f"Error matching tags for img phase: {e}")
-
-    return tags
-
-
-async def img_gen_task(self):
-    user_name = get_user_ctx_inter(ictx).display_name or None
-    channel = ictx.channel
-    bot_should_do = params.get('bot_should_do', {})
-    img_censoring = params.get('img_censoring', 0)
-    try:
-        if not message.tags:
-            await message.tags.get_tags()
-            tags = match_img_tags(img_prompt, tags)
-            bot_should_do = bot_should_do(tags)
-        # Initialize img_payload
-        img_payload = init_img_payload(img_prompt, params)
-        # collect matched tag values
-        img_payload_mods, params = collect_img_tag_values(tags, params)
-        send_user_image = img_payload_mods.pop('send_user_image', [])
-        # Apply tags relevant to Img gen
-        img_payload, params = await process_img_payload_tags(img_payload, img_payload_mods, params)
-        # Check censoring
-        if img_censoring == 2:
-            if img_send_embed_info:
-                img_send_embed_info.title = "Image prompt was flagged as inappropriate."
-                img_send_embed_info.description = ""
-                await channel.send(embed=img_send_embed_info)
-            return
-        # Process loractl
-        if config['sd']['extensions'].get('lrctl', {}).get('enabled', False):
-            tags.matches = apply_loractl(tags.matches)
-        # Apply tags relevant to Img prompts
-        img_payload = process_img_prompt_tags(img_payload, tags)
-        # Apply menu selections from /image command
-        img_payload = apply_imgcmd_params(img_payload, params)
-        # Clean anything up that gets messy
-        img_payload = clean_img_payload(img_payload)
-        # Change imgmodel if triggered by tags
-        should_swap = False
-        imgmodel_params = params.get('imgmodel', {})
-        if imgmodel_params:
-            # Add checkpoint to image payload (change_imgmodel_task() will change it anyway)
-            sd_model_checkpoint = imgmodel_params.get('sd_model_checkpoint', '')
-            override_settings = img_payload.setdefault('override_settings', {})
-            override_settings['sd_model_checkpoint'] = sd_model_checkpoint
-            # collect params fpr event of model swapping
-            swap_params = {'imgmodel': {}}
-            swap_params['imgmodel']['imgmodel_name'] = bot_database.last_imgmodel_name
-            swap_params['imgmodel']['sd_model_checkpoint'] = bot_database.last_imgmodel_checkpoint
-            should_swap = await change_imgmodel_task(params, ictx)
-        # Generate and send images
-        params['bot_should_do'] = bot_should_do
-        await process_image_gen(img_payload, channel, params)
-        if (current_task.name == 'image' or (bot_should_do['should_send_text'] and not bot_should_do['should_gen_text'])) and img_send_embed_info:
-            img_send_embed_info.title = f"{user_name} requested an image:"
-            img_send_embed_info.description = params.get('message', img_prompt)[:2000]
-            await channel.send(embed=img_send_embed_info)
-            await channel.send(f">>> {img_payload['prompt']}"[:2000])
-        if send_user_image:
-            await channel.send(file=send_user_image) if len(send_user_image) == 1 else await channel.send(files=send_user_image)
-        # If switching back to original Img model
-        if should_swap:
-            swap_params['imgmodel']['mode'] = 'swap_back'
-            swap_params['imgmodel']['verb'] = 'Swapping back to'
-            await change_imgmodel_task(swap_params, ictx)
-    except Exception as e:
-        log.error(f"An error occurred in img_gen_task(): {e}")
-        traceback.print_exc()
-        current_task.clear()
 
 #################################################################
 ######################## /IMAGE COMMAND #########################

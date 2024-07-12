@@ -464,15 +464,17 @@ class Embeds:
             self.sent_msg_embeds[name] = await previously_sent_embed.edit(embed = self.update(name, title, description, color, url_suffix, url))
         return self.sent_msg_embeds[name]
 
-    async def send(self, name:str, title:str|None=None, description:str|None=None, color:int|None=None, url_suffix:str|None=None, url:str|None=None) -> None|discord.Message:
+    async def send(self, name:str, title:str|None=None, description:str|None=None, color:int|None=None, url_suffix:str|None=None, url:str|None=None, channel:discord.TextChannel|None=None) -> None|discord.Message:
+        send_channel = channel or self.channel or None
         # Return if not configured
-        if not self.enabled(name) or self.channel is None:
+        if not self.enabled(name) or self.channel is None or channel is None:
             return
         # Retain the message while sending Embed
-        self.sent_msg_embeds[name] = await self.channel.send(embed = self.update(name, title, description, color, url_suffix, url))
+        self.sent_msg_embeds[name] = await send_channel.send(embed = self.update(name, title, description, color, url_suffix, url))
         return self.sent_msg_embeds[name]
 
-    async def edit_or_send(self, name:str, title:str|None=None, description:str|None=None, color:int|None=None, url_suffix:str|None=None, url:str|None=None) -> None|discord.Embed|discord.Message:
+    async def edit_or_send(self, name:str, title:str|None=None, description:str|None=None, color:int|None=None, url_suffix:str|None=None, url:str|None=None, channel:discord.TextChannel|None=None) -> None|discord.Embed|discord.Message:
+        send_channel = channel or self.channel or None
         # Return if not configured
         if not self.enabled(name):
             return
@@ -481,8 +483,10 @@ class Embeds:
         # Retain the message while sending/editing Embed
         if previously_sent_embed:
             self.sent_msg_embeds[name] = await previously_sent_embed.edit(embed = self.update(name, title, description, color, url_suffix, url))
+        elif send_channel is None:
+            return
         else:
-            self.sent_msg_embeds[name] = await self.channel.send(embed = self.update(name, title, description, color, url_suffix, url))
+            self.sent_msg_embeds[name] = await send_channel.send(embed = self.update(name, title, description, color, url_suffix, url))
         return self.sent_msg_embeds[name]
 
     def create(self, name:str, title:str=' ', description:str=' ', color:int|None=None, url_suffix:str|None=None, url:str|None=None) -> discord.Embed:
