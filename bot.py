@@ -45,7 +45,7 @@ from modules.utils_discord import Embeds, guild_only, configurable_for_dm_if, is
 from modules.utils_files import load_file, merge_base, save_yaml_file  # noqa: F401
 from modules.utils_aspect_ratios import round_to_precision, res_to_model_fit, dims_from_ar, avg_from_dims, get_aspect_ratio_parts, calculate_aspect_ratio_sizes  # noqa: F401
 from modules.history import HistoryManager, History, HMessage, cnf
-from modules.typing import TAG_LIST, TAG_LIST_DICT, SORTED_TAGS, AlertUserError
+from modules.typing import TAG_LIST, TAG_LIST_DICT, AlertUserError
 
 from discord.ext.commands.errors import HybridCommandError, CommandError
 from discord.errors import DiscordException
@@ -956,7 +956,7 @@ class Tags:
         self.detagged_text:str = None
         #self.init(text) # initialize tags from input text
 
-    def sort_tags(self, all_tags: TAG_LIST) -> SORTED_TAGS:
+    def sort_tags(self, all_tags: TAG_LIST):
         for tag in all_tags:
             if 'random' in tag.keys():
                 if not isinstance(tag['random'], (int, float)):
@@ -1080,7 +1080,7 @@ class Tags:
             log.error(f"Error getting tags: {e}")
             return text
 
-    def match_img_tags(self) -> SORTED_TAGS:
+    def match_img_tags(self):
         try:
             # Unmatch any previously matched tags which try to insert text into the img_prompt
             matches_:TAG_LIST = self.matches # type: ignore
@@ -2359,7 +2359,7 @@ class TaskProcessing(TaskAttributes):
         except Exception as e:
             log.error(f"An error occurred when cleaning img_payload: {e}")
 
-    def apply_loractl(self):# -> SORTED_TAGS:
+    def apply_loractl(self):
         try:
             matched_tags: list = self.tags.matches
             if sd.client != 'A1111 SD WebUI':

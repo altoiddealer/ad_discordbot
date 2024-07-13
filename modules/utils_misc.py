@@ -55,6 +55,22 @@ def update_dict_matched_keys(d, u):
             d[k] = v
     return d
 
+def random_value_from_range(value_range):
+    if isinstance(value_range, (list, tuple)) and len(value_range) == 2:
+        start, end = value_range
+        if isinstance(start, (int, float)) and isinstance(end, (int, float)):
+            num_digits = max(len(str(start).split('.')[-1]), len(str(end).split('.')[-1]))
+            value = random.uniform(start, end) if isinstance(start, float) or isinstance(end, float) else random.randint(start, end)
+            value = round(value, num_digits)
+            return value
+    log.warning(f'Invalid value range "{value_range}". Defaulting to "0".')
+    return 0
+
+def convert_lists_to_tuples(dictionary:dict) -> dict:
+    for key, value in dictionary.items():
+        if isinstance(value, list) and len(value) == 2 and all(isinstance(item, (int, float)) for item in value) and not any(isinstance(item, bool) for item in value):
+            dictionary[key] = tuple(value)
+    return dictionary
 
 def get_time(offset=0.0, time_format=None, date_format=None):
     try:

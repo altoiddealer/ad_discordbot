@@ -421,14 +421,14 @@ class Embeds:
 
     def init_default_embeds(self):
         if self.enabled('system'):
-            self.create("system", "System Notification", " ", self.root_url, self.color)
+            self.create("system", "System Notification", " ", url=self.root_url, color=self.color)
         if self.enabled('images'):
-            self.create("img_gen", "Processing image generation ...", " ", self.root_url, self.color)
-            self.create("img_send", "User requested an image ...", " ", self.root_url, self.color)
+            self.create("img_gen", "Processing image generation ...", " ", url=self.root_url, color=self.color)
+            self.create("img_send", "User requested an image ...", " ", url=self.root_url, color=self.color)
         if self.enabled('change'):
-            self.create("change", "Change Notification", " ", self.root_url, self.color)
+            self.create("change", "Change Notification", " ", url=self.root_url, color=self.color)
         if self.enabled('flow'):
-            self.create("flow", "Flow Notification", " ", "/wiki/tags", self.color)
+            self.create("flow", "Flow Notification", " ", url_suffix="/wiki/tags", color=self.color)
 
     def get(self, name:str) -> discord.Embed|None:
         return self.embeds.get(name, None)
