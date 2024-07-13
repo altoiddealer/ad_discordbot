@@ -1083,7 +1083,7 @@ class Tags:
             log.error(f"Error getting tags: {e}")
             return text
 
-    def match_img_tags(self):
+    def match_img_tags(self, img_prompt:str):
         try:
             # Unmatch any previously matched tags which try to insert text into the img_prompt
             matches_:TAG_LIST = self.matches # type: ignore
@@ -1102,7 +1102,7 @@ class Tags:
                     if not tag:
                         self.matches.remove(tag)
             # match tags for 'img' phase.
-            tags = self.match_tags(phase='img')
+            self.match_tags(img_prompt, phase='img')
             # Rematch any previously matched tags that failed to match text in img_prompt
             for tag in self.unmatched['userllm'][:]:  # Iterate over a copy of the list
                 if tag.get('imgtag_matched_early') and tag.get('imgtag_uninserted'):
@@ -1111,8 +1111,6 @@ class Tags:
 
         except Exception as e:
             log.error(f"Error matching tags for img phase: {e}")
-
-        return tags
 
     def process_tag_insertions(self, prompt:str) -> str:
         try:
@@ -3363,7 +3361,7 @@ class Tasks(TaskProcessing):
         try:
             if not self.tags:
                 self.tags = Tags(self.img_prompt)
-                self.tags.match_img_tags()
+                self.tags.match_img_tags(self.img_prompt)
                 self.params.update_bot_should_do(self.tags)
             # Initialize img_payload
             self.init_img_payload()
