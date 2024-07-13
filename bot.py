@@ -140,14 +140,16 @@ class SD:
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.request(method.lower(), url=f'{self.url}{endpoint}', json=json) as response:
+                    response_text = await response.text()
                     if response.status == 200:
                         r = await response.json()
                         if self.client is None and endpoint != '/sdapi/v1/cmd-flags':
                             await self.get_sysinfo()
-                        bot_settings.imgmodel.refresh_enabled_extensions()
+                            bot_settings.imgmodel.refresh_enabled_extensions()
                         return r
                     else:
                         log.error(f'{self.url}{endpoint} response: {response.status} "{response.reason}"')
+                        log.error(f'Response content: {response_text}')
                         if retry and response.status in [408, 500]:
                             log.info("Retrying the request in 3 seconds...")
                             await asyncio.sleep(3)
@@ -246,7 +248,7 @@ class TTS:
     def init_tts_extensions(self):
         # Get any supported TTS client found in TGWUI CMD_FLAGS
         for extension in shared.args.extensions:
-            if extension in self.supported_tts_clients:
+            if extension in self.supported_clients:
                 self.client = extension
                 break
 
@@ -1066,14 +1068,15 @@ class Tags:
 
     async def init(self, text:str) -> str:
         try:
-            flow_step_tags = []
+            base_tags: TAG_LIST           = bot_settings.base_tags # base tags
+            char_tags: TAG_LIST           = bot_settings.settings['llmcontext'].get('tags', []) # character specific tags
+            imgmodel_tags: TAG_LIST       = bot_settings.settings['imgmodel'].get('tags', []) # imgmodel specific tags
+            detagged_text, tags_from_text = self.get_tags_from_text(text)
+            flow_step_tags: TAG_LIST      = []
             if flows.queue.qsize() > 0:
                 flow_step_tags = [await flows.queue.get()]
-            base_tags = bot_settings.base_tags # base tags
-            imgmodel_tags = bot_settings.settings['imgmodel'].get('tags', []) # imgmodel specific tags
-            char_tags = bot_settings.settings['llmcontext'].get('tags', []) # character specific tags
-            detagged_text, tags_from_text = self.get_tags_from_text(text)
-            all_tags = tags_from_text + flow_step_tags + char_tags + imgmodel_tags + base_tags  # merge tags to one dictionary
+            # merge tags to one list (Priority is important!!)
+            all_tags: TAG_LIST = tags_from_text + flow_step_tags + char_tags + imgmodel_tags + base_tags
             self.sort_tags(all_tags) # sort tags into phases (user / llm / userllm)
             return detagged_text
         except Exception as e:
@@ -1754,7 +1757,7 @@ class TaskProcessing(TaskAttributes):
     async def message_img_subtask(self):
         self.img_prompt = self.img_prompt or self.bot_hmessage.text
         self.tags.match_img_tags(self.img_prompt)
-        self.params.update_bot_should_do() # check for updates from tags
+        self.params.update_bot_should_do(self.tags) # check for updates from tags
         if self.params.should_gen_image:
             await self.embeds.delete('img_gen')
             # Img Gen Task - CREATE NEW TASK AND QUEUE IT
@@ -2888,7 +2891,7 @@ class Tasks(TaskProcessing):
             await spontaneous_messaging.reset_for_channel(self.ictx)    # Stop any pending spontaneous message task for current channel
 
             self.tags.match_tags(self.text, phase='llm')    # match tags labeled for user / userllm.
-            self.params.update_bot_should_do()      # check what bot should do
+            self.params.update_bot_should_do(self.tags)      # check what bot should do
 
             # Bot should generate text...
             if self.params.should_gen_text:
@@ -3360,7 +3363,7 @@ class Tasks(TaskProcessing):
             if not self.tags:
                 self.tags = Tags(self.img_prompt)
                 self.tags.match_img_tags()
-                self.params.update_bot_should_do()
+                self.params.update_bot_should_do(self.tags)
             # Initialize img_payload
             self.init_img_payload()
             # collect matched tag values
@@ -3517,14 +3520,15 @@ class TaskManager(Tasks):
         try:
             while True:
                 # Fetch item from the queue
-                task: Task = await self.queue.get()           
+                task: Task = await self.queue.get()
+                task.init_self_values() # Sets defaults for task attributes
                 self.event.set() # Flag processing a task. Check with 'if task_manager.event.is_set():'
 
                 try:
                     await self.run_task(task)
                     # flows queue is populated in process_llm_payload_tags()
                     if flows.queue.qsize() > 0:
-                        await flows.run_flow_if_any(task.text)
+                        await flows.run_flow_if_any(task.text, task.ictx)
                 except Exception as e:
                     logging.error(f"An error occurred while processing task {task.name}: {e}")
 
@@ -3536,11 +3540,13 @@ class TaskManager(Tasks):
 
     async def run(self, task: Task) -> Any:
         try:
+            if task.name == 'on_message':
+                await task.message_task()
             # Dynamically get the method and call it
-            method_name = f'{task.name}_task'
-            method = getattr(self, method_name, None)
-            if method is not None and callable(method):
-                return await method()
+            # method_name = f'{task.name}_task'
+            # method = getattr(self, method_name, None)
+            # if method is not None and callable(method):
+            #     return await method()
             else:
                 logging.error(f"No such method: {method_name}")
         except Exception as e:
@@ -3571,10 +3577,10 @@ task_manager = TaskManager()
 ########################## QUEUED FLOW ##########################
 #################################################################
 class Flows:
-    def __init__(self, ictx:CtxInteraction):
+    def __init__(self, ictx:CtxInteraction|None=None):
         self.ictx: CtxInteraction = ictx
-        self.user_name: str = get_user_ctx_inter(ictx).display_name
-        self.channel: discord.TextChannel = ictx.channel
+        self.user_name: Optional[str] = get_user_ctx_inter(ictx).display_name if ictx else None
+        self.channel: Optional[discord.TextChannel] = ictx.channel if ictx else None
 
         self.event: asyncio.Event = asyncio.Event()
         self.queue: asyncio.Queue = asyncio.Queue()
@@ -3674,8 +3680,11 @@ class Flows:
         self.event.clear()              # flag that flow is no longer processing
         self.queue.task_done()          # flow queue task is complete
 
-    async def run_flow_if_any(self, text:str):
+    async def run_flow_if_any(self, text:str, ictx:CtxInteraction):
         if self.queue.qsize() > 0:
+            self.ictx      = ictx
+            self.user_name = get_user_ctx_inter(ictx).display_name
+            self.channel   = ictx.channel
             # flows are activated in process_llm_payload_tags(), and is where the flow queue is populated
             await self.flow_task(text)
 
@@ -3871,7 +3880,7 @@ if sd.enabled:
         img2img_dict = {}
         cnet_dict = {}
         try:
-            prompt = await dynamic_prompting(ctx.author.display_name, prompt, i=None)
+            prompt = await dynamic_prompting(ctx.author.display_name, prompt, ictx=None)
             log_msg = f"**Prompt:** {prompt}"
             if size:
                 selected_size = next((option for option in size_options if option['name'] == size), None)
