@@ -1781,6 +1781,7 @@ class TaskProcessing(TaskAttributes):
                 log.warning(f'Bot tried to generate text for {self.user_name}, but no LLM model was loaded')
         ## Finalize payload, generate text via TGWUI, and process responses
         # Toggle TTS off, if interaction server is not connected to Voice Channel
+        tts_sw = False
         if (not self.params.should_send_text) \
             or (hasattr(self.ictx, 'guild') and getattr(self.ictx.guild, 'voice_client', None) \
             and not voice_clients.guild_vcs.get(self.ictx.guild.id) and int(tts.settings.get('play_mode', 0)) == 0):
