@@ -854,7 +854,7 @@ class VoiceClients:
 
 voice_clients = VoiceClients()
 
-
+# Command to set voice channels
 @client.hybrid_command(name="set_server_voice_channel", description="Assign a channel as the voice channel for this server")
 @app_commands.checks.has_permissions(manage_channels=True)
 @guild_only()
@@ -1504,6 +1504,24 @@ class Params:
             log.error(f"An error occurred while checking if bot should do '{key}': {e}")
 
 #################################################################
+########################## MENTIONS #############################
+#################################################################
+# For @ mentioning users who were not last replied to
+class Mentions:
+    def __init__(self):
+        self.previous_user_mention = ''
+
+    def update_mention(self, user_mention:str, last_resp:str='') -> str:
+        mention_resp = last_resp
+
+        if user_mention != self.previous_user_mention:
+            mention_resp = f"{user_mention} {last_resp}"
+        self.previous_user_mention = user_mention
+        return mention_resp
+    
+mentions = Mentions()
+
+#################################################################
 ####################### TASK PROCESSING #########################
 #################################################################
 class TaskAttributes():
@@ -1525,7 +1543,7 @@ class TaskAttributes():
     bot_hmessage: HMessage
 
 class TaskProcessing(TaskAttributes):
-    ####################### MOSTLY TEXT GEN ORICESSING #########################
+    ####################### MOSTLY TEXT GEN PROCESSING #########################
     async def send_responses(self):
         if self.bot_hmessage:
             # Process any TTS response
@@ -1533,7 +1551,7 @@ class TaskProcessing(TaskAttributes):
                 await voice_clients.process_tts_resp(self.ictx, self.bot_hmessage)
             if self.params.should_send_text:
                 # @mention non-consecutive users
-                mention_resp = update_mention(self.user.mention, self.bot_hmessage.text)
+                mention_resp = mentions.update_mention(self.user.mention, self.bot_hmessage.text)
                 # send responses to channel - reference a message if applicable
                 await send_long_message(self.channel, mention_resp, self.bot_hmessage, self.params.ref_message)
                 # Apply any reactions applicable to message
@@ -2917,6 +2935,25 @@ class Tasks(TaskProcessing):
             await self.embeds.delete('change')
         
         return None, None
+    
+    # on_message variation
+    async def on_message_task(self):
+        await self.message_task()
+        message_manager.last_channel = self.channel.id
+        if not is_direct_message(self.ictx):
+            message_manager.update_afk_for_guild(self.ictx.guild.id)
+
+    # spontaneous_message variation
+    async def spontaneous_message_task(self):
+        await self.message_task()
+        task, tally = spontaneous_messaging.tasks[self.channel.id]
+        spontaneous_messaging.tasks[self.channel.id] = (task, tally + 1)
+
+    # From /image command (use_llm = True)
+    async def msg_image_cmd_task(self):
+        task_manager.current_task = 'msg_image_cmd_task' # (already set, just including it here as why this seemingly dupe task exists :P)
+        await self.message_task()
+
 
     #################################################################
     ######################### CONTINUE TASK #########################
@@ -3376,6 +3413,9 @@ class Tasks(TaskProcessing):
             log.error(f"An error occurred in img_gen_task(): {e}")
             traceback.print_exc()
 
+    async def image_cmd_task(self):
+        task_manager.current_task = 'image_cmd'  # (already set, just including it here as why this seemingly dupe task exists :P)
+        await self.img_gen_task()
 
 #################################################################
 ############################# TASK ##############################
@@ -3386,8 +3426,8 @@ class Task(Tasks):
         TaskManager.run() will use the Task() name to dynamically call a Tasks() method.
 
         Valid names:
-        'message' / 'continue' / 'regenerate' / 'speak'
-        'change_imgmodel' / 'change_llmmodel' / 'change_char' / 'img gen'
+        'message' / 'on_message' / 'spontaneous_message' / 'continue' / 'regenerate'
+        'change_imgmodel' / 'change_llmmodel' / 'change_char' / 'img_gen' / 'msg_image_cmd_task' /'speak'
 
         kwargs:
         channel, user, user_name, embeds, text, llm_prompt, llm_payload, params,
@@ -3411,7 +3451,7 @@ class Task(Tasks):
         self.bot_hmessage: HMessage  = kwargs.pop('bot_hmessage', None)
         self.local_history           = kwargs.pop('local_history', None)
 
-        # Dynamically assign remaining keyword arguments as attributes
+        # Dynamically assign custom keyword arguments as attributes
         for key, value in kwargs.items():
             setattr(self, key, value)
 
@@ -3461,20 +3501,8 @@ class Task(Tasks):
 
 
 #################################################################
-######################## MAIN TASK QUEUE ########################
+######################### TASK MANAGER ##########################
 #################################################################
-# For @ mentioning users who were not last replied to
-previous_user_mention = ''
-
-def update_mention(user_mention:str, last_resp:str=''):
-    global previous_user_mention
-    mention_resp = last_resp
-
-    if user_mention != previous_user_mention:
-        mention_resp = f"{user_mention} {last_resp}"
-    previous_user_mention = user_mention
-    return mention_resp
-
 class TaskManager(Tasks):
     def __init__(self):
         self.current_task: str = None
@@ -3821,7 +3849,7 @@ if sd.enabled:
 
     async def process_image(ctx: commands.Context, selections):
         # CREATE TASK - CHECK IF ONLINE
-        image_cmd_task = Task(ctx)
+        image_cmd_task = Task('image_cmd', ctx)
         # Do not process if SD WebUI is offline
         if not await image_cmd_task.sd_online():
             await ctx.defer()
@@ -4124,22 +4152,20 @@ if sd.enabled:
             await ireply(ctx, 'image') # send a response msg to the user
 
             # QUEUE TASK
+            log.info(f'{ctx.author.display_name} used "/image": "{prompt}"')
+            if use_llm:
+                log.info(f'reply requested: {ctx.author.display_name} said: "{prompt}"')
+                # Set more parameters
+                params: Params = image_cmd_task.params
+                params.should_gen_text = True
+                params.should_gen_image = True
+                params.skip_create_user_hmsg = True
+                params.skip_create_bot_hmsg = True
+                params.save_to_history = False
+                # Change name, will run 'message' then 'img_gen'
+                image_cmd_task.name = 'msg_image_cmd_task'
 
-            # async with task_semaphore:
-            #     async with ctx.channel.typing():
-            #         # offload to ai_gen queue
-            #         log.info(f'{ctx.author.display_name} used "/image": "{prompt}"')
-            #         if use_llm:
-            #             log.info(f'reply requested: {ctx.author.display_name} said: "{prompt}"')
-            #             params['bot_should_do'] = {'should_gen_text': True, 'should_gen_image': True}
-            #             params['skip_create_user_hmsg'] = True
-            #             params['skip_create_bot_hmsg'] = True
-            #             params['save_to_history'] = False
-            #             current_task.set(ctx.channel, 'image')
-            #             await message_task(ctx, prompt, llm_payload=None, params=params)
-            #         else:
-            #             await img_gen_task('image', prompt, params, ctx, tags={})
-            #         await run_flow_if_any(ctx, prompt)
+            task_manager.queue.put(image_cmd_task)
 
         except Exception as e:
             log.error(f"An error occurred in image(): {e}")
@@ -5200,12 +5226,9 @@ class MessageManager():
         try:
             log.info(f'Processing queued message (#{num}) by {message.author.display_name}.')
             # offload to TaskManager() queue
-            message_task = Task('message', message, text=text)
-            await task_manager.queue.put(message_task)
-            # TODO SEPARATE QUEUE/ HANDLING FOR MESSAGE TASKS
-            self.last_channel = message.channel.id
-            if not is_direct_message(message):
-                self.update_afk_for_guild(message.guild.id)
+            on_message_task = Task('on_message', message, text=text)
+            await task_manager.queue.put(on_message_task)
+            # TODO SEPARATE TASK QUEUE + HANDLING FOR MESSAGE TASKS
         except Exception as e:
             log.error(f"Error while processing a Message: {e}")
 
@@ -5296,11 +5319,8 @@ class SpontaneousMessaging():
         try:
             log.info(f'Prompting for a spontaneous message: "{prompt}"')
             # offload to TaskManager() queue
-            spontaneous_message_task = Task('message', ictx, text=prompt)
+            spontaneous_message_task = Task('spontaneous_message', ictx, text=prompt)
             await task_manager.queue.put(spontaneous_message_task)
-            task, tally = self.tasks[ictx.channel.id]
-            self.tasks[ictx.channel.id] = (task, tally + 1)
-
         except Exception as e:
             log.error(f"Error while processing a Spontaneous Message: {e}")
 
