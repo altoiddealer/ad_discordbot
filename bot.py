@@ -1647,11 +1647,9 @@ class TaskProcessing(TaskAttributes):
                 else:
                     if char_params == change_character:
                         verb = 'Changing'
-                        # CREATE TASK AND RUN IT
-                        char_params = {'character': {'char_name': char_params, 'mode': 'change', 'verb': verb}}
-                        params = Params(character=char_params)
-                        change_char_task = Task('change_character', self.ictx, params=params)
-                        await task_manager.run_subtask(change_char_task)
+                        # RUN A SUBTASK
+                        self.params.character = {'char_name': char_params, 'mode': 'change', 'verb': verb}
+                        await self.run_subtask('change_char')
                     else:
                         verb = 'Swapping'
                         await self.swap_llm_character(swap_character)
@@ -1758,17 +1756,8 @@ class TaskProcessing(TaskAttributes):
         self.params.update_bot_should_do(self.tags) # check for updates from tags
         if self.params.should_gen_image:
             await self.embeds.delete('img_gen')
-            # Img Gen Task - CREATE NEW TASK AND QUEUE IT
-            img_gen_task = Tasks(name='img_gen', ictx=self.ictx, img_prompt=self.img_prompt, params=self.params, tags=self.tags)
-            #await img_gen_task(self.img_prompt, self.params, self.ictx, tags)
-
-    async def llmmodel_swap_back(self, original_llmmodel:str) -> dict:
-        self.params.llmmodel['llmmodel_name'] = original_llmmodel
-        # Swap LLM Model back - CREATE NEW TASK AND QUEUE IT
-        change_llmmodel_task = Tasks(self.ictx, self.params)
-        await change_llmmodel_task(self.ictx, self.params)
-        # Delete embed again after the second call
-        await self.embeds.delete('change')
+            # RUN A SUBTASK
+            await self.run_subtask('img_gen')
 
     async def message_llm_subtask(self):
         # if no LLM model is loaded, notify that no text will be generated
@@ -1822,18 +1811,6 @@ class TaskProcessing(TaskAttributes):
                 await self.channel.send('**Processing image generation using message as the image prompt ...**', delete_after=5) # msg for if LLM model is unloaded
             else:
                 self.embeds.send('img_gen', "Prompting ...", " ")
-
-    async def llmmodel_swap_or_change(self):
-        # Check params to see if an LLM model change/swap was triggered by Tags
-        llm_model_mode = self.params.llmmodel.get('mode', 'change')  # default to 'change' unless a tag was triggered with 'swap'
-        original_llmmodel = copy.copy(str(shared.model_name))           # copy current LLM model name
-        # Change LLM model CREATE TASK AND QUEUE IT
-        change_llmmodel_task = Tasks('change_llmmodel', self.ictx, self.params)
-        await change_llmmodel_task(self.ictx, self.params)
-        # Delete embed before the second call
-        if llm_model_mode == 'swap':
-            await self.embeds.delete('change')
-        return llm_model_mode, original_llmmodel
 
     async def build_llm_payload(self):
         # Use predefined LLM payload or initialize with defaults
@@ -2898,17 +2875,29 @@ class Tasks(TaskProcessing):
 
                 # process text generation
                 if tgwui.enabled:
+
                     if self.params.llmmodel:        # if LLM model swap/change was triggered
-                        llm_model_mode, original_llmmodel = await self.llmmodel_swap_or_change()
+                        llm_model_mode = self.params.llmmodel.get('mode', 'change')  # default to 'change' unless a tag was triggered with 'swap'
+                        original_llmmodel = copy.copy(str(shared.model_name))        # copy current LLM model name
+                        # RUN CHANGE LLMMODEL AS SUBTASK
+                        self.run_subtask('change_llmmodel')
+                        # Delete embed before the second call
+                        if llm_model_mode == 'swap':
+                            await self.embeds.delete('change')
+
                     if self.params.should_gen_image:
                         await self.init_img_embed() # Create a "prompting" embed for image gen
+
                     await self.message_llm_subtask()
 
                     # add history reactions to user message / swap LLM model
                     if config.discord.get('history_reactions', {}).get('enabled', True):
                         await apply_reactions_to_messages(client.user, self.ictx, self.user_hmessage)
                     if self.params.llmmodel and llm_model_mode == 'swap':
-                        await self.llmmodel_swap_back(original_llmmodel)
+                        self.params.llmmodel['llmmodel_name'] = original_llmmodel
+                        # RUN CHANGE LLMMODEL AS SUBTASK
+                        await self.run_subtask('change_llmmodel')
+                        await self.embeds.delete('change') # Delete embed
 
                 # process image generation (A1111 / Forge)
                 if sd.enabled:
@@ -2922,10 +2911,9 @@ class Tasks(TaskProcessing):
                 if await self.sd_online():   # Notify user their prompt will be used directly for img gen
                     await self.channel.send('Bot was triggered by Tags to not respond with text.\n \
                                     **Processing image generation using your input as the prompt ...**', delete_after=5)
-                # CREATE TASK AND RUN IT
-                img_gen_task = self.clone('img_gen', self.ictx)
-                await task_manager.run_subtask(img_gen_task)
-            
+                # RUN IMG GEN AS SUBTASK
+                await self.run_subtask('img_gen')
+
             await spontaneous_messaging.set_for_channel(self.ictx) # trigger spontaneous message from bot, as configured
 
             return self.user_hmessage, self.bot_hmessage
@@ -2956,6 +2944,10 @@ class Tasks(TaskProcessing):
         task_manager.current_task = 'msg_image_cmd_task' # (already set, just including it here as why this seemingly dupe task exists :P)
         await self.message_task()
 
+    # From Flows
+    async def flows_task(self):
+        task_manager.current_task = 'flows_task' # (already set)
+        await self.message_task()
 
     #################################################################
     ######################### CONTINUE TASK #########################
@@ -3150,9 +3142,9 @@ class Tasks(TaskProcessing):
                 params['bot_hmsg_hidden'] = temp_reveal_msgs # Hide new bot HMessage if regenerating from hidden exchange
 
             # Regenerate the reply
-            # CREATE TASK AND RUN IT
-            regenerate_task = self.clone('message', self.ictx) # run a message task
-            _, new_bot_hmessage = await task_manager.run_subtask(regenerate_task)
+            # CREATE A MESSAGE SUB TASK AND RUN IT
+            regenerate_task: Task = self.clone('message', self.ictx)
+            _, new_bot_hmessage = await regenerate_task.run_subtask()
 
             # Mark as reply
             new_bot_hmessage.mark_as_reply_for(self.user_hmessage)
@@ -3394,9 +3386,8 @@ class Tasks(TaskProcessing):
                 swap_params: Params = Params()
                 swap_params.imgmodel['imgmodel_name'] = bot_database.last_imgmodel_name
                 swap_params.imgmodel['sd_model_checkpoint'] = bot_database.last_imgmodel_checkpoint
-                # CREATE TASK AND RUN IT
-                change_imgmodel_task = Task('change_imgmodel', self.ictx, params=self.params)
-                should_swap = await task_manager.run_subtask(change_imgmodel_task)
+                # RUN A CHANGE IMGMODEL SUBTASK
+                should_swap = await self.run_subtask('change_imgmodel')
             # Generate and send images
             await self.process_image_gen()
             if (task_manager.current_task == 'image_cmd' or (self.params.should_send_text and not self.params.should_gen_text)):
@@ -3409,8 +3400,8 @@ class Tasks(TaskProcessing):
             if should_swap:
                 swap_params.imgmodel['mode'] = 'swap_back'
                 swap_params.imgmodel['verb'] = 'Swapping back to'
-                change_imgmodel_task = Task('change_imgmodel', self.ictx, params=swap_params)
-                await task_manager.run_subtask(change_imgmodel_task)
+                # RUN A CHANGE IMGMODEL SUBTASK
+                await self.run_subtask('change_imgmodel')
         except Exception as e:
             log.error(f"An error occurred in img_gen_task(): {e}")
             traceback.print_exc()
@@ -3457,7 +3448,9 @@ class Task(Tasks):
         for key, value in kwargs.items():
             setattr(self, key, value)
 
+    # Only assigns defaults for attributes which are not already set
     def init_self_values(self):
+        self.initialized = True # Flag that Task has been initialized (skip if using same Task object for subtasks, etc)
         self.channel: discord.TextChannel = self.ictx.channel if self.ictx else None
         self.user: Union[discord.User, discord.Member] = get_user_ctx_inter(self.ictx) if self.ictx else None
         self.user_name: str          = self.user.display_name if self.user else ""
@@ -3480,9 +3473,9 @@ class Task(Tasks):
         non_history_tasks = ['imgmodel', 'character'] # tasks that definitely do not need history
         if self.ictx and self.name not in non_history_tasks:
             if is_direct_message(self.ictx):
-                self.local_history = bot_history.get_history_for(self.channel.id).dont_save()
+                self.local_history = self.local_history if self.local_history else bot_history.get_history_for(self.channel.id).dont_save()
             else:
-                self.local_history = bot_history.get_history_for(self.channel.id)
+                self.local_history = self.local_history if self.local_history else bot_history.get_history_for(self.channel.id)
 
     def clone(self, name:str='', ictx:CtxInteraction|None=None) -> "Task":
         # Create a dictionary of the current attributes
@@ -3501,6 +3494,43 @@ class Task(Tasks):
         # Create a new instance with the same attributes
         return Task(name=name, ictx=ictx, **current_attributes)
 
+    async def run(self, task_name: str|None=None) -> Any:
+        try:
+            if not hasattr(self, 'initialized'):
+                self.init_self_values()
+            # Dynamically get the method and call it
+            task_name = task_name if task_name is not None else self.name
+            method_name = f'{task_name}_task'
+            method = getattr(self, method_name, None)
+            if method is not None and callable(method):
+                return await method()
+            else:
+                logging.error(f"No such method: {method_name}")
+        except Exception as e:
+            logging.error(f"An error occurred while processing task {self.name}: {e}")
+
+    async def run_task(self) -> Any:
+        '''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+        run_task() should only be called by the TaskManager()
+        Runs a method of Tasks()
+        '''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+        task_manager.current_task = self.name
+        task_manager.current_subtask = None
+        task_manager.current_channel = self.channel
+        task_manager.current_user_name = self.user_name
+        return await self.run()
+
+    async def run_subtask(self, subtask: str|None=None) -> Any:
+        '''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+        run_subtask() should only be called from an in-process main Task()
+        Can be called from a new Task() instance.
+        Can also be called from the current main Task() instance while providing subtask name.
+        Runs a method of Tasks()
+        '''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+        task_manager.current_subtask = subtask if subtask is not None else self.name
+        output = await self.run(subtask)
+        task_manager.current_subtask = None
+        return output
 
 #################################################################
 ######################### TASK MANAGER ##########################
@@ -3520,55 +3550,28 @@ class TaskManager(Tasks):
             while True:
                 # Fetch item from the queue
                 task: Task = await self.queue.get()
-                task.init_self_values() # Sets defaults for task attributes
                 self.event.set() # Flag processing a task. Check with 'if task_manager.event.is_set():'
 
                 try:
-                    await self.run_task(task)
+                    await task.run_task(task)
                     # flows queue is populated in process_llm_payload_tags()
                     if flows.queue.qsize() > 0:
                         await flows.run_flow_if_any(task.text, task.ictx)
                 except Exception as e:
                     logging.error(f"An error occurred while processing task {task.name}: {e}")
 
+                self.reset_current()    # Reset all current task attributes
                 self.event.clear()      # Flag no longer processing task
                 self.queue.task_done()  # Accept next task
         except Exception as e:
             logging.error(f"An error occurred while processing a main task: {e}")
             self.event.clear()
 
-    async def run(self, task: Task) -> Any:
-        try:
-            if task.name == 'on_message':
-                await task.message_task()
-            # Dynamically get the method and call it
-            # method_name = f'{task.name}_task'
-            # method = getattr(self, method_name, None)
-            # if method is not None and callable(method):
-            #     return await method()
-            else:
-                logging.error(f"No such method: {method_name}")
-        except Exception as e:
-            logging.error(f"An error occurred while processing task {task.name}: {e}")
-
-    async def run_task(self, task: Task) -> Any:
-        '''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
-        run_task() should only be called by the TaskManager()
-        Runs a method of Tasks()
-        '''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
-        self.current_task = task.name
+    def reset_current(self):
+        self.current_task = None
         self.current_subtask = None
-        self.current_channel = task.channel
-        self.current_user_name = task.user_name
-        return await self.run(task)
-
-    async def run_subtask(self, subtask: Task) -> Any:
-        '''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
-        run_subtask() should only be called from an in-process main Task()
-        Runs a method of Tasks()
-        '''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
-        self.current_subtask = subtask.name
-        return await self.run(subtask)
+        self.current_channel = None
+        self.current_user_name = None
 
 task_manager = TaskManager()
 
@@ -3665,9 +3668,9 @@ class Flows:
                 descript += f'**Processing Step {total_flow_steps + 1 - remaining_flow_steps}/{total_flow_steps}**{flow_name}\n'
                 await bot_embeds.edit(name='flow', description=descript)
 
-                # CREATE TASK AND RUN IT
-                flow_task = Task('flow', self.ictx, text=text)
-                await task_manager.run_subtask(flow_task)
+                # CREATE A SUBTASK AND RUN IT
+                flows_task: Task = Task('flows', self.ictx, text=text)
+                await flows_task.run_subtask()
 
             descript = descript.replace("**Processing", ":white_check_mark: **")
             await bot_embeds.edit('flow', f"Flow completed for {self.user_name}", descript)
