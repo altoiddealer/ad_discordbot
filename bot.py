@@ -192,27 +192,22 @@ if sd.enabled:
         await ctx.send(f"**`/restart_sd_client` __will not work__ unless {sd.client} was launched with flag: `--api-server-stop`**", delete_after=10)
         await sd.api(endpoint='/sdapi/v1/server-restart', method='post', json=None, retry=False)
         title = f"{ctx.author.display_name} used '/restart_sd_client'. Restarting {sd.client} ..."
-        system_embed = None
-        if bot_embeds.enabled('system'):
-            system_embed = await ctx.send(embed = bot_embeds.update('system', title=title, description='Attempting to re-establish connection in 5 seconds (Attempt 1 of 10)'))
+        await bot_embeds.send('system', title=title, description='Attempting to re-establish connection in 5 seconds (Attempt 1 of 10)', channel=ctx.channel)
         log.info(title)
         response = None
         retry = 1
         while response is None and retry < 11:
-            if system_embed:
-                system_embed = await system_embed.edit(embed = bot_embeds.update('system', description=f'Attempting to re-establish connection in 5 seconds (Attempt {retry} of 10)'))
+            await bot_embeds.edit('system', description=f'Attempting to re-establish connection in 5 seconds (Attempt {retry} of 10)')
             await asyncio.sleep(5)
             response = await sd.api(endpoint='/sdapi/v1/progress', method='get', json=None, retry=False)
             retry += 1
         if response:
             title = f"{sd.client} restarted successfully."
-            if system_embed:
-                system_embed = await system_embed.edit(embed = bot_embeds.update('system', title=title, description=f"Connection re-established after {retry} out of 10 attempts."))
+            await bot_embeds.edit('system', title=title, description=f"Connection re-established after {retry} out of 10 attempts.")
             log.info(title)
         else:
             title = f"{sd.client} server unresponsive after Restarting."
-            if system_embed:
-                system_embed = await system_embed.edit(embed = bot_embeds.update('system', title=title, description="Connection was not re-established after 10 attempts."))
+            await bot_embeds.edit('system', title=title, description="Connection was not re-established after 10 attempts.")
             log.error(title)
 
     if sd.client:
@@ -603,7 +598,7 @@ def get_character() -> str|None:
 async def first_run():
     try:
         for guild in client.guilds:  # Iterate over all guilds the bot is a member of
-            if guild.text_channels and bot_embeds.system:
+            if guild.text_channels and bot_embeds.enabled('system'):
                 # Find the 'general' channel, if it exists
                 default_channel = None
                 for channel in guild.text_channels:
@@ -846,10 +841,10 @@ class VoiceClients:
             await self.toggle_voice_client(ctx.guild.id, message)
             if bot_embeds.enabled('change'):
                 # Send change embed to interaction channel
-                await ctx.channel.send(embed = bot_embeds.update('change', f"{ctx.author.display_name} {message} TTS.", 'Note: Does not load/unload the TTS model.'))
+                await bot_embeds.send('change', f"{ctx.author.display_name} {message} TTS.", 'Note: Does not load/unload the TTS model.', channel=ctx.channel)
                 if bot_database.announce_channels:
                     # Send embeds to announcement channels
-                    await bg_task_queue.put(announce_changes(ctx, f'{message} TTS', ' '))
+                    await bg_task_queue.put(announce_changes(f'{message} TTS', ' ', ctx))
             log.info(f"TTS was {message}.")
         except Exception as e:
             log.error(f'Error when toggling TTS to "{message}": {e}')
@@ -1401,9 +1396,8 @@ async def dynamic_prompting(user_name: str, text: str, ictx: Optional[CtxInterac
 #################################################################
 ######################### ANNOUCEMENTS ##########################
 #################################################################
-async def announce_changes(ictx: CtxInteraction, change_label:str, change_name:str):
+async def announce_changes(change_label:str, change_name:str, ictx: CtxInteraction|None=None):
     user_name = get_user_ctx_inter(ictx).display_name if ictx else 'Automatically'
-    bot_embeds.update('change', f"{user_name} {change_label}:", f'**{change_name}**')
     try:
         # adjust delay depending on how many channels there are to prevent being rate limited
         delay = math.floor(len(bot_database.announce_channels)/2)
@@ -1412,17 +1406,17 @@ async def announce_changes(ictx: CtxInteraction, change_label:str, change_name:s
             channel = await client.fetch_channel(channel_id)
             # if Automatic imgmodel change (no interaction object)
             if ictx is None:
-                await channel.send(embed=change_embed_info)
+                await bot_embeds.send('change', f"{user_name} {change_label}:", f'**{change_name}**', channel=channel)
             # If private channel
             elif ictx.channel.overwrites_for(ictx.guild.default_role).read_messages is False:
                 continue
             # Public channels in interaction server
             elif any(channel_id == channel.id for channel in ictx.guild.channels):
-                await bot_embeds.send('change', f"{user_name} {change_label} in <#{ictx.channel.id}>:")
+                await bot_embeds.send('change', f"{user_name} {change_label} in <#{ictx.channel.id}>:", channel=channel)
             # Channel is in another server
             elif channel_id not in [channel.id for channel in ictx.guild.channels]:
                 if change_label != 'reset the conversation':
-                    await bot_embeds.send('change', f"A user {change_label} in another bot server:")
+                    await bot_embeds.send('change', f"A user {change_label} in another bot server:", channel=channel)
     except Exception as e:
         log.error(f'An error occurred while announcing changes to announce channels: {e}')
 
@@ -1810,7 +1804,7 @@ class TaskProcessing(TaskAttributes):
             if shared.model_name == 'None':
                 await self.channel.send('**Processing image generation using message as the image prompt ...**', delete_after=5) # msg for if LLM model is unloaded
             else:
-                self.embeds.send('img_gen', "Prompting ...", " ")
+                await self.embeds.send('img_gen', "Prompting ...", " ")
 
     async def build_llm_payload(self):
         # Use predefined LLM payload or initialize with defaults
@@ -2114,7 +2108,9 @@ class TaskProcessing(TaskAttributes):
                         else:
                             title = 'Generating image: 100%'
                             description = f'{self.progress_bar(1)}'
+                        print("1")
                         await self.embeds.edit('img_gen', title, description)
+                        print("2")
                         await asyncio.sleep(1)
                     else:
                         log.warning(f'Connection closed with {sd.client}, retrying in 1 second (attempt {retry_count + 1}/5)')
@@ -2123,7 +2119,9 @@ class TaskProcessing(TaskAttributes):
                 else:
                     await self.sd_progress_warning()
                     return
+            print("3")
             await self.embeds.delete('img_gen')
+            print("4")
         except Exception as e:
             log.error(f'Error tracking {sd.client} image generation progress: {e}')
 
@@ -2404,7 +2402,7 @@ class TaskProcessing(TaskAttributes):
             if controlnet: 
                 self.img_payload['alwayson_scripts']['controlnet']['args'][0].update(controlnet)
         except Exception as e:
-            log.error(f"Error initializing img payload: {e}")
+            log.error(f"Error initializing imgcmd params: {e}")
 
     def process_img_prompt_tags(self):
         try:
@@ -2941,12 +2939,10 @@ class Tasks(TaskProcessing):
 
     # From /image command (use_llm = True)
     async def msg_image_cmd_task(self):
-        task_manager.current_task = 'msg_image_cmd_task' # (already set, just including it here as why this seemingly dupe task exists :P)
         await self.message_task()
 
     # From Flows
     async def flows_task(self):
-        task_manager.current_task = 'flows_task' # (already set)
         await self.message_task()
 
     #################################################################
@@ -3057,7 +3053,7 @@ class Tasks(TaskProcessing):
             e_msg = 'An error occurred while processing "Continue"'
             log.error(f'{e_msg}: {e}')
             await self.ictx.followup.send(e_msg, silent=True)
-            self.embeds.delete('system') # delete embed
+            await self.embeds.delete('system') # delete embed
 
     #################################################################
     ####################### REGENERATE TASK #########################
@@ -3211,7 +3207,7 @@ class Tasks(TaskProcessing):
             for sub_dict in tts_args.values():
                 if 'api_key' in sub_dict:
                     sub_dict.pop('api_key')
-            self.embeds.send('system', f'{self.user_name} requested tts:', f"**Params:** {tts_args}\n**Text:** {self.text}")
+            await self.embeds.send('system', f'{self.user_name} requested tts:', f"**Params:** {tts_args}\n**Text:** {self.text}")
             await tgwui.update_extensions(bot_settings.settings['llmcontext'].get('extensions', {})) # Restore character specific extension settings
             if self.params.user_voice:
                 os.remove(self.params.user_voice)
@@ -3256,7 +3252,7 @@ class Tasks(TaskProcessing):
             await self.embeds.send('change', f"{self.user_name} changed Img model:", f'**{imgmodel_name}**')
             if bot_database.announce_channels and self.embeds.enabled('change'):
                 # Send embeds to announcement channels
-                await bg_task_queue.put(announce_changes(self.ictx, 'changed Img model', imgmodel_name))
+                await bg_task_queue.put(announce_changes('changed Img model', imgmodel_name, self.ictx))
 
             log.info(f"Image model changed to: {imgmodel_name}")
             if config['discord']['post_active_settings']['enabled']:
@@ -3264,7 +3260,7 @@ class Tasks(TaskProcessing):
         except Exception as e:
             log.error(f"Error changing Img model: {e}")
             traceback.print_exc()
-            self.embeds.edit_or_send('change', "An error occurred while changing Img model", e)
+            await self.embeds.edit_or_send('change', "An error occurred while changing Img model", e)
             return False
 
     #################################################################
@@ -3303,7 +3299,7 @@ class Tasks(TaskProcessing):
                     await self.embeds.send('change', title, description)
                     # Send embeds to announcement channels
                     if bot_database.announce_channels:
-                        await bg_task_queue.put(announce_changes(self.ictx, 'changed LLM model', llmmodel_name))
+                        await bg_task_queue.put(announce_changes('changed LLM model', llmmodel_name, self.ictx))
                 log.info(f"LLM model changed to: {llmmodel_name}")
         except Exception as e:
             log.error(f"An error occurred while changing LLM Model from '/llmmodel': {e}")
@@ -3339,12 +3335,15 @@ class Tasks(TaskProcessing):
                 await self.embeds.send('change', f'**{char_name}**', f"{self.user_name} {change_message}:")
                 # Send embeds to announcement channels
                 if bot_database.announce_channels and not is_direct_message(self.ictx):
-                    await bg_task_queue.put(announce_changes(self.ictx, change_message, char_name))
+                    await bg_task_queue.put(announce_changes(change_message, char_name, self.ictx))
             await self.send_char_greeting_or_history(char_name)
             log.info(f"Character loaded: {char_name}")
         except Exception as e:
             log.error(f'An error occurred while loading character for "{self.name}": {e}')
             await self.embeds.edit_or_send('change', "An error occurred while loading character", e)
+
+    async def reset_task(self):
+        await self.change_char_task()
 
     #################################################################
     ######################## IMAGE GEN TASK #########################
@@ -3407,7 +3406,6 @@ class Tasks(TaskProcessing):
             traceback.print_exc()
 
     async def image_cmd_task(self):
-        task_manager.current_task = 'image_cmd'  # (already set, just including it here as why this seemingly dupe task exists :P)
         await self.img_gen_task()
 
 #################################################################
@@ -3420,7 +3418,7 @@ class Task(Tasks):
 
         Valid names:
         'message' / 'on_message' / 'spontaneous_message' / 'continue' / 'regenerate'
-        'change_imgmodel' / 'change_llmmodel' / 'change_char' / 'img_gen' / 'msg_image_cmd_task' /'speak'
+        'change_imgmodel' / 'change_llmmodel' / 'change_char' / 'img_gen' / 'msg_image_cmd' /'speak'
 
         kwargs:
         channel, user, user_name, embeds, text, llm_prompt, llm_payload, params,
@@ -3550,15 +3548,18 @@ class TaskManager(Tasks):
             while True:
                 # Fetch item from the queue
                 task: Task = await self.queue.get()
-                self.event.set() # Flag processing a task. Check with 'if task_manager.event.is_set():'
+                # Flag processing a task. Check with 'if task_manager.event.is_set():'
+                self.event.set() 
+                # initialize default values
+                task.init_self_values()
 
-                try:
-                    await task.run_task(task)
-                    # flows queue is populated in process_llm_payload_tags()
-                    if flows.queue.qsize() > 0:
-                        await flows.run_flow_if_any(task.text, task.ictx)
-                except Exception as e:
-                    logging.error(f"An error occurred while processing task {task.name}: {e}")
+                not_typing = ['on_message', 'spontaneous_message', 'reset', 'change_char', 'change_imgmodel', 'change_llmmodel']
+
+                if task.name not in not_typing:
+                    async with task.channel.typing():
+                        await self.run_task(task)
+                else:
+                    await self.run_task(task)
 
                 self.reset_current()    # Reset all current task attributes
                 self.event.clear()      # Flag no longer processing task
@@ -3572,6 +3573,15 @@ class TaskManager(Tasks):
         self.current_subtask = None
         self.current_channel = None
         self.current_user_name = None
+
+    async def run_task(self, task:Task):
+        try:
+            await task.run_task()
+            # flows queue is populated in process_llm_payload_tags()
+            if flows.queue.qsize() > 0:
+                await flows.run_flow_if_any(task.text, task.ictx)
+        except Exception as e:
+            logging.error(f"An error occurred while processing task {task.name}: {e}")
 
 task_manager = TaskManager()
 
@@ -3658,7 +3668,7 @@ class Flows:
         try:
             total_flow_steps = self.queue.qsize()
             descript = ''
-            await bot_embeds.send('flow', f'Processing Flow for {self.user_name} with {total_flow_steps} steps', descript)
+            await bot_embeds.send('flow', f'Processing Flow for {self.user_name} with {total_flow_steps} steps', descript, channel=self.channel)
 
             while self.queue.qsize() > 0:   # flow_queue items are removed in get_tags()
                 flow_name, text = await self.peek_flow_queue(text)
@@ -3677,7 +3687,7 @@ class Flows:
 
         except Exception as e:
             log.error(f"An error occurred while processing a Flow: {e}")
-            await bot_embeds.edit_or_send('flow', "An error occurred while processing a Flow", e)
+            await bot_embeds.edit_or_send('flow', "An error occurred while processing a Flow", e, channel=self.channel)
 
         self.event.clear()              # flag that flow is no longer processing
         self.queue.task_done()          # flow queue task is complete
@@ -3809,7 +3819,7 @@ if sd.enabled:
         async def image(ctx: commands.Context, prompt: str, use_llm: typing.Optional[app_commands.Choice[str]], size: typing.Optional[app_commands.Choice[str]], style: typing.Optional[app_commands.Choice[str]], 
                         neg_prompt: typing.Optional[str], img2img: typing.Optional[discord.Attachment], img2img_mask: typing.Optional[discord.Attachment], 
                         face_swap: typing.Optional[discord.Attachment], controlnet: typing.Optional[discord.Attachment]):
-            user_selections = {"prompt": prompt, "use_llm": use_llm.value if use_llm else None, "size": size.value if size else None, "style": style.value if style else None, "neg_prompt": neg_prompt,
+            user_selections = {"prompt": prompt, "use_llm": use_llm.value if use_llm else None, "size": size.value if size else None, "style": style.value if style else {}, "neg_prompt": neg_prompt if neg_prompt else '',
                                "img2img": img2img if img2img else None, "img2img_mask": img2img_mask if img2img_mask else None,
                                "face_swap": face_swap if face_swap else None, "cnet": controlnet if controlnet else None}
             await process_image(ctx, user_selections)
@@ -3825,7 +3835,7 @@ if sd.enabled:
         @configurable_for_dm_if(lambda ctx: 'image' in config.discord_dm_setting('allowed_commands', []))
         async def image(ctx: commands.Context, prompt: str, use_llm: typing.Optional[app_commands.Choice[str]], size: typing.Optional[app_commands.Choice[str]], style: typing.Optional[app_commands.Choice[str]],
                         neg_prompt: typing.Optional[str], img2img: typing.Optional[discord.Attachment], img2img_mask: typing.Optional[discord.Attachment], controlnet: typing.Optional[discord.Attachment]):
-            user_selections = {"prompt": prompt, "use_llm": use_llm.value if use_llm else None, "size": size.value if size else None, "style": style.value if style else None, "neg_prompt": neg_prompt,
+            user_selections = {"prompt": prompt, "use_llm": use_llm.value if use_llm else None, "size": size.value if size else None, "style": style.value if style else {}, "neg_prompt": neg_prompt if neg_prompt else '',
                                "img2img": img2img if img2img else None, "img2img_mask": img2img_mask if img2img_mask else None, "cnet": controlnet if controlnet else None}
             await process_image(ctx, user_selections)
     elif reactor_enabled and not cnet_enabled:
@@ -3840,7 +3850,7 @@ if sd.enabled:
         @configurable_for_dm_if(lambda ctx: 'image' in config.discord_dm_setting('allowed_commands', []))
         async def image(ctx: commands.Context, prompt: str, use_llm: typing.Optional[app_commands.Choice[str]], size: typing.Optional[app_commands.Choice[str]], style: typing.Optional[app_commands.Choice[str]],
                         neg_prompt: typing.Optional[str], img2img: typing.Optional[discord.Attachment], img2img_mask: typing.Optional[discord.Attachment], face_swap: typing.Optional[discord.Attachment]):
-            user_selections = {"prompt": prompt, "use_llm": use_llm.value if use_llm else None, "size": size.value if size else None, "style": style.value if style else None, "neg_prompt": neg_prompt,
+            user_selections = {"prompt": prompt, "use_llm": use_llm.value if use_llm else None, "size": size.value if size else None, "style": style.value if style else {}, "neg_prompt": neg_prompt if neg_prompt else '',
                                "img2img": img2img if img2img else None, "img2img_mask": img2img_mask if img2img_mask else None, "face_swap": face_swap if face_swap else None}
             await process_image(ctx, user_selections)
     else:
@@ -3854,7 +3864,7 @@ if sd.enabled:
         @configurable_for_dm_if(lambda ctx: 'image' in config.discord_dm_setting('allowed_commands', []))
         async def image(ctx: commands.Context, prompt: str, use_llm: typing.Optional[app_commands.Choice[str]], size: typing.Optional[app_commands.Choice[str]], style: typing.Optional[app_commands.Choice[str]],
                         neg_prompt: typing.Optional[str], img2img: typing.Optional[discord.Attachment], img2img_mask: typing.Optional[discord.Attachment]):
-            user_selections = {"prompt": prompt, "use_llm": use_llm.value if use_llm else None, "size": size.value if size else None, "style": style.value if style else None, "neg_prompt": neg_prompt,
+            user_selections = {"prompt": prompt, "use_llm": use_llm.value if use_llm else None, "size": size.value if size else None, "style": style.value if style else {}, "neg_prompt": neg_prompt if neg_prompt else '',
                                "img2img": img2img if img2img else None, "img2img_mask": img2img_mask if img2img_mask else None}
             await process_image(ctx, user_selections)
 
@@ -3866,10 +3876,11 @@ if sd.enabled:
             await ctx.defer()
             return
         # User inputs from /image command
+        print("selections:", selections)
         prompt = selections.get('prompt', '')
         use_llm = selections.get('use_llm', None)
         size = selections.get('size', None)
-        style = selections.get('style', None)
+        style = selections.get('style', {})
         neg_prompt = selections.get('neg_prompt', '')
         img2img = selections.get('img2img', None)
         img2img_mask = selections.get('img2img_mask', None)
@@ -4149,7 +4160,7 @@ if sd.enabled:
                     log.error(f"An error occurred while configuring ControlNet for /image command: {e}")
 
             # UPDATE TASK WITH PARAMS
-            imgcmd_params: dict         = image_cmd_task.params.imgcmd
+            imgcmd_params = {}
             imgcmd_params['size']       = size
             imgcmd_params['neg_prompt'] = neg_prompt
             imgcmd_params['style']      = style
@@ -4157,8 +4168,8 @@ if sd.enabled:
             imgcmd_params['controlnet'] = cnet_dict
             imgcmd_params['img2img']    = img2img_dict
             imgcmd_params['message']    = log_msg
-            
-            image_cmd_task.params.endpoint = endpoint
+
+            image_cmd_task.params = Params(imgcmd=imgcmd_params, endpoint=endpoint)
 
             await ireply(ctx, 'image') # send a response msg to the user
 
@@ -4173,10 +4184,10 @@ if sd.enabled:
                 params.skip_create_user_hmsg = True
                 params.skip_create_bot_hmsg = True
                 params.save_to_history = False
-                # Change name, will run 'message' then 'img_gen'
-                image_cmd_task.name = 'msg_image_cmd_task'
+                # CHANGE NAME (will run 'message' then 'img_gen')
+                image_cmd_task.name = 'msg_image_cmd'
 
-            task_manager.queue.put(image_cmd_task)
+            await task_manager.queue.put(image_cmd_task)
 
         except Exception as e:
             log.error(f"An error occurred in image(): {e}")
@@ -4234,7 +4245,7 @@ if bot_embeds.enabled('system'):
             else:
                 description_lines.append(f"{key}: {value}")
         formatted_description = "\n".join(description_lines)
-        await ctx.send(embed = bot_embeds.update('system', "Bot LLM Gen Statistics:", f">>> {formatted_description}"))
+        await bot_embeds.send('system', "Bot LLM Gen Statistics:", f">>> {formatted_description}", channel=ctx.channel)
 
 @client.hybrid_command(description="Toggle current channel as an announcement channel for the bot (model changes)")
 @app_commands.checks.has_permissions(manage_channels=True)
@@ -4291,9 +4302,9 @@ if tgwui.enabled:
 
         log.info(f'{ctx.author.display_name} used "/reset_conversation": "{bot_database.last_character}"')
         # offload to TaskManager() queue
-        change_char_params = Params(character={'char_name': bot_database.last_character, 'verb': 'Resetting', 'mode': 'reset'})
-        change_char_task = Task('change_char', ctx, params=change_char_params)
-        await task_manager.queue.put(change_char_task)
+        reset_params = Params(character={'char_name': bot_database.last_character, 'verb': 'Resetting', 'mode': 'reset'})
+        reset_task = Task('reset', ctx, params=reset_params)
+        await task_manager.queue.put(reset_task)
 
     # /save_conversation command
     @client.hybrid_command(description="Saves the current conversation to a new file in text-generation-webui/logs/")
@@ -4481,11 +4492,11 @@ if tgwui.enabled:
                 if cmd == 'Continue':
                     log.info(f'{inter.user.display_name} used "{cmd}"')
                     continue_task = Task('continue', inter, local_history=local_history, target_discord_message=message) # custom kwarg
-                    task_manager.queue.put(continue_task)
+                    await task_manager.queue.put(continue_task)
                 else:
                     log.info(f'{inter.user.display_name} used "{cmd} ({mode})"')
                     regenerate_task = Task('regenerate', inter, local_history=local_history, target_discord_msg=message, target_hmessage=target_hmessage, mode=mode) # custom kwargs
-                    task_manager.queue.put(regenerate_task)
+                    await task_manager.queue.put(regenerate_task)
 
     # Context menu command to Regenerate from selected user message and create new history
     @client.tree.context_menu(name="regenerate create")
@@ -4926,6 +4937,7 @@ async def process_llmmodel(ctx, selected_llmmodel):
         change_llmmodel_params = Params(llmmodel={'llmmodel_name': selected_llmmodel, 'verb': 'Changing', 'mode': 'change'})
         change_llmmodel_task = Task('change_llmmodel', ctx, params=change_llmmodel_params)
         await task_manager.queue.put(change_llmmodel_task)
+
     except Exception as e:
         log.error(f"Error processing /llmmodel command: {e}")
 
@@ -5265,32 +5277,28 @@ class MessageManager():
 
     async def process_msg_queue(self):
         while True:
-            if self.msg_queue.empty():
-                await asyncio.sleep(1)
+            # Fetches the next item in the queue with the earliest value for 'send_after'
+            send_after, num, message, text, channel_id = await self.msg_queue.get()
 
-            while not self.msg_queue.empty():
-                # Fetches the next item in the queue with the earliest value for 'send_after'
-                send_after, num, message, text, channel_id = await self.msg_queue.get()
-
-                current_time = time.time()
-                # Process message that is ready to send
-                if send_after <= current_time:
+            current_time = time.time()
+            # Process message that is ready to send
+            if send_after <= current_time:
+                await self.run_message_task(num, message, text)
+                self.msg_queue.task_done()
+            # Check for any exceptions and process first found
+            else:
+                exception = await self.check_for_exception()
+                if exception:
+                    await self.run_message_task(exception['num'], exception['message'], exception['text'])
+                    self.msg_queue.task_done()
+                # Wait for next item to process normally
+                else:
+                    delay = send_after - current_time
+                    if self.msg_queue.qsize() > 0:
+                        log.info(f'Queued msg #{num} will be processed in {delay} seconds.')
+                    await asyncio.sleep(delay)
                     await self.run_message_task(num, message, text)
                     self.msg_queue.task_done()
-                # Check for any exceptions and process first found
-                else:
-                    exception = await self.check_for_exception()
-                    if exception:
-                        await self.run_message_task(exception['num'], exception['message'], exception['text'])
-                        self.msg_queue.task_done()
-                    # Wait for next item to process normally
-                    else:
-                        delay = send_after - current_time
-                        if self.msg_queue.qsize() > 0:
-                            log.info(f'Queued msg #{num} will be processed in {delay} seconds.')
-                        await asyncio.sleep(delay)
-                        await self.run_message_task(num, message, text)
-                        self.msg_queue.task_done()
 
 
     async def queue(self, message: discord.Message, text: str):

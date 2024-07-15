@@ -443,6 +443,7 @@ class Embeds:
 
     def update(self, name:str, title:str|None=None, description:str|None=None, color:int|None=None, url_suffix:str|None=None, url:str|None=None) -> discord.Embed:
         embed:discord.Embed = self.embeds.get(name)
+        print("embed:", embed)
         if title:
             embed.title = title
         if description:
@@ -454,40 +455,50 @@ class Embeds:
         return embed
     
     async def edit(self, name:str, title:str|None=None, description:str|None=None, color:int|None=None, url_suffix:str|None=None, url:str|None=None) -> None|discord.Message:
-        # Return if not configured
-        if not self.enabled(name):
-            return
-        # Get the previously sent embed
-        previously_sent_embed:discord.Message = self.sent_msg_embeds.pop(name, None)
-        # Retain the message while editing Embed
-        if previously_sent_embed:
-            self.sent_msg_embeds[name] = await previously_sent_embed.edit(embed = self.update(name, title, description, color, url_suffix, url))
-        return self.sent_msg_embeds[name]
+        try:
+            # Return if not configured
+            if not self.enabled(name):
+                return
+            # Get the previously sent embed
+            previously_sent_embed:discord.Message = self.sent_msg_embeds.pop(name, None)
+            print("previously_sent_embed:", previously_sent_embed, "id:", previously_sent_embed.id)
+            # Retain the message while editing Embed
+            if previously_sent_embed:
+                self.sent_msg_embeds[name] = await previously_sent_embed.edit(embed = self.update(name, title, description, color, url_suffix, url))
+            return self.sent_msg_embeds[name]
+        except Exception as e:
+            log.error(f'Error editing "{name} embed" :', e)
 
     async def send(self, name:str, title:str|None=None, description:str|None=None, color:int|None=None, url_suffix:str|None=None, url:str|None=None, channel:discord.TextChannel|None=None) -> None|discord.Message:
-        send_channel = channel or self.channel or None
-        # Return if not configured
-        if not self.enabled(name) or self.channel is None or channel is None:
-            return
-        # Retain the message while sending Embed
-        self.sent_msg_embeds[name] = await send_channel.send(embed = self.update(name, title, description, color, url_suffix, url))
-        return self.sent_msg_embeds[name]
+        try:
+            send_channel = channel or self.channel or None
+            # Return if not configured
+            if not self.enabled(name) or self.channel is None or channel is None:
+                return
+            # Retain the message while sending Embed
+            self.sent_msg_embeds[name] = await send_channel.send(embed = self.update(name, title, description, color, url_suffix, url))
+            return self.sent_msg_embeds[name]
+        except Exception as e:
+            log.error(f'Error sending "{name} embed" :', e)
 
     async def edit_or_send(self, name:str, title:str|None=None, description:str|None=None, color:int|None=None, url_suffix:str|None=None, url:str|None=None, channel:discord.TextChannel|None=None) -> None|discord.Embed|discord.Message:
-        send_channel = channel or self.channel or None
-        # Return if not configured
-        if not self.enabled(name):
-            return
-        # Get the previously sent embed
-        previously_sent_embed:discord.Message = self.sent_msg_embeds.pop(name, None)
-        # Retain the message while sending/editing Embed
-        if previously_sent_embed:
-            self.sent_msg_embeds[name] = await previously_sent_embed.edit(embed = self.update(name, title, description, color, url_suffix, url))
-        elif send_channel is None:
-            return
-        else:
-            self.sent_msg_embeds[name] = await send_channel.send(embed = self.update(name, title, description, color, url_suffix, url))
-        return self.sent_msg_embeds[name]
+        try:
+            send_channel = channel or self.channel or None
+            # Return if not configured
+            if not self.enabled(name):
+                return
+            # Get the previously sent embed
+            previously_sent_embed:discord.Message = self.sent_msg_embeds.pop(name, None)
+            # Retain the message while sending/editing Embed
+            if previously_sent_embed:
+                self.sent_msg_embeds[name] = await previously_sent_embed.edit(embed = self.update(name, title, description, color, url_suffix, url))
+            elif send_channel is None:
+                return
+            else:
+                self.sent_msg_embeds[name] = await send_channel.send(embed = self.update(name, title, description, color, url_suffix, url))
+            return self.sent_msg_embeds[name]
+        except Exception as e:
+            log.error(f'Error editing or sending "{name} embed" :', e)
 
     def create(self, name:str, title:str=' ', description:str=' ', color:int|None=None, url_suffix:str|None=None, url:str|None=None) -> discord.Embed:
         if url or url_suffix:
