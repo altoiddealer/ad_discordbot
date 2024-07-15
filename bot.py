@@ -174,6 +174,8 @@ class SD:
             ui_settings_file = r.get("ui_settings_file", "")
             if "webui-forge" in ui_settings_file:
                 self.client = 'SD WebUI Forge'
+            elif "webui-reforge" in ui_settings_file:
+                self.client = 'SD WebUI ReForge'
             elif "webui" in ui_settings_file:
                 self.client = 'A1111 SD WebUI'
             else:
@@ -2108,9 +2110,7 @@ class TaskProcessing(TaskAttributes):
                         else:
                             title = 'Generating image: 100%'
                             description = f'{self.progress_bar(1)}'
-                        print("1")
                         await self.embeds.edit('img_gen', title, description)
-                        print("2")
                         await asyncio.sleep(1)
                     else:
                         log.warning(f'Connection closed with {sd.client}, retrying in 1 second (attempt {retry_count + 1}/5)')
@@ -2119,9 +2119,7 @@ class TaskProcessing(TaskAttributes):
                 else:
                     await self.sd_progress_warning()
                     return
-            print("3")
             await self.embeds.delete('img_gen')
-            print("4")
         except Exception as e:
             log.error(f'Error tracking {sd.client} image generation progress: {e}')
 
@@ -3389,9 +3387,10 @@ class Tasks(TaskProcessing):
                 should_swap = await self.run_subtask('change_imgmodel')
             # Generate and send images
             await self.process_image_gen()
-            if (task_manager.current_task == 'image_cmd' or (self.params.should_send_text and not self.params.should_gen_text)):
+            imgcmd_tasks = ['image_cmd', 'msg_image_cmd']
+            if (task_manager.current_task in imgcmd_tasks) or (self.params.should_send_text and not self.params.should_gen_text):
                 await self.embeds.send('img_send', f"{self.user_name} requested an image:", self.params.imgcmd.get('message', self.img_prompt)[:2000])
-                await self.channel.send(f">>> {self.img_payload['prompt']}"[:2000])
+                await self.channel.send(f">>> {self.img_prompt}"[:2000])
             send_user_image = self.params.send_user_image
             if send_user_image:
                 await self.channel.send(file=send_user_image) if len(send_user_image) == 1 else await self.channel.send(files=send_user_image)
@@ -3452,7 +3451,7 @@ class Task(Tasks):
         self.channel: discord.TextChannel = self.ictx.channel if self.ictx else None
         self.user: Union[discord.User, discord.Member] = get_user_ctx_inter(self.ictx) if self.ictx else None
         self.user_name: str          = self.user.display_name if self.user else ""
-        self.embeds: Embeds          = self.embeds if self.embeds else Embeds(config)
+        self.embeds: Embeds          = self.embeds if self.embeds else Embeds(config, self.ictx)
         # The original input text
         self.text: str               = self.text if self.text else ""
         # TGWUI specific attributes
@@ -3876,7 +3875,6 @@ if sd.enabled:
             await ctx.defer()
             return
         # User inputs from /image command
-        print("selections:", selections)
         prompt = selections.get('prompt', '')
         use_llm = selections.get('use_llm', None)
         size = selections.get('size', None)
@@ -5526,6 +5524,7 @@ class ImgModel:
 
     def init_sd_extensions(self):
         extensions = config.get('sd', {}).get('extensions', {})
+        forge_clients = ['SD WebUI Forge', 'SD WebUI ReForge']
         # Initialize ControlNet defaults
         if extensions.get('controlnet_enabled'):
             self.payload['alwayson_scripts']['controlnet'] = {'args': [{
@@ -5541,7 +5540,7 @@ class ImgModel:
             if sd.client:
                 log.info('"Forge Couple" extension support is enabled and active.')
             # Warn Non-Forge:
-            if sd.client and sd.client != 'SD WebUI Forge':
+            if sd.client and sd.client not in forge_clients:
                 log.warning(f'"Forge Couple" is not known to be compatible with "{sd.client}". If you experience errors, disable this extension in config.yaml')
         # Initialize layerdiffuse defaults
         if extensions.get('layerdiffuse_enabled'):
@@ -5550,7 +5549,7 @@ class ImgModel:
                 'blending': None, 'resize_mode': 'Crop and Resize', 'output_mat_for_i2i': False, 'fg_prompt': '', 'bg_prompt': '', 'blended_prompt': ''}}
             if sd.client:
                 log.info('"layerdiffuse" extension support is enabled and active.')
-            if sd.client and sd.client != 'SD WebUI Forge':
+            if sd.client and sd.client not in forge_clients:
                 log.warning(f'"layerdiffuse" is not known to be compatible with "{sd.client}". If you experience errors, disable this extension in config.yaml')
         # Initialize ReActor defaults
         if extensions.get('reactor_enabled'):
