@@ -945,15 +945,33 @@ async def update_tags(tags:list) -> list:
         return tags
 
 class Tags:
-    def __init__(self, text:str|None=None):
+    def __init__(self):
+        self.initialized = False
         self.matches:list = []
         self.unmatched = {'user': [], 'llm': [], 'userllm': []}
-        self.tag_trumps = []
+        self.tag_trumps:set = set([])
+        '''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+        Instances of Tags() are initialized with empty defaults.
 
-        if text:
-            self.init(text)
-        self.detagged_text:str = None
-        #self.init(text) # initialize tags from input text
+        The values will populate automatically when calling 'match_tags()',
+        or they may be initialized on demand using 'init()'
+        '''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+
+    async def init(self, text:str, phase:str='llm') -> str:
+        try:
+            self.initialized = True
+            base_tags: TAG_LIST      = bot_settings.base_tags # base tags
+            char_tags: TAG_LIST      = bot_settings.settings['llmcontext'].get('tags', []) # character specific tags
+            imgmodel_tags: TAG_LIST  = bot_settings.settings['imgmodel'].get('tags', []) # imgmodel specific tags
+            tags_from_text           = self.get_tags_from_text(text, phase)
+            flow_step_tags: TAG_LIST = []
+            if flows.queue.qsize() > 0:
+                flow_step_tags = [await flows.queue.get()]
+            # merge tags to one list (Priority is important!!)
+            all_tags: TAG_LIST = tags_from_text + flow_step_tags + char_tags + imgmodel_tags + base_tags
+            self.sort_tags(all_tags) # sort tags into phases (user / llm / userllm)
+        except Exception as e:
+            log.error(f"Error getting tags: {e}")
 
     def sort_tags(self, all_tags: TAG_LIST):
         for tag in all_tags:
@@ -1044,11 +1062,18 @@ class Tags:
 
     # Matches [[this:syntax]] and creates 'tags' from matches
     # Can handle any structure including dictionaries, lists, even nested sublists.
-    def get_tags_from_text(self, text:str) -> tuple[str, list[dict]]:
+    def get_tags_from_text(self, text:str, phase:str='llm') -> tuple[str, list[dict]]:
         try:
             tags_from_text = []
             matches = patterns.instant_tags.findall(text)
-            detagged_text = patterns.instant_tags.sub('', text)
+
+            if phase == 'llm':
+                self.text = patterns.instant_tags.sub('', text).strip()
+            elif phase == 'img':
+                self.img_prompt = patterns.instant_tags.sub('', text).strip()
+            else:
+                log.error("invalid 'phase' for 'get_tags_from_text':", phase)
+
             for match in matches:
                 tag_dict = {}
                 tag_pairs = match.split('|')
@@ -1058,29 +1083,12 @@ class Tags:
                 tags_from_text.append(tag_dict)
             if tags_from_text:
                 log.info(f"[TAGS] Tags from text: '{tags_from_text}'")
-            return detagged_text, tags_from_text
+            return tags_from_text
         except Exception as e:
             log.error(f"Error getting tags from text: {e}")
-            return text, []
+            return []
 
-    async def init(self, text:str) -> str:
-        try:
-            base_tags: TAG_LIST           = bot_settings.base_tags # base tags
-            char_tags: TAG_LIST           = bot_settings.settings['llmcontext'].get('tags', []) # character specific tags
-            imgmodel_tags: TAG_LIST       = bot_settings.settings['imgmodel'].get('tags', []) # imgmodel specific tags
-            detagged_text, tags_from_text = self.get_tags_from_text(text)
-            flow_step_tags: TAG_LIST      = []
-            if flows.queue.qsize() > 0:
-                flow_step_tags = [await flows.queue.get()]
-            # merge tags to one list (Priority is important!!)
-            all_tags: TAG_LIST = tags_from_text + flow_step_tags + char_tags + imgmodel_tags + base_tags
-            self.sort_tags(all_tags) # sort tags into phases (user / llm / userllm)
-            return detagged_text
-        except Exception as e:
-            log.error(f"Error getting tags: {e}")
-            return text
-
-    def match_img_tags(self, img_prompt:str):
+    async def match_img_tags(self, img_prompt:str):
         try:
             # Unmatch any previously matched tags which try to insert text into the img_prompt
             matches_:TAG_LIST = self.matches # type: ignore
@@ -1099,7 +1107,7 @@ class Tags:
                     if not tag:
                         self.matches.remove(tag)
             # match tags for 'img' phase.
-            self.match_tags(img_prompt, phase='img')
+            await self.match_tags(img_prompt, phase='img')
             # Rematch any previously matched tags that failed to match text in img_prompt
             for tag in self.unmatched['userllm'][:]:  # Iterate over a copy of the list
                 if tag.get('imgtag_matched_early') and tag.get('imgtag_uninserted'):
@@ -1160,21 +1168,18 @@ class Tags:
             log.error(f"Error processing LLM prompt tags: {e}")
             return prompt
 
-    def process_tag_trumps(self, matches:list, trump_params:TAG_LIST|None=None) -> tuple[TAG_LIST, TAG_LIST]:
-        trump_params = trump_params or []
+    def process_tag_trumps(self, matches:list):
         try:
             # Collect all 'trump' parameters for all matched tags
-            trump_params_set = set(trump_params)
             for tag in matches:
                 if isinstance(tag, tuple):
                     tag_dict = tag[0]  # get tag value if tuple
                 else:
                     tag_dict = tag
                 if 'trumps' in tag_dict:
-                    trump_params_set.update([param.strip().lower() for param in tag_dict['trumps'].split(',')])
+                    self.tag_trumps.update([param.strip().lower() for param in tag_dict['trumps'].split(',')])
                     del tag_dict['trumps']
-            # Remove duplicates from the trump_params_set
-            trump_params_set = set(trump_params_set)
+
             # Iterate over all tags in 'matches' and remove 'trumped' tags
             untrumped_matches = []
             for tag in matches:
@@ -1182,32 +1187,39 @@ class Tags:
                     tag_dict = tag[0]  # get tag value if tuple
                 else:
                     tag_dict = tag
-                if any(trigger.strip().lower() == trump.strip().lower() for trigger in tag_dict.get('trigger', '').split(',') for trump in trump_params_set): # TODO line too long and hard to follow
+                # Extract and clean triggers
+                triggers = [trigger.strip().lower() for trigger in tag_dict.get('trigger', '').split(',')]
+                # Check if any trigger is in the trump parameters set
+                is_trumped = any(trigger in self.tag_trumps for trigger in triggers)
+                if is_trumped:
                     log.info(f'''[TAGS] Tag with triggers "{tag_dict['trigger']}" was trumped by another tag.''')
                 else:
                     untrumped_matches.append(tag)
-            return untrumped_matches, list(trump_params_set)
+                
+            print("untrumped_matches:", untrumped_matches)
+
+            setattr(self, 'matches', untrumped_matches)
+
         except Exception as e:
             log.error(f"Error processing matched tags: {e}")
-            # return original matches if error occurs
-            # also return empty set for trump_tags which is expected
-            return matches, []
 
-    def match_tags(self, search_text:str, phase='llm'):
+    async def match_tags(self, search_text:str, phase:str='llm'):
+        if not self.initialized:
+            await self.init(search_text, phase)
         try:
             # Remove 'llm' tags if pre-LLM phase, to be added back to unmatched tags list at the end of function
             if phase == 'llm':
                 llm_tags = self.unmatched.pop('llm', []) if 'user' in self.unmatched else [] # type: ignore
 
-            updated_matches:TAG_LIST = copy.deepcopy(self.matches) # type: ignore
-            updated_unmatched:TAG_LIST_DICT = copy.deepcopy(self.unmatched) # type: ignore
+            updated_matches:TAG_LIST = list(copy.deepcopy(self.matches)) # type: ignore
+            updated_unmatched:TAG_LIST_DICT = dict(copy.deepcopy(self.unmatched)) # type: ignore
             for list_name, unmatched_list in self.unmatched.items(): # type: ignore
                 unmatched_list: TAG_LIST
                 
                 for tag in unmatched_list:
                     if 'trigger' not in tag:
                         updated_unmatched[list_name].remove(tag)
-                        tag['phase'] = phase # TODO warning: this updates the original tag before deepcopy
+                        tag['phase'] = phase
                         updated_matches.append(tag)
                         continue
                     
@@ -1237,15 +1249,15 @@ class Tags:
                                 tag['imgtag_uninserted'] = True
                                 updated_matches.append(tag)
             if updated_matches:
-                self.matches, self.trump_params = self.process_tag_trumps(updated_matches, tags['trump_params']) # type: ignore # trump tags
+                self.process_tag_trumps(updated_matches) # type: ignore # trump tags
             # Add LLM sublist back to unmatched tags list if LLM phase
             if phase == 'llm':
                 updated_unmatched['llm'] = llm_tags
             if 'user' in updated_unmatched:
                 del updated_unmatched['user'] # Remove after first phase. Controls the 'llm' tag processing at function start.
 
-            self.matches = updated_matches
-            self.unmatched = updated_unmatched
+            setattr(self, 'matches', updated_matches)
+            setattr(self, 'unmatched', updated_unmatched)
 
         except Exception as e:
             log.error(f"Error matching tags: {e}")
@@ -1481,15 +1493,16 @@ class Params:
         actions = ['should_gen_text', 'should_send_text', 'should_gen_image', 'should_send_image']
         try:
             # iterate through matched tags and update
-            if tags.matches:
-                for item in tags.matches:
+            matches = getattr(tags, 'matches')
+            if matches and isinstance(matches, list):
+                for item in matches:
                     if isinstance(item, tuple):
                         tag, _, _ = item
                     else:
                         tag = item
                     for key, value in tag.items():
                         if key in actions:
-                            self.key = value
+                            setattr(self, key, value)
             # Disable things as set by config
             if not tgwui.enabled:
                 self.should_gen_text = False
@@ -1748,7 +1761,7 @@ class TaskProcessing(TaskAttributes):
 
     async def message_img_subtask(self):
         self.img_prompt = self.img_prompt or self.bot_hmessage.text
-        self.tags.match_img_tags(self.img_prompt)
+        await self.tags.match_img_tags(self.img_prompt)
         self.params.update_bot_should_do(self.tags) # check for updates from tags
         if self.params.should_gen_image:
             await self.embeds.delete('img_gen')
@@ -2380,7 +2393,7 @@ class TaskProcessing(TaskAttributes):
 
     def apply_imgcmd_params(self):
         try:
-            imgcmd_params              = self.params.imgcmd
+            imgcmd_params = self.params.imgcmd
             size: Optional[dict]       = imgcmd_params['size']
             face_swap :Optional[str]   = imgcmd_params['face_swap']
             controlnet: Optional[dict] = imgcmd_params['controlnet']
@@ -2392,7 +2405,7 @@ class TaskProcessing(TaskAttributes):
                 self.img_payload['denoising_strength'] = img2img['denoising_strength']
             if img2img_mask:
                 self.img_payload['mask'] = img2img_mask
-            if size: 
+            if size:
                 self.img_payload.update(size)
             if face_swap:
                 self.img_payload['alwayson_scripts']['reactor']['args']['image'] = face_swap # image in base64 format
@@ -2860,10 +2873,10 @@ class Tasks(TaskProcessing):
     #################################################################
     async def message_task(self) -> tuple[HMessage, HMessage]:
         try:
-            await spontaneous_messaging.reset_for_channel(self.ictx)    # Stop any pending spontaneous message task for current channel
+            await spontaneous_messaging.reset_for_channel(self.ictx) # Stop any pending spontaneous message task for current channel
 
-            self.tags.match_tags(self.text, phase='llm')    # match tags labeled for user / userllm.
-            self.params.update_bot_should_do(self.tags)      # check what bot should do
+            await self.tags.match_tags(self.text, phase='llm') # match tags labeled for user / userllm.
+            self.params.update_bot_should_do(self.tags)  # check what bot should do
 
             # Bot should generate text...
             if self.params.should_gen_text:
@@ -3349,7 +3362,8 @@ class Tasks(TaskProcessing):
     async def img_gen_task(self):
         try:
             if not self.tags:
-                self.tags = Tags(self.img_prompt)
+                self.tags = Tags()
+                await self.tags.init(phase='img')
                 self.tags.match_img_tags(self.img_prompt)
                 self.params.update_bot_should_do(self.tags)
             # Initialize img_payload
@@ -4159,7 +4173,7 @@ if sd.enabled:
 
             # UPDATE TASK WITH PARAMS
             imgcmd_params = {}
-            imgcmd_params['size']       = size
+            imgcmd_params['size']       = size_dict
             imgcmd_params['neg_prompt'] = neg_prompt
             imgcmd_params['style']      = style
             imgcmd_params['face_swap']  = faceswapimg

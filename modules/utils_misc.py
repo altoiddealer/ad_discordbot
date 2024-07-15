@@ -4,6 +4,7 @@ logging = log
 import datetime
 from datetime import timedelta
 import math
+import random
 
 # Adds missing keys/values
 def fix_dict(set, req):
