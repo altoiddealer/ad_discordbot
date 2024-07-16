@@ -5,13 +5,16 @@ from datetime import datetime, timedelta
 import math
 import random
 
-# Adds missing keys/values
-def fix_dict(set, req):
+def fix_dict(set, req, src:str|None=None, path=""):
+    ignored_keys = ['regenerate', '_continue', 'text', 'bot_in_character_menu', 'imgmodel_name']
     for k, req_v in req.items():
-        if k not in set:
+        current_path = f"{path}/{k}" if path else k  # Update the current path
+        if k not in set and k not in ignored_keys:
+            if src:
+                log.warning(f'key "{current_path}" missing from "{src}". Using default value: {repr(req_v)}.')
             set[k] = req_v
         elif isinstance(req_v, dict):
-            fix_dict(set[k], req_v)
+            fix_dict(set[k], req_v, src, current_path)
     return set
 
 # Updates matched keys, AND adds missing keys

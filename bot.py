@@ -129,7 +129,7 @@ client = commands.Bot(command_prefix=".", intents=intents)
 class SD:
     def __init__(self):
         self.enabled:bool = config['sd'].get('enabled', True)
-        self.url:str = config['sd'].get('SD_URL') or config['sd'].get('A1111', 'http://127.0.0.1:7860') # deprecated
+        self.url:str = config['sd'].get('SD_URL', 'http://127.0.0.1:7860')
         self.client:str = None
 
         if self.enabled:
@@ -233,7 +233,7 @@ from modules.prompts import count_tokens
 class TTS:
     def __init__(self):
         self.enabled:bool = False
-        self.settings:dict = config.get('textgenwebui', {}).get('tts_settings') or config.get('discord', {}).get('tts_settings') or {}
+        self.settings:dict = config['textgenwebui']['tts_settings']
         self.supported_clients = ['alltalk_tts', 'coqui_tts', 'silero_tts', 'elevenlabs_tts']
         self.client:str = self.settings.get('extension', '')
         self.api_key:str = ''
@@ -291,11 +291,7 @@ tts = TTS()
 # Majority of this code section is sourced from 'modules/server.py'
 class TGWUI:
     def __init__(self):
-        if 'textgenwebui' not in config:
-            log.warning("'config.yaml' is missing a new dictionary 'textgenwebui'. Enabling TGWUI by default.")
-            self.enabled:bool = True
-        else:
-            self.enabled:bool = config['textgenwebui'].get('enabled', True)
+        self.enabled:bool = config['textgenwebui'].get('enabled', True)
 
         self.instruction_template_str:str = None
 
@@ -1543,7 +1539,7 @@ class TaskProcessing(TaskAttributes):
                 # send responses to channel - reference a message if applicable
                 await send_long_message(self.channel, mention_resp, self.bot_hmessage, self.params.ref_message)
                 # Apply any reactions applicable to message
-                if config.discord.get('history_reactions', {}).get('enabled', True):
+                if config['discord']['history_reactions'].get('enabled', True):
                     await apply_reactions_to_messages(client.user, self.ictx, self.bot_hmessage)
         # send any user images
         send_user_image = self.params.send_user_image
@@ -1773,7 +1769,7 @@ class TaskProcessing(TaskAttributes):
         if not self.params.skip_create_bot_hmsg:
             # Replacing original Bot HMessage via "regenerate replace"
             if self.params.bot_hmessage_to_update:
-                apply_reactions = config.discord.get('history_reactions', {}).get('enabled', True)
+                apply_reactions = config['discord']['history_reactions'].get('enabled', True)
                 self.bot_hmessage = await replace_msg_in_history_and_discord(client.user, self.ictx, self.params, last_resp, tts_resp, apply_reactions)
                 self.params.should_send_text = False
             else:
@@ -1819,7 +1815,7 @@ class TaskProcessing(TaskAttributes):
         self.llm_payload['text'] = self.llm_prompt
 
     def apply_server_mode(self):
-        if self.ictx and config.get('textgenwebui', {}).get('server_mode', False):
+        if self.ictx and config['textgenwebui'].get('server_mode', False):
             try:
                 name1 = f'Server: {self.ictx.guild}'
                 self.llm_payload['state']['name1'] = name1
@@ -1878,7 +1874,9 @@ class TaskProcessing(TaskAttributes):
             def process_responses():
                 last_resp = ''
                 tts_resp = ''
-                for resp in chatbot_wrapper(text=self.llm_payload['text'], state=self.llm_payload['state'], regenerate=self.llm_payload['regenerate'], _continue=self.llm_payload['_continue'], loading_message=True, for_ui=False):
+                regenerate = self.llm_payload.get('regenerate', False)
+                _continue = self.llm_payload.get('_continue', False)
+                for resp in chatbot_wrapper(text=self.llm_payload['text'], state=self.llm_payload['state'], regenerate=regenerate, _continue=_continue, loading_message=True, for_ui=False):
                     i_resp = resp.get('internal', [])
                     if len(i_resp) > 0:
                         last_resp = i_resp[len(i_resp) - 1][1]
@@ -2259,7 +2257,7 @@ class TaskProcessing(TaskAttributes):
             self.img_payload['negative_prompt'] = processed_negative_prompt
 
             # Clean up extension keys
-            extensions = config.get('sd', {}).get('extensions', {})
+            extensions = config['sd']['extensions']
             alwayson_scripts = self.img_payload.get('alwayson_scripts', {})
             # Clean ControlNet
             if alwayson_scripts.get('controlnet'):
@@ -2333,7 +2331,7 @@ class TaskProcessing(TaskAttributes):
                     bot_database.update_was_warned('loractl')
                     log.warning(f'loractl is not known to be compatible with "{sd.client}". Not applying loractl...')
                 return
-            scaling_settings = [v for k, v in config['sd'].get('extensions', {}).get('lrctl', {}).items() if 'scaling' in k]
+            scaling_settings = [v for k, v in config['sd']['extensions'].get('lrctl', {}).items() if 'scaling' in k]
             scaling_settings = scaling_settings if scaling_settings else ['']
             # Flatten the matches dictionary values to get a list of all tags (including those within tuples)
             all_matched_tags = [tag if isinstance(tag, dict) else tag[0] for tag in matched_tags]
@@ -2353,7 +2351,7 @@ class TaskProcessing(TaskAttributes):
                                     lora_weight = float(lora_weight_match.group())
                                     # Selecting the appropriate scaling based on the index
                                     scaling_key = f'lora_{index + 1}_scaling' if index+1 < len(scaling_settings) else 'additional_loras_scaling'
-                                    scaling_values = config['sd'].get('extensions', {}).get('lrctl', {}).get(scaling_key, '')
+                                    scaling_values = config['sd']['extensions']['lrctl'].get(scaling_key, '')
                                     if scaling_values:
                                         scaling_factors = [round(float(factor.split('@')[0]) * lora_weight, 2) for factor in scaling_values.split(',')]
                                         scaling_steps = [float(step.split('@')[1]) for step in scaling_values.split(',')]
@@ -2720,7 +2718,7 @@ class TaskProcessing(TaskAttributes):
         forge_couple_args = {}
         layerdiffuse_args = {}
         reactor_args = {}
-        extensions = config.get('sd', {}).get('extensions', {})
+        extensions = config['sd'].get('extensions', {})
         accept_only_first = ['flow', 'aspect_ratio', 'img2img', 'img2img_mask', 'sd_output_dir']
         try:
             for tag in self.tags.matches:
@@ -2884,7 +2882,7 @@ class Tasks(TaskProcessing):
         try:
             if tgwui.enabled:
                 # add history reactions to user message / swap LLM model
-                if config.discord.get('history_reactions', {}).get('enabled', True):
+                if config['discord']['history_reactions'].get('enabled', True):
                     await apply_reactions_to_messages(client.user, self.ictx, self.user_hmessage)
                 if self.params.llmmodel and self.params.llmmodel.get('mode', 'change')  == 'swap':
                     self.params.llmmodel['llmmodel_name'] = shared.previous_model_name
@@ -3025,7 +3023,7 @@ class Tasks(TaskProcessing):
             else:
                 # Mark original message as being continued and update reactions for it
                 original_bot_hmessage.is_continued = True
-                if config.discord.get('history_reactions', {}).get('enabled', True):
+                if config['discord']['history_reactions'].get('enabled', True):
                     await apply_reactions_to_messages(client.user, self.ictx, original_bot_hmessage, [original_bot_hmessage.id], ref_message)
 
                 # Add previous last message id to related ids
@@ -3043,7 +3041,7 @@ class Tasks(TaskProcessing):
 
             # Apply any reactions applicable to message
             msg_ids_to_edit = [updated_bot_hmessage.id] + updated_bot_hmessage.related_ids
-            if config.discord.get('history_reactions', {}).get('enabled', True):
+            if config['discord']['history_reactions'].get('enabled', True):
                 await apply_reactions_to_messages(client.user, self.ictx, updated_bot_hmessage, msg_ids_to_edit, new_discord_msg)
 
             # process any tts resp
@@ -3165,11 +3163,11 @@ class Tasks(TaskProcessing):
                 target_bot_hmessage.update(hidden=True) # always hide previous regen when creating
 
                 target_bot_hmessage_ids = [target_bot_hmessage.id] + target_bot_hmessage.related_ids
-                if config.discord.get('history_reactions', {}).get('enabled', True):
+                if config['discord']['history_reactions'].get('enabled', True):
                     await apply_reactions_to_messages(client.user, self.ictx, target_bot_hmessage, target_bot_hmessage_ids, self.target_discord_msg)
 
             # Update reactions for user message
-            if config.discord.get('history_reactions', {}).get('enabled', True):
+            if config['discord']['history_reactions'].get('enabled', True):
                 await apply_reactions_to_messages(client.user, self.ictx, self.user_hmessage)
 
             await self.embeds.delete('system')
@@ -3280,7 +3278,7 @@ class Tasks(TaskProcessing):
                     toggle_hmessages(bot_hmessage, user_hmessage, verb)
 
             # Apply reaction to user message
-            if config.discord.get('history_reactions', {}).get('enabled', True):
+            if config['discord']['history_reactions'].get('enabled', True):
                 await apply_reactions_to_messages(client.user, self.ictx, user_hmessage)
 
             # Process all messages that need label updates
@@ -3290,7 +3288,7 @@ class Tasks(TaskProcessing):
                 if target_hmsg.related_ids:
                     msg_ids_to_edit.extend(target_hmsg.related_ids)
                 # Process reactions for all affected messages
-                if config.discord.get('history_reactions', {}).get('enabled', True):
+                if config['discord']['history_reactions'].get('enabled', True):
                     await apply_reactions_to_messages(client.user, self.ictx, target_hmsg, msg_ids_to_edit, self.target_discord_msg)
             
             result = f"**Modified message exchange pair in history for {self.user_name}** (messages {verb})."
@@ -3975,8 +3973,8 @@ if sd.enabled:
     size_choices, style_choices, use_llm_choices = asyncio.run(get_imgcmd_choices(size_options, style_options))
 
     # Check if extensions enabled in config
-    cnet_enabled = config.get('sd', {}).get('extensions', {}).get('controlnet_enabled', False)
-    reactor_enabled = config.get('sd', {}).get('extensions', {}).get('reactor_enabled', False)
+    cnet_enabled = config['sd']['extensions'].get('controlnet_enabled', False)
+    reactor_enabled = config['sd']['extensions'].get('reactor_enabled', False)
 
     if cnet_enabled and reactor_enabled:
         @client.hybrid_command(name="image", description=f'Generate an image using {sd.client}')
@@ -4742,7 +4740,6 @@ def get_all_characters():
                 if not char_data:
                     continue
 
-                char_data = dict(char_data) # TODO does yaml loader behave weird that we need to convert it to a dict here?
                 if char_data.get('bot_in_character_menu', True):
                     filtered_characters.append(character)
 
@@ -5532,7 +5529,7 @@ class Behavior:
     def bot_should_reply(self, message:discord.Message, text:str) -> bool:
         main_condition = is_direct_message(message) or (message.channel.id in bot_database.main_channels)
 
-        if not config.get('discord', {}).get('direct_messages', {}).get('allow_chatting', True):
+        if not config['discord']['direct_messages'].get('allow_chatting', True):
             return False
         # Don't reply to @everyone
         if message.mention_everyone:
@@ -5583,7 +5580,7 @@ class ImgModel:
         bot_active_settings.save()
 
     def init_sd_extensions(self):
-        extensions = config.get('sd', {}).get('extensions', {})
+        extensions = config['sd']['extensions']
         forge_clients = ['SD WebUI Forge', 'SD WebUI ReForge']
         # Initialize ControlNet defaults
         if extensions.get('controlnet_enabled'):
@@ -5747,7 +5744,7 @@ class Settings:
         active_settings = copy.deepcopy(bot_active_settings.get_vars())
         behavior = active_settings.pop('behavior', {})
         # Add any missing required settings
-        self.settings = fix_dict(active_settings, defaults)
+        self.settings = fix_dict(active_settings, defaults, 'dict_base_settings.yaml')
         bot_behavior.update_behavior(behavior)
 
     # Allows printing default values of Settings
@@ -5939,7 +5936,7 @@ class CustomHistoryManager(HistoryManager):
 
 bot_behavior = Behavior() # needs to be loaded before settings
 bot_settings = Settings(bot_behavior=bot_behavior)
-bot_history = CustomHistoryManager(class_builder_history=CustomHistory, **config.get('textgenwebui', {}).get('chat_history', {}))
+bot_history = CustomHistoryManager(class_builder_history=CustomHistory, **config['textgenwebui'].get('chat_history', {}))
 
 
 def exit_handler():

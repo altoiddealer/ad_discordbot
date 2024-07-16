@@ -12,14 +12,14 @@ class SharedPath:
 
     def init_user_config_files(root, src_dir, file) -> str:
         dest_path = os.path.join(root, file)
+        src_path = os.path.join(src_dir, file)
         if not os.path.exists(dest_path):
-            src_path = os.path.join(src_dir, file)
             if os.path.exists(src_path):
                 copyfile(src_path, dest_path)
                 log.info(f'Copied default user setting template "/{file}/" to "{root}".')
             else:
                 log.error(f'Required settings file "/{file}/" not found in "{root}" or "{src_dir}".')
-        return dest_path
+        return dest_path, src_path
 
     def init_shared_paths(root, dir, reason) -> str:
         path = os.path.join(root, dir)
@@ -44,11 +44,11 @@ class SharedPath:
     # Configs
     templates = os.path.join(dir_root, 'settings_templates')
 
-    config = init_user_config_files(dir_root, templates, 'config.yaml')
-    base_settings = init_user_config_files(dir_root, templates, 'dict_base_settings.yaml')
-    cmd_options = init_user_config_files(dir_root, templates, 'dict_cmdoptions.yaml')
-    img_models = init_user_config_files(dir_root, templates, 'dict_imgmodels.yaml')
-    tags = init_user_config_files(dir_root, templates, 'dict_tags.yaml')
+    config, config_template = init_user_config_files(dir_root, templates, 'config.yaml')
+    base_settings, base_settings_template = init_user_config_files(dir_root, templates, 'dict_base_settings.yaml')
+    cmd_options, cmd_options_template = init_user_config_files(dir_root, templates, 'dict_cmdoptions.yaml')
+    img_models, img_models_template = init_user_config_files(dir_root, templates, 'dict_imgmodels.yaml')
+    tags, tags_template = init_user_config_files(dir_root, templates, 'dict_tags.yaml')
 
     # Wildcards
     dir_wildcards = init_shared_paths(dir_root, 'wildcards', "wildcard files for Dynamic Prompting feature. Refer to the bot's wiki on GitHub for more information.")
