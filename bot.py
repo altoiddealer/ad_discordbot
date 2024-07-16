@@ -829,27 +829,6 @@ class VoiceClients:
             await bg_task_queue.put(self.play_in_voice_channel(ictx.guild.id, bot_hmessage.text_visible)) # run task in background
             
         bot_hmessage.update(spoken=True)
-        
-    async def process_toggle_tts(self, ctx: commands.Context):
-        try:
-            if tts.enabled:
-                await tts.apply_toggle_tts(toggle='off')
-                tts.enabled = False
-                message = 'disabled'
-            else:
-                await tts.apply_toggle_tts(toggle='on', tts_sw=True)
-                tts.enabled = True
-                message = 'enabled'
-            await self.toggle_voice_client(ctx.guild.id, message)
-            if bot_embeds.enabled('change'):
-                # Send change embed to interaction channel
-                await bot_embeds.send('change', f"{ctx.author.display_name} {message} TTS.", 'Note: Does not load/unload the TTS model.', channel=ctx.channel)
-                if bot_database.announce_channels:
-                    # Send embeds to announcement channels
-                    await bg_task_queue.put(announce_changes(f'{message} TTS', ' ', ctx))
-            log.info(f"TTS was {message}.")
-        except Exception as e:
-            log.error(f'Error when toggling TTS to "{message}": {e}')
 
 voice_clients = VoiceClients()
 
@@ -873,9 +852,10 @@ if tgwui.enabled and tts.client:
     @guild_only()
     async def toggle_tts(ctx: commands.Context):
         await ireply(ctx, 'toggle TTS') # send a response msg to the user
-        async with task_semaphore:
-            log.info(f'{ctx.author.display_name} used "/toggle_tts"')
-            await voice_clients.process_toggle_tts(ctx)
+        # offload to TaskManager() queue
+        log.info(f'{ctx.author.display_name} used "/toggle_tts"')
+        toggle_tts_task = Task('toggle_tts', ctx)
+        task_manager.queue.put(toggle_tts_task)
 
 #################################################################
 ############################ TAGS ###############################
@@ -2869,7 +2849,14 @@ class Tasks(TaskProcessing):
     #################################################################
     ######################### MESSAGE TASK ##########################
     #################################################################
-    async def message_task(self) -> tuple[HMessage, HMessage]:
+    async def message_task_error(self:"Task", e):
+        print(traceback.format_exc())
+        log.error(f'An error occurred while processing "{self.name}" request: {e}')
+        await self.embeds.edit_or_send('img_gen', f'An error occurred while processing "{self.name}" request', e)
+        await self.embeds.delete('change')
+        return None, None
+
+    async def message_task(self:"Task") -> tuple[HMessage, HMessage]:
         try:
             await spontaneous_messaging.reset_for_channel(self.ictx) # Stop any pending spontaneous message task for current channel
 
@@ -2882,39 +2869,45 @@ class Tasks(TaskProcessing):
 
                 # process text generation
                 if tgwui.enabled:
-
-                    if self.params.llmmodel:        # if LLM model swap/change was triggered
-                        llm_model_mode = self.params.llmmodel.get('mode', 'change')  # default to 'change' unless a tag was triggered with 'swap'
-                        original_llmmodel = copy.copy(str(shared.model_name))        # copy current LLM model name
+                    # if LLM model swap/change was triggered
+                    if self.params.llmmodel:
                         # RUN CHANGE LLMMODEL AS SUBTASK
                         self.run_subtask('change_llmmodel')
                         # Delete embed before the second call
-                        if llm_model_mode == 'swap':
+                        if self.params.llmmodel.get('mode', 'change') == 'swap': # default to 'change' unless a tag was triggered with 'swap'
                             await self.embeds.delete('change')
-
+                    # if triggered to generate an image
                     if self.params.should_gen_image:
                         await self.init_img_embed() # Create a "prompting" embed for image gen
 
                     await self.message_llm_subtask()
 
-                    # add history reactions to user message / swap LLM model
-                    if config.discord.get('history_reactions', {}).get('enabled', True):
-                        await apply_reactions_to_messages(client.user, self.ictx, self.user_hmessage)
-                    if self.params.llmmodel and llm_model_mode == 'swap':
-                        self.params.llmmodel['llmmodel_name'] = original_llmmodel
-                        # RUN CHANGE LLMMODEL AS SUBTASK
-                        await self.run_subtask('change_llmmodel')
-                        await self.embeds.delete('change') # Delete embed
+            return await self.message_task_post_llmgen()
 
-                # process image generation (A1111 / Forge)
-                if sd.enabled:
-                    await self.message_img_subtask()
+        except Exception as e:
+            return await self.message_task_error(e)
 
-                # send responses (text, TTS, images)
-                await self.send_responses()
+    async def message_task_post_llmgen(self:"Task") -> tuple[HMessage, HMessage]:
+        try:
+            if tgwui.enabled:
+                # add history reactions to user message / swap LLM model
+                if config.discord.get('history_reactions', {}).get('enabled', True):
+                    await apply_reactions_to_messages(client.user, self.ictx, self.user_hmessage)
+                if self.params.llmmodel and self.params.llmmodel.get('mode', 'change')  == 'swap':
+                    self.params.llmmodel['llmmodel_name'] = shared.previous_model_name
+                    # RUN CHANGE LLMMODEL AS SUBTASK
+                    await self.run_subtask('change_llmmodel')
+                    await self.embeds.delete('change') # Delete embed
+
+            # process image generation (A1111 / Forge)
+            if self.params.should_gen_text and sd.enabled:
+                await self.message_img_subtask()
+
+            # send responses (text, TTS, images)
+            await self.send_responses()
 
             # Bot DID NOT generate text...
-            elif self.params.should_gen_image:      # If bot should only generate image:
+            if self.params.should_gen_image:      # If bot should only generate image:
                 if await self.sd_online():   # Notify user their prompt will be used directly for img gen
                     await self.channel.send('Bot was triggered by Tags to not respond with text.\n \
                                     **Processing image generation using your input as the prompt ...**', delete_after=5)
@@ -2926,38 +2919,33 @@ class Tasks(TaskProcessing):
             return self.user_hmessage, self.bot_hmessage
 
         except Exception as e:
-            print(traceback.format_exc())
-            log.error(f'An error occurred while processing "{self.name}" request: {e}')
-            await self.embeds.edit_or_send('img_gen', f'An error occurred while processing "{self.name}" request', e)
-            await self.embeds.delete('change')
-        
-        return None, None
+            return await self.message_task_error(e)
     
     # on_message variation
-    async def on_message_task(self):
+    async def on_message_task(self:"Task"):
         await self.message_task()
         message_manager.last_channel = self.channel.id
         if not is_direct_message(self.ictx):
             message_manager.update_afk_for_guild(self.ictx.guild.id)
 
     # spontaneous_message variation
-    async def spontaneous_message_task(self):
+    async def spontaneous_message_task(self:"Task"):
         await self.message_task()
         task, tally = spontaneous_messaging.tasks[self.channel.id]
         spontaneous_messaging.tasks[self.channel.id] = (task, tally + 1)
 
     # From /image command (use_llm = True)
-    async def msg_image_cmd_task(self):
+    async def msg_image_cmd_task(self:"Task"):
         await self.message_task()
 
     # From Flows
-    async def flows_task(self):
+    async def flows_task(self:"Task"):
         await self.message_task()
 
     #################################################################
     ######################### CONTINUE TASK #########################
     #################################################################
-    async def continue_task(self, target_discord_msg:discord.Message):
+    async def continue_task(self:"Task", target_discord_msg:discord.Message):
         try:
             original_user_hmessage, original_bot_hmessage = self.local_history.get_history_pair_from_msg_id(target_discord_msg.id)
             # Requires finding original bot HMessage in history
@@ -3067,7 +3055,7 @@ class Tasks(TaskProcessing):
     #################################################################
     ####################### REGENERATE TASK #########################
     #################################################################
-    async def regenerate_task(self, target_discord_msg: discord.Message, target_hmessage:HMessage, mode:str='create'):
+    async def regenerate_task(self:"Task", target_discord_msg: discord.Message, target_hmessage:HMessage, mode:str='create'):
         try:
             self.user_hmessage, self.bot_hmessage = self.local_history.get_history_pair_from_msg_id(target_discord_msg.id, user_hmsg_attr='regenerated_from', bot_hmsg_list_attr='regenerations')
 
@@ -3181,9 +3169,40 @@ class Tasks(TaskProcessing):
             await self.embeds.delete('system')
 
     #################################################################
+    ###################### EDIT HISTORY TASK ########################
+    #################################################################
+    async def edit_history_task(self:"Task"):
+        modal = EditMessageModal(client.user, self.ictx, matched_hmessage=self.matched_hmessage, target_message=self.target_message)
+        await self.ictx.response.send_modal(modal)
+
+    #################################################################
+    ####################### TOGGLE TTS TASK #########################
+    #################################################################
+    async def toggle_tts_task(self:"Task"):
+        try:
+            if tts.enabled:
+                await tts.apply_toggle_tts(toggle='off')
+                tts.enabled = False
+                message = 'disabled'
+            else:
+                await tts.apply_toggle_tts(toggle='on', tts_sw=True)
+                tts.enabled = True
+                message = 'enabled'
+            await voice_clients.toggle_voice_client(self.ictx.guild.id, message)
+            if self.embeds.enabled('change'):
+                # Send change embed to interaction channel
+                await self.embeds.send('change', f"{self.user_name} {message} TTS.", 'Note: Does not load/unload the TTS model.', channel=self.channel)
+                if bot_database.announce_channels:
+                    # Send embeds to announcement channels
+                    await bg_task_queue.put(announce_changes(f'{message} TTS', ' ', self.ictx))
+            log.info(f"TTS was {message}.")
+        except Exception as e:
+            log.error(f'Error when toggling TTS to "{message}": {e}')
+
+    #################################################################
     ########################## SPEAK TASK ###########################
     #################################################################
-    async def speak_task(self):
+    async def speak_task(self:"Task"):
         try:
             if shared.model_name == 'None':
                 await self.channel.send('Cannot process "/speak" request: No LLM model is currently loaded. Use "/llmmodel" to load a model.)', delete_after=5)
@@ -3227,7 +3246,7 @@ class Tasks(TaskProcessing):
     #################################################################
     #################### CHANGE IMG MODEL TASK ######################
     #################################################################
-    async def change_imgmodel_task(self):
+    async def change_imgmodel_task(self:"Task"):
         try:
             if not self.ictx:
                 self.user_name = 'Automatically'
@@ -3276,7 +3295,7 @@ class Tasks(TaskProcessing):
     #################### CHANGE LLM MODEL TASK ######################
     #################################################################
     # Process selected LLM model
-    async def change_llmmodel_task(self):
+    async def change_llmmodel_task(self:"Task"):
         try:
             llmmodel_params = self.params.llmmodel
             llmmodel_name = llmmodel_params.get('llmmodel_name')
@@ -3318,7 +3337,7 @@ class Tasks(TaskProcessing):
     #################################################################
     #################### CHANGE CHARACTER TASK ######################
     #################################################################
-    async def change_char_task(self):
+    async def change_char_task(self:"Task"):
         try:
             char_params = self.params.character
             char_name = char_params.get('char_name', {})
@@ -3357,7 +3376,7 @@ class Tasks(TaskProcessing):
     #################################################################
     ######################## IMAGE GEN TASK #########################
     #################################################################
-    async def img_gen_task(self):
+    async def img_gen_task(self:"Task"):
         try:
             if not self.tags:
                 self.tags = Tags()
@@ -4345,12 +4364,10 @@ if tgwui.enabled:
             await inter.response.send_message("Message not found in current chat history.", ephemeral=True, delete_after=5)
             return
         
-        async with task_semaphore:
-            # offload to ai_gen queue
-            log.info(f'{inter.user.display_name} used "edit history"')
-            # Send the modal
-            modal = EditMessageModal(client.user, inter, matched_hmessage, target_message=message)
-            await inter.response.send_modal(modal)
+        # offload to TaskManager() queue
+        log.info(f'{inter.user.display_name} used "edit history"')
+        edit_history_task = Task('edit_history', inter, matched_hmessage=matched_hmessage, target_message=message)
+        task_manager.queue.put(edit_history_task)
 
     async def apply_hide_or_reveal_history(inter: discord.Interaction, local_history: History, target_discord_msg: discord.Message, target_hmessage:HMessage):
         try:
