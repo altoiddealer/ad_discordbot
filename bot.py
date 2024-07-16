@@ -855,7 +855,7 @@ if tgwui.enabled and tts.client:
         # offload to TaskManager() queue
         log.info(f'{ctx.author.display_name} used "/toggle_tts"')
         toggle_tts_task = Task('toggle_tts', ctx)
-        task_manager.queue.put(toggle_tts_task)
+        await task_manager.queue.put(toggle_tts_task)
 
 #################################################################
 ############################ TAGS ###############################
@@ -4367,7 +4367,7 @@ if tgwui.enabled:
         # offload to TaskManager() queue
         log.info(f'{inter.user.display_name} used "edit history"')
         edit_history_task = Task('edit_history', inter, matched_hmessage=matched_hmessage, target_message=message)
-        task_manager.queue.put(edit_history_task)
+        await task_manager.queue.put(edit_history_task)
 
     async def apply_hide_or_reveal_history(inter: discord.Interaction, local_history: History, target_discord_msg: discord.Message, target_hmessage:HMessage):
         try:
