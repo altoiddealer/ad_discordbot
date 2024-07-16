@@ -1,8 +1,7 @@
 from modules.logs import import_track, get_logger; import_track(__file__, fp=True); log = get_logger(__name__)  # noqa: E702
 logging = log
 
-import datetime
-from datetime import timedelta
+from datetime import datetime, timedelta
 import math
 import random
 

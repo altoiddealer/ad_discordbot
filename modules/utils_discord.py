@@ -432,7 +432,7 @@ class Embeds:
 
     def create(self, name:str, title:str=' ', description:str=' ', url_suffix:str|None=None, url:str|None=None, color:int|None=None) -> discord.Embed:
         if url or url_suffix:
-            url = url if url_suffix is None else f'{url}{url_suffix}'
+            url = url if url_suffix is None else f'{self.root_url}{url_suffix}'
         self.embeds[name] = discord.Embed(title=title, description=description, url=url, color=color)
         return self.embeds[name]
 

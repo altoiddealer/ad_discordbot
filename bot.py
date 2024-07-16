@@ -1195,8 +1195,6 @@ class Tags:
                     log.info(f'''[TAGS] Tag with triggers "{tag_dict['trigger']}" was trumped by another tag.''')
                 else:
                     untrumped_matches.append(tag)
-                
-            print("untrumped_matches:", untrumped_matches)
 
             setattr(self, 'matches', untrumped_matches)
 
@@ -1957,14 +1955,15 @@ class TaskProcessing(TaskAttributes):
             log.error(f'An error occurred while creating Bot HMessage: {e}')
             return None
 
-    def format_prompt_with_recent_output(self, prompt:str) -> str:
+    def format_prompt_with_recent_output(self, prompt:str, local_history:History|None=None) -> str:
         try:
+            local_history = local_history if local_history is not None else self.local_history
             formatted_prompt = prompt
             # Find all matches of {user_x} and {llm_x} in the prompt
             matches = patterns.recent_msg_roles.findall(prompt)
             if matches:
-                user_msgs = [user_hmsg.text for user_hmsg in self.local_history.role_messages('user')[-10:]][::-1]
-                bot_msgs = [bot_hmsg.text for bot_hmsg in self.local_history.role_messages('assistant')[-10:]][::-1]
+                user_msgs = [user_hmsg.text for user_hmsg in local_history.role_messages('user')[-10:]][::-1]
+                bot_msgs = [bot_hmsg.text for bot_hmsg in local_history.role_messages('assistant')[-10:]][::-1]
                 recent_messages = {'user': user_msgs, 'llm': bot_msgs}
                 log.debug(f"format_prompt_with_recent_output {len(user_msgs)}, {len(bot_msgs)}, {repr(user_msgs[0])}, {repr(bot_msgs[0])}")
             # Iterate through the matches
@@ -1989,35 +1988,34 @@ class TaskProcessing(TaskAttributes):
             log.error(f'An error occurred while formatting prompt with recent messages: {e}')
             return prompt
 
-    def process_prompt_formatting(self, prompt:str, formatting:dict) -> str:
+    def process_prompt_formatting(self, prompt:str, formatting:dict, local_history:History|None=None) -> str:
         updated_prompt = prompt
-        # Only try formatting text if there is at least one instance of {variable syntax}
-        possible_variables = patterns.curly_brackets.search(prompt)
-        if possible_variables:
-            try:
-                format_prompt: list[str] = formatting.get('format_prompt', [])
-                time_offset = formatting.get('time_offset', None)
-                time_format = formatting.get('time_format', None)
-                date_format = formatting.get('date_format', None)
-                # Tag handling for prompt formatting
-                if format_prompt:
-                    for fmt_prompt in format_prompt:
-                        updated_prompt = fmt_prompt.replace('{prompt}', updated_prompt)
-                # format prompt with any defined recent messages
-                updated_prompt = self.format_prompt_with_recent_output(updated_prompt)
-                # format prompt with last time
-                time_since_last_user_msg = bot_database.last_user_msg.get(self.ictx.channel.id, '')
-                if time_since_last_user_msg:
-                    time_since_last_user_msg = format_time_difference(time.time(), bot_database.last_user_msg[self.ictx.channel.id])
-                updated_prompt = updated_prompt.replace('{time_since_last_user_msg}', time_since_last_user_msg)
-                # Format time if defined
-                new_time, new_date = get_time(time_offset, time_format, date_format)
-                updated_prompt = updated_prompt.replace('{time}', new_time)
-                updated_prompt = updated_prompt.replace('{date}', new_date)
-                if updated_prompt != prompt:
-                    log.info(f'Prompt was formatted: {updated_prompt}')
-            except Exception as e:
-                log.error(f"Error formatting LLM prompt: {e}")
+        try:
+            # unpack formatting dict
+            format_prompt: list[str] = formatting.get('format_prompt', [])
+            time_offset = formatting.get('time_offset', None)
+            time_format = formatting.get('time_format', None)
+            date_format = formatting.get('date_format', None)
+
+            # Tag handling for prompt formatting
+            if format_prompt:
+                for fmt_prompt in format_prompt:
+                    updated_prompt = fmt_prompt.replace('{prompt}', updated_prompt)
+            # format prompt with any defined recent messages
+            updated_prompt = self.format_prompt_with_recent_output(updated_prompt, local_history)
+            # format prompt with last time
+            time_since_last_user_msg = bot_database.last_user_msg.get(self.ictx.channel.id, '')
+            if time_since_last_user_msg:
+                time_since_last_user_msg = format_time_difference(time.time(), bot_database.last_user_msg[self.ictx.channel.id])
+            updated_prompt = updated_prompt.replace('{time_since_last_user_msg}', time_since_last_user_msg)
+            # Format time if defined
+            new_time, new_date = get_time(time_offset, time_format, date_format)
+            updated_prompt = updated_prompt.replace('{time}', new_time)
+            updated_prompt = updated_prompt.replace('{date}', new_date)
+            if updated_prompt != prompt:
+                log.info(f'Prompt was formatted: {updated_prompt}')
+        except Exception as e:
+            log.error(f"Error formatting LLM prompt: {e}")
         return updated_prompt
 
     def update_llm_gen_statistics(self, last_resp:str):
@@ -2269,7 +2267,7 @@ class TaskProcessing(TaskAttributes):
 
     def clean_img_payload(self):
         try:
-            # Remove duplicate negative prompts
+            # Remove duplicate negative prompts while prserving original order
             negative_prompt_list = self.img_payload.get('negative_prompt', '').split(', ')
             unique_values_set = set()
             unique_values_list = []
@@ -3601,11 +3599,12 @@ task_manager = TaskManager()
 #################################################################
 ########################## QUEUED FLOW ##########################
 #################################################################
-class Flows:
+class Flows(TaskProcessing):
     def __init__(self, ictx:CtxInteraction|None=None):
         self.ictx: CtxInteraction = ictx
         self.user_name: Optional[str] = get_user_ctx_inter(ictx).display_name if ictx else None
         self.channel: Optional[discord.TextChannel] = ictx.channel if ictx else None
+        self.local_history = None
 
         self.event: asyncio.Event = asyncio.Event()
         self.queue: asyncio.Queue = asyncio.Queue()
@@ -3621,10 +3620,11 @@ class Flows:
                     flow.remove(flow_dict)
                     break
             for step in flow:
-                if not step:
+                if not step: # ignore possible empty dict
                     continue
-                flow_step = copy.copy(flow_base)
-                flow_step.update(step)
+                flow_step = copy.copy(flow_base) # use flow base
+                flow_step.update(step)           # update with flow step tags
+                # duplicate flow step depending on 'flow_loops'
                 counter = 1
                 flow_step_loops = flow_step.pop('flow_step_loops', 0)
                 counter += (flow_step_loops - 1) if flow_step_loops else 0
@@ -3646,10 +3646,10 @@ class Flows:
             # format prompt before feeding it back into message_task()
             elif key == 'format_prompt':
                 formatting = {'format_prompt': [value]}
-                text = self.process_prompt_formatting(text, formatting)
+                text = self.process_prompt_formatting(text, formatting, self.local_history)
             # see if any tag values have dynamic formatting (user prompt, LLM reply, etc)
             elif isinstance(value, str):
-                formatted_value = self.format_prompt_with_recent_output(value)       # output will be a string
+                formatted_value = self.format_prompt_with_recent_output(value, self.local_history)       # output will be a string
                 # if the value changed...
                 if formatted_value != value:         
                     tags = Tags() # Simply to access Tags methods
@@ -3683,7 +3683,7 @@ class Flows:
             descript = ''
             await bot_embeds.send('flow', f'Processing Flow for {self.user_name} with {total_flow_steps} steps', descript, channel=self.channel)
 
-            while self.queue.qsize() > 0:   # flow_queue items are removed in get_tags()
+            while self.queue.qsize() > 0:   # flow_queue items are removed while running the subtask()
                 flow_name, text = await self.peek_flow_queue(text)
                 remaining_flow_steps = self.queue.qsize()
 
@@ -3710,6 +3710,11 @@ class Flows:
             self.ictx      = ictx
             self.user_name = get_user_ctx_inter(ictx).display_name
             self.channel   = ictx.channel
+            if is_direct_message(ictx):
+                self.local_history = self.local_history if self.local_history else bot_history.get_history_for(self.channel.id).dont_save()
+            else:
+                self.local_history = self.local_history if self.local_history else bot_history.get_history_for(self.channel.id)
+
             # flows are activated in process_llm_payload_tags(), and is where the flow queue is populated
             await self.flow_task(text)
 
