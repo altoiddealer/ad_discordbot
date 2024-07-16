@@ -566,13 +566,13 @@ class History:
             
         return output
     
-    def get_history_pair_from_msg_id(self, message_id: MessageID, user_msg_attr:str='reply_to', bot_msg_list_attr:str='replies'):
+    def get_history_pair_from_msg_id(self, message_id: MessageID, user_hmsg_attr:str='reply_to', bot_hmsg_list_attr:str='replies'):
         hmessage: Optional[HMessage] = self.search(lambda m: m.id == message_id or message_id in m.related_ids)
         if not hmessage:
             return None, None
 
         if hmessage.role == 'assistant':
-            user_hmessage = getattr(hmessage, user_msg_attr)
+            user_hmessage = getattr(hmessage, user_hmsg_attr)
             if not user_hmessage:
                 user_hmessage = hmessage.reply_to
             bot_hmessage = hmessage
@@ -581,7 +581,7 @@ class History:
         elif hmessage.role == 'user':
             user_hmessage = hmessage
             bot_hmessage = None
-            bot_hmessage_list = [m for m in getattr(hmessage, bot_msg_list_attr) if m.role == 'assistant']
+            bot_hmessage_list = [m for m in getattr(hmessage, bot_hmsg_list_attr) if m.role == 'assistant']
             if not bot_hmessage_list:
                 bot_hmessage_list = [m for m in hmessage.replies if m.role == 'assistant']
             bot_hmessage = bot_hmessage_list[-1]

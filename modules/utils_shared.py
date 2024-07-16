@@ -86,4 +86,8 @@ class SharedBotEmojis:
     regen_emoji = config.discord.get('history_reactions', {}).get('regen_emoji', '🔃')
     continue_emoji = config.discord.get('history_reactions', {}).get('continue_emoji', '⏩')
 
+    @classmethod
+    def get_emojis(cls):
+        return [cls.hidden_emoji, cls.regen_emoji, cls.continue_emoji]
+
 bot_emojis = SharedBotEmojis()
