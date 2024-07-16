@@ -3172,7 +3172,7 @@ class Tasks(TaskProcessing):
     ###################### EDIT HISTORY TASK ########################
     #################################################################
     async def edit_history_task(self:"Task"):
-        modal = EditMessageModal(client.user, self.ictx, matched_hmessage=self.matched_hmessage, target_discord_message=self.target_message)
+        modal = EditMessageModal(client.user, self.ictx, matched_hmessage=self.matched_hmessage, target_discord_msg=self.target_message)
         await self.ictx.response.send_modal(modal)
 
     #################################################################
