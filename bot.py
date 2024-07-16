@@ -1733,7 +1733,7 @@ class TaskProcessing(TaskAttributes):
         self.llm_payload['state']['context'] = bot_settings.settings['llmcontext']['context']
         self.llm_payload['state']['history'] = self.local_history.render_to_tgwui()
 
-    async def message_img_subtask(self):
+    async def message_img_gen(self):
         self.img_prompt = self.img_prompt or self.bot_hmessage.text
         await self.tags.match_img_tags(self.img_prompt)
         self.params.update_bot_should_do(self.tags) # check for updates from tags
@@ -1742,7 +1742,7 @@ class TaskProcessing(TaskAttributes):
             # RUN A SUBTASK
             await self.run_subtask('img_gen')
 
-    async def message_llm_subtask(self):
+    async def message_llm_gen(self):
         # if no LLM model is loaded, notify that no text will be generated
         if shared.model_name == 'None':
             if not bot_database.was_warned('no_llmmodel'):
@@ -1760,32 +1760,11 @@ class TaskProcessing(TaskAttributes):
         self.apply_server_mode()
         # Update names in stopping strings
         self.extra_stopping_strings()
-        # Create user message in HManager
-        if not self.params.skip_create_user_hmsg:
-            await self.create_user_hmessage()
         # generate text with text-generation-webui
-        last_resp, tts_resp = await self.llm_gen()
-        # Create Bot HMessage in HManager
-        if not self.params.skip_create_bot_hmsg:
-            # Replacing original Bot HMessage via "regenerate replace"
-            if self.params.bot_hmessage_to_update:
-                apply_reactions = config['discord']['history_reactions'].get('enabled', True)
-                self.bot_hmessage = await replace_msg_in_history_and_discord(client.user, self.ictx, self.params, last_resp, tts_resp, apply_reactions)
-                self.params.should_send_text = False
-            else:
-                await self.create_bot_hmessage(last_resp, tts_resp)
+        await self.llm_gen()
+
         # Toggle TTS back on if it was toggled off
         await tts.apply_toggle_tts(toggle='on', tts_sw=tts_sw)
-
-        self.img_prompt = last_resp
-        # Log message exchange
-        if last_resp:
-            log.info(f'''{self.user_name}: "{self.llm_payload['text']}"''')
-            log.info(f'''{self.llm_payload['state']['name2']}: "{last_resp}"''')
-        # If no text was generated, treat user input at the response
-        else:
-            if self.params.should_gen_image and sd.enabled:
-                self.img_prompt = self.llm_payload['text']
 
     async def init_img_embed(self):
         # make a 'Prompting...' embed when generating text for an image response
@@ -1893,6 +1872,10 @@ class TaskProcessing(TaskAttributes):
             last_resp, tts_resp = await loop.run_in_executor(None, process_responses)
             if last_resp:
                 self.update_llm_gen_statistics(last_resp) # Update statistics
+
+            setattr(self, 'last_resp', last_resp)
+            setattr(self, 'tts_resp', tts_resp)
+
             return last_resp, tts_resp
         except Exception as e:
             log.error(f'An error occurred in llm_gen(): {e}')
@@ -2009,12 +1992,17 @@ class TaskProcessing(TaskAttributes):
             bot_statistics.llm['num_tokens_total'] = total_tokens
             # Update time statistics
             total_time = bot_statistics.llm.get('time_total', 0)
-            total_time += (time.time() - bot_statistics._llm_gen_time_start_last)
+            llm_gen_time = time.time() - bot_statistics._llm_gen_time_start_last
+            total_time += llm_gen_time
+
             bot_statistics.llm['time_total'] = round(total_time, 4)
             # Update averages
             bot_statistics.llm['tokens_per_gen_avg'] = total_tokens/total_gens
             bot_statistics.llm['tokens_per_sec_avg'] = round((total_tokens/total_time), 4)
             bot_statistics.save()
+
+            # Update self attribute
+            setattr(self, 'last_tokens', last_tokens)
         except Exception as e:
             log.error(f'An error occurred while saving LLM gen statistics: {e}')
 
@@ -2847,7 +2835,25 @@ class Tasks(TaskProcessing):
     #################################################################
     ######################### MESSAGE TASK ##########################
     #################################################################
-    async def message_task(self:"Task") -> tuple[HMessage, HMessage]:
+
+
+    async def create_hmessages(self:"Task", last_resp:str='', tts_resp:str='') -> tuple[HMessage, HMessage]:
+        # Create user message in HManager
+        if not self.params.skip_create_user_hmsg:
+            await self.create_user_hmessage()
+
+        # Create Bot HMessage in HManager
+        if not self.params.skip_create_bot_hmsg:
+            # Replacing original Bot HMessage via "regenerate replace"
+            if self.params.bot_hmessage_to_update:
+                apply_reactions = config['discord']['history_reactions'].get('enabled', True)
+                self.bot_hmessage = await replace_msg_in_history_and_discord(client.user, self.ictx, self.params, last_resp, tts_resp, apply_reactions)
+                self.params.should_send_text = False
+            else:
+                await self.create_bot_hmessage(last_resp, tts_resp)
+
+    # message_task is split into two separate functions to apply any intentional delays after text is generated (behavior settings)
+    async def message_task(self:"Task"):
         try:
             await spontaneous_messaging.reset_for_channel(self.ictx) # Stop any pending spontaneous message task for current channel
 
@@ -2860,6 +2866,7 @@ class Tasks(TaskProcessing):
 
                 # process text generation
                 if tgwui.enabled:
+
                     # if LLM model swap/change was triggered
                     if self.params.llmmodel:
                         # RUN CHANGE LLMMODEL AS SUBTASK
@@ -2871,16 +2878,32 @@ class Tasks(TaskProcessing):
                     if self.params.should_gen_image:
                         await self.init_img_embed() # Create a "prompting" embed for image gen
 
-                    await self.message_llm_subtask()
-
-            return await self.message_task_post_llmgen()
+                    # generate text with TGWUI
+                    await self.message_llm_gen()
 
         except Exception as e:
             return await self.message_task_error(e)
 
-    async def message_task_post_llmgen(self:"Task") -> tuple[HMessage, HMessage]:
+
+    async def message_post_llm_task(self:"Task") -> tuple[HMessage, HMessage]:
         try:
+            last_resp = getattr(self, 'last_resp', '')
+            tts_resp = getattr(self, 'tts_resp', '')
+
             if tgwui.enabled:
+
+                await self.create_hmessages(last_resp, tts_resp)
+
+                self.img_prompt = last_resp
+                # Log message exchange
+                if last_resp:
+                    log.info(f'''{self.user_name}: "{self.llm_payload['text']}"''')
+                    log.info(f'''{self.llm_payload['state']['name2']}: "{last_resp}"''')
+                # If no text was generated, treat user input at the response
+                else:
+                    if self.params.should_gen_image and sd.enabled:
+                        self.img_prompt = self.llm_payload['text']
+
                 # add history reactions to user message / swap LLM model
                 if config['discord']['history_reactions'].get('enabled', True):
                     await apply_reactions_to_messages(client.user, self.ictx, self.user_hmessage)
@@ -2892,7 +2915,7 @@ class Tasks(TaskProcessing):
 
             # process image generation (A1111 / Forge)
             if self.params.should_gen_text and sd.enabled:
-                await self.message_img_subtask()
+                await self.message_img_gen()
 
             # send responses (text, TTS, images)
             await self.send_responses()
@@ -2911,7 +2934,7 @@ class Tasks(TaskProcessing):
 
         except Exception as e:
             return await self.message_task_error(e)
-    
+
     async def message_task_error(self:"Task", e):
         print(traceback.format_exc())
         log.error(f'An error occurred while processing "{self.name}" request: {e}')
@@ -2919,27 +2942,47 @@ class Tasks(TaskProcessing):
         await self.embeds.delete('change')
         return None, None
 
+    async def check_behavior(self):
+        time_started_typing = getattr(self, 'time_start_typing', None)
+        last_tokens = getattr(self, 'last_tokens', None)
+
+        if bot_behavior.maximum_typing_speed > 0 \
+        and time_started_typing and last_tokens:
+            seconds_to_write = last_tokens*4
+            current_time = time.time()
+
+
+        self.llm_payload['state']['max_tokens_second'] = round((bot_behavior.maximum_typing_speed*4)/60)
+
+
     ## Variations of message_task
     # on_message variation
     async def on_message_task(self:"Task"):
+        setattr(self, 'time_start_typing', time.time())
         await self.message_task()
+        #await self.check_behavior()
+        await self.message_post_llm_task()
         message_manager.last_channel = self.channel.id
         if not is_direct_message(self.ictx):
             message_manager.update_afk_for_guild(self.ictx.guild.id)
 
     # spontaneous_message variation
     async def spontaneous_message_task(self:"Task"):
+        setattr(self, 'time_start_typing', time.time())
         await self.message_task()
+        await self.message_post_llm_task()
         task, tally = spontaneous_messaging.tasks[self.channel.id]
         spontaneous_messaging.tasks[self.channel.id] = (task, tally + 1)
 
     # From /image command (use_llm = True)
     async def msg_image_cmd_task(self:"Task"):
         await self.message_task()
+        await self.message_post_llm_task()
 
     # From Flows
     async def flows_task(self:"Task"):
         await self.message_task()
+        await self.message_post_llm_task()
 
     #################################################################
     ######################### CONTINUE TASK #########################
