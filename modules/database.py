@@ -192,7 +192,10 @@ class Database(BaseFileMemory):
         self.main_channels = data.pop('main_channels', [])
         self.voice_channels = data.pop('voice_channels', {})
         self.warned_once = data.pop('warned_once', {})
+        self.reset_was_warned()
 
+    def reset_was_warned(self):
+        self.warned_once = {}
 
     def last_user_msg_for(self, channel_id):
         return self.last_user_msg.get(channel_id, None)

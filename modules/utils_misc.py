@@ -5,17 +5,21 @@ from datetime import datetime, timedelta
 import math
 import random
 
-def fix_dict(set, req, src:str|None=None, path=""):
+def fix_dict(set, req, src: str | None = None, warned: bool = False, path=""):
+    was_warned = warned
     ignored_keys = ['regenerate', '_continue', 'text', 'bot_in_character_menu', 'imgmodel_name']
     for k, req_v in req.items():
         current_path = f"{path}/{k}" if path else k  # Update the current path
         if k not in set and k not in ignored_keys:
-            if src:
-                log.warning(f'key "{current_path}" missing from "{src}". Using default value: {repr(req_v)}.')
+            if not warned and src:  # Only log if warned is initially False
+                log.warning(f'key "{current_path}" missing from "{src}".')
+                log.info(f'Applying default value for "{current_path}": {repr(req_v)}.')
+                was_warned = True
             set[k] = req_v
         elif isinstance(req_v, dict):
-            fix_dict(set[k], req_v, src, current_path)
-    return set
+            set[k], child_warned = fix_dict(set[k], req_v, src, warned, current_path)
+            was_warned = was_warned or child_warned  # Update was_warned if any child call was warned
+    return set, was_warned
 
 # Updates matched keys, AND adds missing keys
 def update_dict(d, u):

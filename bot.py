@@ -340,7 +340,7 @@ class TGWUI:
         for index, name in enumerate(shared.args.extensions):
             if name in available_extensions:
                 if name != 'api':
-                    if not bot_database.was_warned(name):
+                    if not bot_database.was_warned(f'extension_{name}'):
                         bot_database.update_was_warned(name)
                         log.info(f'Loading the extension "{name}"')
                 try:
@@ -1340,10 +1340,7 @@ def get_braces_value(matched_text:str) -> str:
 
 async def dynamic_prompting(user_name: str, text: str, ictx: Optional[CtxInteraction] = None) -> str:
     if not config.get('dynamic_prompting_enabled', True):
-        if not bot_database.was_warned('dynaprompt'):
-            bot_database.update_was_warned('dynaprompt')
-            log.warning(f"'{shared_path.config}' is missing a new parameter 'dynamic_prompting_enabled'. Defaulting to 'True' (enabled) ")
-            return text
+        return text
 
     # copy text for adding comments
     text_with_comments = text
@@ -1551,7 +1548,7 @@ class TaskProcessing(TaskAttributes):
         defaults = bot_settings.settings_to_dict() # Get default settings as dict
         default_state = defaults['llmstate']['state']
         current_state = self.llm_payload['state']
-        self.llm_payload['state'] = fix_dict(current_state, default_state)
+        self.llm_payload['state'], _ = fix_dict(current_state, default_state)
 
     async def swap_llm_character(self, char_name:str):
         try:
@@ -5807,8 +5804,11 @@ class Settings:
         # Current user custom settings
         active_settings = copy.deepcopy(bot_active_settings.get_vars())
         behavior = active_settings.pop('behavior', {})
-        # Add any missing required settings
-        self.settings = fix_dict(active_settings, defaults, 'dict_base_settings.yaml')
+        # Add any missing required settings, while warning for any missing
+        warned = bot_database.was_warned('fixed_base_settings')
+        self.settings, was_warned = fix_dict(active_settings, defaults, 'dict_base_settings.yaml', warned)
+        bot_database.update_was_warned('fixed_base_settings', was_warned, save_now=False)
+        # Update behavior dict
         bot_behavior.update_behavior(behavior)
 
     # Allows printing default values of Settings
