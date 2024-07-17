@@ -340,7 +340,7 @@ class TGWUI:
         for index, name in enumerate(shared.args.extensions):
             if name in available_extensions:
                 if name != 'api':
-                    if not bot_database.was_warned(f'extension_{name}'):
+                    if not bot_database.was_warned(name):
                         bot_database.update_was_warned(name)
                         log.info(f'Loading the extension "{name}"')
                 try:
@@ -1819,6 +1819,30 @@ class TaskProcessing(TaskAttributes):
         except Exception as e:
             log.error(f'An error occurred while updating stopping strings: {e}')
 
+    # Process responses from text-generation-webui
+    async def create_bot_hmessage(self, last_resp:str='', tts_resp:str='') -> HMessage:
+        try:
+            # custom handlings, mainly from 'regenerate'
+            self.bot_hmessage = self.local_history.new_message(bot_settings.name, last_resp, 'assistant', bot_settings._bot_id, text_visible=tts_resp)
+            if self.user_hmessage:
+                self.bot_hmessage.mark_as_reply_for(self.user_hmessage)
+            if self.params.regenerated:
+                self.bot_hmessage.mark_as_regeneration_for(self.params.regenerated)
+            if self.params.bot_hmsg_hidden or self.params.save_to_history == False:
+                self.bot_hmessage.update(hidden=True)
+            if is_direct_message(self.ictx):
+                self.bot_hmessage.dont_save()
+
+            if last_resp:
+                truncation = int(bot_settings.settings['llmstate']['state']['truncation_length'] * 4) #approx tokens
+                self.bot_hmessage.history.truncate(truncation)
+                client.loop.create_task(self.bot_hmessage.history.save())
+
+            return self.bot_hmessage
+        except Exception as e:
+            log.error(f'An error occurred while creating Bot HMessage: {e}')
+            return None
+
     # Creates User HMessage in HManager
     async def create_user_hmessage(self):
         try:
@@ -1835,6 +1859,23 @@ class TaskProcessing(TaskAttributes):
                 await self.warn_direct_channel(self.ictx)
         except Exception as e:
             log.error(f'An error occurred while creating User HMessage: {e}')
+
+    async def create_hmessages(self, last_resp:str='', tts_resp:str='') -> tuple[HMessage, HMessage]:
+        # Create user message in HManager
+        if not self.params.skip_create_user_hmsg:
+            await self.create_user_hmessage()
+
+        # Create Bot HMessage in HManager
+        if not self.params.skip_create_bot_hmsg:
+            # Replacing original Bot HMessage via "regenerate replace"
+            if self.params.bot_hmessage_to_update:
+                apply_reactions = config['discord']['history_reactions'].get('enabled', True)
+                self.bot_hmessage = await replace_msg_in_history_and_discord(client.user, self.ictx, self.params, last_resp, tts_resp, apply_reactions)
+                self.params.should_send_text = False
+            else:
+                await self.create_bot_hmessage(last_resp, tts_resp)
+
+        return self.user_hmessage, self.bot_hmessage
 
     # Send LLM Payload - get responses
     async def llm_gen(self) -> tuple[str, str]:
@@ -1886,30 +1927,6 @@ class TaskProcessing(TaskAttributes):
                 await self.embeds.send('system', "This conversation will not be saved, ***however***:", "Your interactions will be included in the bot's general logging.")
             else:
                 await self.ictx.channel.send("This conversation will not be saved. ***However***, your interactions will be included in the bot's general logging.")
-
-    # Process responses from text-generation-webui
-    async def create_bot_hmessage(self, last_resp:str='', tts_resp:str='') -> HMessage:
-        try:
-            # custom handlings, mainly from 'regenerate'
-            self.bot_hmessage = self.local_history.new_message(bot_settings.name, last_resp, 'assistant', bot_settings._bot_id, text_visible=tts_resp)
-            if self.user_hmessage:
-                self.bot_hmessage.mark_as_reply_for(self.user_hmessage)
-            if self.params.regenerated:
-                self.bot_hmessage.mark_as_regeneration_for(self.params.regenerated)
-            if self.params.bot_hmsg_hidden or self.params.save_to_history == False:
-                self.bot_hmessage.update(hidden=True)
-            if is_direct_message(self.ictx):
-                self.bot_hmessage.dont_save()
-
-            if last_resp:
-                truncation = int(bot_settings.settings['llmstate']['state']['truncation_length'] * 4) #approx tokens
-                self.bot_hmessage.history.truncate(truncation)
-                client.loop.create_task(self.bot_hmessage.history.save())
-
-            return self.bot_hmessage
-        except Exception as e:
-            log.error(f'An error occurred while creating Bot HMessage: {e}')
-            return None
 
     def format_prompt_with_recent_output(self, prompt:str, local_history:History|None=None) -> str:
         try:
@@ -3482,7 +3499,7 @@ class Tasks(TaskProcessing):
                 try:
                     shared.model_name = llmmodel_name   # set to new LLM model
                     if shared.model_name != 'None':
-                        bot_database.update_was_warned('no_llmmodel', False) # Reset warning message
+                        bot_database.update_was_warned('no_llmmodel') # Reset warning message
                         loader = tgwui.get_llm_model_loader(llmmodel_name)    # Try getting loader from user-config.yaml to prevent errors
                         await tgwui.load_llm_model(loader)                    # Load an LLM model if specified
                 except Exception as e:
@@ -4661,7 +4678,7 @@ async def character_loader(char_name, channel=None):
         # Merge with basesettings
         char_data = merge_base(char_data, 'llmcontext')
         # Reset warning for character specific TTS
-        bot_database.update_was_warned('char_tts', False)
+        bot_database.update_was_warned('char_tts')
         # Gather context specific keys from the character data
         char_llmcontext = {}
         for key, value in char_data.items():
@@ -5807,7 +5824,7 @@ class Settings:
         # Add any missing required settings, while warning for any missing
         warned = bot_database.was_warned('fixed_base_settings')
         self.settings, was_warned = fix_dict(active_settings, defaults, 'dict_base_settings.yaml', warned)
-        bot_database.update_was_warned('fixed_base_settings', was_warned, save_now=False)
+        bot_database.update_was_warned('fixed_base_settings', was_warned)
         # Update behavior dict
         bot_behavior.update_behavior(behavior)
 

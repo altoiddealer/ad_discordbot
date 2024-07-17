@@ -191,11 +191,7 @@ class Database(BaseFileMemory):
         self.announce_channels = data.pop('announce_channels', [])
         self.main_channels = data.pop('main_channels', [])
         self.voice_channels = data.pop('voice_channels', {})
-        self.warned_once = data.pop('warned_once', {})
-        self.reset_was_warned()
-
-    def reset_was_warned(self):
-        self.warned_once = {}
+        data['warned_once'] = {}
 
     def last_user_msg_for(self, channel_id):
         return self.last_user_msg.get(channel_id, None)
@@ -211,13 +207,15 @@ class Database(BaseFileMemory):
         if save_now:
             self.save()
 
+    def save_pre_process(self, data):
+        data.pop('warned_once', None)
+        return data
+
     def was_warned(self, flag_name):
         return self.warned_once.get(flag_name, False)
 
-    def update_was_warned(self, flag_name, value=True, save_now=True):
+    def update_was_warned(self, flag_name, value=True):
         self.warned_once[flag_name] = value
-        if save_now:
-            self.save()
 
     def update_voice_channels(self, guild_id, channel_id, save_now=True):
         self.voice_channels[guild_id] = channel_id
