@@ -1728,8 +1728,6 @@ class TaskProcessing(TaskAttributes):
         self.llm_payload['state']['name1_instruct'] = self.user_name
         self.llm_payload['state']['name2_instruct'] = bot_settings.name
         self.llm_payload['state']['character_menu'] = bot_settings.name
-        # if current_task.name == 'message' and bot_behavior.maximum_typing_speed > 0:
-        #     self.llm_payload['state']['max_tokens_second'] = round((bot_behavior.maximum_typing_speed*4)/60)
         self.llm_payload['state']['context'] = bot_settings.settings['llmcontext']['context']
         self.llm_payload['state']['history'] = self.local_history.render_to_tgwui()
 
@@ -1772,7 +1770,7 @@ class TaskProcessing(TaskAttributes):
             if shared.model_name == 'None':
                 await self.channel.send('**Processing image generation using message as the image prompt ...**', delete_after=5) # msg for if LLM model is unloaded
             else:
-                await self.embeds.send('img_gen', "Prompting ...", " ")
+                await self.embeds.send('img_gen', "Prompting ...", " ", delete_after=5)
 
     async def build_llm_payload(self):
         # Use predefined LLM payload or initialize with defaults
@@ -2835,23 +2833,6 @@ class Tasks(TaskProcessing):
     #################################################################
     ######################### MESSAGE TASK ##########################
     #################################################################
-
-
-    async def create_hmessages(self:"Task", last_resp:str='', tts_resp:str='') -> tuple[HMessage, HMessage]:
-        # Create user message in HManager
-        if not self.params.skip_create_user_hmsg:
-            await self.create_user_hmessage()
-
-        # Create Bot HMessage in HManager
-        if not self.params.skip_create_bot_hmsg:
-            # Replacing original Bot HMessage via "regenerate replace"
-            if self.params.bot_hmessage_to_update:
-                apply_reactions = config['discord']['history_reactions'].get('enabled', True)
-                self.bot_hmessage = await replace_msg_in_history_and_discord(client.user, self.ictx, self.params, last_resp, tts_resp, apply_reactions)
-                self.params.should_send_text = False
-            else:
-                await self.create_bot_hmessage(last_resp, tts_resp)
-
     # message_task is split into two separate functions to apply any intentional delays after text is generated (behavior settings)
     async def message_task(self:"Task"):
         try:
@@ -2874,17 +2855,20 @@ class Tasks(TaskProcessing):
                         # Delete embed before the second call
                         if self.params.llmmodel.get('mode', 'change') == 'swap': # default to 'change' unless a tag was triggered with 'swap'
                             await self.embeds.delete('change')
-                    # if triggered to generate an image
-                    if self.params.should_gen_image:
-                        await self.init_img_embed() # Create a "prompting" embed for image gen
+                    # # if triggered to generate an image
+                    # if self.params.should_gen_image:
+                    #     await self.init_img_embed() # Create a "prompting" embed for image gen
 
                     # generate text with TGWUI
                     await self.message_llm_gen()
 
         except Exception as e:
-            return await self.message_task_error(e)
+            print(traceback.format_exc())
+            log.error(f'An error occurred while processing "{self.name}" request: {e}')
+            await self.embeds.delete('change')
 
 
+    # Parked Task may be resumed from here
     async def message_post_llm_task(self:"Task") -> tuple[HMessage, HMessage]:
         try:
             last_resp = getattr(self, 'last_resp', '')
@@ -2928,51 +2912,64 @@ class Tasks(TaskProcessing):
                 # RUN IMG GEN AS SUBTASK
                 await self.run_subtask('img_gen')
 
-            await spontaneous_messaging.set_for_channel(self.ictx) # trigger spontaneous message from bot, as configured
+            await spontaneous_messaging.set_for_channel(self.ictx) # reset timer for spontaneous message from bot, as configured
+
+            message_manager.last_channel = self.channel.id
 
             return self.user_hmessage, self.bot_hmessage
 
         except Exception as e:
-            return await self.message_task_error(e)
-
-    async def message_task_error(self:"Task", e):
-        print(traceback.format_exc())
-        log.error(f'An error occurred while processing "{self.name}" request: {e}')
-        await self.embeds.edit_or_send('img_gen', f'An error occurred while processing "{self.name}" request', e)
-        await self.embeds.delete('change')
-        return None, None
-
-    async def check_behavior(self):
+            print(traceback.format_exc())
+            log.error(f'An error occurred while processing "{self.name}" request: {e}')
+            await self.embeds.edit_or_send('img_gen', f'An error occurred while processing "{self.name}" request', e)
+            await self.embeds.delete('change')
+            return None, None
+    
+    
+    # Offloads task to "parked queue" if not ready to send
+    async def check_behavior(self:"Task"):
         time_started_typing = getattr(self, 'time_start_typing', None)
         last_tokens = getattr(self, 'last_tokens', None)
 
-        if bot_behavior.maximum_typing_speed > 0 \
-        and time_started_typing and last_tokens:
-            seconds_to_write = last_tokens*4
-            current_time = time.time()
+        if bot_behavior.maximum_typing_speed > 0 and time_started_typing and last_tokens:
+            max_tokens_per_second = round( (bot_behavior.maximum_typing_speed*4) / 60 )
+            seconds_to_write = last_tokens / max_tokens_per_second
+            time_to_send = time_started_typing + seconds_to_write
 
+            if time.time() < time_to_send:
+                parked_message_task: Task = self.clone('message_post_llm', self.ictx)
+                await task_manager.park_task(parked_message_task, time_to_run = time_to_send)
+                log.debug(f'Message task was parked, will send after: {time_to_send}')
+                return False
 
-        self.llm_payload['state']['max_tokens_second'] = round((bot_behavior.maximum_typing_speed*4)/60)
-
+        return True
 
     ## Variations of message_task
     # on_message variation
     async def on_message_task(self:"Task"):
         setattr(self, 'time_start_typing', time.time())
-        await self.message_task()
-        #await self.check_behavior()
-        await self.message_post_llm_task()
-        message_manager.last_channel = self.channel.id
         if not is_direct_message(self.ictx):
             message_manager.update_afk_for_guild(self.ictx.guild.id)
+        await self.message_task()
+
+        # check if task should have special handling
+        proceed = await self.check_behavior()
+
+        if proceed:
+            await self.message_post_llm_task()
 
     # spontaneous_message variation
     async def spontaneous_message_task(self:"Task"):
         setattr(self, 'time_start_typing', time.time())
         await self.message_task()
-        await self.message_post_llm_task()
-        task, tally = spontaneous_messaging.tasks[self.channel.id]
-        spontaneous_messaging.tasks[self.channel.id] = (task, tally + 1)
+
+        # check if task should have special handling
+        proceed = await self.check_behavior()
+
+        if proceed:
+            await self.message_post_llm_task()
+            task, tally = spontaneous_messaging.tasks[self.channel.id]
+            spontaneous_messaging.tasks[self.channel.id] = (task, tally + 1)
 
     # From /image command (use_llm = True)
     async def msg_image_cmd_task(self:"Task"):
@@ -3624,11 +3621,12 @@ class Task(Tasks):
         '''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
         TaskManager.run() will use the Task() name to dynamically call a Tasks() method.
 
-        Valid names:
-        'message' / 'on_message' / 'spontaneous_message' / 'continue' / 'regenerate'
-        'change_imgmodel' / 'change_llmmodel' / 'change_char' / 'img_gen' / 'msg_image_cmd' /'speak'
+        Valid Task names:
+        'on_message' / 'message' / 'message_post_llm' / 'spontaneous_message' / 'flows'
+        'edit_history' / 'continue' / 'regenerate' / ''hide_or_reveal_history'
+        'change_imgmodel' / 'change_llmmodel' / 'change_char' / 'img_gen' / 'msg_image_cmd' / 'speak'
 
-        kwargs:
+        Default kwargs:
         channel, user, user_name, embeds, text, llm_prompt, llm_payload, params,
         tags, img_prompt, img_payload, user_hmessage, bot_hmessage, local_history
         '''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
@@ -3684,20 +3682,10 @@ class Task(Tasks):
                 self.local_history = self.local_history if self.local_history else bot_history.get_history_for(self.channel.id)
 
     def clone(self, name:str='', ictx:CtxInteraction|None=None) -> "Task":
-        # Create a dictionary of the current attributes
-        current_attributes = {
-            'embeds': self.embeds,
-            'text': self.text,
-            'llm_prompt': self.llm_prompt,
-            'llm_payload': self.llm_payload,
-            'params': self.params,
-            'tags': self.tags,
-            'img_prompt': self.img_prompt,
-            'img_payload': self.img_payload,
-            'user_hmessage': self.user_hmessage,
-            'bot_hmessage': self.bot_hmessage
-        }
-        # Create a new instance with the same attributes
+        '''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+        Returns a new Task() with all of the same attributes
+        '''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+        current_attributes = {key: value for key, value in vars(self).items() if not key.startswith('__') and not callable(value)}
         return Task(name=name, ictx=ictx, **current_attributes)
 
     async def run(self, task_name: str|None=None) -> Any:
@@ -3749,21 +3737,26 @@ class TaskManager(Tasks):
         self.current_user_name: str = None
 
         self.event = asyncio.Event()
-        self.queue = asyncio.Queue()
+        self.queue = asyncio.Queue() # main Task queue
+
+        self.next_parked_run_time:time = None
+        self.parked_queue = asyncio.PriorityQueue() # messages that are delayed
 
     async def process_tasks(self):
         try:
             while True:
                 # Fetch item from the queue
-                task: Task = await self.queue.get()
+                task:Task = await self.get_next_task()
+
+
                 # Flag processing a task. Check with 'if task_manager.event.is_set():'
                 self.event.set() 
                 # initialize default values
                 task.init_self_values()
 
-                not_typing = ['on_message', 'spontaneous_message', 'reset', 'change_char', 'change_imgmodel', 'change_llmmodel']
+                typing = ['message', 'flows', 'continue', 'regenerate', 'msg_image_cmd', 'speak']
 
-                if task.name not in not_typing:
+                if task.name in typing:
                     async with task.channel.typing():
                         await self.run_task(task)
                 else:
@@ -3790,6 +3783,35 @@ class TaskManager(Tasks):
                 await flows.run_flow_if_any(task.text, task.ictx)
         except Exception as e:
             logging.error(f"An error occurred while processing task {task.name}: {e}")
+
+    async def set_next_time(self):
+        # Set the time for the next queued item
+        total_queue_size = self.parked_queue.qsize()
+        # Only gets the next item
+        if self.parked_queue.qsize() == total_queue_size:
+            time_to_run, channel_id, task = await self.parked_queue.get()
+            self.next_parked_run_time = time_to_run # update value
+            await self.parked_queue.put((time_to_run, channel_id, task))
+
+    async def get_next_task(self):
+        # Fetch parked Task that is ready to send
+        if (self.next_parked_run_time is not None) and (time.time() > self.next_parked_run_time):
+            task:Task = await self.parked_queue.get()
+            if self.parked_queue.qsize() > 0:
+                await self.set_next_time()
+            else:
+                self.next_parked_run_time = None
+
+        # Or just fetch next Task
+        else:
+            task:Task = await self.queue.get()
+
+        return task
+
+    async def park_task(self, task:Task, time_to_run:time):
+        await self.parked_queue.put((time_to_run, task.channel.id, task))
+        if (self.next_parked_run_time is None) or (time_to_run < self.next_parked_run_time):
+            self.next_parked_run_time = time_to_run
 
 task_manager = TaskManager()
 
@@ -5356,13 +5378,13 @@ class MessageManager():
         temp_items = []
 
         while not self.msg_queue.empty():
-            send_after, num, message, text, channel_id = await self.msg_queue.get()
+            send_after, num, message, text = await self.msg_queue.get()
             # Only condition to check (for now)
-            if channel_id == self.last_channel:
-                exception = {'send_after': send_after, 'num': num, 'message': message, 'text': text, 'channel_id': channel_id}
+            if message.channel.id == self.last_channel:
+                exception = {'send_after': send_after, 'num': num, 'message': message, 'text': text}
                 break
             else:
-                temp_items.append((send_after, num, message, text, channel_id))
+                temp_items.append((send_after, num, message, text))
 
         # Re-add the temporarily removed items back to the queue
         for item in temp_items:
@@ -5373,7 +5395,7 @@ class MessageManager():
     async def process_msg_queue(self):
         while True:
             # Fetches the next item in the queue with the earliest value for 'send_after'
-            send_after, num, message, text, channel_id = await self.msg_queue.get()
+            send_after, num, message, text = await self.msg_queue.get()
 
             current_time = time.time()
             # Process message that is ready to send
@@ -5401,10 +5423,9 @@ class MessageManager():
         send_after = time.time() + delay
         self.counter += 1
         num = self.counter
-        channel_id = message.channel.id
 
         if delay:
-            await self.msg_queue.put((send_after, num, message, text, channel_id))
+            await self.msg_queue.put((send_after, num, message, text))
         else:
             await self.run_message_task(num, message, text)
 
@@ -5419,7 +5440,7 @@ class SpontaneousMessaging():
 
     async def reset_for_channel(self, ictx:CtxInteraction):
         # Only reset from discord message or '/prompt' cmd
-        if task_manager.current_task in ['message', 'prompt']:
+        if task_manager.current_task in ['on_message', 'prompt']:
             current_chan_msg_task = self.tasks.get(ictx.channel.id, (None, 0))
             task, _ = current_chan_msg_task
             if task:

@@ -478,13 +478,14 @@ class Embeds:
             return self.sent_msg_embeds[name]
         return None
 
-    async def send(self, name:str, title:str|None=None, description:str|None=None, color:int|None=None, url_suffix:str|None=None, url:str|None=None, channel:discord.TextChannel|None=None) -> None|discord.Message:
+    async def send(self, name:str, title:str|None=None, description:str|None=None, color:int|None=None, url_suffix:str|None=None, url:str|None=None, channel:discord.TextChannel|None=None, delete_after:int|None=None) -> None|discord.Message:
         send_channel = channel or self.channel or None
         # Return if not configured
         if not self.enabled(name) or (self.channel is None and channel is None):
             return
         # Retain the message while sending Embed
-        self.sent_msg_embeds[name] = await send_channel.send(embed = self.update(name, title, description, color, url_suffix, url))
+        updated_embed = self.update(name, title, description, color, url_suffix, url)
+        self.sent_msg_embeds[name] = await send_channel.send(embed = updated_embed, delete_after=delete_after)
         return self.sent_msg_embeds[name]
 
     async def edit_or_send(self, name:str, title:str|None=None, description:str|None=None, color:int|None=None, url_suffix:str|None=None, url:str|None=None, channel:discord.TextChannel|None=None) -> None|discord.Embed|discord.Message:
