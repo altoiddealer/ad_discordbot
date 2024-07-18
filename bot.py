@@ -1172,7 +1172,7 @@ class Tags:
                 else:
                     untrumped_matches.append(tag)
 
-            setattr(self, 'matches', untrumped_matches)
+            self.matches = untrumped_matches
 
         except Exception as e:
             log.error(f"Error processing matched tags: {e}")
@@ -1230,8 +1230,8 @@ class Tags:
             if 'user' in updated_unmatched:
                 del updated_unmatched['user'] # Remove after first phase. Controls the 'llm' tag processing at function start.
 
-            setattr(self, 'matches', updated_matches)
-            setattr(self, 'unmatched', updated_unmatched)
+            self.matches = updated_matches
+            self.unmatched = updated_unmatched
 
         except Exception as e:
             log.error(f"Error matching tags: {e}")
@@ -1519,9 +1519,13 @@ class TaskAttributes():
     tags: Tags
     img_prompt: str
     img_payload: dict
-    local_history: History
+    last_resp: str
+    tts_resp: str
     user_hmessage: HMessage
     bot_hmessage: HMessage
+    local_history: History
+    typing_task: "TypingTask"
+
 
 class TaskProcessing(TaskAttributes):
     ####################### MOSTLY TEXT GEN PROCESSING #########################
@@ -1739,9 +1743,10 @@ class TaskProcessing(TaskAttributes):
         await self.tags.match_img_tags(self.img_prompt)
         self.params.update_bot_should_do(self.tags) # check for updates from tags
         if self.params.should_gen_image:
-            await self.embeds.delete('img_gen')
-            # RUN A SUBTASK
-            await self.run_subtask('img_gen')
+            # await self.embeds.delete('img_gen')
+            # CREATE A TASK AND QUEUE IT
+            img_gen_task = self.clone('img_gen', self.ictx)
+            await task_manager.task_queue.put(img_gen_task)
 
     async def message_llm_gen(self):
         # if no LLM model is loaded, notify that no text will be generated
@@ -1826,10 +1831,10 @@ class TaskProcessing(TaskAttributes):
             log.error(f'An error occurred while updating stopping strings: {e}')
 
     # Process responses from text-generation-webui
-    async def create_bot_hmessage(self, last_resp:str='', tts_resp:str='') -> HMessage:
+    async def create_bot_hmessage(self) -> HMessage:
         try:
             # custom handlings, mainly from 'regenerate'
-            self.bot_hmessage = self.local_history.new_message(bot_settings.name, last_resp, 'assistant', bot_settings._bot_id, text_visible=tts_resp)
+            self.bot_hmessage = self.local_history.new_message(bot_settings.name, self.last_resp, 'assistant', bot_settings._bot_id, text_visible=self.tts_resp)
             if self.user_hmessage:
                 self.bot_hmessage.mark_as_reply_for(self.user_hmessage)
             if self.params.regenerated:
@@ -1839,7 +1844,7 @@ class TaskProcessing(TaskAttributes):
             if is_direct_message(self.ictx):
                 self.bot_hmessage.dont_save()
 
-            if last_resp:
+            if self.last_resp:
                 truncation = int(bot_settings.settings['llmstate']['state']['truncation_length'] * 4) #approx tokens
                 self.bot_hmessage.history.truncate(truncation)
                 client.loop.create_task(self.bot_hmessage.history.save())
@@ -1866,7 +1871,7 @@ class TaskProcessing(TaskAttributes):
         except Exception as e:
             log.error(f'An error occurred while creating User HMessage: {e}')
 
-    async def create_hmessages(self, last_resp:str='', tts_resp:str='') -> tuple[HMessage, HMessage]:
+    async def create_hmessages(self) -> tuple[HMessage, HMessage]:
         # Create user message in HManager
         if not self.params.skip_create_user_hmsg:
             await self.create_user_hmessage()
@@ -1876,17 +1881,17 @@ class TaskProcessing(TaskAttributes):
             # Replacing original Bot HMessage via "regenerate replace"
             if self.params.bot_hmessage_to_update:
                 apply_reactions = config['discord']['history_reactions'].get('enabled', True)
-                self.bot_hmessage = await replace_msg_in_history_and_discord(client.user, self.ictx, self.params, last_resp, tts_resp, apply_reactions)
+                self.bot_hmessage = await replace_msg_in_history_and_discord(client.user, self.ictx, self.params, self.last_resp, self.tts_resp, apply_reactions)
                 self.params.should_send_text = False
             else:
-                await self.create_bot_hmessage(last_resp, tts_resp)
+                await self.create_bot_hmessage()
 
         return self.user_hmessage, self.bot_hmessage
 
     # Send LLM Payload - get responses
     async def llm_gen(self) -> tuple[str, str]:
         if shared.model_name == 'None':
-            return '', ''
+            return
         try:
             loop = asyncio.get_event_loop()
             # Store time for statistics
@@ -1909,20 +1914,19 @@ class TaskProcessing(TaskAttributes):
                             audio_format_match = patterns.audio_src.search(last_vis_resp)
                             if audio_format_match:
                                 tts_resp = audio_format_match.group(1)
-                return last_resp, tts_resp  # responses from TGWUI
+
+                self.last_resp = last_resp
+                self.tts_resp = tts_resp
+
             # Offload the synchronous task to a separate thread
-            last_resp, tts_resp = await loop.run_in_executor(None, process_responses)
-            if last_resp:
-                self.update_llm_gen_statistics(last_resp) # Update statistics
+            await loop.run_in_executor(None, process_responses)
 
-            setattr(self, 'last_resp', last_resp)
-            setattr(self, 'tts_resp', tts_resp)
+            if self.last_resp:
+                self.update_llm_gen_statistics() # Update statistics
 
-            return last_resp, tts_resp
         except Exception as e:
             log.error(f'An error occurred in llm_gen(): {e}')
             traceback.print_exc()
-            return '', ''
     
     # Warn anyone direct messaging the bot
     async def warn_direct_channel(self):
@@ -1997,13 +2001,13 @@ class TaskProcessing(TaskAttributes):
             log.error(f"Error formatting LLM prompt: {e}")
         return updated_prompt
 
-    def update_llm_gen_statistics(self, last_resp:str):
+    def update_llm_gen_statistics(self):
         try:
             total_gens = bot_statistics.llm.get('generations_total', 0)
             total_gens += 1
             bot_statistics.llm['generations_total'] = total_gens
             # Update tokens statistics
-            last_tokens = int(count_tokens(last_resp))
+            last_tokens = int(count_tokens(self.last_resp))
             bot_statistics.llm['num_tokens_last'] = last_tokens
             total_tokens = bot_statistics.llm.get('num_tokens_total', 0)
             total_tokens += last_tokens
@@ -2019,7 +2023,7 @@ class TaskProcessing(TaskAttributes):
             bot_statistics.llm['tokens_per_sec_avg'] = round((total_tokens/total_time), 4)
             bot_statistics.save()
 
-            # Update self attribute
+            # Set self attribute
             setattr(self, 'last_tokens', last_tokens)
         except Exception as e:
             log.error(f'An error occurred while saving LLM gen statistics: {e}')
@@ -2891,18 +2895,15 @@ class Tasks(TaskProcessing):
     # Parked Task may be resumed from here
     async def message_post_llm_task(self:"Task") -> tuple[HMessage, HMessage]:
         try:
-            last_resp = getattr(self, 'last_resp', '')
-            tts_resp = getattr(self, 'tts_resp', '')
-
             if tgwui.enabled:
 
-                await self.create_hmessages(last_resp, tts_resp)
+                await self.create_hmessages()
 
-                self.img_prompt = last_resp
+                self.img_prompt = self.last_resp
                 # Log message exchange
-                if last_resp:
+                if self.last_resp:
                     log.info(f'''{self.user_name}: "{self.llm_payload['text']}"''')
-                    log.info(f'''{self.llm_payload['state']['name2']}: "{last_resp}"''')
+                    log.info(f'''{self.llm_payload['state']['name2']}: "{self.last_resp}"''')
                 # If no text was generated, treat user input at the response
                 else:
                     if self.params.should_gen_image and sd.enabled:
@@ -2913,9 +2914,10 @@ class Tasks(TaskProcessing):
                     await apply_reactions_to_messages(client.user, self.ictx, self.user_hmessage)
                 if self.params.llmmodel and self.params.llmmodel.get('mode', 'change')  == 'swap':
                     self.params.llmmodel['llmmodel_name'] = shared.previous_model_name
-                    # RUN CHANGE LLMMODEL AS SUBTASK
-                    await self.run_subtask('change_llmmodel')
-                    await self.embeds.delete('change') # Delete embed
+                    # CREATE TASK AND QUEUE IT
+                    change_llmmodel_task = self.clone('change_llmmodel', self.ictx)
+                    await task_manager.task_queue.put(change_llmmodel_task)
+                    #await self.embeds.delete('change') # Delete embed
 
             # process image generation (A1111 / Forge)
             if self.params.should_gen_text and sd.enabled:
@@ -2929,8 +2931,9 @@ class Tasks(TaskProcessing):
                 if await self.sd_online():   # Notify user their prompt will be used directly for img gen
                     await self.channel.send('Bot was triggered by Tags to not respond with text.\n \
                                     **Processing image generation using your input as the prompt ...**', delete_after=5)
-                # RUN IMG GEN AS SUBTASK
-                await self.run_subtask('img_gen')
+                # CREATE A TASK AND QUEUE IT
+                img_gen_task = self.clone('img_gen', self.ictx)
+                await task_manager.task_queue.put(img_gen_task)
 
             await spontaneous_messaging.set_for_channel(self.ictx) # reset timer for spontaneous message from bot, as configured
 
@@ -2957,8 +2960,8 @@ class Tasks(TaskProcessing):
             time_to_send += seconds_to_write
 
         if time_to_send > time.time():
-            parked_message_task: Task = self.clone('message_post_llm', self.ictx)
-            await message_manager.park_task(parked_message_task, time_to_run = time_to_send)
+            delayed_message_task: Task = self.clone('message_post_llm', self.ictx, keep_typing=True)
+            await message_manager.queue_delayed_message(delayed_message_task, time_to_run = time_to_send)
             log.debug(f'Message task was parked, will send after: {time_to_send}')
             return False
 
@@ -2967,7 +2970,7 @@ class Tasks(TaskProcessing):
     ## Variations of message_task
     # on_message variation
     async def on_message_task(self:"Task"):
-        self.init_typing() # begins typing now or at response_time if any
+        self.init_typing() # begins typing now or at 'response_time' if any
         await self.message_task()
         # check if task should have special handling
         proceed = await self.check_behavior()
@@ -2976,7 +2979,7 @@ class Tasks(TaskProcessing):
 
     # spontaneous_message variation
     async def spontaneous_message_task(self:"Task"):
-        setattr(self, 'time_start_typing', time.time())
+        self.init_typing() # begins typing now ('response_time' N/A)
         await self.message_task()
 
         # check if task should have special handling
@@ -3047,23 +3050,23 @@ class Tasks(TaskProcessing):
             self.extra_stopping_strings()
             # Skip create_user_hmessage()
             # Generate text with text-generation-webui.
-            last_resp, tts_resp = await self.llm_gen()
+            await self.llm_gen()
             # Skip create_bot_hmessage()
             # Toggle TTS back on if it was toggled off
             await tts.apply_toggle_tts(toggle='on', tts_sw=tts_sw)
 
             await self.embeds.delete('system') # delete embed
-            if not last_resp:
+            if not self.last_resp:
                 await self.ictx.followup.send('Failed to continue text.', silent=True)
                 return
 
             # Log message exchange
             log.info(f'''{self.user_name}: "{self.llm_payload['text']}"''')
             log.info('Continued text:')
-            log.info(f'''{self.llm_payload['state']['name2']}: "{last_resp}"''')
+            log.info(f'''{self.llm_payload['state']['name2']}: "{self.last_resp}"''')
 
             # Extract the continued text from previous text
-            continued_text = last_resp[len(original_bot_hmessage.text):]
+            continued_text = self.last_resp[len(original_bot_hmessage.text):]
 
             # Get a possible message to reply to
             ref_message = self.target_discord_msg
@@ -3093,7 +3096,7 @@ class Tasks(TaskProcessing):
                     # Pass to send_long_message which will add more ids and update last.
                     await send_long_message(self.channel, continued_text, bot_hmessage=updated_bot_hmessage)
 
-            updated_bot_hmessage.update(text=last_resp, text_visible=tts_resp)
+            updated_bot_hmessage.update(text=self.last_resp, text_visible=self.tts_resp)
 
             # Apply any reactions applicable to message
             msg_ids_to_edit = [updated_bot_hmessage.id] + updated_bot_hmessage.related_ids
@@ -3101,7 +3104,7 @@ class Tasks(TaskProcessing):
                 await apply_reactions_to_messages(client.user, self.ictx, updated_bot_hmessage, msg_ids_to_edit, new_discord_msg)
 
             # process any tts resp
-            if tts_resp:
+            if self.tts_resp:
                 await voice_clients.process_tts_resp(self.ictx, updated_bot_hmessage)
 
         except Exception as e:
@@ -3415,9 +3418,9 @@ class Tasks(TaskProcessing):
             # Get history for interaction channel
             await self.create_user_hmessage()
             # generate text with text-generation-webui
-            last_resp, tts_resp = await self.llm_gen()
+            await self.llm_gen()
             # Process responses
-            await self.create_bot_hmessage(last_resp, tts_resp)
+            await self.create_bot_hmessage()
             await self.embeds.delete('system') # delete embed
             if not self.bot_hmessage:
                 return
@@ -3697,6 +3700,8 @@ class Task(Tasks):
         self.tags: Tags              = kwargs.pop('tags', None)
         self.img_prompt: str         = kwargs.pop('img_prompt', None)
         self.img_payload: dict       = kwargs.pop('img_payload', None)
+        self.last_resp: str          = kwargs.pop('last_resp', None)
+        self.tts_resp: str           = kwargs.pop('tts_resp', None)
         self.user_hmessage: HMessage = kwargs.pop('user_hmessage', None)
         self.bot_hmessage: HMessage  = kwargs.pop('bot_hmessage', None)
         self.local_history           = kwargs.pop('local_history', None)
@@ -3724,6 +3729,9 @@ class Task(Tasks):
         # Image specific attributes
         self.img_prompt: str         = self.img_prompt if self.img_prompt else None
         self.img_payload: dict       = self.img_payload if self.img_payload else {}
+        # Bot response attributes
+        self.last_resp: str          = self.last_resp if self.last_resp else ''
+        self.tts_resp: str           = self.tts_resp if self.tts_resp else ''
         # History attributes
         self.user_hmessage: HMessage = self.user_hmessage if self.user_hmessage else None
         self.bot_hmessage: HMessage  = self.bot_hmessage if self.bot_hmessage else None
@@ -3734,7 +3742,9 @@ class Task(Tasks):
                 self.local_history   = self.local_history if self.local_history else bot_history.get_history_for(self.channel.id).dont_save()
             else:
                 self.local_history   = self.local_history if self.local_history else bot_history.get_history_for(self.channel.id)
+        # Typing Task
         self.typing_task:TypingTask  = self.typing_task if self.typing_task else None
+
 
     def init_typing(self, start_time=None, end_time=None):
         '''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
@@ -3748,12 +3758,30 @@ class Task(Tasks):
             start_time = getattr(self, 'response_time', time.time())
         self.typing_task.start(start_time=start_time, end_time=end_time)
 
-    def clone(self, name:str='', ictx:CtxInteraction|None=None) -> "Task":
+
+    def clone(self, name:str='', ictx:CtxInteraction|None=None, keep_typing:bool=False) -> "Task":
         '''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
-        Returns a new Task() with all of the same attributes
+        Returns a new Task() with all of the same attributes.
+        Can optionally clone a running 'typing_task'
         '''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
-        current_attributes = {key: value for key, value in vars(self).items() if not key.startswith('__') and not callable(value)}
+        current_attributes = {
+            key: (
+                copy.deepcopy(value)
+                if not isinstance(value, TypingTask) or not keep_typing
+                else self._clone_typing_task(value)
+            )
+            for key, value in vars(self).items()
+            if not key.startswith('__') and not callable(value)
+        }
         return Task(name=name, ictx=ictx, **current_attributes)
+
+    def _clone_typing_task(self, typing_task):
+        # Clone the TypingTask manually to ensure a new instance
+        new_typing_task = TypingTask(typing_task.channel)
+        if typing_task.end_time is not None and time.time() < typing_task.end_time:
+            new_typing_task.start(start_time=time.time(), end_time=typing_task.end_time)
+        return new_typing_task
+
 
     async def run(self, task_name: str|None=None) -> Any:
         try:
@@ -3770,6 +3798,7 @@ class Task(Tasks):
         except Exception as e:
             logging.error(f"An error occurred while processing task {self.name}: {e}")
 
+
     async def run_task(self) -> Any:
         '''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
         run_task() should only be called by the TaskManager()
@@ -3780,6 +3809,7 @@ class Task(Tasks):
         task_manager.current_channel = self.channel
         task_manager.current_user_name = self.user_name
         return await self.run()
+
 
     async def run_subtask(self, subtask: str|None=None) -> Any:
         '''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
@@ -3884,9 +3914,9 @@ class TaskManager(Tasks):
                 discord_message: discord.Message
                 log.info(f'Processing queued message (#{num}) by {discord_message.author.display_name}.')
 
-                # CREATE 'on_message' TASK FROM MESSAGE
+                # CREATE TASK FROM MESSAGE
                 task = Task('on_message', discord_message, text=text)
-                # assign response_time to task
+                # assign precalculated response_time to task
                 setattr(task, 'response_time', response_time)
                 queue_name = 'message_queue'
 
@@ -5477,7 +5507,7 @@ class MessageManager():
             if current_time <= self.next_send_time:
                 send_time, task = await self.send_msg_queue.get()
                 task:Task
-                await task.send_responses()
+                await task.message_post_llm_task()
                 
                 # # Process message that is ready to send
                 # if send_time <= current_time:
