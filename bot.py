@@ -1547,7 +1547,7 @@ class TaskProcessing(TaskAttributes):
             await self.channel.send(file=send_user_image) if len(send_user_image) == 1 else await self.channel.send(files=send_user_image)
 
         # Restart AFK task
-        bot_behavior.schedule_afk()
+        await bot_behavior.schedule_afk()
         # reset timer for spontaneous message from bot, as configured
         await spontaneous_messaging.set_for_channel(self.ictx)
         # Message Manager may prioritize queued messages differently if from same channel
@@ -2976,6 +2976,7 @@ class Tasks(TaskProcessing):
         if bot_behavior.maximum_typing_speed > 0 and last_tokens:
             max_tokens_per_second = round( (bot_behavior.maximum_typing_speed*4) / 60 )
             seconds_to_write = last_tokens / max_tokens_per_second
+            setattr(self, 'seconds_to_write', seconds_to_write) # keep this for later message processing
             time_to_send += seconds_to_write
 
         if time_to_send > time.time():
@@ -5482,49 +5483,80 @@ class MessageManager():
         self.send_msg_task = None
         self.last_channel = None
 
-    async def send_message(self):
-        # Fetches the next item in the queue with the earliest value for 'send_time'
-        current_time = time.time()
-        if current_time <= self.next_send_time:
+    async def check_for_exception(self):
+        temp_items = []
+        send_time = None
+        task = None
+        # Check for another message in the same channel as last
+        while not self.send_msg_queue.empty():
+            temp_time, temp_task = await self.send_msg_queue.get()
+            # 'channel.id' Only condition to check (for now)
+            if temp_task.channel.id == self.last_channel:
+                send_time = temp_time
+                task = temp_task
+                break
+            else:
+                temp_items.append((temp_time, temp_task))
+        # Put temp removed items back to the queue
+        for item in temp_items:
+            await self.send_msg_queue.put(item)
+        # No candidate found
+        if task is None:
+            return None, None
+        # only use exception if 'seconds_to_write' is less than next sent time
+        seconds_to_write = getattr(task, 'seconds_to_write', 0)
+        send_time = time.time() + seconds_to_write
+
+        if send_time < self.next_send_time:
+            # Return exception with updated send_time
+            return send_time, task
+        else:
+            # put it back and return None
+            await self.send_msg_queue.put((send_time, task))
+            return None, None
+
+    async def schedule_next_message(self):
+        if self.send_msg_queue.empty():
+            self.next_send_time = None
+            return
+        task = None
+        # Message from same channel may possibly cut the line
+        send_time, task = await self.check_for_exception()
+        # Or just get the next message
+        if not task:
             send_time, task = await self.send_msg_queue.get()
+        await self.send_msg_queue.put((send_time, task))
+        await self.schedule_send_message(send_time)
+
+    async def send_message(self, time_until_send:float):
+        # Fetches the next item in the queue with the earliest value for 'send_time'
+        await asyncio.sleep(time_until_send)
+        _, task = await self.send_msg_queue.get()
+        # Send the delayed responses
+        try:
             task:Task
             await task.message_post_llm_task()
-            
-            # # Process message that is ready to send
-            # if send_time <= current_time:
-            #     await self.run_message_task(num, message, text)
-            #     self.send_msg_queue.task_done()
-            # # Check for any exceptions and process first found
-            # else:
-            #     exception = await self.check_for_exception()
-            #     if exception:
-            #         await self.run_message_task(exception['num'], exception['message'], exception['text'])
-            #         self.send_msg_queue.task_done()
-            #     # Wait for next item to process normally
-            #     else:
-            #         delay = response_time - current_time
-            #         if self.send_msg_queue.qsize() > 0:
-            #             log.info(f'Queued msg #{num} will be processed in {delay} seconds.')
-            #         await asyncio.sleep(delay)
-            #         await self.run_message_task(num, message, text)
-            #         self.send_msg_queue.task_done()
+        except Exception as e:
+            log.error('An error occurred while sending a delayed message:', e)
+        del task # delete finished task
+        # schedule the next message send
+        await self.schedule_next_message()
 
-    async def set_next_time(self):
-        send_time, task = await self.send_msg_queue.get()
-        self.next_send_time = send_time # update value
-        await self.send_msg_queue.put((send_time, task))
-
-### WIP ######################
     async def schedule_send_message(self, send_time):
-        asyncio.create_task(self.send_message)
-
+        # Update send time
+        self.next_send_time = send_time
+        # Cancel any existing message send task
+        if self.send_msg_task and not self.send_msg_task.done():
+            self.send_msg_task.cancel()
+        time_until_send = max(0, send_time - time.time())
+        # Create message send task
+        self.send_msg_task = await asyncio.create_task(self.send_message(time_until_send))
 
     async def queue_delayed_message(self, task:Task, send_time:time):
-        # Add to queue which will send responses for (mostly) completed message Tasks, self sorted by 'send_time'
+        # Add to self-sorted queue which, will send responses for (mostly) completed message Tasks
         if self.next_send_time is None or send_time < self.next_send_time:
             await self.schedule_send_message(send_time)
-
-            self.next_send_time = send_time
+        # Add task to queue
         await self.send_msg_queue.put((send_time, task))
 
 
@@ -5540,62 +5572,6 @@ class MessageManager():
         num = self.counter
         # Queue to TaskManager()
         await task_manager.message_queue.put((response_time, num, discord_message, text))
-
-
-    # async def run_message_task(self, num:int, message: discord.Message, text: str):
-    #     try:
-    #         log.info(f'Processing queued message (#{num}) by {message.author.display_name}.')
-    #         # offload to TaskManager() queue
-    #         on_message_task = Task('on_message', message, text=text)
-    #         await task_manager.task_queue.put(on_message_task)
-    #         # TODO SEPARATE TASK QUEUE + HANDLING FOR MESSAGE TASKS
-    #     except Exception as e:
-    #         log.error(f"Error while processing a Message: {e}")
-
-    # async def check_for_exception(self):
-    #     # If the next item is not ready, check for the next task in the same channel
-    #     exception = None
-    #     temp_items = []
-
-    #     while not self.send_msg_queue.empty():
-    #         response_time, num, message, text = await self.send_msg_queue.get()
-    #         # Only condition to check (for now)
-    #         if message.channel.id == self.last_channel:
-    #             exception = {'response_time': response_time, 'num': num, 'message': message, 'text': text}
-    #             break
-    #         else:
-    #             temp_items.append((response_time, num, message, text))
-
-    #     # Re-add the temporarily removed items back to the queue
-    #     for item in temp_items:
-    #         await self.send_msg_queue.put(item)
-
-    #     return exception
-
-    # async def process_send_msg_queue(self):
-    #     while True:
-    #         # Fetches the next item in the queue with the earliest value for 'response_time'
-    #         response_time, num, message, text = await self.send_msg_queue.get()
-
-    #         current_time = time.time()
-    #         # Process message that is ready to send
-    #         if response_time <= current_time:
-    #             await self.run_message_task(num, message, text)
-    #             self.send_msg_queue.task_done()
-    #         # Check for any exceptions and process first found
-    #         else:
-    #             exception = await self.check_for_exception()
-    #             if exception:
-    #                 await self.run_message_task(exception['num'], exception['message'], exception['text'])
-    #                 self.send_msg_queue.task_done()
-    #             # Wait for next item to process normally
-    #             else:
-    #                 delay = response_time - current_time
-    #                 if self.send_msg_queue.qsize() > 0:
-    #                     log.info(f'Queued msg #{num} will be processed in {delay} seconds.')
-    #                 await asyncio.sleep(delay)
-    #                 await self.run_message_task(num, message, text)
-    #                 self.send_msg_queue.task_done()
 
 message_manager = MessageManager()
 
@@ -5784,7 +5760,7 @@ class Behavior:
         self.afk_task = await asyncio.create_task(self.go_afk_after(afk_time))
 
     async def come_online(self):
-        if not self.online()
+        if not self.online():
             await client.change_presence(status=discord.Status.online)
         await self.schedule_afk()
         self.online_task = None
