@@ -5787,7 +5787,7 @@ class Behavior:
         self.idle_weights = get_normalized_weights(target = responsiveness, list_len = num_values)
         # choose a value with weighted probability based on 'responsiveness' bot behavior
         idle_time = random.choices(self.idle_range, self.idle_weights)[0]
-        log.info(f"{bot_database.last_character} will be idle in {idle_time} seconds.")
+        log.debug(f"{bot_database.last_character} will be idle in {idle_time} seconds.")
         self.idle_task = asyncio.create_task(self.go_idle_after(idle_time))
 
     async def come_online(self, schedule_idle:bool=False):
