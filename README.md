@@ -24,6 +24,31 @@
 <details>
   <summary>click to expand</summary>
 
+   **07/02/2024:** New Behaviors "Spontaneous Messaging"
+
+    - Character can now be silently prompted to say something after inactivity
+    - A few settings control the behavior
+    - It can also serve as an "Auto-prompter" generating unlimited responses
+
+  ---
+
+   **06/18/2024:** Per-Server Voice Channels (TTS)
+
+    - New command to set voice channels: /set_server_voice_channel
+    - The context menu commands (regen / continue / edit history) vastly improved
+    - The bot now reacts to messages to identify their status (hidden, etc)
+
+  ---
+
+   **06/14/2024:** Direct Messages Support. Image model changes.
+
+    - The bot now supports Direct Messages, which have their own history!
+    - Most commands are disabled in DMs.
+    - Direct messaging can be disabled via config.yaml
+    - Img model "override settings" (checkpoint, vae, clip skip) are no longer saved.
+
+  ---
+
   **06/11/2024:** More Context Menu Commands!
 
   <img width="285" alt="Screenshot 2024-06-11 155926" src="https://github.com/altoiddealer/ad_discordbot/assets/1613484/92d1ef4f-56c2-46aa-be9e-5ce69284900e">

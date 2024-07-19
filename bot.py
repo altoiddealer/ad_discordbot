@@ -4880,7 +4880,7 @@ async def character_loader(char_name, channel=None):
         update_instruct = char_instruct or tgwui.instruction_template_str or None
         if update_instruct:
             state_dict['instruction_template_str'] = update_instruct
-        # Update stored database value for character
+        # Update stored database / shared.settings values for character
         bot_database.set('last_character', char_name)
         shared.settings['character'] = char_name
         # Update discord username / avatar
