@@ -142,7 +142,7 @@ async def ireply(ictx: 'CtxInteraction', process):
         log.error(f"Error sending message response to user's interaction command: {e}")
 
 
-async def send_long_message(channel, message_text, bot_hmessage:Optional['HMessage']=None, ref_message:Optional[discord.Message]=None) -> int:
+async def send_long_message(channel, message_text, bot_hmessage:Optional['HMessage']=None, ref_message:Optional[discord.Message]=None) -> discord.Message:
     """ Splits a longer message into parts while preserving sentence boundaries and code blocks """
     active_lang = ''
 
@@ -209,7 +209,7 @@ async def send_long_message(channel, message_text, bot_hmessage:Optional['HMessa
     if bot_hmessage:
         bot_hmessage.id = sent_message.id
 
-    return sent_message.id
+    return sent_message
 
 async def replace_msg_in_history_and_discord(client_user:discord.Client, ictx:CtxInteraction, params, text:str, text_visible:str, apply_reactions:bool=True) -> Optional['HMessage']:
     channel = ictx.channel
