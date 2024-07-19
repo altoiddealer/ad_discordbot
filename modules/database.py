@@ -5,6 +5,8 @@ import time
 from modules.database_migration_v1_v2 import OldDatabase
 from modules.utils_shared import shared_path
 from modules.utils_files import make_fp_unique
+from modules.utils_misc import fix_dict
+
 import os
 
 from modules.logs import import_track, get_logger; import_track(__file__, fp=True); log = get_logger(__name__)  # noqa: E702
@@ -189,8 +191,7 @@ class Database(BaseFileMemory):
         self.announce_channels = data.pop('announce_channels', [])
         self.main_channels = data.pop('main_channels', [])
         self.voice_channels = data.pop('voice_channels', {})
-        self.warned_once = data.pop('warned_once', {})
-
+        data['warned_once'] = {}
 
     def last_user_msg_for(self, channel_id):
         return self.last_user_msg.get(channel_id, None)
@@ -206,13 +207,15 @@ class Database(BaseFileMemory):
         if save_now:
             self.save()
 
+    def save_pre_process(self, data):
+        data.pop('warned_once', None)
+        return data
+
     def was_warned(self, flag_name):
         return self.warned_once.get(flag_name, False)
 
-    def update_was_warned(self, flag_name, value=True, save_now=True):
+    def update_was_warned(self, flag_name, value=True):
         self.warned_once[flag_name] = value
-        if save_now:
-            self.save()
 
     def update_voice_channels(self, guild_id, channel_id, save_now=True):
         self.voice_channels[guild_id] = channel_id
@@ -226,11 +229,18 @@ class Config(BaseFileMemory):
         self.textgenwebui: dict
         self.sd: dict
         super().__init__(shared_path.config, version=2, missing_okay=True)
+        self.fix_config()
+
+    def fix_config(self):
+        config_dict = self.get_vars()
+        # Load the template config
+        config_template = load_file(shared_path.config_template, {})
+        # Update the user config with any missing values from the template
+        fix_dict(config_dict, config_template, 'config.yaml')
 
     def run_migration(self):
         _old_active = os.path.join(shared_path.dir_root, 'config.py')
         self._migrate_from_file(_old_active, load=True)
-
 
     def discord_dm_setting(self, key, default=None):
         return self.get('discord', {}).get('direct_messages', {}).get(key, default)

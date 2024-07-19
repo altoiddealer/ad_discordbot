@@ -40,33 +40,35 @@ def configurable_for_dm_if(func):
     
     return commands.check(predicate)
 
-def is_direct_message(ictx: CtxInteraction):
+def is_direct_message(ictx:CtxInteraction):
     return ictx and getattr(ictx, 'guild') is None \
         and hasattr(ictx, 'channel') and isinstance(ictx.channel, discord.DMChannel)
 
 
-def get_hmessage_emojis(message:'HMessage') -> str:   
+def get_hmessage_emojis(hmessage:'HMessage') -> list[str]:
     history_emojis = {'is_continued': bot_emojis.continue_emoji,
                       'regenerated_from': bot_emojis.regen_emoji,
                       'hidden': bot_emojis.hidden_emoji}
 
-    emojis_for_message = []
+    emojis_for_hmessage = []
 
     for key, value in history_emojis.items():
-        if getattr(message, key, False):
-            emojis_for_message.append(value)
+        if getattr(hmessage, key, False):
+            emojis_for_hmessage.append(value)
     
-    return emojis_for_message
+    return emojis_for_hmessage
 
-async def update_message_reactions(client_user:discord.ClientUser, emojis_list:list, discord_msg:discord.Message):
+async def update_message_reactions(client_user:discord.ClientUser, emojis_list:list[str], discord_msg:discord.Message):
     try:
         reactions_to_add = emojis_list
         already_reacted = []
         reactions_to_remove = []
 
+        bot_emojis_list = bot_emojis.get_emojis()
+
         # check for existing reactions
         for reaction in discord_msg.reactions:
-            if reaction.emoji in [bot_emojis]:
+            if reaction.emoji in bot_emojis_list:
                 async for user in reaction.users():
                     if user == client_user:
                         if reaction.emoji not in emojis_list:
@@ -86,7 +88,11 @@ async def update_message_reactions(client_user:discord.ClientUser, emojis_list:l
 
 
 # Applies history reactions to a list of discord messages, such as all related messages from 'Continue' function
-async def apply_reactions_to_messages(client_user:discord.Client, ictx:CtxInteraction, hmsg:'HMessage'=None, msg_id_list:list=None, ictx_msg:discord.Message=None):
+async def apply_reactions_to_messages(client_user:discord.ClientUser,
+                                      ictx:CtxInteraction,
+                                      hmsg:Optional['HMessage']=None,
+                                      msg_id_list:Optional[list[int]]=None,
+                                      ictx_msg:Optional[discord.Message]=None):
     try:
         if hmsg is None:
             return
@@ -136,7 +142,7 @@ async def ireply(ictx: 'CtxInteraction', process):
         log.error(f"Error sending message response to user's interaction command: {e}")
 
 
-async def send_long_message(channel, message_text, bot_message:Optional['HMessage']=None, ref_message:Optional[discord.Message]=None) -> int:
+async def send_long_message(channel, message_text, bot_hmessage:Optional['HMessage']=None, ref_message:Optional[discord.Message]=None) -> discord.Message:
     """ Splits a longer message into parts while preserving sentence boundaries and code blocks """
     active_lang = ''
 
@@ -190,8 +196,8 @@ async def send_long_message(channel, message_text, bot_message:Optional['HMessag
                 sent_message = await channel.send(chunk_text, reference=ref_message)
             else:
                 sent_message = await channel.send(chunk_text)
-            if bot_message:
-                bot_message.related_ids.append(sent_message.id)
+            if bot_hmessage:
+                bot_hmessage.related_ids.append(sent_message.id)
                 
             message_text = message_text[chunk_length:]
             if len(message_text) <= MAX_MESSAGE_LENGTH:
@@ -200,26 +206,26 @@ async def send_long_message(channel, message_text, bot_message:Optional['HMessag
                 sent_message = await channel.send(chunk_text)
                 break
             
-    if bot_message:
-        bot_message.id = sent_message.id
+    if bot_hmessage:
+        bot_hmessage.id = sent_message.id
 
-    return sent_message.id
+    return sent_message
 
-async def replace_msg_in_history_and_discord(client_user:discord.Client, ictx:CtxInteraction, params:dict, text:str, text_visible:str, apply_reactions:bool=True) -> Optional['HMessage']:
+async def replace_msg_in_history_and_discord(client_user:discord.Client, ictx:CtxInteraction, params, text:str, text_visible:str, apply_reactions:bool=True) -> Optional['HMessage']:
     channel = ictx.channel
-    updated_message: Optional[HMessage] = params.get('user_message_to_update') or params.get('bot_message_to_update')
-    msg_hidden = params.get('user_msg_hidden') or params.get('bot_msg_hidden') or updated_message.hidden
-    target_discord_msg_id = params.get('target_discord_msg_id')
-    ref_message = params.get('ref_message')
+    updated_hmessage: Optional[HMessage] = getattr(params, 'user_hmessage_to_update', None) or getattr(params, 'bot_hmessage_to_update', None)
+    hmsg_hidden = getattr(params, 'user_hmsg_hidden', None) or getattr(params, 'bot_hmsg_hidden', None) or updated_hmessage.hidden 
+    target_discord_msg_id = getattr(params, 'target_discord_msg_id', None)
+    ref_message = getattr(params, 'ref_message', None)
     try:
         if not target_discord_msg_id:
-            target_discord_msg_id = updated_message.id
+            target_discord_msg_id = updated_hmessage.id
         target_discord_msg = await channel.fetch_message(target_discord_msg_id)
 
         # Only modify discord message(s) if they are responses from the bot
         if target_discord_msg.author == client_user:
             # Collect all messages that are part of the original message
-            messages_to_remove = [updated_message.id] + updated_message.related_ids
+            messages_to_remove = [updated_hmessage.id] + updated_hmessage.related_ids
             # Remove target message from the list
             if target_discord_msg.id in messages_to_remove:
                 messages_to_remove.remove(target_discord_msg.id)
@@ -234,21 +240,21 @@ async def replace_msg_in_history_and_discord(client_user:discord.Client, ictx:Ct
                 await target_discord_msg.edit(content=text)
             else:
                 await target_discord_msg.delete()
-                if params.get('bot_message_to_update'):
-                    await send_long_message(channel, text, bot_message=updated_message, ref_message=ref_message)
+                if getattr(params, 'bot_hmessage_to_update', None):
+                    await send_long_message(channel, text, bot_hmessage=updated_hmessage, ref_message=ref_message)
                 else:
-                    await send_long_message(channel, text, bot_message=None, ref_message=ref_message)
+                    await send_long_message(channel, text, bot_hmessage=None, ref_message=ref_message)
 
         # Clear related IDs attribute
-        updated_message.related_ids.clear() # TODO maybe add a 'fresh' method to HMessage? - For Reality
+        updated_hmessage.related_ids.clear() # TODO maybe add a 'fresh' method to HMessage? - For Reality
         # Update the HMessage
-        updated_message.update(text=text, text_visible=text_visible, hidden=msg_hidden)
+        updated_hmessage.update(text=text, text_visible=text_visible, hidden=hmsg_hidden)
 
         # Apply any reactions applicable to message
         if apply_reactions:
-            await apply_reactions_to_messages(client_user, ictx, updated_message)
+            await apply_reactions_to_messages(client_user, ictx, updated_hmessage)
 
-        return updated_message
+        return updated_hmessage
     except Exception as e:
         log.error(f"An error occurred while replacing message in history and Discord: {e}")
         return None
@@ -262,7 +268,7 @@ async def rebuild_chunked_message(ictx:CtxInteraction, msg_id_list:list=None, ic
             else:
                 chunk_message = await ictx.channel.fetch_message(msg_id)
             rebuilt_message += chunk_message.clean_content
-            print("rebuilt_message", rebuilt_message)
+            log.debug("rebuilt_message:", rebuilt_message)
         except Exception:
             log.warning(f'Failed to get message content for id {msg_id}.')
             rebuilt_message = ''
@@ -272,13 +278,14 @@ async def rebuild_chunked_message(ictx:CtxInteraction, msg_id_list:list=None, ic
 
 # Modal for editing history
 class EditMessageModal(discord.ui.Modal, title="Edit Message in History"):
-    def __init__(self, client_user: Optional[discord.ClientUser], ictx:CtxInteraction, matched_hmessage: 'HMessage', target_message: discord.Message, apply_reactions:bool=True):
+    def __init__(self, client_user: Optional[discord.ClientUser], ictx:CtxInteraction, matched_hmessage: 'HMessage', target_discord_msg: discord.Message, apply_reactions:bool=True, params=None):
         super().__init__()
-        self.target_message = target_message
+        self.target_discord_msg = target_discord_msg
         self.matched_hmessage = matched_hmessage
         self.client_user = client_user
         self.ictx = ictx
         self.apply_reactions = apply_reactions
+        self.params = params
 
         # Add TextInput dynamically with default value
         self.new_content = discord.ui.TextInput(
@@ -292,9 +299,9 @@ class EditMessageModal(discord.ui.Modal, title="Edit Message in History"):
     async def on_submit(self, inter: discord.Interaction):
         # Update text in history
         new_text = self.new_content.value
-        params = {'user_message_to_update': self.matched_hmessage}
-        await replace_msg_in_history_and_discord(self.client_user, self.ictx, params=params, text=new_text, text_visible=new_text, apply_reactions=self.apply_reactions)
-        if self.target_message.author != self.client_user:
+        setattr(self.params, 'user_hmessage_to_update', self.matched_hmessage)
+        await replace_msg_in_history_and_discord(self.client_user, self.ictx, params=self.params, text=new_text, text_visible=new_text, apply_reactions=self.apply_reactions)
+        if self.target_discord_msg.author != self.client_user:
             await inter.response.send_message("Message history has been edited successfully (Note: the bot cannot update your discord message).", ephemeral=True, delete_after=7)
         else:
             await inter.response.send_message("Message history has been edited successfully.", ephemeral=True, delete_after=5)
@@ -401,3 +408,118 @@ def get_message_ctx_inter(ictx: CtxInteraction) -> discord.Message:
     if isinstance(ictx, discord.Message):
         return ictx
     return ictx.message
+
+
+class Embeds:
+    def __init__(self, config:dict, ictx:CtxInteraction|None=None):
+        self.channel:discord.TextChannel|None = ictx.channel if ictx else None
+        self.color:int = config['discord'].get('embed_settings', {}).get('color', 0x1e1f22)
+        self.enabled_embeds:dict = config['discord'].get('embed_settings', {}).get('show_embeds', {})
+
+        self.root_url:str = 'https://github.com/altoiddealer/ad_discordbot'
+
+        self.embeds:dict = {}
+        self.sent_msg_embeds:dict = {}
+
+        self.init_default_embeds()
+
+    def enabled(self, name:str) -> bool:
+        return self.enabled_embeds.get(name, True) # all enabled by default
+
+    def init_default_embeds(self):
+        if self.enabled('system'):
+            self.create("system", "System Notification", " ", url=self.root_url, color=self.color)
+        if self.enabled('images'):
+            self.create("img_gen", "Processing image generation ...", " ", url=self.root_url, color=self.color)
+            self.create("img_send", "User requested an image ...", " ", url=self.root_url, color=self.color)
+        if self.enabled('change'):
+            self.create("change", "Change Notification", " ", url=self.root_url, color=self.color)
+        if self.enabled('flow'):
+            self.create("flow", "Flow Notification", " ", url_suffix="/wiki/tags", color=self.color)
+
+    def create(self, name:str, title:str=' ', description:str=' ', url_suffix:str|None=None, url:str|None=None, color:int|None=None) -> discord.Embed:
+        if url or url_suffix:
+            url = url if url_suffix is None else f'{self.root_url}{url_suffix}'
+        self.embeds[name] = discord.Embed(title=title, description=description, url=url, color=color)
+        return self.embeds[name]
+
+    def get(self, name:str) -> discord.Embed|None:
+        return self.embeds.get(name, None)
+
+    def get_sent_msg(self, name:str) -> discord.Message|None:
+        return self.sent_msg_embeds.get(name, None)
+    
+    async def delete(self, name:str):
+        previously_sent_embed:discord.Message = self.sent_msg_embeds.pop(name, None)
+        if previously_sent_embed:
+            await previously_sent_embed.delete()
+
+    def update(self, name:str, title:str|None=None, description:str|None=None, color:int|None=None, url_suffix:str|None=None, url:str|None=None) -> discord.Embed:
+        embed:discord.Embed = self.embeds.get(name)
+        if title:
+            embed.title = title
+        if description:
+            embed.description = description
+        if color:
+            embed.color = color
+        if url or url_suffix:
+            embed.url = url if url else f'{self.root_url}{url_suffix}'
+        return embed
+    
+    async def edit(self, name:str, title:str|None=None, description:str|None=None, color:int|None=None, url_suffix:str|None=None, url:str|None=None) -> None|discord.Message:
+        # Return if not configured
+        if not self.enabled(name):
+            return
+        # Get the previously sent embed
+        previously_sent_embed:discord.Message = self.sent_msg_embeds.pop(name, None)
+        # Retain the message while editing Embed
+        if previously_sent_embed:
+            self.sent_msg_embeds[name] = await previously_sent_embed.edit(embed = self.update(name, title, description, color, url_suffix, url))
+            return self.sent_msg_embeds[name]
+        return None
+
+    async def send(self, name:str, title:str|None=None, description:str|None=None, color:int|None=None, url_suffix:str|None=None, url:str|None=None, channel:discord.TextChannel|None=None, delete_after:int|None=None) -> None|discord.Message:
+        send_channel = channel or self.channel or None
+        # Return if not configured
+        if not self.enabled(name) or (self.channel is None and channel is None):
+            return
+        # Retain the message while sending Embed
+        updated_embed = self.update(name, title, description, color, url_suffix, url)
+        self.sent_msg_embeds[name] = await send_channel.send(embed = updated_embed, delete_after=delete_after)
+        return self.sent_msg_embeds[name]
+
+    async def edit_or_send(self, name:str, title:str|None=None, description:str|None=None, color:int|None=None, url_suffix:str|None=None, url:str|None=None, channel:discord.TextChannel|None=None) -> None|discord.Embed|discord.Message:
+        send_channel = channel or self.channel or None
+        # Return if not configured
+        if not self.enabled(name):
+            return
+        # Get the previously sent embed
+        previously_sent_embed:discord.Message = self.sent_msg_embeds.pop(name, None)
+        # Retain the message while sending/editing Embed
+        if previously_sent_embed:
+            self.sent_msg_embeds[name] = await previously_sent_embed.edit(embed = self.update(name, title, description, color, url_suffix, url))
+            return self.sent_msg_embeds[name]
+        elif send_channel is None:
+            return None
+        else:
+            self.sent_msg_embeds[name] = await send_channel.send(embed = self.update(name, title, description, color, url_suffix, url))
+            return self.sent_msg_embeds[name]
+
+    def helpmenu(self) -> discord.Embed:
+        system_json = {
+            "title": "Welcome to ad_discordbot!",
+            \
+            "description": """
+            **/helpmenu** - Display this message
+            **/character** - Change character
+            **/main** - Toggle if Bot always replies, per channel
+            **/image** - prompt an image to be generated (or try "draw <subject>")
+            **/speak** - if TTS settings are enabled, the bot can speak your text
+            **__Changing settings__** ('.../ad\_discordbot/dict\_.yaml' files)
+            **/imgmodel** - Change Img model and any model-specific settings
+            """,
+            \
+            "url": self.root_url,
+            "color": self.color
+        }
+        return discord.Embed().from_dict(system_json)

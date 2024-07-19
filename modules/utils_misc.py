@@ -1,14 +1,25 @@
 from modules.logs import import_track, get_logger; import_track(__file__, fp=True); log = get_logger(__name__)  # noqa: E702
 logging = log
 
-# Adds missing keys/values
-def fix_dict(set, req):
+from datetime import datetime, timedelta
+import math
+import random
+
+def fix_dict(set, req, src: str | None = None, warned: bool = False, path=""):
+    was_warned = warned
+    ignored_keys = ['regenerate', '_continue', 'text', 'bot_in_character_menu', 'imgmodel_name']
     for k, req_v in req.items():
-        if k not in set:
+        current_path = f"{path}/{k}" if path else k  # Update the current path
+        if k not in set and k not in ignored_keys:
+            if not warned and src:  # Only log if warned is initially False
+                log.warning(f'key "{current_path}" missing from "{src}".')
+                log.info(f'Applying default value for "{current_path}": {repr(req_v)}.')
+                was_warned = True
             set[k] = req_v
         elif isinstance(req_v, dict):
-            fix_dict(set[k], req_v)
-    return set
+            set[k], child_warned = fix_dict(set[k], req_v, src, warned, current_path)
+            was_warned = was_warned or child_warned  # Update was_warned if any child call was warned
+    return set, was_warned
 
 # Updates matched keys, AND adds missing keys
 def update_dict(d, u):
@@ -50,6 +61,44 @@ def update_dict_matched_keys(d, u):
         else:
             d[k] = v
     return d
+
+def random_value_from_range(value_range):
+    if isinstance(value_range, (list, tuple)) and len(value_range) == 2:
+        start, end = value_range
+        if isinstance(start, (int, float)) and isinstance(end, (int, float)):
+            num_digits = max(len(str(start).split('.')[-1]), len(str(end).split('.')[-1]))
+            value = random.uniform(start, end) if isinstance(start, float) or isinstance(end, float) else random.randint(start, end)
+            value = round(value, num_digits)
+            return value
+    log.warning(f'Invalid value range "{value_range}". Defaulting to "0".')
+    return 0
+
+def convert_lists_to_tuples(dictionary:dict) -> dict:
+    for key, value in dictionary.items():
+        if isinstance(value, list) and len(value) == 2 and all(isinstance(item, (int, float)) for item in value) and not any(isinstance(item, bool) for item in value):
+            dictionary[key] = tuple(value)
+    return dictionary
+
+def get_time(offset=0.0, time_format=None, date_format=None):
+    try:
+        new_time = ''
+        new_date = ''
+        current_time = datetime.now()
+        if offset is not None and offset != 0.0:
+            if isinstance(offset, int):
+                current_time = datetime.now() + timedelta(days=offset)
+            elif isinstance(offset, float):
+                days = math.floor(offset)
+                hours = (offset - days) * 24
+                current_time = datetime.now() + timedelta(days=days, hours=hours)
+        time_format = time_format if time_format is not None else '%H:%M:%S'
+        date_format = date_format if date_format is not None else '%Y-%m-%d'
+        new_time = current_time.strftime(time_format)
+        new_date = current_time.strftime(date_format)
+        return new_time, new_date
+    except Exception as e:
+        log.error(f"Error when getting date/time: {e}")
+        return '', ''
 
 # Converts seconds to other values
 def format_time(seconds) -> str:
