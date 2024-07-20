@@ -7,7 +7,7 @@ import random
 
 def fix_dict(set, req, src: str | None = None, warned: bool = False, path=""):
     was_warned = warned
-    ignored_keys = ['regenerate', '_continue', 'text', 'bot_in_character_menu', 'imgmodel_name']
+    ignored_keys = ['regenerate', '_continue', 'text', 'bot_in_character_menu', 'imgmodel_name', 'tags', 'override_settings']
     for k, req_v in req.items():
         current_path = f"{path}/{k}" if path else k  # Update the current path
         if k not in set and k not in ignored_keys:
