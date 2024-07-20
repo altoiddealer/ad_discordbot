@@ -10,8 +10,8 @@ def fix_dict(set, req, src: str | None = None, warned: bool = False, path=""):
     ignored_keys = ['regenerate', '_continue', 'text', 'bot_in_character_menu', 'imgmodel_name', 'tags', 'override_settings']
     for k, req_v in req.items():
         current_path = f"{path}/{k}" if path else k  # Update the current path
-        if k not in set and k not in ignored_keys:
-            if not warned and src:  # Only log if warned is initially False
+        if k not in set:
+            if k not in ignored_keys and not warned and src:  # Only log if warned is initially False
                 log.warning(f'key "{current_path}" missing from "{src}".')
                 log.info(f'Applying default value for "{current_path}": {repr(req_v)}.')
                 was_warned = True
