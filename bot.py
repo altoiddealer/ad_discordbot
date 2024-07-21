@@ -2880,9 +2880,6 @@ class Tasks(TaskProcessing):
                     if self.params.llmmodel:
                         # RUN CHANGE LLMMODEL AS SUBTASK
                         self.run_subtask('change_llmmodel')
-                        # Delete embed before the second call
-                        if self.params.llmmodel.get('mode', 'change') == 'swap': # default to 'change' unless a tag was triggered with 'swap'
-                            await self.embeds.delete('change')
 
                     # generate text with TGWUI
                     await self.message_llm_gen()
@@ -2918,8 +2915,7 @@ class Tasks(TaskProcessing):
                     await apply_reactions_to_messages(client.user, self.ictx, self.user_hmessage)
 
                 # Swap LLM Model back if triggered
-                if self.params.llmmodel and self.params.llmmodel.get('mode', 'change')  == 'swap':
-                    self.params.llmmodel['llmmodel_name'] = shared.previous_model_name
+                if self.params.llmmodel and self.params.llmmodel.get('mode', 'change') == 'swap':
                     # CREATE TASK AND QUEUE IT
                     change_llmmodel_task = Task('change_llmmodel', self.ictx, params=self.params) # Only needs current params
                     await task_manager.task_queue.put(change_llmmodel_task)
@@ -3512,6 +3508,9 @@ class Tasks(TaskProcessing):
             # Load the new model if it is different from the current one
             if shared.model_name != llmmodel_name:
                 await self.embeds.send('change', f'{verb} LLM model ... ', f"{verb} to {llmmodel_name}")
+                # Retain current model name to swap back to
+                if mode == 'swap':
+                    previous_llmmodel = shared.model_name
                 # If an LLM model is loaded, unload it
                 if shared.model_name != 'None':
                     unload_model()
@@ -3525,10 +3524,11 @@ class Tasks(TaskProcessing):
                     await self.embeds.delete('change')
                     await self.embeds.send('change', "An error occurred while changing LLM Model. No LLM Model is loaded.", e)
 
+                await self.embeds.delete('change') # delete embed after model changed
                 if mode == 'swap':
+                    self.params.llmmodel['llmmodel_name'] = previous_llmmodel
                     return
                 if self.embeds.enabled('change'):
-                    await self.embeds.delete('change')
                     # Send change embed to interaction channel
                     title = f"{self.user_name} unloaded the LLM model" if llmmodel_name == 'None' else f"{self.user_name} changed LLM model:"
                     description = 'Use "/llmmodel" to load a new one' if llmmodel_name == 'None' else f'**{llmmodel_name}**'
@@ -3869,7 +3869,7 @@ class Task(Tasks):
         return await self.run()
 
 
-    async def run_subtask(self, subtask: str|None=None) -> Any:
+    async def run_subtask(self, subtask:Optional[str]=None) -> Any:
         '''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
         run_subtask() should only be called from an in-process main Task()
         Can be called from a new Task() instance.
