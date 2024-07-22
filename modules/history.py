@@ -357,6 +357,8 @@ class HMessage:
     
     def new_history_end_here(self, include_self=True) -> Union['History', None]:
         new_history = self.duplicate_history()
+        log.debug('self:', self)
+        log.debug('new_history:', new_history)
         if self not in new_history:
             return None
 

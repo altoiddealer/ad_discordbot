@@ -1524,7 +1524,7 @@ class TaskAttributes():
     user_hmessage: HMessage
     bot_hmessage: HMessage
     local_history: History
-    typing_task: "TypingTask"
+    istyping: "IsTyping"
 
 
 class TaskProcessing(TaskAttributes):
@@ -1749,6 +1749,8 @@ class TaskProcessing(TaskAttributes):
         self.params.update_bot_should_do(self.tags) # check for updates from tags
         if self.params.should_gen_image:
             # CLONE CURRENT TASK AND QUEUE IT
+            if hasattr(self.ictx, 'reply'):
+                await self.ictx.reply('(**An image task was triggered, created and queued.**)', delete_after=5)
             img_gen_task = self.clone('img_gen', self.ictx, ignore_list=['llm_payload'])
             await task_manager.task_queue.put(img_gen_task)
 
@@ -2921,8 +2923,8 @@ class Tasks(TaskProcessing):
                     await task_manager.task_queue.put(change_llmmodel_task)
 
             # Stop typing if typing
-            if hasattr(self, 'typing_task'):
-                self.typing_task.stop()
+            if hasattr(self, 'istyping'):
+                self.istyping.stop()
 
             # send responses (text, TTS, images)
             await self.send_responses()
@@ -3046,22 +3048,9 @@ class Tasks(TaskProcessing):
 
             await self.embeds.send('system', 'Continuing ... ', f'Continuing text for {self.user_name}')
 
-            ## Finalize payload, generate text via TGWUI, and process responses
-            # Toggle TTS off, if interaction server is not connected to Voice Channel
-            tts_sw = None
-            if (hasattr(self.ictx, 'guild') and getattr(self.ictx.guild, 'voice_client', None) \
-                and not voice_clients.guild_vcs.get(self.ictx.guild.id) and int(tts.settings.get('play_mode', 0)) == 0):
-                tts_sw = await tts.apply_toggle_tts(self.ictx.guild, toggle='off')
-            # Check to apply Server Mode
-            self.apply_server_mode()
-            # Update names in stopping strings
-            self.extra_stopping_strings()
-            # Skip create_user_hmessage()
-            # Generate text with text-generation-webui.
-            await self.llm_gen()
-            # Skip create_bot_hmessage()
-            # Toggle TTS back on if it was toggled off
-            await tts.apply_toggle_tts(toggle='on', tts_sw=tts_sw)
+            ## Finalize payload, generate text via TGWUI.
+            # does not create hmessages or process responses
+            await self.message_llm_gen()
 
             await self.embeds.delete('system') # delete embed
             if not self.last_resp:
@@ -3195,18 +3184,14 @@ class Tasks(TaskProcessing):
 
             # Flags to skip message logging/special message handling
             regen_params = Params()
+            regen_params.skip_create_user_hmsg = True
+            regen_params.ref_message = original_discord_msg
+            regen_params.bot_hmsg_hidden = temp_reveal_msgs # Hides new bot HMessage if regenerating from hidden exchange
             if self.mode == 'create':
-                regen_params.skip_create_user_hmsg = True
-                regen_params.ref_message = original_discord_msg
                 regen_params.regenerated = self.user_hmessage
-                regen_params.bot_hmsg_hidden = temp_reveal_msgs # Hide new bot HMessage if regenerating from hidden exchange
-
             if self.mode == 'replace':
-                regen_params.skip_create_user_hmsg = True
-                regen_params.ref_message = original_discord_msg
                 regen_params.bot_hmessage_to_update = target_bot_hmessage
                 regen_params.target_discord_msg_id = target_bot_hmessage.id
-                regen_params.bot_hmsg_hidden = temp_reveal_msgs # Hide new bot HMessage if regenerating from hidden exchange
 
             # CLONE CURRENT TASK AS A MESSAGE TASK, RUN IT AS SUBTASK
             regenerate_message_task: Task = self.clone('message', self.ictx)
@@ -3650,39 +3635,36 @@ class Tasks(TaskProcessing):
 #################################################################
 ########################## TYPING TASK ##########################
 #################################################################
-class TypingTask:
+class IsTyping:
     def __init__(self, channel:discord.TextChannel):
         self.channel = channel
-        self.typing_task:Optional[asyncio.Task] = None
+        self.istyping:Optional[asyncio.Task] = None
         self.end_time:Optional[float] = None
 
-    async def _typing_task(self):
-        async with self.channel.typing():
-            while self.end_time is None or time.time() < self.end_time:
-                await asyncio.sleep(1)  # Sleep for a while to keep the typing indicator active
+    async def _istyping(self, start_time):
+        await asyncio.sleep(max(0, start_time - time.time()))
+        while self.end_time is None or time.time() < self.end_time:
+            async with self.channel.typing():          
+                await asyncio.sleep(1)
 
     def start(self, start_time=None, end_time=None):
         if start_time is None:
             start_time = time.time()
-
         self.end_time = end_time
-
-        async def delayed_start():
-            await asyncio.sleep(max(0, start_time - time.time()))
-            self.typing_task = asyncio.create_task(self._typing_task())
-
-        asyncio.create_task(delayed_start())
+        self.istyping = asyncio.create_task(self._istyping(start_time))
 
     def set_end(self, end_time):
         self.end_time = end_time
-        if self.typing_task is not None:
+        if self.istyping is not None:
             # Cancel the task if it should end sooner
             if time.time() >= end_time:
-                self.typing_task.cancel()
+                self.istyping.cancel()
+                self.istyping = None
 
     def stop(self):
-        if self.typing_task is not None:
-            self.typing_task.cancel()
+        if self.istyping is not None:
+            self.istyping.cancel()
+        self.istyping = None
 
 class WakeBot:
     def __init__(self):
@@ -3744,7 +3726,7 @@ class Task(Tasks):
         self.user_hmessage: HMessage = kwargs.pop('user_hmessage', None)
         self.bot_hmessage: HMessage  = kwargs.pop('bot_hmessage', None)
         self.local_history           = kwargs.pop('local_history', None)
-        self.typing_task:TypingTask  = kwargs.pop('typing_task', None)
+        self.istyping:IsTyping  = kwargs.pop('istyping', None)
         self.wake_bot:WakeBot        = kwargs.pop('wake_bot', None)
 
         # Dynamically assign custom keyword arguments as attributes
@@ -3783,30 +3765,30 @@ class Task(Tasks):
             else:
                 self.local_history   = self.local_history if self.local_history else bot_history.get_history_for(self.channel.id)
         # Typing Task
-        self.typing_task:TypingTask  = self.typing_task if self.typing_task else None
+        self.istyping:IsTyping  = self.istyping if self.istyping else None
         self.wake_bot:WakeBot        = self.wake_bot if self.wake_bot else None
 
 
     def init_typing(self, start_time=None, end_time=None):
         '''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
-        Creates a TypingTask() instance, and begins typing in channel.
+        Creates a IsTyping() instance, and begins typing in channel.
         Automatically factors any response_delay from character behavior
         '''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
         if not self.channel:
             return
-        self.typing_task = TypingTask(self.channel)
+        self.istyping = IsTyping(self.channel)
         if start_time is None:
             start_time = getattr(self, 'response_time', time.time())
-        self.typing_task.start(start_time=start_time, end_time=end_time)
+        self.istyping.start(start_time=start_time, end_time=end_time)
 
 
     def clone(self, name:str='', ictx:CtxInteraction|None=None, ignore_list:list|None=None, init_now:Optional[bool]=False, keep_typing:Optional[bool]=False) -> "Task":
         '''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
         Returns a new Task() with all of the same attributes.
-        Can optionally clone a running 'typing_task'
+        Can optionally clone a running 'istyping'
         '''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
         ignore_list = ignore_list if ignore_list is not None else []
-        always_ignore = ['name', 'ictx', 'wake_bot']
+        always_ignore = ['name', 'ictx', 'wake_bot', 'num', 'message_time', 'response_time', 'time_to_send', 'seconds_to_write']
         ignore_list = ignore_list + always_ignore
 
         deepcopy_list = ['llm_payload', 'img_payload']
@@ -3819,8 +3801,8 @@ class Task(Tasks):
                 continue
             elif key in deepcopy_list:
                 current_attributes[key] = copy.deepcopy(value)
-            elif isinstance(value, TypingTask):
-                current_attributes[key] = self._clone_typing_task(value) if keep_typing else value
+            elif isinstance(value, IsTyping):
+                current_attributes[key] = self._clone_istyping(value) if keep_typing else value
             # shallow copy remaining items
             else:
                 current_attributes[key] = value
@@ -3832,12 +3814,12 @@ class Task(Tasks):
 
         return new_task
 
-    def _clone_typing_task(self, typing_task:TypingTask):
-        # Clone the TypingTask manually to ensure a new instance
-        new_typing_task = TypingTask(typing_task.channel)
-        if typing_task.end_time is not None and time.time() < typing_task.end_time:
-            new_typing_task.start(start_time=time.time(), end_time=typing_task.end_time)
-        return new_typing_task
+    def _clone_istyping(self, istyping:IsTyping):
+        # Clone the IsTyping manually to ensure a new instance
+        new_istyping = IsTyping(istyping.channel)
+        if istyping.end_time is not None and time.time() < istyping.end_time:
+            new_istyping.start(start_time=time.time(), end_time=istyping.end_time)
+        return new_istyping
 
 
     async def run(self, task_name: str|None=None) -> Any:
@@ -3918,11 +3900,8 @@ class TaskManager(Tasks):
                     # Flag processing a task. Check with 'if task_manager.event.is_set():'
                     self.event.set() 
 
-                    # initialize default values in Task
-                    task.init_self_values()
-
                     # Typing will begin immediately or at 'response_time' if set by MessageManager() 
-                    typing = ['message', 'flows', 'continue', 'regenerate', 'msg_image_cmd', 'speak']
+                    typing = ['message', 'flows', 'regenerate', 'msg_image_cmd', 'speak'] #TODO debug 'continue' typing endlessly
                     if ('message' in task.name) or (task.name in typing):
                         task.init_typing()
 
@@ -3948,7 +3927,9 @@ class TaskManager(Tasks):
 
         except Exception as e:
             logging.error(f"An error occurred while processing a main task: {e}")
+            traceback.print_exc()
             self.event.clear()
+            client.loop.create_task(task_manager.process_tasks())
 
     def reset_current(self):
         self.current_task = None
@@ -3975,7 +3956,9 @@ class TaskManager(Tasks):
             # Condition to prevent always getting from one queue
             if self.prioritize_messages or self.task_queue.empty():
                 response_time, num, task = await self.message_queue.get()
-                log.info(f'Processing queued message (#{num}) by {task.user_name}.')
+                # initialize default values in Task
+                task.init_self_values()
+                log.info(f'Processing message #{num} by {task.user_name}.')
                 # Schedules the time bot must be "online". Will update later to reflect "time to write".
                 task.wake_bot = WakeBot()
                 if bot_behavior.responsiveness != 1.0:
@@ -3987,6 +3970,8 @@ class TaskManager(Tasks):
         if task is None:
             task:Optional[Task] = await self.task_queue.get()
             if task:
+                # initialize default values in Task
+                task.init_self_values()
                 await bot_behavior.come_online()
                 # return queue name, toggle queue priority
                 queue_name = 'task_queue' # return queue name
