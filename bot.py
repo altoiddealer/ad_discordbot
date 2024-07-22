@@ -3853,7 +3853,7 @@ class Task(Tasks):
 
     async def run_subtask(self, subtask:Optional[str]=None) -> Any:
         '''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
-        run_subtask() should only be called from an in-process main Task()
+        run_subtask() should only be called from a method of Tasks() (a main task)
         Can be called from a new Task() instance.
         Can also be called from the current main Task() instance while providing subtask name.
         Runs a method of Tasks()
