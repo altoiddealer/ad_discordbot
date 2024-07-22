@@ -445,8 +445,8 @@ class History:
             fp=self.fp,
             )
 
-        new._last = self._last
-        new._items = self._items
+        new._last = copy.copy(self._last)
+        new._items = copy.copy(self._items)
         return new
 
 
