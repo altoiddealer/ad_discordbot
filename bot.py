@@ -3699,7 +3699,7 @@ class Task(Tasks):
         TaskManager.run() will use the Task() name to dynamically call a Tasks() method.
 
         Valid Task names:
-        'on_message' / 'message' / 'message_post_llm' / 'spontaneous_message' / 'flows'
+        'on_message' / 'message_llm' / 'message_post_llm' / 'spontaneous_message' / 'flows'
         'edit_history' / 'continue' / 'regenerate' / ''hide_or_reveal_history'
         'change_imgmodel' / 'change_llmmodel' / 'change_char' / 'img_gen' / 'msg_image_cmd' / 'speak'
 
