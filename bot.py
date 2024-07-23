@@ -2995,7 +2995,7 @@ class Tasks(TaskProcessing):
         updated_online_time = max(current_time, updated_online_time)
         # Reschedule wake time
         if online_time != updated_online_time:                
-            bot_status.schedule_come_online(updated_online_time)
+            await bot_status.schedule_come_online(updated_online_time)
 
         # Retain for later message processing
         setattr(self, 'time_to_send', time_to_send)
@@ -4004,9 +4004,6 @@ class TaskManager(Tasks):
                     # Flag processing a task. Check with 'if task_manager.event.is_set():'
                     self.event.set() 
 
-                    # initialize default values in Task
-                    task.init_self_values()
-
                     # Typing will begin immediately or at 'response_time' if set by MessageManager() 
                     typing = ['message', 'flows', 'regenerate', 'msg_image_cmd', 'speak'] #TODO debug 'continue' typing endlessly
                     if ('message' in task.name) or (task.name in typing):
@@ -4064,6 +4061,8 @@ class TaskManager(Tasks):
             if self.prioritize_messages or self.task_queue.empty():
                 num, task = await self.message_queue.get()
                 task:Task
+                # initialize default values in Task
+                task.init_self_values()
                 log.info(f'Processing message #{num} by {task.user_name}.')
                 queue_name = 'message_queue'
                 self.prioritize_messages = False
@@ -4072,6 +4071,8 @@ class TaskManager(Tasks):
             self.prioritize_messages = True
             task:Optional[Task] = await self.task_queue.get()
             if task:
+                # initialize default values in Task
+                task.init_self_values()
                 await bot_status.come_online()
                 queue_name = 'task_queue'
 
@@ -5686,7 +5687,7 @@ class MessageManager():
         setattr(task, 'read_text_delay', read_text_delay)
         setattr(task, 'response_time', response_time)
         # Queue to TaskManager(). Self sorts by 'response_time'
-        await task_manager.message_queue.put((num, response_time, task))
+        await task_manager.message_queue.put((num, task))
 
 message_manager = MessageManager()
 
