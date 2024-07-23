@@ -37,7 +37,7 @@ from typing import Union
 
 sys.path.append("ad_discordbot")
 
-from modules.utils_shared import task_semaphore, shared_path, patterns, bot_emojis
+from modules.utils_shared import task_processing, shared_path, patterns, bot_emojis
 from modules.database import Database, ActiveSettings, Config, StarBoard, Statistics
 from modules.utils_misc import fix_dict, update_dict, sum_update_dict, update_dict_matched_keys, random_value_from_range, convert_lists_to_tuples, get_time, format_time, format_time_difference, get_normalized_weights  # noqa: F401
 from modules.utils_discord import Embeds, guild_only, configurable_for_dm_if, is_direct_message, ireply, sleep_delete_message, send_long_message, \
@@ -1751,7 +1751,7 @@ class TaskProcessing(TaskAttributes):
         if self.params.should_gen_image:
             # CLONE CURRENT TASK AND QUEUE IT
             if hasattr(self.ictx, 'reply'):
-                await self.ictx.reply('(**An image task was triggered, created and queued.**)', delete_after=5)
+                await self.ictx.reply('(**An image task was triggered, created and queued.**)', ephemeral=True, delete_after=5)
             img_gen_task = self.clone('img_gen', self.ictx, ignore_list=['llm_payload'])
             await task_manager.task_queue.put(img_gen_task)
 
@@ -3977,8 +3977,6 @@ class TaskManager(Tasks):
         self.current_channel: discord.TextChannel = None
         self.current_user_name: str = None
 
-        # To allow checking if processing a task
-        self.event = asyncio.Event()
         # main Task queue
         self.task_queue = asyncio.Queue()
         # Special queue for 'on_message'
@@ -4001,8 +3999,8 @@ class TaskManager(Tasks):
                     task, queue_name = await self.get_next_task()
                     task: Task
 
-                    # Flag processing a task. Check with 'if task_manager.event.is_set():'
-                    self.event.set() 
+                    # Flag processing a task. Check with 'if task_processing.is_set():'
+                    task_processing.set() 
 
                     # Typing will begin immediately or at 'response_time' if set by MessageManager() 
                     typing = ['message', 'flows', 'regenerate', 'msg_image_cmd', 'speak'] #TODO debug 'continue' typing endlessly
@@ -4024,7 +4022,7 @@ class TaskManager(Tasks):
 
                     # Queue cleanup
                     self.reset_current()        # Reset all current self attributes
-                    self.event.clear()          # Flag no longer processing task
+                    task_processing.clear()          # Flag no longer processing task
                     current_queue = getattr(self, queue_name)
                     current_queue: asyncio.Queue|asyncio.PriorityQueue
                     current_queue.task_done()   # Accept next task
