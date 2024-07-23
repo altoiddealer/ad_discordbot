@@ -126,7 +126,7 @@ async def sleep_delete_message(message: discord.Message, wait:int=5):
 # Send message response to user's interaction command
 async def ireply(ictx: 'CtxInteraction', process):
     try:
-        if task_processing.is_set()
+        if task_processing.is_set():
             message = f'Your {process} request was added to the task queue'
         else:
             message = f'Processing your {process} request'
