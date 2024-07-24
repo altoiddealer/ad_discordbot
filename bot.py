@@ -2024,8 +2024,10 @@ class TaskProcessing(TaskAttributes):
             bot_statistics.save()
 
             # Set self attributes
-            setattr(self, 'last_tokens', last_tokens)
-            setattr(self, 'llm_gen_time', llm_gen_time)
+            if hasattr(self, 'message') and self.message is not None:
+                self.last_tokens = last_tokens
+                setattr(self.message, 'last_tokens', last_tokens)
+                #setattr(self, 'llm_gen_time', llm_gen_time)
         except Exception as e:
             log.error(f'An error occurred while saving LLM gen statistics: {e}')
 
@@ -2960,7 +2962,7 @@ class Tasks(TaskProcessing):
     async def check_message(self:"Task") -> bool:
         proceed = True
 
-        if hasattr(self, "message"):
+        if hasattr(self, "message") and self.message is not None:
             self.message.factor_typing_speed()
             updated_istyping_time = await self.message.update_timing()
             self.istyping.update(start_time=updated_istyping_time)
@@ -3685,6 +3687,7 @@ class BotStatus:
 
     async def come_online(self):
         '''Ensures the bot is online immediately.'''
+        self.cancel_go_idle_task()
         if not self.online:
             self.online = True
             await client.change_presence(status=discord.Status.online)
@@ -3694,12 +3697,13 @@ class BotStatus:
         self.come_online_task = None
 
     async def come_online_after(self, time_until_online:float):
+        log.debug(f"{bot_database.last_character} will be online in {time_until_online} seconds.")
+        self.come_online_time = time.time() + time_until_online
         try:
-            log.debug(f"{bot_database.last_character} will be online in {time_until_online} seconds.")
-            self.come_online_time = time.time() + time_until_online
             await asyncio.sleep(time_until_online)
             await self.come_online()
         except asyncio.CancelledError:
+            log.debug("come_online_after task was cancelled")
             self.come_online_time = None
             self.come_online_task = None
 
@@ -3726,9 +3730,12 @@ class BotStatus:
 
     async def go_idle_after(self, time_until_idle:float):
         try:
-            log.debug(f"{bot_database.last_character} will be idle in {time_until_idle} seconds.")
+            time_until_idle = int(time_until_idle)
+            log.info(f"{bot_database.last_character} will be idle in {time_until_idle} seconds.")
             self.go_idle_time = time.time() + time_until_idle
-            await asyncio.sleep(time_until_idle)
+            for i in range(time_until_idle):
+                await asyncio.sleep(1)
+                #log.debug(f'idle countdown {time_until_idle-i}')
             await self.go_idle()
         except asyncio.CancelledError:
             log.debug("go_idle_after task was cancelled")
@@ -3739,10 +3746,8 @@ class BotStatus:
         # Cancel any prior go idle task
         if self.go_idle_task and not self.go_idle_task.done():
             self.go_idle_task.cancel()
-            try:
-                asyncio.ensure_future(self.go_idle_task)  # Wait for the cancellation to complete
-            except asyncio.CancelledError:
-                pass
+            self.go_idle_time = None
+            self.go_idle_task = None
 
     async def schedule_go_idle(self):
         '''Sets the bot status to idle at a randomly selected time'''
@@ -3759,7 +3764,7 @@ class BotStatus:
         responsiveness = max(0.0, min(1.0, bot_behavior.responsiveness)) # clamped between 0.0 and 1.0
         if responsiveness == 1.0:
             return
-        num_values = 12         # arbitrary number of values and weights to generate
+        num_values = 10           # arbitrary number of values and weights to generate
         max_time_until_idle = 600 # arbitrary max timeframe in seconds
         # Generate evenly spaced values in range of num_values
         self.idle_range = [round(i * max_time_until_idle / (num_values - 1), 3) for i in range(num_values)]
@@ -3790,7 +3795,7 @@ class Message:
         offset_from_time = getattr(self, time_key, None)
         if offset_from_time:
             self.time_offset = time.time() - (offset_from_time + self.time_offset)
-        log.debug(f"Current timing offset for Message #{self.num}: {self.time_offset} seconds")
+        log.debug(f"Timing offset for Message #{self.num}: {self.time_offset} seconds")
 
     def factor_typing_speed(self):
         # Calculate and apply effect of "typing speed", if configured
@@ -3819,8 +3824,7 @@ class Message:
 
         # Update time to "come online"
         updated_online_time = max(current_time, (time_to_send - self.read_text_delay - self.seconds_to_write))
-        if updated_online_time != bot_status.come_online_time:
-            await bot_status.schedule_come_online(updated_online_time)
+        await bot_status.schedule_come_online(updated_online_time)
 
         # Determine whether to delay the responses (or update existing value)
         if (time_to_send > current_time) or (self.time_to_send is not None):
@@ -5660,7 +5664,7 @@ class MessageManager():
         try:
             # Fetches and sends the next item in the queue
             await asyncio.sleep(time_until_send)
-            await self.send_message
+            await self.send_message()
         except asyncio.CancelledError:
             self.last_send_time = time.time()
             self.send_msg_event.clear()
@@ -5697,12 +5701,13 @@ class MessageManager():
 
     # Queue delayed message tasks (self-sorting) which will run after predetermined time
     async def queue_delayed_message(self, task:Task):
+        num = task.message.num
         send_time = task.message.time_to_send
+        # Add to self-sorted queue
+        await self.send_msg_queue.put((num, send_time, task))
+        # Schedule message send
         if self.next_send_time is None:
             await self.schedule_send_message(send_time)
-        # Add to self-sorted queue
-        num = task.message.num
-        await self.send_msg_queue.put((num, send_time, task))
 
     # Queue discord message tasks to TaskManager() - will sort message tasks based on response_time
     async def queue_message(self, discord_message: discord.Message, text: str):
@@ -5826,11 +5831,9 @@ class Behavior:
         num_values = 10 # arbitrary number of values and weights to generate
         # Generate evenly spaced values from 0 to max_reply_delay
         self.response_delay_values = [round(i * self.max_reply_delay / (num_values - 1), 3) for i in range(num_values)]
-        log.debug(f"Response delay values: {self.response_delay_values}")
         # Generate the weights from responsiveness (inverted)
         inv_responsiveness = (1.0 - responsiveness)
         self.response_delay_weights = get_normalized_weights(target = inv_responsiveness, list_len = num_values)
-        log.debug(f"Response delay weights: {self.response_delay_weights}")
 
     def build_text_delay_values(self):
         responsiveness = max(0.0, min(1.0, self.responsiveness)) # clamped between 0.0 and 1.0
@@ -5842,7 +5845,6 @@ class Behavior:
         # Remove second half of delay values
         num_values = len(text_values) // 2
         self.text_delay_values = text_values[:num_values]
-        log.debug(f"Text delay values: {self.text_delay_values}")
 
     # Currently not used...
     def merge_weights(self, text_weights:list) -> list:
@@ -5863,7 +5865,6 @@ class Behavior:
         if self.current_response_delay is None:
             chosen_delay = random.choices(self.response_delay_values, self.response_delay_weights)[0]
             self.current_response_delay = chosen_delay
-            log.debug(f"Randomly selected message response delay: {chosen_delay}")
 
         return self.current_response_delay
 
@@ -5875,10 +5876,8 @@ class Behavior:
         text_len = len(text)
         text_factor = min(max(text_len / 450, 0.0), 1.0)  # Normalize text length to [0, 1]
         text_delay_weights = get_normalized_weights(target = text_factor, list_len = num_values, strength=2.0) # use stronger weights for text factor
-        log.debug(f"Text length: {text_len}, Text Delay Weights: {text_delay_weights}")
         # randomly select and return text delay
         chosen_delay = random.choices(self.text_delay_values, text_delay_weights)[0]
-        log.debug(f"Randomly selected message text delay: {chosen_delay}")
         return chosen_delay
 
     # Active conversations
