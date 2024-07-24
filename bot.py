@@ -661,7 +661,7 @@ async def on_message(message: discord.Message):
     if text.startswith(f"@{bot_database.last_character} "):
         text = text.replace(f"@{bot_database.last_character} ", "", 1)
     # apply wildcards
-    text = await dynamic_prompting(message.author.display_name, text, message)
+    text = await dynamic_prompting(text, message, message.author.display_name)
     # Send to to MessageManager()
     await message_manager.queue_message(message, text)
 
@@ -1338,7 +1338,7 @@ def get_braces_value(matched_text:str) -> str:
         replaced_text = ', '.join(chosen_options) if num_choices > 1 else chosen_options[0]
     return replaced_text
 
-async def dynamic_prompting(user_name: str, text: str, ictx: Optional[CtxInteraction] = None) -> str:
+async def dynamic_prompting(text: str, ictx: Optional[CtxInteraction] = None, user_name=None) -> str:
     if not config.get('dynamic_prompting_enabled', True):
         return text
 
@@ -1374,7 +1374,7 @@ async def dynamic_prompting(user_name: str, text: str, ictx: Optional[CtxInterac
             highlighted_changes = '`' + replaced_text + '`'
             text_with_comments = (text_with_comments[:adjusted_start] + highlighted_changes + text_with_comments[adjusted_end:])
     # send a message showing the selected options
-    if ictx and (braces_matches or wildcard_matches):
+    if ictx and user_name and (braces_matches or wildcard_matches):
         await ictx.reply(content=f"__Text with **[Dynamic Prompting](<https://github.com/altoiddealer/ad_discordbot/wiki/dynamic-prompting>)**__:\n>>> **{user_name}**: {text_with_comments}", mention_author=False, silent=True)
     return text
 
@@ -4102,7 +4102,7 @@ class Flows(TaskProcessing):
                     formatted_value = tags.parse_tag_from_text_value(formatted_value)    # convert new string to correct value type
                 formatted_flow_tags[key] = formatted_value
             # apply wildcards
-            text = await dynamic_prompting(self.user_name, text, ictx=None)
+            text = await dynamic_prompting(text)
         next_flow.update(formatted_flow_tags) # commit updates
         return flow_name, text
 
@@ -4358,7 +4358,7 @@ if sd.enabled:
         img2img_dict = {}
         cnet_dict = {}
         try:
-            prompt = await dynamic_prompting(ctx.author.display_name, prompt, ictx=None)
+            prompt = await dynamic_prompting(prompt)
             log_msg = f"**Prompt:** {prompt}"
             if size:
                 selected_size = next((option for option in size_options if option['name'] == size), None)
@@ -5787,11 +5787,13 @@ class SpontaneousMessaging():
         random_prompt = random.choice(bot_behavior.spontaneous_msg_prompts)
         if not random_prompt:
             random_prompt = '''[SYSTEM] The conversation has been inactive for {time_since_last_msg}, so you should say something.'''
+
+        prompt = await dynamic_prompting(random_prompt)
         # Cancel any existing task (does not reset tally)
         if task and not task.done():
             task.cancel()
         # Start the new task
-        new_task = asyncio.create_task(self.run_task(ictx, random_prompt, wait_secs))
+        new_task = asyncio.create_task(self.run_task(ictx, prompt, wait_secs))
         # update self variable with new task
         self.tasks[ictx.channel.id] = (new_task, tally)
         log.debug(f"Created a spontaneous msg task (channel: {ictx.channel.id}, delay: {wait_secs}), tally: {tally}.") # Debug because we want surprises from this feature
