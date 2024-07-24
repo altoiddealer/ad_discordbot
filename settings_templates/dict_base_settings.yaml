@@ -20,7 +20,7 @@ behavior:
   maximum_typing_speed: -1            # Words per Minute. 80 = 80 WPM (good typist) / -1 = no restriction (default). Basically a shortcut to the 'max_tokens_second' param (scales it to WPM).
   # 'responsiveness' and 'msg_size_affects_delay' separately influence the weights for response timing. 'max_reply_delay' will never be exceeded.
   responsiveness: 1.0                 # Controls "how much the character is paying attention". 0.0 = Distracted human / 1.0 = Computer program.
-  msg_size_affects_delay: true        # Will make the bot respond faster for shorter messages, and slower for longer messages.
+  msg_size_affects_delay: false       # Will make the bot respond faster for shorter messages, and slower for longer messages.
   max_reply_delay: 30.0               # Maximum delay before bot begins to respond (-seconds-).
 
   # 'spontaneous_messaging' will select a random prompt from a list instead of being prompted by user message.
@@ -30,7 +30,7 @@ behavior:
   spontaneous_msg_min_wait: 10.0      # Minimum wait before bot may spontaneously message (-minutes-)
   spontaneous_msg_max_wait: 60.0      # Maximum wait before bot may spontaneously message (-minutes-)
   spontaneous_msg_prompts:            # Random prompt will be picked from this list if triggered
-    - '''[SYSTEM] The conversation has been inactive for {time_since_last_user_msg}, so you should say something.'''
+    - '''[SYSTEM] The conversation has been inactive for {time_since_last_msg}, so you should say something.'''
   # - 'another prompt' 
 
 imgmodel:
