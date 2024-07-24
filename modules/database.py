@@ -224,11 +224,9 @@ class Database(BaseFileMemory):
 
         user_member_dict = self.get_member_dict('user')
         last_user_msg = user_member_dict.get(channel_id, 0)
-        print("last_user_msg:", last_user_msg)
 
         bot_member_dict = self.get_member_dict('bot')
         last_bot_msg = bot_member_dict.get(channel_id, 0)
-        print("last_bot_msg:", last_bot_msg)
 
         return max(last_user_msg, last_bot_msg) # Return most recent from any user/bot
 

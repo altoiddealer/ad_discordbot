@@ -2029,9 +2029,9 @@ class TaskProcessing(TaskAttributes):
 
             # Set self attributes
             if hasattr(self, 'message') and self.message is not None:
-                self.last_tokens = last_tokens
-                setattr(self.message, 'last_tokens', last_tokens)
-                #setattr(self, 'llm_gen_time', llm_gen_time)
+                self.message.last_tokens = last_tokens
+                self.message.llm_gen_time = llm_gen_time
+
         except Exception as e:
             log.error(f'An error occurred while saving LLM gen statistics: {e}')
 
@@ -2973,7 +2973,8 @@ class Tasks(TaskProcessing):
             time_to_send = getattr(self.message, 'time_to_send', None)
             if time_to_send:
                 self.name = 'message_post_llm' # Change self task name
-                log.info(f'Response to message #{self.message.num} will send in {time_to_send - time.time()} seconds.')
+                writing_message = '' if bot_behavior.maximum_typing_speed < 0 else f' (seconds to write: {round(self.message.seconds_to_write, 2)})'
+                log.info(f'Response to message #{self.message.num} will send in {round(time_to_send - time.time(), 2)} seconds.{writing_message}')
                 proceed = False
 
         return proceed
@@ -3555,7 +3556,7 @@ class Tasks(TaskProcessing):
                 await self.embeds.delete('change')
                 change_message = 'reset the conversation' if mode == 'reset' else 'changed character'
                 # Send change embed to interaction channel
-                await self.embeds.send('change', f'**{char_name}**', f"{self.user_name} {change_message}:")
+                await self.embeds.send('change', f'**{char_name}**', f"{self.user_name} {change_message}.")
                 # Send embeds to announcement channels
                 if bot_database.announce_channels and not is_direct_message(self.ictx):
                     await bg_task_queue.put(announce_changes(change_message, char_name, self.ictx))
@@ -3635,7 +3636,7 @@ class Tasks(TaskProcessing):
         await self.img_gen_task()
 
 #################################################################
-########################## TYPING TASK ##########################
+################# ISTYPING (INSTANCE IN TASK) ###################
 #################################################################
 class IsTyping:
     def __init__(self, channel:discord.TextChannel):
@@ -3676,108 +3677,8 @@ class IsTyping:
         self.istyping.done()
 
 #################################################################
-######################### BOT STATUS ############################
+################## MESSAGE (INSTANCE IN TASK) ###################
 #################################################################
-# Bot can "go idle" based on 'responsiveness' behavior setting
-class BotStatus:
-    def __init__(self):
-        self.online = True
-        self.come_online_time = None
-        self.come_online_task = None
-        self.idle_range = []
-        self.idle_weights = []
-        self.go_idle_time = None
-        self.go_idle_task = None
-
-    async def come_online(self):
-        '''Ensures the bot is online immediately.'''
-        self.cancel_go_idle_task()
-        if not self.online:
-            self.online = True
-            await client.change_presence(status=discord.Status.online)
-        # Reset variables
-        bot_behavior.current_response_delay = None # only reset this when completed without cancel
-        self.come_online_time = None
-        self.come_online_task = None
-
-    async def come_online_after(self, time_until_online:float):
-        log.debug(f"{bot_database.last_character} will be online in {time_until_online} seconds.")
-        self.come_online_time = time.time() + time_until_online
-        try:
-            await asyncio.sleep(time_until_online)
-            await self.come_online()
-        except asyncio.CancelledError:
-            log.debug("come_online_after task was cancelled")
-            self.come_online_time = None
-            self.come_online_task = None
-
-    def cancel_come_online_task(self):
-        if self.come_online_task and not self.come_online_task.done():
-            self.come_online_task.cancel()
-
-    async def schedule_come_online(self, online_time:float=time.time()):
-        '''Ensures the bot is online at given time'''
-        self.cancel_come_online_task()
-        time_until_online = max(0, online_time - time.time()) # get time difference for sleeping
-        if time_until_online > 0:
-            self.come_online_task = asyncio.create_task(self.come_online_after(time_until_online))
-        else:
-            await self.come_online()
-
-    async def go_idle(self):
-        if self.online:
-            self.online = False
-            await client.change_presence(status=discord.Status.idle)
-        log.info(f"{bot_database.last_character} is now idle.")
-        self.go_idle_time = None
-        self.go_idle_task = None
-
-    async def go_idle_after(self, time_until_idle:float):
-        try:
-            time_until_idle = int(time_until_idle)
-            log.info(f"{bot_database.last_character} will be idle in {time_until_idle} seconds.")
-            self.go_idle_time = time.time() + time_until_idle
-            for i in range(time_until_idle):
-                await asyncio.sleep(1)
-                #log.debug(f'idle countdown {time_until_idle-i}')
-            await self.go_idle()
-        except asyncio.CancelledError:
-            log.debug("go_idle_after task was cancelled")
-            self.go_idle_time = None
-            self.go_idle_task = None
-
-    def cancel_go_idle_task(self):
-        # Cancel any prior go idle task
-        if self.go_idle_task and not self.go_idle_task.done():
-            self.go_idle_task.cancel()
-            self.go_idle_time = None
-            self.go_idle_task = None
-
-    async def schedule_go_idle(self):
-        '''Sets the bot status to idle at a randomly selected time'''
-        responsiveness = max(0.0, min(1.0, bot_behavior.responsiveness)) # clamped between 0.0 and 1.0
-        if responsiveness == 1.0:
-            return # Never go idle
-        # cancel previously set go idle task
-        self.cancel_go_idle_task()
-        # choose a value with weighted probability based on 'responsiveness' bot behavior
-        time_until_idle = random.choices(self.idle_range, self.idle_weights)[0]
-        self.go_idle_task = asyncio.create_task(self.go_idle_after(time_until_idle))
-
-    def build_idle_weights(self):
-        responsiveness = max(0.0, min(1.0, bot_behavior.responsiveness)) # clamped between 0.0 and 1.0
-        if responsiveness == 1.0:
-            return
-        num_values = 10           # arbitrary number of values and weights to generate
-        max_time_until_idle = 600 # arbitrary max timeframe in seconds
-        # Generate evenly spaced values in range of num_values
-        self.idle_range = [round(i * max_time_until_idle / (num_values - 1), 3) for i in range(num_values)]
-        self.idle_range[0] = self.idle_range[1] # Never go idle immediately
-        # Generate the weights from responsiveness
-        self.idle_weights = get_normalized_weights(target = responsiveness, list_len = num_values)
-
-bot_status = BotStatus()
-
 class Message:
     def __init__(self, num:int, **kwargs):
         self.num = num
@@ -3790,6 +3691,7 @@ class Message:
         self.time_offset = 0
         self.seconds_to_write = 0
         self.last_tokens = None
+        self.llm_gen_time = 0
         self.time_to_send = None
 
     def update_time_offset(self, time_key:str='received_time'):
@@ -3804,12 +3706,14 @@ class Message:
         if bot_behavior.maximum_typing_speed > 0 and self.last_tokens is not None:
             max_tokens_per_second = round( (bot_behavior.maximum_typing_speed*4) / 60 )
             # update seconds_to_write, increase delay
-            self.seconds_to_write = self.last_tokens / max_tokens_per_second
+            seconds_to_write = self.last_tokens / max_tokens_per_second
+            self.seconds_to_write = max(seconds_to_write, self.llm_gen_time)
             self.response_delay += self.seconds_to_write
 
     # Offloads task to "parked queue" if not ready to send
     async def update_timing(self) -> float:
         current_time = time.time()
+        # Time offset is gap between msg received / msg un-queued from TaskManager()
         base_time = self.received_time + self.time_offset
 
         # If bot currently online, minimize the response delay
@@ -3833,8 +3737,23 @@ class Message:
             # Only messages with delayed responses will have value for 'time_to_send
             self.time_to_send = time_to_send
 
+        #self.debug_timing(current_time, base_time, fixed_delay, time_to_send, updated_istyping_time, updated_online_time)
+
         return updated_istyping_time
 
+    def debug_timing(self, current_time, base_time, fixed_delay, time_to_send, updated_istyping_time, updated_online_time):
+        print(f"Debugging Timing Information (relative to initial current_time):")
+        print(f"current_time: {current_time} (base value)")
+        print(f"received_time: {self.received_time} -> {self.received_time - current_time} seconds from current_time")
+        print(f"time_offset: {self.time_offset}")
+        print(f"base_time: {base_time} -> {base_time - current_time} seconds from current_time")
+        print(f"response_delay: {self.response_delay} seconds")
+        print(f"fixed_delay: {fixed_delay} seconds")
+        print(f"time_to_send: {time_to_send} -> {time_to_send - current_time} seconds from current_time")
+        print(f"updated_istyping_time: {updated_istyping_time} -> {updated_istyping_time - current_time} seconds from current_time")
+        print(f"updated_online_time: {updated_online_time} -> {updated_online_time - current_time} seconds from current_time")
+        if self.time_to_send is not None:
+            print(f"time_to_send (previous): {self.time_to_send} -> {self.time_to_send - current_time} seconds from current_time")
 
 #################################################################
 ############################# TASK ##############################
@@ -5010,7 +4929,7 @@ async def character_loader(char_name, channel=None):
         update_dict(state_dict, dict(char_llmstate))
         bot_behavior.update_behavior(dict(char_behavior))
         # Print mode in cmd
-        log.info(f"Initializing in {state_dict['mode']} mode")
+        log.info(f"        Initializing in {state_dict['mode']} mode")
         # Check for any char defined or model defined instruct_template
         update_instruct = char_instruct or tgwui.instruction_template_str or None
         if update_instruct:
@@ -5635,6 +5554,109 @@ if tgwui.enabled and tts.client and tts.client in tts.supported_clients:
             await process_speak(ctx, input_text, selected_voice, lang, voice_input)
 
 #################################################################
+######################### BOT STATUS ############################
+#################################################################
+# Bot can "go idle" based on 'responsiveness' behavior setting
+class BotStatus:
+    def __init__(self):
+        self.online = True
+        self.come_online_time = None
+        self.come_online_task = None
+        self.idle_range = []
+        self.idle_weights = []
+        self.go_idle_time = None
+        self.go_idle_task = None
+
+    async def come_online(self):
+        '''Ensures the bot is online immediately.'''
+        self.cancel_go_idle_task()
+        if not self.online:
+            self.online = True
+            await client.change_presence(status=discord.Status.online)
+        # Reset variables
+        bot_behavior.current_response_delay = None # only reset this when completed without cancel
+        self.come_online_time = None
+        self.come_online_task = None
+
+    async def come_online_after(self, time_until_online:float):
+        log.debug(f"{bot_database.last_character} will be online in {time_until_online} seconds.")
+        self.come_online_time = time.time() + time_until_online
+        try:
+            await asyncio.sleep(time_until_online)
+            await self.come_online()
+        except asyncio.CancelledError:
+            log.debug("come_online_after task was cancelled")
+            self.come_online_time = None
+            self.come_online_task = None
+
+    def cancel_come_online_task(self):
+        if self.come_online_task and not self.come_online_task.done():
+            self.come_online_task.cancel()
+
+    async def schedule_come_online(self, online_time:float=time.time()):
+        '''Ensures the bot is online at given time'''
+        self.cancel_come_online_task()
+        time_until_online = max(0, online_time - time.time()) # get time difference for sleeping
+        if time_until_online > 0:
+            self.come_online_task = asyncio.create_task(self.come_online_after(time_until_online))
+        else:
+            await self.come_online()
+
+    async def go_idle(self):
+        if self.online:
+            self.online = False
+            await client.change_presence(status=discord.Status.idle)
+        log.info(f"{bot_database.last_character} is now idle.")
+        self.go_idle_time = None
+        self.go_idle_task = None
+
+    async def go_idle_after(self, time_until_idle:float):
+        try:
+            time_until_idle = int(time_until_idle)
+            log.info(f"{bot_database.last_character} will be idle in {time_until_idle} seconds.")
+            self.go_idle_time = time.time() + time_until_idle
+            for i in range(time_until_idle):
+                await asyncio.sleep(1)
+                #log.debug(f'idle countdown {time_until_idle-i}')
+            await self.go_idle()
+        except asyncio.CancelledError:
+            log.debug(f"{bot_database.last_character} is still active (go idle task was cancelled).")
+            self.go_idle_time = None
+            self.go_idle_task = None
+
+    def cancel_go_idle_task(self):
+        # Cancel any prior go idle task
+        if self.go_idle_task and not self.go_idle_task.done():
+            self.go_idle_task.cancel()
+            self.go_idle_time = None
+            self.go_idle_task = None
+
+    async def schedule_go_idle(self):
+        '''Sets the bot status to idle at a randomly selected time'''
+        responsiveness = max(0.0, min(1.0, bot_behavior.responsiveness)) # clamped between 0.0 and 1.0
+        if responsiveness == 1.0:
+            return # Never go idle
+        # cancel previously set go idle task
+        self.cancel_go_idle_task()
+        # choose a value with weighted probability based on 'responsiveness' bot behavior
+        time_until_idle = random.choices(self.idle_range, self.idle_weights)[0]
+        self.go_idle_task = asyncio.create_task(self.go_idle_after(time_until_idle))
+
+    def build_idle_weights(self):
+        responsiveness = max(0.0, min(1.0, bot_behavior.responsiveness)) # clamped between 0.0 and 1.0
+        if responsiveness == 1.0:
+            return
+        num_values = 10           # arbitrary number of values and weights to generate
+        max_time_until_idle = 600 # arbitrary max timeframe in seconds
+        # Generate evenly spaced values in range of num_values
+        self.idle_range = [round(i * max_time_until_idle / (num_values - 1), 3) for i in range(num_values)]
+        self.idle_range[0] = self.idle_range[1] # Never go idle immediately
+        # Generate the weights from responsiveness
+        self.idle_weights = get_normalized_weights(target = responsiveness, list_len = num_values)
+
+bot_status = BotStatus()
+
+#################################################################
 ####################### MESSAGE MANAGER #########################
 #################################################################
 # Manages "normal" discord message requests (not from commands, "Flows", etc)
@@ -5788,6 +5810,7 @@ class SpontaneousMessaging():
 
 spontaneous_messaging = SpontaneousMessaging()
 
+
 #################################################################
 ####################### DEFAULT SETTINGS ########################
 #################################################################
@@ -5824,6 +5847,19 @@ class Behavior:
         self.build_response_delay_weights()
         self.build_text_delay_values()
         bot_status.build_idle_weights()
+        self.print_behavior_message()
+
+    def print_behavior_message(self):
+        log.info("----------------------------------------------")
+        log.info(f"{bot_database.last_character}'s Behavior:")
+        max_responsiveness_msg = '• Processes messages at uncapped speeds, and will never go idle.'
+        responsiveness_msg = '• Behaves more humanlike. Delays to respond after going idle.'
+        log.info(f'{max_responsiveness_msg if self.responsiveness > 1.0 else responsiveness_msg} (responsiveness: {self.responsiveness})')
+        if self.msg_size_affects_delay:
+            log.info(f'• Takes time to read messages. (msg_size_affects_delay: {self.msg_size_affects_delay})')
+        if self.maximum_typing_speed > 0:
+            log.info(f'• Takes longer to write responses. (maximum_typing_speed: {self.maximum_typing_speed})')
+        log.info("----------------------------------------------")
 
     # Response delays
     def build_response_delay_weights(self):
