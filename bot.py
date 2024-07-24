@@ -656,7 +656,7 @@ async def on_message(message: discord.Message):
     if tgwui.enabled and not bot_behavior.bot_should_reply(message, text): 
         return # Check that bot should reply or not
     # Store the current time. The value will save locally to database.yaml at another time
-    bot_database.update_last_user_msg(message.channel.id, save_now=False)
+    bot_database.update_last_msg_for(message.channel.id, 'user', save_now=False)
     # if @ mentioning bot, remove the @ mention from user prompt
     if text.startswith(f"@{bot_database.last_character} "):
         text = text.replace(f"@{bot_database.last_character} ", "", 1)
@@ -1550,6 +1550,7 @@ class TaskProcessing(TaskAttributes):
             mention_resp = mentions.update_mention(self.user.mention, self.bot_hmessage.text)
             # send responses to channel - reference a message if applicable
             sent_msg = await send_long_message(self.channel, mention_resp, self.bot_hmessage, self.params.ref_message)
+            bot_database.update_last_msg_for(self.channel.id, 'bot', save_now=False)
             if self.params.should_gen_image:
                 setattr(self, 'img_ref_message', sent_msg)
             # Apply any reactions applicable to message
@@ -1987,10 +1988,13 @@ class TaskProcessing(TaskAttributes):
             # format prompt with any defined recent messages
             updated_prompt = self.format_prompt_with_recent_output(updated_prompt, local_history)
             # format prompt with last time
-            time_since_last_user_msg = bot_database.last_user_msg.get(self.ictx.channel.id, '')
-            if time_since_last_user_msg:
-                time_since_last_user_msg = format_time_difference(time.time(), bot_database.last_user_msg[self.ictx.channel.id])
-            updated_prompt = updated_prompt.replace('{time_since_last_user_msg}', time_since_last_user_msg)
+            time_since_last_msg = bot_database.get_last_msg_for(self.channel.id)
+            if time_since_last_msg:
+                time_since_last_msg = format_time_difference(time.time(), time_since_last_msg)
+            else:
+                time_since_last_msg = ''
+            updated_prompt = updated_prompt.replace('{time_since_last_msg}', time_since_last_msg)
+            updated_prompt = updated_prompt.replace('{time_since_last_user_msg}', time_since_last_msg) # deprecated code
             # Format time if defined
             new_time, new_date = get_time(time_offset, time_format, date_format)
             updated_prompt = updated_prompt.replace('{time}', new_time)
@@ -3769,10 +3773,8 @@ class BotStatus:
         # Generate evenly spaced values in range of num_values
         self.idle_range = [round(i * max_time_until_idle / (num_values - 1), 3) for i in range(num_values)]
         self.idle_range[0] = self.idle_range[1] # Never go idle immediately
-        log.debug(f"Idle range: {self.idle_range}")
         # Generate the weights from responsiveness
         self.idle_weights = get_normalized_weights(target = responsiveness, list_len = num_values)
-        log.debug(f"Idle weights: {self.idle_weights}")
 
 bot_status = BotStatus()
 
@@ -5762,7 +5764,7 @@ class SpontaneousMessaging():
         # select a random prompt
         random_prompt = random.choice(bot_behavior.spontaneous_msg_prompts)
         if not random_prompt:
-            random_prompt = '''[SYSTEM] The conversation has been inactive for {time_since_last_user_msg}, so you should say something.'''
+            random_prompt = '''[SYSTEM] The conversation has been inactive for {time_since_last_msg}, so you should say something.'''
         # Cancel any existing task (does not reset tally)
         if task and not task.done():
             task.cancel()
@@ -5840,11 +5842,11 @@ class Behavior:
         if responsiveness == 1.0 or not self.msg_size_affects_delay:
             return
         # Manipulate the possible text delays to something more reasonable, while still rooted in 'responsiveness'
-        text_values = copy.deepcopy(self.response_delay_values)
-        text_values.pop(0) # Remove "0" delay
+        self.text_delay_values = copy.deepcopy(self.response_delay_values)
+        self.text_delay_values.pop(0) # Remove "0" delay
         # Remove second half of delay values
-        num_values = len(text_values) // 2
-        self.text_delay_values = text_values[:num_values]
+        # num_values = len(text_values) // 2
+        # self.text_delay_values = text_values[:num_values]
 
     # Currently not used...
     def merge_weights(self, text_weights:list) -> list:
@@ -5860,12 +5862,10 @@ class Behavior:
         if bot_status.online or self.responsiveness >= 1.0:
             self.current_response_delay = 0
             return 0
-
         # Choose a delay if none currently set
         if self.current_response_delay is None:
             chosen_delay = random.choices(self.response_delay_values, self.response_delay_weights)[0]
             self.current_response_delay = chosen_delay
-
         return self.current_response_delay
 
     def get_text_delay(self, text:str) -> float:
@@ -5877,8 +5877,10 @@ class Behavior:
         text_factor = min(max(text_len / 450, 0.0), 1.0)  # Normalize text length to [0, 1]
         text_delay_weights = get_normalized_weights(target = text_factor, list_len = num_values, strength=2.0) # use stronger weights for text factor
         # randomly select and return text delay
-        chosen_delay = random.choices(self.text_delay_values, text_delay_weights)[0]
+        chosen_delay = (random.choices(self.text_delay_values, text_delay_weights)[0]) / 2 # Halve it
+        log.debug(f"Read Text delay: {chosen_delay}. Chosen from range: {self.text_delay_values}")
         return chosen_delay
+
 
     # Active conversations
     def update_user_dict(self, user_id):
@@ -5892,6 +5894,7 @@ class Behavior:
             time_since_last_conversation = datetime.now() - last_conversation_time
             return time_since_last_conversation.total_seconds() < self.conversation_recency
         return False
+
 
     # Checks if bot should reply to a message
     def bot_should_reply(self, message:discord.Message, text:str) -> bool:
