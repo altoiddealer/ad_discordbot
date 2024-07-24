@@ -6,7 +6,7 @@ from shutil import copyfile
 from modules.logs import import_track, get_logger; import_track(__file__, fp=True); log = get_logger(__name__)  # noqa: E702
 logging = log
 
-task_semaphore = asyncio.Semaphore(1)
+task_processing = asyncio.Event()
 
 class SharedPath:
 

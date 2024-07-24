@@ -154,6 +154,7 @@ class Database(BaseFileMemory):
         self.last_imgmodel_name:str
         self.last_imgmodel_checkpoint:str
         self.last_user_msg:dict[str, float]
+        self.last_bot_msg:dict[str, float]
         self.announce_channels:list[int]
         self.main_channels:list[int]
         self.voice_channels:dict[str, int]
@@ -188,24 +189,47 @@ class Database(BaseFileMemory):
         self.last_imgmodel_name = data.pop('last_imgmodel_name', '')
         self.last_imgmodel_checkpoint = data.pop('last_imgmodel_checkpoint', '')
         self.last_user_msg = data.pop('last_user_msg', {})
+        self.last_bot_msg = data.pop('last_bot_msg', {})
         self.announce_channels = data.pop('announce_channels', [])
         self.main_channels = data.pop('main_channels', [])
         self.voice_channels = data.pop('voice_channels', {})
         data['warned_once'] = {}
 
-    def last_user_msg_for(self, channel_id):
-        return self.last_user_msg.get(channel_id, None)
+    def get_member_dict(self, member:str) -> dict:
+        member_attr_str = f"last_{member}_msg"
+        member_dict = getattr(self, member_attr_str, None)
+        if not isinstance(member_dict, dict):
+            member_dict = {}
+        return member_dict
 
-    def update_last_user_msg(self, channel_id, value=None, save_now=False):
-        if not isinstance(self.last_user_msg, dict):
-            self.last_user_msg = {}
+    def last_msg_for(self, channel_id, member:str):
+        member_dict = self.get_member_dict(member)
+        if member_dict:
+            return member_dict.get(channel_id, None)
 
-        if channel_id not in self.last_user_msg:
+    def update_last_msg_for(self, channel_id, member:str, save_now=False):
+        member_dict = self.get_member_dict(member)
+
+        if channel_id not in member_dict:
             save_now = True
 
-        self.last_user_msg[channel_id] = time.time()
+        member_dict[channel_id] = time.time()
         if save_now:
             self.save()
+
+    def get_last_msg_for(self, channel_id, member:str|None=None):
+        if member:
+            member_dict = self.get_member_dict(member)
+            return member_dict.get(channel_id) # return most recent for requested member
+
+        user_member_dict = self.get_member_dict('user')
+        last_user_msg = user_member_dict.get(channel_id, 0)
+
+        bot_member_dict = self.get_member_dict('bot')
+        last_bot_msg = bot_member_dict.get(channel_id, 0)
+
+        return max(last_user_msg, last_bot_msg) # Return most recent from any user/bot
+
 
     def save_pre_process(self, data):
         data.pop('warned_once', None)
