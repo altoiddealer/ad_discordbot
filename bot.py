@@ -919,7 +919,7 @@ async def update_tags(tags:list) -> list:
 
 class Tags:
     def __init__(self):
-        self.initialized = False
+        self.tags_initialized = False
         self.matches:list = []
         self.unmatched = {'user': [], 'llm': [], 'userllm': []}
         self.tag_trumps:set = set([])
@@ -930,9 +930,9 @@ class Tags:
         or they may be initialized on demand using 'init()'
         '''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
 
-    async def init(self, text:str, phase:str='llm') -> str:
+    async def init_tags(self, text:str, phase:str='llm') -> str:
         try:
-            self.initialized = True
+            self.tags_initialized = True
             base_tags: TAG_LIST      = bot_settings.base_tags # base tags
             char_tags: TAG_LIST      = bot_settings.settings['llmcontext'].get('tags', []) # character specific tags
             imgmodel_tags: TAG_LIST  = bot_settings.settings['imgmodel'].get('tags', []) # imgmodel specific tags
@@ -1141,7 +1141,7 @@ class Tags:
             log.error(f"Error processing LLM prompt tags: {e}")
             return prompt
 
-    def process_tag_trumps(self, matches:list):
+    def process_tag_trumps(self, matches:list) -> TAG_LIST:
         try:
             # Collect all 'trump' parameters for all matched tags
             for tag in matches:
@@ -1150,7 +1150,9 @@ class Tags:
                 else:
                     tag_dict = tag
                 if 'trumps' in tag_dict:
-                    self.tag_trumps.update([param.strip().lower() for param in tag_dict['trumps'].split(',')])
+                    for param in tag_dict['trumps'].split(','):
+                        stripped_param = param.strip().lower()
+                        self.tag_trumps.update([stripped_param])
                     del tag_dict['trumps']
 
             # Iterate over all tags in 'matches' and remove 'trumped' tags
@@ -1168,15 +1170,14 @@ class Tags:
                     log.info(f'''[TAGS] Tag with triggers "{tag_dict['trigger']}" was trumped by another tag.''')
                 else:
                     untrumped_matches.append(tag)
-
-            self.matches = untrumped_matches
-
+            return untrumped_matches
         except Exception as e:
             log.error(f"Error processing matched tags: {e}")
+            return matches
 
     async def match_tags(self, search_text:str, phase:str='llm'):
-        if not self.initialized:
-            await self.init(search_text, phase)
+        if not self.tags_initialized:
+            await self.init_tags(search_text, phase)
         try:
             # Remove 'llm' tags if pre-LLM phase, to be added back to unmatched tags list at the end of function
             if phase == 'llm':
@@ -1220,7 +1221,7 @@ class Tags:
                                 tag['imgtag_uninserted'] = True
                                 updated_matches.append(tag)
             if updated_matches:
-                self.process_tag_trumps(updated_matches) # type: ignore # trump tags
+                updated_matches = self.process_tag_trumps(updated_matches) # type: ignore # trump tags
             # Add LLM sublist back to unmatched tags list if LLM phase
             if phase == 'llm':
                 updated_unmatched['llm'] = llm_tags
