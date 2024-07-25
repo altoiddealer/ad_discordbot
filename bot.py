@@ -2973,11 +2973,11 @@ class Tasks(TaskProcessing):
             self.message.factor_typing_speed()
             updated_istyping_time = await self.message.update_timing()
             self.istyping.update(start_time=updated_istyping_time)
-            time_to_send = getattr(self.message, 'time_to_send', None)
-            if time_to_send:
+            send_time = getattr(self.message, 'send_time', None)
+            if send_time:
                 self.name = 'message_post_llm' # Change self task name
                 writing_message = '' if bot_behavior.maximum_typing_speed < 0 else f' (seconds to write: {round(self.message.seconds_to_write, 2)})'
-                log.info(f'Response to message #{self.message.num} will send in {round(time_to_send - time.time(), 2)} seconds.{writing_message}')
+                log.info(f'Response to message #{self.message.num} will send in {round(send_time - time.time(), 2)} seconds.{writing_message}')
                 proceed = False
 
         return proceed
@@ -3695,7 +3695,7 @@ class Message:
         self.seconds_to_write = 0
         self.last_tokens = None
         self.llm_gen_time = 0
-        self.time_to_send = None
+        self.send_time = None
 
     def update_time_offset(self, time_key:str='received_time'):
         '''Updates the running difference between current time and the key value'''
@@ -3711,7 +3711,6 @@ class Message:
             # update seconds_to_write, increase delay
             seconds_to_write = self.last_tokens / max_tokens_per_second
             self.seconds_to_write = max(seconds_to_write, self.llm_gen_time)
-            self.response_delay += self.seconds_to_write
 
     # Offloads task to "parked queue" if not ready to send
     async def update_timing(self) -> float:
@@ -3721,30 +3720,28 @@ class Message:
 
         # If bot currently online, minimize the response delay
         if bot_status.online:
-            self.response_delay = self.read_text_delay + self.seconds_to_write
+            self.response_delay = self.read_text_delay
 
         # Ensure response delay does not exceed max reply delay
-        fixed_delay = min(bot_behavior.max_reply_delay, self.response_delay)
-        # Ensure time to send is not in the past
-        time_to_send = max(current_time, (base_time + fixed_delay))
-
-        # Update time for 'is typing...'
-        updated_istyping_time = max(current_time, time_to_send - self.seconds_to_write)
+        updated_delay = min(bot_behavior.max_reply_delay, self.response_delay)
+        # Ensure time to write/send are not in the past
+        updated_istyping_time = max(current_time, (base_time + updated_delay))
+        updated_send_time = updated_istyping_time + self.seconds_to_write
 
         # Update time to "come online"
-        updated_online_time = max(current_time, (time_to_send - self.read_text_delay - self.seconds_to_write))
+        updated_online_time = max(current_time, (updated_send_time - self.read_text_delay - self.seconds_to_write))
         await bot_status.schedule_come_online(updated_online_time)
 
         # Determine whether to delay the responses (or update existing value)
-        if (time_to_send > current_time) or (self.time_to_send is not None):
-            # Only messages with delayed responses will have value for 'time_to_send
-            self.time_to_send = time_to_send
+        if (updated_send_time > current_time) or (self.send_time is not None):
+            # Only messages with delayed responses will have value for 'send_time
+            self.send_time = updated_send_time
 
-        #self.debug_timing(current_time, base_time, fixed_delay, time_to_send, updated_istyping_time, updated_online_time)
+        #self.debug_timing(current_time, base_time, fixed_delay, send_time, updated_istyping_time, updated_online_time)
 
         return updated_istyping_time
 
-    def debug_timing(self, current_time, base_time, fixed_delay, time_to_send, updated_istyping_time, updated_online_time):
+    def debug_timing(self, current_time, base_time, fixed_delay, send_time, updated_istyping_time, updated_online_time):
         print(f"Debugging Timing Information (relative to initial current_time):")
         print(f"current_time: {current_time} (base value)")
         print(f"received_time: {self.received_time} -> {self.received_time - current_time} seconds from current_time")
@@ -3752,11 +3749,11 @@ class Message:
         print(f"base_time: {base_time} -> {base_time - current_time} seconds from current_time")
         print(f"response_delay: {self.response_delay} seconds")
         print(f"fixed_delay: {fixed_delay} seconds")
-        print(f"time_to_send: {time_to_send} -> {time_to_send - current_time} seconds from current_time")
+        print(f"send_time: {send_time} -> {send_time - current_time} seconds from current_time")
         print(f"updated_istyping_time: {updated_istyping_time} -> {updated_istyping_time - current_time} seconds from current_time")
         print(f"updated_online_time: {updated_online_time} -> {updated_online_time - current_time} seconds from current_time")
-        if self.time_to_send is not None:
-            print(f"time_to_send (previous): {self.time_to_send} -> {self.time_to_send - current_time} seconds from current_time")
+        if self.send_time is not None:
+            print(f"send_time (previous): {self.send_time} -> {self.send_time - current_time} seconds from current_time")
 
 #################################################################
 ############################# TASK ##############################
@@ -3978,7 +3975,7 @@ class TaskManager(Tasks):
                     await self.run_task(task)
 
                     # Unresponded message tasks will have 'time_to_sent' attribute. Queue these to MessageManager().
-                    if task.message is not None and getattr(task.message, 'time_to_send', None):
+                    if task.message is not None and getattr(task.message, 'send_time', None):
                         await message_manager.queue_delayed_message(task)
                     # Finished tasks are deleted
                     else:
@@ -5705,7 +5702,7 @@ class MessageManager():
         task:Task
         updated_istyping_time = await task.message.update_timing()
         task.istyping.update(start_time=updated_istyping_time)
-        updated_send_time = task.message.time_to_send
+        updated_send_time = task.message.send_time
         # Ensure at least enough time elapsed to write message
         minimum_send_time = self.last_send_time + task.message.seconds_to_write
         updated_send_time = max(minimum_send_time, send_time)
@@ -5728,7 +5725,7 @@ class MessageManager():
     # Queue delayed message tasks (self-sorting) which will run after predetermined time
     async def queue_delayed_message(self, task:Task):
         num = task.message.num
-        send_time = task.message.time_to_send
+        send_time = task.message.send_time
         # Add to self-sorted queue
         await self.send_msg_queue.put((num, send_time, task))
         # Schedule message send
