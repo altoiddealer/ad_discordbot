@@ -112,7 +112,7 @@ async def apply_reactions_to_messages(client_user:discord.ClientUser,
             try:
                 discord_msg = await ictx.channel.fetch_message(msg_id)
             except:
-                log.warning('Bot tried reacting to a discord message object which was not found (message may be from an internal prompt).')
+                log.debug('Bot tried reacting to a discord message object which was not found (message may be from an internal prompt).')
             # Update reactions for the message
             if discord_msg:
                 await update_message_reactions(client_user, emojis_for_msg, discord_msg)                
