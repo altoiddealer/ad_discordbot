@@ -659,8 +659,10 @@ async def on_message(message: discord.Message):
         text = text.replace(f"@{bot_database.last_character} ", "", 1)
     # apply wildcards
     text = await dynamic_prompting(text, message, message.author.display_name)
+    # Create Task from message
+    task = Task('on_message', message, text=text)
     # Send to to MessageManager()
-    await message_manager.queue_message(message, text)
+    await message_manager.queue_message_task(task)
 
 # Starboard feature
 @client.event
@@ -3681,11 +3683,11 @@ class IsTyping:
 ################## MESSAGE (INSTANCE IN TASK) ###################
 #################################################################
 class Message:
-    def __init__(self, num:int, **kwargs):
+    def __init__(self, num:int, received_time:float, response_delay:float, read_text_delay:float):
         self.num = num
-        self.received_time = kwargs.get('received_time', time.time())
-        self.response_delay = kwargs.get('response_delay', 0)
-        self.read_text_delay = kwargs.get('read_text_delay', 0)
+        self.received_time = received_time
+        self.response_delay = response_delay
+        self.read_text_delay = read_text_delay
         # Response time is mainly for scheduling "is typing..."
         self.response_time = self.received_time + min(bot_behavior.max_reply_delay, (self.response_delay + self.read_text_delay))
         # time offset will be updated to account for lag between tasks
@@ -3968,7 +3970,7 @@ class TaskManager(Tasks):
                     task_processing.set() 
 
                     # Typing will begin immediately or at 'response_time' if set by MessageManager() 
-                    typing = ['message', 'flows', 'regenerate', 'msg_image_cmd', 'speak'] #TODO debug 'continue' typing endlessly
+                    typing = ['flows', 'regenerate', 'msg_image_cmd', 'speak'] #TODO debug 'continue' typing endlessly
                     if ('message' in task.name) or (task.name in typing):
                         task.init_typing()
 
@@ -5733,20 +5735,17 @@ class MessageManager():
         if self.next_send_time is None:
             await self.schedule_send_message(send_time)
 
-    # Queue discord message tasks to TaskManager() - will sort message tasks based on response_time
-    async def queue_message(self, discord_message: discord.Message, text: str):
-        # CREATE TASK FROM MESSAGE
-        task = Task('on_message', discord_message, text=text)
+    # Queue discord messages / Spontaneous Messages to TaskManager(). Self sorts by 'num'
+    async def queue_message_task(self, task:Task):
         # Update counter
         self.counter += 1
         num = self.counter
-        # Determine any response / read text delays
         received_time = time.time()
-        response_delay = bot_behavior.set_response_delay()
-        read_text_delay = bot_behavior.get_text_delay(text)
+        # Determine any response / read text delays (Only applicable to 'normal discord messages')
+        response_delay = bot_behavior.set_response_delay() if task.name == 'on_message' else 0
+        read_text_delay = bot_behavior.get_text_delay(task.text) if task.name == 'on_message' else 0
         # Assign Message() and attributes
-        task.message = Message(num, received_time=received_time, response_delay=response_delay, read_text_delay=read_text_delay)
-        # Queue to TaskManager(). Self sorts by 'response_time'
+        task.message = Message(num, received_time, response_delay, read_text_delay)
         await task_manager.message_queue.put((num, task))
 
 message_manager = MessageManager()
@@ -5775,7 +5774,8 @@ class SpontaneousMessaging():
             log.info(f'Prompting for a spontaneous message: "{prompt}"')
             # offload to TaskManager() queue
             spontaneous_message_task = Task('spontaneous_message', ictx, text=prompt)
-            await task_manager.task_queue.put(spontaneous_message_task)
+            await message_manager.queue_message_task(spontaneous_message_task)
+            #await task_manager.task_queue.put(spontaneous_message_task)
         except Exception as e:
             log.error(f"Error while processing a Spontaneous Message: {e}")
 
