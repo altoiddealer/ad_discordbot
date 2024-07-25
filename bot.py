@@ -5856,7 +5856,7 @@ class Behavior:
         log.info(f"{bot_database.last_character}'s Behavior:")
         max_responsiveness_msg = '• Processes messages at uncapped speeds, and will never go idle.'
         responsiveness_msg = '• Behaves more humanlike. Delays to respond after going idle.'
-        log.info(f'{max_responsiveness_msg if self.responsiveness > 1.0 else responsiveness_msg} (responsiveness: {self.responsiveness})')
+        log.info(f'{max_responsiveness_msg if self.responsiveness >= 1.0 else responsiveness_msg} (responsiveness: {self.responsiveness})')
         if self.msg_size_affects_delay:
             log.info(f'• Takes time to read messages. (msg_size_affects_delay: {self.msg_size_affects_delay})')
         if self.maximum_typing_speed > 0:
