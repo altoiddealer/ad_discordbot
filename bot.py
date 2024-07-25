@@ -547,7 +547,7 @@ if sd.enabled:
             await ctx.send("Auto-change Img models task was started.", ephemeral=True, delete_after=5)
 
 # helper function to begin auto-select imgmodel task
-async def start_auto_change_imgmodels():
+async def start_auto_change_imgmodels(status:str='started'):
     try:
         global imgmodel_update_task
         imgmodels_data = load_file(shared_path.img_models, {})
@@ -556,36 +556,33 @@ async def start_auto_change_imgmodels():
         frequency = auto_change_settings.get('frequency', 1.0)
         duration = frequency*3600 # 3600 = 1 hour
         imgmodel_update_task = client.loop.create_task(auto_update_imgmodel_task(mode, duration))
-        log.info(f"Auto-change Imgmodels task was started (Mode: '{mode}', Frequency: {frequency} hours).")
+        log.info(f"Auto-change Imgmodels task was {status} (Mode: '{mode}', Frequency: {frequency} hours).")
     except Exception as e:
         log.error(f"Error starting auto-change Img models task: {e}")
 
 # Try getting a valid character file source
 def get_character() -> str|None:
     try:
-        # This will be either the char name found in activesettings, or the default char name
-        source = bot_settings.settings['llmcontext']['name']
-        # If name doesn't match the bot's discord username, try to figure out best char data to initialize with
-        if source != bot_database.last_character:
-            sources = [
-                client.user.display_name, # Try current bot name
-                bot_settings.settings['llmcontext']['name'] # Try last known name
-            ]
-            char_name = None
-            for try_source in sources:
-                log.info(f'Trying to load character "{try_source}"...')
-                try:
-                    _, char_name, _, _, _ = load_character(try_source, '', '')
-                    if char_name:
-                        log.info(f'Initializing with character "{try_source}". Use "/character" for changing characters.')
-                        source = try_source
-                        break  # Character loaded successfully, exit the loop
-                except Exception as e:
-                    log.error(f"Error loading character for chat mode: {e}")
-            if not char_name:
-                log.error(f"Character not found in '/characters'. Tried files: {sources}")
-                return None # return nothing because no character files exist anyway
-        # Load character, but don't save it's settings to activesettings (Only user actions will result in modifications)
+        # Try loading last known character with fallback sources
+        sources = [
+            bot_database.last_character,
+            bot_settings.settings['llmcontext']['name'],
+            client.user.display_name
+        ]
+        char_name = None
+        for try_source in sources:
+            log.info(f'Trying to load character "{try_source}"...')
+            try:
+                _, char_name, _, _, _ = load_character(try_source, '', '')
+                if char_name:
+                    log.info(f'Initializing with character "{try_source}". Use "/character" for changing characters.')
+                    source = try_source
+                    break  # Character loaded successfully, exit the loop
+            except Exception as e:
+                log.error(f"Error loading character for chat mode: {e}")
+        if not char_name:
+            log.error(f"Character not found. Tried files: {sources}")
+            return None
         return source
     except Exception as e:
         log.error(f"Error trying to load character data: {e}")
@@ -1438,7 +1435,7 @@ class Params:
         # Image related params
         self.img_censoring: int = kwargs.get('img_censoring', 0)
         self.endpoint: str      = kwargs.get('endpoint', '/sdapi/v1/txt2img')
-        self.sd_output_dir: str = kwargs.get('sd_output_dir', (os.path.join(shared_path.dir_root, 'sd_outputs')))
+        self.sd_output_dir: str = kwargs.get('sd_output_dir', 'sd_outputs')
 
         # discord/HMessage related params
         self.ref_message                 = kwargs.get('ref_message', None)
@@ -2232,7 +2229,10 @@ class TaskProcessing(TaskAttributes):
 
     async def process_image_gen(self:Union["Task","Tasks"]):
         try:
-            sd_output_dir = self.params.sd_output_dir
+            base_dir = shared_path.dir_root
+            joined_output_dir = os.path.join(base_dir, self.params.sd_output_dir)
+            # backwards compatibility (user defined output dir was originally expected to include the base directory)
+            sd_output_dir = joined_output_dir.replace(f'{base_dir}{os.sep}{base_dir}', base_dir) # replace double base prefix with one
             # Ensure the necessary directories exist
             os.makedirs(sd_output_dir, exist_ok=True)
             temp_dir = os.path.join(shared_path.dir_root, 'user_images', '__temp')
@@ -2582,7 +2582,7 @@ class TaskProcessing(TaskAttributes):
             reactor: dict           = mods.pop('reactor', {})
             img2img: str            = mods.pop('img2img', '')
             img2img_mask: str       = mods.pop('img2img_mask', '')
-            self.params.sd_output_dir = mods.pop('sd_output_dir', self.params.sd_output_dir)
+            self.params.sd_output_dir = (mods.pop('sd_output_dir', self.params.sd_output_dir)).lstrip('/')  # Remove leading slash if it exists
             self.params.img_censoring = mods.pop('img_censoring', self.params.img_censoring)
             # Process the tag matches
             if flow or change_imgmodel or swap_imgmodel or payload or aspect_ratio or param_variances or controlnet or forge_couple or layerdiffuse or reactor or img2img or img2img_mask:
@@ -5208,8 +5208,7 @@ async def change_imgmodel(selected_imgmodel_params:dict, ictx:CtxInteraction=Non
         global imgmodel_update_task
         if imgmodel_update_task and not imgmodel_update_task.done():
             imgmodel_update_task.cancel()
-            await bg_task_queue.put(start_auto_change_imgmodels())
-            log.info("Auto-change Imgmodels task was restarted")
+            await bg_task_queue.put(start_auto_change_imgmodels('restarted'))
 
 async def get_selected_imgmodel_params(selected_imgmodel_value:str) -> dict:
     try:
