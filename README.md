@@ -24,7 +24,7 @@
 <details>
   <summary>click to expand</summary>
 
-   **07/24/2024:** New [Behaviors Settings](./behaviors) to bring your characters to life!
+   **07/24/2024:** New [Behaviors]([wiki/behaviors](https://github.com/altoiddealer/ad_discordbot/wiki/behaviors)) to bring your characters to life!
 
    Some new settings appeared recently... which were slightly buggy.  Today, I announce that they are working very well!
 
