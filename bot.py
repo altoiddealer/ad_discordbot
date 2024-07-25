@@ -547,7 +547,7 @@ if sd.enabled:
             await ctx.send("Auto-change Img models task was started.", ephemeral=True, delete_after=5)
 
 # helper function to begin auto-select imgmodel task
-async def start_auto_change_imgmodels():
+async def start_auto_change_imgmodels(status:str='started'):
     try:
         global imgmodel_update_task
         imgmodels_data = load_file(shared_path.img_models, {})
@@ -556,36 +556,33 @@ async def start_auto_change_imgmodels():
         frequency = auto_change_settings.get('frequency', 1.0)
         duration = frequency*3600 # 3600 = 1 hour
         imgmodel_update_task = client.loop.create_task(auto_update_imgmodel_task(mode, duration))
-        log.info(f"Auto-change Imgmodels task was started (Mode: '{mode}', Frequency: {frequency} hours).")
+        log.info(f"Auto-change Imgmodels task was {status} (Mode: '{mode}', Frequency: {frequency} hours).")
     except Exception as e:
         log.error(f"Error starting auto-change Img models task: {e}")
 
 # Try getting a valid character file source
 def get_character() -> str|None:
     try:
-        # This will be either the char name found in activesettings, or the default char name
-        source = bot_settings.settings['llmcontext']['name']
-        # If name doesn't match the bot's discord username, try to figure out best char data to initialize with
-        if source != bot_database.last_character:
-            sources = [
-                client.user.display_name, # Try current bot name
-                bot_settings.settings['llmcontext']['name'] # Try last known name
-            ]
-            char_name = None
-            for try_source in sources:
-                log.info(f'Trying to load character "{try_source}"...')
-                try:
-                    _, char_name, _, _, _ = load_character(try_source, '', '')
-                    if char_name:
-                        log.info(f'Initializing with character "{try_source}". Use "/character" for changing characters.')
-                        source = try_source
-                        break  # Character loaded successfully, exit the loop
-                except Exception as e:
-                    log.error(f"Error loading character for chat mode: {e}")
-            if not char_name:
-                log.error(f"Character not found in '/characters'. Tried files: {sources}")
-                return None # return nothing because no character files exist anyway
-        # Load character, but don't save it's settings to activesettings (Only user actions will result in modifications)
+        # Try loading last known character with fallback sources
+        sources = [
+            bot_database.last_character,
+            bot_settings.settings['llmcontext']['name'],
+            client.user.display_name
+        ]
+        char_name = None
+        for try_source in sources:
+            log.info(f'Trying to load character "{try_source}"...')
+            try:
+                _, char_name, _, _, _ = load_character(try_source, '', '')
+                if char_name:
+                    log.info(f'Initializing with character "{try_source}". Use "/character" for changing characters.')
+                    source = try_source
+                    break  # Character loaded successfully, exit the loop
+            except Exception as e:
+                log.error(f"Error loading character for chat mode: {e}")
+        if not char_name:
+            log.error(f"Character not found. Tried files: {sources}")
+            return None
         return source
     except Exception as e:
         log.error(f"Error trying to load character data: {e}")
@@ -662,8 +659,10 @@ async def on_message(message: discord.Message):
         text = text.replace(f"@{bot_database.last_character} ", "", 1)
     # apply wildcards
     text = await dynamic_prompting(text, message, message.author.display_name)
+    # Create Task from message
+    task = Task('on_message', message, text=text)
     # Send to to MessageManager()
-    await message_manager.queue_message(message, text)
+    await message_manager.queue_message_task(task)
 
 # Starboard feature
 @client.event
@@ -922,7 +921,7 @@ async def update_tags(tags:list) -> list:
 
 class Tags:
     def __init__(self):
-        self.initialized = False
+        self.tags_initialized = False
         self.matches:list = []
         self.unmatched = {'user': [], 'llm': [], 'userllm': []}
         self.tag_trumps:set = set([])
@@ -933,9 +932,9 @@ class Tags:
         or they may be initialized on demand using 'init()'
         '''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
 
-    async def init(self, text:str, phase:str='llm') -> str:
+    async def init_tags(self, text:str, phase:str='llm') -> str:
         try:
-            self.initialized = True
+            self.tags_initialized = True
             base_tags: TAG_LIST      = bot_settings.base_tags # base tags
             char_tags: TAG_LIST      = bot_settings.settings['llmcontext'].get('tags', []) # character specific tags
             imgmodel_tags: TAG_LIST  = bot_settings.settings['imgmodel'].get('tags', []) # imgmodel specific tags
@@ -1144,7 +1143,7 @@ class Tags:
             log.error(f"Error processing LLM prompt tags: {e}")
             return prompt
 
-    def process_tag_trumps(self, matches:list):
+    def process_tag_trumps(self, matches:list) -> TAG_LIST:
         try:
             # Collect all 'trump' parameters for all matched tags
             for tag in matches:
@@ -1153,7 +1152,9 @@ class Tags:
                 else:
                     tag_dict = tag
                 if 'trumps' in tag_dict:
-                    self.tag_trumps.update([param.strip().lower() for param in tag_dict['trumps'].split(',')])
+                    for param in tag_dict['trumps'].split(','):
+                        stripped_param = param.strip().lower()
+                        self.tag_trumps.update([stripped_param])
                     del tag_dict['trumps']
 
             # Iterate over all tags in 'matches' and remove 'trumped' tags
@@ -1171,15 +1172,14 @@ class Tags:
                     log.info(f'''[TAGS] Tag with triggers "{tag_dict['trigger']}" was trumped by another tag.''')
                 else:
                     untrumped_matches.append(tag)
-
-            self.matches = untrumped_matches
-
+            return untrumped_matches
         except Exception as e:
             log.error(f"Error processing matched tags: {e}")
+            return matches
 
     async def match_tags(self, search_text:str, phase:str='llm'):
-        if not self.initialized:
-            await self.init(search_text, phase)
+        if not self.tags_initialized:
+            await self.init_tags(search_text, phase)
         try:
             # Remove 'llm' tags if pre-LLM phase, to be added back to unmatched tags list at the end of function
             if phase == 'llm':
@@ -1223,7 +1223,7 @@ class Tags:
                                 tag['imgtag_uninserted'] = True
                                 updated_matches.append(tag)
             if updated_matches:
-                self.process_tag_trumps(updated_matches) # type: ignore # trump tags
+                updated_matches = self.process_tag_trumps(updated_matches) # type: ignore # trump tags
             # Add LLM sublist back to unmatched tags list if LLM phase
             if phase == 'llm':
                 updated_unmatched['llm'] = llm_tags
@@ -1438,7 +1438,7 @@ class Params:
         # Image related params
         self.img_censoring: int = kwargs.get('img_censoring', 0)
         self.endpoint: str      = kwargs.get('endpoint', '/sdapi/v1/txt2img')
-        self.sd_output_dir: str = kwargs.get('sd_output_dir', (os.path.join(shared_path.dir_root, 'sd_outputs')))
+        self.sd_output_dir: str = kwargs.get('sd_output_dir', 'sd_outputs')
 
         # discord/HMessage related params
         self.ref_message                 = kwargs.get('ref_message', None)
@@ -2232,7 +2232,10 @@ class TaskProcessing(TaskAttributes):
 
     async def process_image_gen(self:Union["Task","Tasks"]):
         try:
-            sd_output_dir = self.params.sd_output_dir
+            base_dir = shared_path.dir_root
+            joined_output_dir = os.path.join(base_dir, self.params.sd_output_dir)
+            # backwards compatibility (user defined output dir was originally expected to include the base directory)
+            sd_output_dir = joined_output_dir.replace(f'{base_dir}{os.sep}{base_dir}', base_dir) # replace double base prefix with one
             # Ensure the necessary directories exist
             os.makedirs(sd_output_dir, exist_ok=True)
             temp_dir = os.path.join(shared_path.dir_root, 'user_images', '__temp')
@@ -2582,7 +2585,7 @@ class TaskProcessing(TaskAttributes):
             reactor: dict           = mods.pop('reactor', {})
             img2img: str            = mods.pop('img2img', '')
             img2img_mask: str       = mods.pop('img2img_mask', '')
-            self.params.sd_output_dir = mods.pop('sd_output_dir', self.params.sd_output_dir)
+            self.params.sd_output_dir = (mods.pop('sd_output_dir', self.params.sd_output_dir)).lstrip('/')  # Remove leading slash if it exists
             self.params.img_censoring = mods.pop('img_censoring', self.params.img_censoring)
             # Process the tag matches
             if flow or change_imgmodel or swap_imgmodel or payload or aspect_ratio or param_variances or controlnet or forge_couple or layerdiffuse or reactor or img2img or img2img_mask:
@@ -3680,11 +3683,11 @@ class IsTyping:
 ################## MESSAGE (INSTANCE IN TASK) ###################
 #################################################################
 class Message:
-    def __init__(self, num:int, **kwargs):
+    def __init__(self, num:int, received_time:float, response_delay:float, read_text_delay:float):
         self.num = num
-        self.received_time = kwargs.get('received_time', time.time())
-        self.response_delay = kwargs.get('response_delay', 0)
-        self.read_text_delay = kwargs.get('read_text_delay', 0)
+        self.received_time = received_time
+        self.response_delay = response_delay
+        self.read_text_delay = read_text_delay
         # Response time is mainly for scheduling "is typing..."
         self.response_time = self.received_time + min(bot_behavior.max_reply_delay, (self.response_delay + self.read_text_delay))
         # time offset will be updated to account for lag between tasks
@@ -3967,7 +3970,7 @@ class TaskManager(Tasks):
                     task_processing.set() 
 
                     # Typing will begin immediately or at 'response_time' if set by MessageManager() 
-                    typing = ['message', 'flows', 'regenerate', 'msg_image_cmd', 'speak'] #TODO debug 'continue' typing endlessly
+                    typing = ['flows', 'regenerate', 'msg_image_cmd', 'speak'] #TODO debug 'continue' typing endlessly
                     if ('message' in task.name) or (task.name in typing):
                         task.init_typing()
 
@@ -4916,6 +4919,11 @@ async def character_loader(char_name, channel=None):
                 char_llmcontext['tags'] = value
         # Merge llmcontext data and extra data
         char_llmcontext.update(textgen_data)
+        # Update stored database / shared.settings values for character
+        bot_database.set('last_character', char_name)
+        shared.settings['character'] = char_name
+        # Update discord username / avatar
+        await update_client_profile(char_name, channel)
         # Collect behavior data
         char_behavior = char_data.get('behavior', {})
         char_behavior = merge_base(char_behavior, 'behavior')
@@ -4934,11 +4942,6 @@ async def character_loader(char_name, channel=None):
         update_instruct = char_instruct or tgwui.instruction_template_str or None
         if update_instruct:
             state_dict['instruction_template_str'] = update_instruct
-        # Update stored database / shared.settings values for character
-        bot_database.set('last_character', char_name)
-        shared.settings['character'] = char_name
-        # Update discord username / avatar
-        await update_client_profile(char_name, channel)
         # Mirror the changes in bot_active_settings
         bot_active_settings['llmcontext'] = char_llmcontext
         bot_active_settings['behavior'] = char_behavior
@@ -5208,8 +5211,7 @@ async def change_imgmodel(selected_imgmodel_params:dict, ictx:CtxInteraction=Non
         global imgmodel_update_task
         if imgmodel_update_task and not imgmodel_update_task.done():
             imgmodel_update_task.cancel()
-            await bg_task_queue.put(start_auto_change_imgmodels())
-            log.info("Auto-change Imgmodels task was restarted")
+            await bg_task_queue.put(start_auto_change_imgmodels('restarted'))
 
 async def get_selected_imgmodel_params(selected_imgmodel_value:str) -> dict:
     try:
@@ -5733,20 +5735,17 @@ class MessageManager():
         if self.next_send_time is None:
             await self.schedule_send_message(send_time)
 
-    # Queue discord message tasks to TaskManager() - will sort message tasks based on response_time
-    async def queue_message(self, discord_message: discord.Message, text: str):
-        # CREATE TASK FROM MESSAGE
-        task = Task('on_message', discord_message, text=text)
+    # Queue discord messages / Spontaneous Messages to TaskManager(). Self sorts by 'num'
+    async def queue_message_task(self, task:Task):
         # Update counter
         self.counter += 1
         num = self.counter
-        # Determine any response / read text delays
         received_time = time.time()
-        response_delay = bot_behavior.set_response_delay()
-        read_text_delay = bot_behavior.get_text_delay(text)
+        # Determine any response / read text delays (Only applicable to 'normal discord messages')
+        response_delay = bot_behavior.set_response_delay() if task.name == 'on_message' else 0
+        read_text_delay = bot_behavior.get_text_delay(task.text) if task.name == 'on_message' else 0
         # Assign Message() and attributes
-        task.message = Message(num, received_time=received_time, response_delay=response_delay, read_text_delay=read_text_delay)
-        # Queue to TaskManager(). Self sorts by 'response_time'
+        task.message = Message(num, received_time, response_delay, read_text_delay)
         await task_manager.message_queue.put((num, task))
 
 message_manager = MessageManager()
@@ -5775,7 +5774,8 @@ class SpontaneousMessaging():
             log.info(f'Prompting for a spontaneous message: "{prompt}"')
             # offload to TaskManager() queue
             spontaneous_message_task = Task('spontaneous_message', ictx, text=prompt)
-            await task_manager.task_queue.put(spontaneous_message_task)
+            await message_manager.queue_message_task(spontaneous_message_task)
+            #await task_manager.task_queue.put(spontaneous_message_task)
         except Exception as e:
             log.error(f"Error while processing a Spontaneous Message: {e}")
 
