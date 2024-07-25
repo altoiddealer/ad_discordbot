@@ -1866,7 +1866,7 @@ class TaskProcessing(TaskAttributes):
                 self.user_hmessage.update(hidden=True)
             if is_direct_message(self.ictx):
                 self.user_hmessage.dont_save()
-                await self.warn_direct_channel(self.ictx)
+                await self.warn_direct_channel()
             return self.user_hmessage
         except Exception as e:
             log.error(f'An error occurred while creating User HMessage: {e}')
