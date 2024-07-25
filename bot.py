@@ -3001,6 +3001,8 @@ class Tasks(TaskProcessing):
     # From Spontaneous Message feature
     async def spontaneous_message_task(self:"Task"):
         await self.message_llm_task()
+        # replace the previous discord message ID with a randomly generated one
+        self.ictx.id = int(''.join([str(random.randint(0, 9)) for _ in range(19)]))
         # check if task should have special handling
         proceed = await self.check_message()
         if proceed:
@@ -3737,23 +3739,7 @@ class Message:
             # Only messages with delayed responses will have value for 'send_time
             self.send_time = updated_send_time
 
-        #self.debug_timing(current_time, base_time, fixed_delay, send_time, updated_istyping_time, updated_online_time)
-
         return updated_istyping_time
-
-    def debug_timing(self, current_time, base_time, fixed_delay, send_time, updated_istyping_time, updated_online_time):
-        print(f"Debugging Timing Information (relative to initial current_time):")
-        print(f"current_time: {current_time} (base value)")
-        print(f"received_time: {self.received_time} -> {self.received_time - current_time} seconds from current_time")
-        print(f"time_offset: {self.time_offset}")
-        print(f"base_time: {base_time} -> {base_time - current_time} seconds from current_time")
-        print(f"response_delay: {self.response_delay} seconds")
-        print(f"fixed_delay: {fixed_delay} seconds")
-        print(f"send_time: {send_time} -> {send_time - current_time} seconds from current_time")
-        print(f"updated_istyping_time: {updated_istyping_time} -> {updated_istyping_time - current_time} seconds from current_time")
-        print(f"updated_online_time: {updated_online_time} -> {updated_online_time - current_time} seconds from current_time")
-        if self.send_time is not None:
-            print(f"send_time (previous): {self.send_time} -> {self.send_time - current_time} seconds from current_time")
 
 #################################################################
 ############################# TASK ##############################
