@@ -4919,6 +4919,11 @@ async def character_loader(char_name, channel=None):
                 char_llmcontext['tags'] = value
         # Merge llmcontext data and extra data
         char_llmcontext.update(textgen_data)
+        # Update stored database / shared.settings values for character
+        bot_database.set('last_character', char_name)
+        shared.settings['character'] = char_name
+        # Update discord username / avatar
+        await update_client_profile(char_name, channel)
         # Collect behavior data
         char_behavior = char_data.get('behavior', {})
         char_behavior = merge_base(char_behavior, 'behavior')
@@ -4937,11 +4942,6 @@ async def character_loader(char_name, channel=None):
         update_instruct = char_instruct or tgwui.instruction_template_str or None
         if update_instruct:
             state_dict['instruction_template_str'] = update_instruct
-        # Update stored database / shared.settings values for character
-        bot_database.set('last_character', char_name)
-        shared.settings['character'] = char_name
-        # Update discord username / avatar
-        await update_client_profile(char_name, channel)
         # Mirror the changes in bot_active_settings
         bot_active_settings['llmcontext'] = char_llmcontext
         bot_active_settings['behavior'] = char_behavior
