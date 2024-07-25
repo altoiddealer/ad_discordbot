@@ -101,17 +101,21 @@ async def apply_reactions_to_messages(client_user:discord.ClientUser,
 
         # Get correct emojis for current message
         emojis_for_msg = get_hmessage_emojis(hmsg)
-        
+
         # Iterate over list of discord message IDs and update reactions for the discord message objects
+        discord_msg = None
         for msg_id in msg_id_list:
             # skip fetching ictx message if provided and matched
             if ictx_msg and msg_id == ictx_msg.id:
                 discord_msg = ictx_msg
             # fetch message object from id
-            else:
+            try:
                 discord_msg = await ictx.channel.fetch_message(msg_id)
+            except:
+                log.warning('Bot tried reacting to a discord message object which was not found (message may be from an internal prompt).')
             # Update reactions for the message
-            await update_message_reactions(client_user, emojis_for_msg, discord_msg)
+            if discord_msg:
+                await update_message_reactions(client_user, emojis_for_msg, discord_msg)                
     except Exception as e:
         log.error(f'Error while processing reactions for messages: {e}')
 
