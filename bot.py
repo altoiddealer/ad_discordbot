@@ -813,7 +813,17 @@ class VoiceClients:
             if file.endswith('wav'):
                 audio = AudioSegment.from_wav(file)
             elif file.endswith('mp3'):
-                audio = AudioSegment.from_mp3(file)
+                try:
+                    audio = AudioSegment.from_mp3(file)
+                except Exception:
+                    try:
+                        audio = AudioSegment.from_file(file)
+                        audio.export(buffer, format="mp3", bitrate=f"{bit_rate}k")
+                        buffer.seek(0)
+                        audio = AudioSegment.from_mp3(buffer)
+                    except Exception as e:
+                        logging.error('Failed to decode MP3 file after conversion: %s', e)
+                        return
             else:
                 log.error('TTS generated unsupported file format:', file)
             audio.export(buffer, format="mp3", bitrate=f"{bit_rate}k")
@@ -4028,6 +4038,7 @@ class TaskManager(Tasks):
                 num, task = await self.message_queue.get()
                 task:Task
                 # initialize default values in Task
+                await bot_status.schedule_come_online(task.message.response_time)
                 task.init_self_values()
                 task.message.unqueue_time = time.time()
                 log.info(f'Processing message #{num} by {task.user_name}.')
@@ -5472,8 +5483,8 @@ async def fetch_speak_options():
         elif tts.client == 'edge_tts':
             lang_list = ['English']
             from extensions.edge_tts.script import edge_tts # type: ignore
-            voices = asyncio.run(edge_tts.list_voices())
-            all_voices = [voice for voice in voices if voice.startswith('en-')]
+            voices = await edge_tts.list_voices()
+            all_voices = [voice['ShortName'] for voice in voices if 'ShortName' in voice and voice['ShortName'].startswith('en-')]
         all_voices.sort() # Sort alphabetically
         return lang_list, all_voices
     except Exception as e:
