@@ -354,8 +354,11 @@ class TGWUI:
                     extension = getattr(extensions, name).script
                     extensions_module.apply_settings(extension, name)
                     if hasattr(extension, "setup"):
-                        log.warning(f'Extension "{name}" is hasattr "setup". Skipping...')
-                        continue
+                        log.warning(f'Extension "{name}" is hasattr "setup". Trying to load...')
+                        try:
+                            extension.setup()
+                        except Exception as e:
+                            log.error(f'Setup failed for extension {extension}:', e)
                     extensions_module.state[name] = [True, index]
                 except Exception:
                     log.error(f'Failed to load the extension "{name}".')
