@@ -806,7 +806,12 @@ class VoiceClients:
         
         bit_rate = int(tts.settings.get('mp3_bit_rate', 128))
         with io.BytesIO() as buffer:
-            audio = AudioSegment.from_wav(file)
+            if file.endswith('wav'):
+                audio = AudioSegment.from_wav(file)
+            elif file.endswith('mp3'):
+                audio = AudioSegment.from_mp3(file)
+            else:
+                log.error('TTS generated unsupported file format:', file)
             audio.export(buffer, format="mp3", bitrate=f"{bit_rate}k")
             mp3_file = File(buffer, filename=mp3_filename)
             
