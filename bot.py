@@ -5469,6 +5469,11 @@ async def fetch_speak_options():
             if tts.api_key:
                 update_api_key(tts.api_key)
             all_voices = refresh_voices()
+        elif tts.client == 'edge_tts':
+            lang_list = ['English']
+            from extensions.edge_tts.script import edge_tts # type: ignore
+            voices = asyncio.run(edge_tts.list_voices())
+            all_voices = [voice for voice in voices if voice.startswith('en-')]
         all_voices.sort() # Sort alphabetically
         return lang_list, all_voices
     except Exception as e:
