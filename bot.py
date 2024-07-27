@@ -234,7 +234,7 @@ class TTS:
     def __init__(self):
         self.enabled:bool = False
         self.settings:dict = config['textgenwebui']['tts_settings']
-        self.supported_clients = ['alltalk_tts', 'coqui_tts', 'silero_tts', 'elevenlabs_tts']
+        self.supported_clients = ['alltalk_tts', 'coqui_tts', 'silero_tts', 'elevenlabs_tts', 'edge_tts']
         self.client:str = self.settings.get('extension', '')
         self.api_key:str = ''
         self.voice_key:str = ''
@@ -260,12 +260,12 @@ class TTS:
             elif self.client == 'coqui_tts':
                 self.voice_key = 'voice'
                 self.lang_key = 'language'
-            elif self.client == 'silero_tts':
-                self.voice_key = 'speaker'
-                self.lang_key = 'language'
             elif self.client == 'elevenlabs_tts':
                 self.voice_key = 'selected_voice'
                 self.lang_key = ''
+            elif self.client in ['silero_tts', 'edge_tts']:
+                self.voice_key = 'speaker'
+                self.lang_key = 'language'
 
             if self.client not in shared.args.extensions:
                 shared.args.extensions.append(self.client)
@@ -355,9 +355,11 @@ class TGWUI:
                     extension = getattr(extensions, name).script
                     extensions_module.apply_settings(extension, name)
                     if hasattr(extension, "setup"):
-                        extension.setup()
-                        #log.warning(f'Extension "{name}" is hasattr "setup".')
-                        #continue
+                        log.warning(f'Extension "{name}" is hasattr "setup". Trying to load...')
+                        try:
+                            extension.setup()
+                        except Exception as e:
+                            log.error(f'Setup failed for extension {extension}:', e)
                     extensions_module.state[name] = [True, index]
                 except Exception:
                     log.error(f'Failed to load the extension "{name}".')
