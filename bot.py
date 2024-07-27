@@ -312,6 +312,7 @@ class TGWUI:
             shared.generation_lock = Lock()
 
     def init_settings(self):
+        shared.settings['character'] = bot_database.last_character
         # Loading custom settings
         settings_file = None
         tgwui_settings_json = os.path.join(shared_path.dir_tgwui, "settings.json")
@@ -354,8 +355,9 @@ class TGWUI:
                     extension = getattr(extensions, name).script
                     extensions_module.apply_settings(extension, name)
                     if hasattr(extension, "setup"):
-                        log.warning(f'Extension "{name}" is hasattr "setup". Skipping...')
-                        continue
+                        extension.setup()
+                        #log.warning(f'Extension "{name}" is hasattr "setup".')
+                        #continue
                     extensions_module.state[name] = [True, index]
                 except Exception:
                     log.error(f'Failed to load the extension "{name}".')
@@ -806,7 +808,12 @@ class VoiceClients:
         
         bit_rate = int(tts.settings.get('mp3_bit_rate', 128))
         with io.BytesIO() as buffer:
-            audio = AudioSegment.from_wav(file)
+            if file.endswith('wav'):
+                audio = AudioSegment.from_wav(file)
+            elif file.endswith('mp3'):
+                audio = AudioSegment.from_mp3(file)
+            else:
+                log.error('TTS generated unsupported file format:', file)
             audio.export(buffer, format="mp3", bitrate=f"{bit_rate}k")
             mp3_file = File(buffer, filename=mp3_filename)
             
@@ -3651,6 +3658,7 @@ class IsTyping:
 
     async def _istyping(self, start_time):
         await asyncio.sleep(max(0, start_time - time.time()))
+        await bot_status.come_online()
         while self.end_time is None or time.time() < self.end_time:
             async with self.channel.typing():          
                 await asyncio.sleep(1)
@@ -3686,39 +3694,37 @@ class IsTyping:
 #################################################################
 class Message:
     def __init__(self, num:int, received_time:float, response_delay:float, read_text_delay:float):
+        # Values set initially
         self.num = num
         self.received_time = received_time
         self.response_delay = response_delay
         self.read_text_delay = read_text_delay
         # Response time is mainly for scheduling "is typing..."
         self.response_time = self.received_time + min(bot_behavior.max_reply_delay, (self.response_delay + self.read_text_delay))
-        # time offset will be updated to account for lag between tasks
-        self.time_offset = 0
+
+        # Set while unqueuing
+        self.unqueue_time = None
+
+        # Updated after LLM Gen
         self.seconds_to_write = 0
         self.last_tokens = None
         self.llm_gen_time = 0
         self.send_time = None
 
-    def update_time_offset(self, time_key:str='received_time'):
-        '''Updates the running difference between current time and the key value'''
-        offset_from_time = getattr(self, time_key, None)
-        if offset_from_time:
-            self.time_offset = time.time() - (offset_from_time + self.time_offset)
-        log.debug(f"Timing offset for Message #{self.num}: {self.time_offset} seconds")
-
     def factor_typing_speed(self):
         # Calculate and apply effect of "typing speed", if configured
         if bot_behavior.maximum_typing_speed > 0 and self.last_tokens is not None:
-            max_tokens_per_second = round( (bot_behavior.maximum_typing_speed*4) / 60 )
-            # update seconds_to_write, increase delay
-            seconds_to_write = self.last_tokens / max_tokens_per_second
+            words_generated = self.last_tokens*0.75
+            words_per_second = bot_behavior.maximum_typing_speed / 60
+            # update seconds_to_write, adjust delay
+            seconds_to_write = (words_generated / words_per_second)
             self.seconds_to_write = max(seconds_to_write, self.llm_gen_time)
 
     # Offloads task to "parked queue" if not ready to send
     async def update_timing(self) -> float:
         current_time = time.time()
-        # Time offset is gap between msg received / msg un-queued from TaskManager()
-        base_time = self.received_time + self.time_offset
+        base_time = self.unqueue_time
+        typing_offset = max(0, base_time - self.response_time)
 
         # If bot currently online, minimize the response delay
         if bot_status.online:
@@ -3727,7 +3733,7 @@ class Message:
         # Ensure response delay does not exceed max reply delay
         updated_delay = min(bot_behavior.max_reply_delay, self.response_delay)
         # Ensure time to write/send are not in the past
-        updated_istyping_time = max(current_time, (base_time + updated_delay))
+        updated_istyping_time = max(current_time, (base_time + updated_delay) - typing_offset)
         updated_send_time = updated_istyping_time + self.seconds_to_write
 
         # Update time to "come online"
@@ -3738,6 +3744,18 @@ class Message:
         if (updated_send_time > current_time) or (self.send_time is not None):
             # Only messages with delayed responses will have value for 'send_time
             self.send_time = updated_send_time
+
+    def debug_timing(self, current_time, base_time, typing_offset, updated_delay, updated_istyping_time, updated_send_time, updated_online_time):
+        print("Original schedule:")
+        print("Received time:", 0)
+        print("Come Online time: Not Set")
+        print("IsTyping time:", round(self.response_time - self.received_time))
+        print("Send Time: Not Set")
+        print("")
+        print("Unqueued time:", self.unqueue_time - self.received_time)
+
+        print("Come Online time: Not Set")
+
 
         return updated_istyping_time
 
@@ -4009,7 +4027,7 @@ class TaskManager(Tasks):
                 task:Task
                 # initialize default values in Task
                 task.init_self_values()
-                task.message.update_time_offset()
+                task.message.unqueue_time = time.time()
                 log.info(f'Processing message #{num} by {task.user_name}.')
                 queue_name = 'message_queue'
                 self.prioritize_messages = False
