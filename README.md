@@ -24,6 +24,22 @@
 <details>
   <summary>click to expand</summary>
 
+   **07/24/2024:** New [Behaviors](https://github.com/altoiddealer/ad_discordbot/wiki/behaviors) to bring your characters to life!
+
+   Some new settings appeared recently... which were slightly buggy.  Today, I announce that they are working very well!
+
+   These new behaviors can make your character more humanistic (or just be like a computer program, by default)
+
+    - Character can go idle, taking more time to respond
+    - Pause to "read messages" before writing
+    - Simulate typing at different speeds (does not actually generate text slower)
+    - *DOES NOT* throttle the bot's performance! All tasks running full speed on the backend!
+    - These behaviors will continue to improve in the coming days/weeks
+
+  ![351922166-c98883f4-143e-40af-b641-544d23c7452e](https://github.com/user-attachments/assets/da26fc19-3ba1-4c90-a15a-ea09e3efcac2)
+
+  ---
+
    **07/02/2024:** New Behaviors "Spontaneous Messaging"
 
     - Character can now be silently prompted to say something after inactivity
