@@ -803,9 +803,34 @@ class VoiceClients:
             source = discord.FFmpegPCMAudio(file)
             self.guild_vcs[guild_id].play(source, after=lambda e: self.after_playback(guild_id, file, e))
 
+    def detect_format(self, file_path):
+        try:
+            audio = AudioSegment.from_wav(file_path)
+            return 'wav'
+        except:
+            pass  
+        try:
+            audio = AudioSegment.from_mp3(file_path)
+            return 'mp3'
+        except:
+            pass
+        return None
+
     async def upload_tts_file(self, channel:discord.TextChannel, tts_resp:str|None=None, bot_hmessage:HMessage|None=None):
         file = tts_resp
         filename = os.path.basename(file)
+        original_ext = os.path.splitext(filename)[1]
+        correct_ext = original_ext
+        detected_format = self.detect_format(file)
+        if detected_format is None:
+            raise ValueError(f"Could not determine the audio file format for file: {file}")
+        if original_ext != f'.{detected_format}':
+            correct_ext = f'.{detected_format}'
+            new_filename = os.path.splitext(filename)[0] + correct_ext
+            new_file_path = os.path.join(os.path.dirname(file), new_filename)
+            os.rename(file, new_file_path)
+            file = new_file_path
+
         mp3_filename = os.path.splitext(filename)[0] + '.mp3'
         
         bit_rate = int(tts.settings.get('mp3_bit_rate', 128))
@@ -813,17 +838,7 @@ class VoiceClients:
             if file.endswith('wav'):
                 audio = AudioSegment.from_wav(file)
             elif file.endswith('mp3'):
-                try:
-                    audio = AudioSegment.from_mp3(file)
-                except Exception:
-                    try:
-                        audio = AudioSegment.from_file(file)
-                        audio.export(buffer, format="mp3", bitrate=f"{bit_rate}k")
-                        buffer.seek(0)
-                        audio = AudioSegment.from_mp3(buffer)
-                    except Exception as e:
-                        logging.error('Failed to decode MP3 file after conversion: %s', e)
-                        return
+                audio = AudioSegment.from_mp3(file)
             else:
                 log.error('TTS generated unsupported file format:', file)
             audio.export(buffer, format="mp3", bitrate=f"{bit_rate}k")
