@@ -2991,12 +2991,15 @@ class Tasks(TaskProcessing):
         if hasattr(self, "message") and self.message is not None:
             self.message.factor_typing_speed()
             updated_istyping_time = await self.message.update_timing()
-            self.istyping.update(start_time=updated_istyping_time)
+            if updated_istyping_time != self.message.istyping_time:
+                self.istyping.start(start_time=updated_istyping_time)
+            self.message.istyping_time = updated_istyping_time
             send_time = getattr(self.message, 'send_time', None)
             if send_time:
                 self.name = 'message_post_llm' # Change self task name
-                writing_message = '' if bot_behavior.maximum_typing_speed < 0 else f' (seconds to write: {round(self.message.seconds_to_write, 2)})'
-                log.info(f'Response to message #{self.message.num} will send in {round(send_time - time.time(), 2)} seconds.{writing_message}')
+                if message_manager.send_msg_queue.empty():
+                    writing_message = '' if bot_behavior.maximum_typing_speed < 0 else f' (seconds to write: {round(self.message.seconds_to_write, 2)})'
+                    log.info(f'Response to message #{self.message.num} will send in {round(send_time - time.time(), 2)} seconds.{writing_message}')
                 proceed = False
 
         return proceed
@@ -3663,43 +3666,49 @@ class Tasks(TaskProcessing):
 ################# ISTYPING (INSTANCE IN TASK) ###################
 #################################################################
 class IsTyping:
-    def __init__(self, channel:discord.TextChannel):
+    def __init__(self, channel: discord.TextChannel):
         self.channel = channel
-        self.istyping:Optional[asyncio.Task] = None
-        self.end_time:Optional[float] = None
+        self.typing_event = asyncio.Event()
+        self.scheduled_typing_task: Optional[asyncio.Task] = None
+        self.typing_task = asyncio.create_task(self.typing())
 
-    async def _istyping(self, start_time):
-        await asyncio.sleep(max(0, start_time - time.time()))
-        await bot_status.come_online()
-        while self.end_time is None or time.time() < self.end_time:
-            async with self.channel.typing():          
+    async def typing(self):
+        while True:
+            await self.typing_event.wait()
+            async with self.channel.typing():
                 await asyncio.sleep(1)
 
+    async def start_typing_after(self, start_time, end_time):
+        try:
+            if start_time is None:
+                start_time = time.time()
+            await asyncio.sleep(max(0, start_time - time.time()))
+            self.typing_event.set()
+            if end_time is not None:
+                await asyncio.sleep(max(0, end_time - time.time()))
+                self.typing_event.clear()
+        except asyncio.CancelledError:
+            log.debug("start_typing_after task was cancelled")
+            self.typing_event.clear()
+            self.scheduled_typing_task = None
+
     def start(self, start_time=None, end_time=None):
-        if start_time is None:
-            start_time = time.time()
-        self.end_time = end_time
-        self.istyping = asyncio.create_task(self._istyping(start_time))
-
-    def update(self, start_time=None, end_time=None):
-        if start_time is None:
-            start_time = time.time()
-        self.end_time = end_time
-        if self.istyping is not None:
-            self.istyping.cancel()
-        self.istyping = asyncio.create_task(self._istyping(start_time))
-
-    def set_end(self, end_time):
-        self.end_time = end_time
-        # Cancel the task if it should have already ended
-        if self.istyping is not None and time.time() >= end_time:
-            self.istyping.cancel()
-            self.istyping.done()
+        if self.scheduled_typing_task is not None:
+            self.scheduled_typing_task.cancel()
+        if start_time is None and end_time is None:
+            self.typing_event.set()
+        else:
+            self.scheduled_typing_task = asyncio.create_task(self.start_typing_after(start_time, end_time))
 
     def stop(self):
-        if self.istyping is not None:
-            self.istyping.cancel()
-        self.istyping.done()
+        if self.scheduled_typing_task is not None:
+            self.scheduled_typing_task.cancel()
+        self.typing_event.clear()
+
+    def __del__(self):
+        self.stop()
+        if self.typing_task is not None:
+            self.typing_task.cancel()
 
 #################################################################
 ################## MESSAGE (INSTANCE IN TASK) ###################
@@ -3711,8 +3720,10 @@ class Message:
         self.received_time = received_time
         self.response_delay = response_delay
         self.read_text_delay = read_text_delay
-        # Response time is mainly for scheduling "is typing..."
-        self.response_time = self.received_time + min(bot_behavior.max_reply_delay, (self.response_delay + self.read_text_delay))
+        # Ensure delays do not exceed 'max_reply_delay'
+        self.scale_delays()
+        self.come_online_time = self.received_time + self.response_delay
+        self.istyping_time = self.come_online_time + self.read_text_delay
 
         # Set while unqueuing
         self.unqueue_time = None
@@ -3723,50 +3734,70 @@ class Message:
         self.llm_gen_time = 0
         self.send_time = None
 
+    def scale_delays(self):
+        total_delay = self.response_delay + self.read_text_delay
+        # Check if the total delay exceeds the maximum allowed delay
+        if total_delay > bot_behavior.max_reply_delay:
+            # Calculate the scaling factor
+            scaling_factor = bot_behavior.max_reply_delay / total_delay
+            # Scale the delays proportionally
+            self.response_delay *= scaling_factor
+            self.read_text_delay *= scaling_factor
+
     def factor_typing_speed(self):
         # Calculate and apply effect of "typing speed", if configured
         if bot_behavior.maximum_typing_speed > 0 and self.last_tokens is not None:
             words_generated = self.last_tokens*0.75
             words_per_second = bot_behavior.maximum_typing_speed / 60
-            # update seconds_to_write, adjust delay
-            seconds_to_write = (words_generated / words_per_second)
-            self.seconds_to_write = max(seconds_to_write, self.llm_gen_time)
+            # update seconds_to_write
+            self.seconds_to_write = (words_generated / words_per_second)
 
     # Offloads task to "parked queue" if not ready to send
     async def update_timing(self) -> float:
         current_time = time.time()
-        base_time = self.unqueue_time
-        typing_offset = max(0, base_time - self.response_time)
 
-        # If bot currently online, minimize the response delay
+        # If bot currently online, ommit the response delay
         if bot_status.online:
-            self.response_delay = self.read_text_delay
+            self.response_delay = 0
 
-        # Ensure response delay does not exceed max reply delay
-        updated_delay = min(bot_behavior.max_reply_delay, self.response_delay)
-        # Ensure time to write/send are not in the past
-        updated_istyping_time = max(current_time, (base_time + updated_delay) - typing_offset)
+        # Update come online timing
+        updated_come_online_time = self.received_time + self.response_delay
+        if updated_come_online_time != self.come_online_time:
+            await bot_status.schedule_come_online(updated_come_online_time)
+        self.come_online_time = updated_come_online_time
+
+        updated_istyping_time = self.received_time + self.response_delay + self.read_text_delay
         updated_send_time = updated_istyping_time + self.seconds_to_write
 
-        # Update time to "come online"
-        updated_online_time = max(current_time, (updated_send_time - self.read_text_delay - self.seconds_to_write))
-        await bot_status.schedule_come_online(updated_online_time)
-
-        # Determine whether to delay the responses (or update existing value)
+        # Determine whether to delay the responses (or update an existing 'send_time')
         if (updated_send_time > current_time) or (self.send_time is not None):
             # Only messages with delayed responses will have value for 'send_time
             self.send_time = updated_send_time
 
-    def debug_timing(self, current_time, base_time, typing_offset, updated_delay, updated_istyping_time, updated_send_time, updated_online_time):
-        print("Original schedule:")
-        print("Received time:", 0)
-        print("Come Online time: Not Set")
-        print("IsTyping time:", round(self.response_time - self.received_time))
-        print("Send Time: Not Set")
-        print("")
-        print("Unqueued time:", self.unqueue_time - self.received_time)
+        #self.debug_timing(current_time, base_time, typing_offset, updated_delay, updated_istyping_time, updated_send_time, updated_online_time)
 
-        print("Come Online time: Not Set")
+    # def debug_timing(self, current_time, base_time, typing_offset, updated_delay, updated_istyping_time, updated_send_time, updated_online_time):
+    #     print("Original schedule:")
+    #     print("Received time:", 0)
+    #     print("Come Online time: Not Set")
+    #     print("IsTyping time:", round(self.response_time - self.received_time))
+    #     print("Received time:", round(self.received_time - current_time, 2))
+    #     print("Come Online time:", round(self.response_time - current_time, 2))
+    #     print("IsTyping time:", round(self.response_time - current_time, 2))
+    #     print("Send Time: Not Set")
+    #     print("")
+    #     print("Unqueued time:", self.unqueue_time - self.received_time)
+
+    #     print("Come Online time: Not Set")
+    #     print("Updated schedule:")
+    #     print("Unqueued time:", round(self.unqueue_time - current_time, 2))
+    #     print("Current time:", 0)
+    #     print("Updated delay:", round(updated_delay, 2))
+    #     print("Updated come online time:", round(updated_online_time - current_time, 2))
+    #     print("Typing offset:", typing_offset)
+    #     print("Seconds to write:", self.seconds_to_write)
+    #     print("Updated IsTyping time:", round(updated_istyping_time - current_time, 2))
+    #     print("Updated send time:", round(updated_send_time - current_time, 2))
 
 
         return updated_istyping_time
@@ -3857,14 +3888,11 @@ class Task(Tasks):
         Automatically factors any response_delay from character behavior
         '''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
         if not self.channel:
+            log.warning(f"Tried initializing IsTyping() in Task() {self.name}, but the task has no channel.")
             return
-        self.istyping = IsTyping(self.channel)
-
-        if start_time is None and self.message is not None:
-            start_time = getattr(self.message, 'response_time', time.time())
-        else:
-            start_time = time.time()
-        self.istyping.start(start_time=start_time, end_time=end_time)
+        if not self.istyping:
+            self.istyping = IsTyping(self.channel)
+            self.istyping.start(start_time=start_time, end_time=end_time)
 
     def clone(self, name:str='', ictx:CtxInteraction|None=None, ignore_list:list|None=None, init_now:Optional[bool]=False, keep_typing:Optional[bool]=False) -> "Task":
         '''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
@@ -3886,7 +3914,7 @@ class Task(Tasks):
             elif key in deepcopy_list:
                 current_attributes[key] = copy.deepcopy(value)
             elif isinstance(value, IsTyping):
-                current_attributes[key] = self._clone_istyping(value) if keep_typing else value
+                current_attributes[key] = self._clone_istyping(value) if keep_typing else IsTyping()
             # shallow copy remaining items
             else:
                 current_attributes[key] = value
@@ -3901,10 +3929,11 @@ class Task(Tasks):
     def _clone_istyping(self, istyping:IsTyping):
         # Clone the IsTyping manually to ensure a new instance
         new_istyping = IsTyping(istyping.channel)
-        if istyping.end_time is not None and time.time() < istyping.end_time:
-            new_istyping.start(start_time=time.time(), end_time=istyping.end_time)
+        # If the typing event is set, ensure the new instance starts typing immediately
+        if istyping.typing_event.is_set():
+            new_istyping.typing_event.set()
         return new_istyping
-
+    
 
     async def run(self, task_name: str|None=None) -> Any:
         try:
@@ -3946,6 +3975,11 @@ class Task(Tasks):
         output = await self.run(subtask)
         task_manager.current_subtask = None
         return output
+    
+    # Ensures typing tasks are cleaned up while deleting Task() instance
+    def __del__(self):
+        if self.istyping is not None:
+            del self.istyping
 
 #################################################################
 ######################### TASK MANAGER ##########################
@@ -4038,8 +4072,8 @@ class TaskManager(Tasks):
                 num, task = await self.message_queue.get()
                 task:Task
                 # initialize default values in Task
-                await bot_status.schedule_come_online(task.message.response_time)
                 task.init_self_values()
+                task.init_typing(task.message.istyping_time)
                 task.message.unqueue_time = time.time()
                 log.info(f'Processing message #{num} by {task.user_name}.')
                 queue_name = 'message_queue'
@@ -5653,6 +5687,9 @@ class BotStatus:
             self.go_idle_task = None
 
     async def schedule_go_idle(self):
+        # Don't schedule go idle task if message responses are queued
+        if not message_manager.send_msg_queue.empty():
+            return
         '''Sets the bot status to idle at a randomly selected time'''
         responsiveness = max(0.0, min(1.0, bot_behavior.responsiveness)) # clamped between 0.0 and 1.0
         if responsiveness == 1.0:
@@ -5699,6 +5736,7 @@ class MessageManager():
             await task.message_post_llm_task()
         except Exception as e:
             log.error('An error occurred while sending a delayed message:', e)
+        task.istyping.stop()
         del task                                # delete task object
         self.last_send_time = time.time()       # log time
         self.send_msg_event.clear()
@@ -5723,8 +5761,7 @@ class MessageManager():
         num, send_time, task = await self.send_msg_queue.get()
         task:Task
         updated_istyping_time = await task.message.update_timing()
-        task.istyping.update(start_time=updated_istyping_time)
-        updated_send_time = task.message.send_time
+        task.istyping.start(start_time=updated_istyping_time)
         # Ensure at least enough time elapsed to write message
         minimum_send_time = self.last_send_time + task.message.seconds_to_write
         updated_send_time = max(minimum_send_time, send_time)
@@ -5765,6 +5802,8 @@ class MessageManager():
         read_text_delay = bot_behavior.get_text_delay(task.text) if task.name == 'on_message' else 0
         # Assign Message() and attributes
         task.message = Message(num, received_time, response_delay, read_text_delay)
+        # Schedule come online. Typing will be scheduled when message is unqueued.
+        await bot_status.schedule_come_online(task.message.come_online_time)
         await task_manager.message_queue.put((num, task))
 
 message_manager = MessageManager()
