@@ -3907,6 +3907,9 @@ class Task(Tasks):
             return
         if not self.istyping:
             self.istyping = IsTyping(self.channel)
+            # Self schedule typing for message requests
+            if self.message is not None and self.message.istyping_time:
+                start_time = self.message.istyping_time
             self.istyping.start(start_time=start_time, end_time=end_time)
 
     def clone(self, name:str='', ictx:CtxInteraction|None=None, ignore_list:list|None=None, init_now:Optional[bool]=False, keep_typing:Optional[bool]=False) -> "Task":
@@ -3929,7 +3932,7 @@ class Task(Tasks):
             elif key in deepcopy_list:
                 current_attributes[key] = copy.deepcopy(value)
             elif isinstance(value, IsTyping):
-                current_attributes[key] = self._clone_istyping(value) if keep_typing else IsTyping()
+                current_attributes[key] = self._clone_istyping(value) if keep_typing else IsTyping(self.channel)
             # shallow copy remaining items
             else:
                 current_attributes[key] = value
@@ -3994,6 +3997,7 @@ class Task(Tasks):
     # Ensures typing tasks are cleaned up while deleting Task() instance
     def __del__(self):
         if self.istyping is not None:
+            self.istyping.stop()
             del self.istyping
 
 #################################################################
@@ -4032,7 +4036,7 @@ class TaskManager(Tasks):
                     task_processing.set() 
 
                     # Typing will begin immediately or at 'response_time' if set by MessageManager() 
-                    typing = ['flows', 'regenerate', 'msg_image_cmd', 'speak'] #TODO debug 'continue' typing endlessly
+                    typing = ['flows', 'regenerate', 'msg_image_cmd', 'speak', 'continue']
                     if ('message' in task.name) or (task.name in typing):
                         task.init_typing()
 
@@ -4088,7 +4092,6 @@ class TaskManager(Tasks):
                 task:Task
                 # initialize default values in Task
                 task.init_self_values()
-                task.init_typing(task.message.istyping_time)
                 task.message.unqueue_time = time.time()
                 log.info(f'Processing message #{num} by {task.user_name}.')
                 queue_name = 'message_queue'
