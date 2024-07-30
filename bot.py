@@ -131,6 +131,7 @@ class SD:
         self.enabled:bool = config['sd'].get('enabled', True)
         self.url:str = config['sd'].get('SD_URL', 'http://127.0.0.1:7860')
         self.client:str = None
+        self.last_img_payload = {}
 
         if self.enabled:
             asyncio.run(self.get_sysinfo())
@@ -1785,8 +1786,8 @@ class TaskProcessing(TaskAttributes):
         self.params.update_bot_should_do(self.tags) # check for updates from tags
         if self.params.should_gen_image:
             # CLONE CURRENT TASK AND QUEUE IT
-            if hasattr(self.ictx, 'reply'):
-                await self.ictx.reply('(**An image task was triggered, created and queued.**)', delete_after=5)
+            await self.embeds.send('system', title='Generating an image', description='An image task was triggered, created and queued.', delete_after=5)
+            #await self.channel.send('()', delete_after=5)
             img_gen_task = self.clone('img_gen', self.ictx, ignore_list=['llm_payload'])
             await task_manager.task_queue.put(img_gen_task)
 
@@ -2226,6 +2227,10 @@ class TaskProcessing(TaskAttributes):
                     return [], r2
                 png_info_data = r2.get("info")
                 if i == 0:  # Only capture pnginfo from the first png_img_data
+                    # Retain seed
+                    seed_match = patterns.seed_value.search(str(png_info_data))
+                    if seed_match:
+                        sd.last_img_payload['seed'] = int(seed_match.group(1))
                     pnginfo = PngImagePlugin.PngInfo()
                     pnginfo.add_text("parameters", png_info_data)
                 image.save(f'{temp_dir}/temp_img_{i}.png', pnginfo=pnginfo) # save image to temp directory
@@ -2300,6 +2305,11 @@ class TaskProcessing(TaskAttributes):
 
     def clean_img_payload(self:Union["Task","Tasks"]):
         try:
+            # Resolves an edge case scenario when using 'last_img_payload' tag
+            stashed_prompt = getattr(self, 'stashed_prompt', None)
+            if stashed_prompt:
+                self.img_payload['prompt'] = self.stashed_prompt
+
             # Remove duplicate negative prompts while prserving original order
             negative_prompt_list = self.img_payload.get('negative_prompt', '').split(', ')
             unique_values_set = set()
@@ -2325,21 +2335,22 @@ class TaskProcessing(TaskAttributes):
                 if not extensions.get('forgecouple_enabled') or self.img_payload.get('init_images'):
                     del alwayson_scripts['forge_couple']
                 else:
-                    self.img_payload['alwayson_scripts']['forge_couple']['args'] = list(self.img_payload['alwayson_scripts']['forge_couple']['args'].values()) # convert dictionary to list
+                    if isinstance(self.img_payload['alwayson_scripts']['forge_couple']['args'], dict):
+                        self.img_payload['alwayson_scripts']['forge_couple']['args'] = list(self.img_payload['alwayson_scripts']['forge_couple']['args'].values()) # convert dictionary to list
                     self.img_payload['alwayson_scripts']['forge couple'] = self.img_payload['alwayson_scripts'].pop('forge_couple') # Add the required space between "forge" and "couple" ("forge couple")
             # Clean layerdiffuse
             if alwayson_scripts.get('layerdiffuse'):
                 # Delete all 'layerdiffuse' keys if disabled by config
                 if not extensions.get('layerdiffuse_enabled'):
                     del alwayson_scripts['layerdiffuse']
-                else:
+                elif isinstance(self.img_payload['alwayson_scripts']['layerdiffuse']['args'], dict):
                     self.img_payload['alwayson_scripts']['layerdiffuse']['args'] = list(self.img_payload['alwayson_scripts']['layerdiffuse']['args'].values()) # convert dictionary to list
             # Clean ReActor
             if alwayson_scripts.get('reactor'):
                 # Delete all 'reactor' keys if disabled by config
                 if not extensions.get('reactor_enabled'):
                     del alwayson_scripts['reactor']
-                else:
+                elif isinstance(self.img_payload['alwayson_scripts']['reactor']['args'], dict):
                     self.img_payload['alwayson_scripts']['reactor']['args'] = list(self.img_payload['alwayson_scripts']['reactor']['args'].values()) # convert dictionary to list
 
             # Workaround for denoising strength bug
@@ -2607,22 +2618,23 @@ class TaskProcessing(TaskAttributes):
 
     async def process_img_payload_tags(self, mods:dict):
         try:
-            flow: dict              = mods.pop('flow', None)
-            change_imgmodel: str    = mods.pop('change_imgmodel', None)
-            swap_imgmodel: str      = mods.pop('swap_imgmodel', None)
-            payload: dict           = mods.pop('payload', None)
-            aspect_ratio: str       = mods.pop('aspect_ratio', None)
-            param_variances: dict   = mods.pop('param_variances', {})
-            controlnet: list        = mods.pop('controlnet', [])
-            forge_couple: dict      = mods.pop('forge_couple', {})
-            layerdiffuse: dict      = mods.pop('layerdiffuse', {})
-            reactor: dict           = mods.pop('reactor', {})
-            img2img: str            = mods.pop('img2img', '')
-            img2img_mask: str       = mods.pop('img2img_mask', '')
+            flow: dict            = mods.pop('flow', None)
+            change_imgmodel: str  = mods.pop('change_imgmodel', None)
+            swap_imgmodel: str    = mods.pop('swap_imgmodel', None)
+            last_img_payload: bool|list = mods.pop('last_img_payload', None)
+            payload: dict         = mods.pop('payload', None)
+            aspect_ratio: str     = mods.pop('aspect_ratio', None)
+            param_variances: dict = mods.pop('param_variances', {})
+            controlnet: list      = mods.pop('controlnet', [])
+            forge_couple: dict    = mods.pop('forge_couple', {})
+            layerdiffuse: dict    = mods.pop('layerdiffuse', {})
+            reactor: dict         = mods.pop('reactor', {})
+            img2img: str          = mods.pop('img2img', '')
+            img2img_mask: str     = mods.pop('img2img_mask', '')
             self.params.sd_output_dir = (mods.pop('sd_output_dir', self.params.sd_output_dir)).lstrip('/')  # Remove leading slash if it exists
             self.params.img_censoring = mods.pop('img_censoring', self.params.img_censoring)
             # Process the tag matches
-            if flow or change_imgmodel or swap_imgmodel or payload or aspect_ratio or param_variances or controlnet or forge_couple or layerdiffuse or reactor or img2img or img2img_mask:
+            if flow or change_imgmodel or swap_imgmodel or payload or aspect_ratio or param_variances or controlnet or forge_couple or layerdiffuse or reactor or img2img or img2img_mask or last_img_payload:
                 # Flow handling
                 if flow is not None and not flows.event.is_set():
                     await flows.build_queue(flow)
@@ -2643,12 +2655,27 @@ class TaskProcessing(TaskAttributes):
                         self.params.imgmodel['verb'] = verb
                         log.info(f'[TAGS] {verb} Img model: "{new_imgmodel_name}"')
                 # Payload handling
+                if last_img_payload:
+                    if isinstance(last_img_payload, bool):
+                        last_img_payload_dict = copy.deepcopy(sd.last_img_payload)
+                        setattr(self, 'stashed_prompt', last_img_payload_dict.pop('prompt', '')) # Retains the prompt to re-apply later
+                        update_dict(self.img_payload, last_img_payload_dict)
+                        log.info("[TAGS] Applying the previous image payload as the starting point (may be modified by other tags). Note: The previous 'prompt' will be identical.")
+                    elif isinstance(last_img_payload, list):
+                        # Filter sd.last_img_payload based on keys in last_img_payload
+                        last_img_payload_dict = {key: sd.last_img_payload[key] for key in last_img_payload if key in sd.last_img_payload}
+                        if last_img_payload_dict:
+                            log.info("[TAGS] Applying the following settings from the previous image payload (may be modified by other tags):")
+                            log.info(f"{', '.join(last_img_payload_dict.keys())}")
+                            update_dict(self.img_payload, last_img_payload_dict)
+                    else:
+                        log.error("[TAGS] A tag was matched with invalid 'last_img_payload'; must be boolean ('true') or a ['list', 'of', 'key_names'].")
                 if payload:
                     if isinstance(payload, dict):
                         log.info(f"[TAGS] Updated payload: '{payload}'")
                         update_dict(self.img_payload, payload)
                     else:
-                        log.warning("A tag was matched with invalid 'payload'; must be a dictionary.")
+                        log.warning("[TAGS] A tag was matched with invalid 'payload'; must be a dictionary.")
                 # Aspect Ratio
                 if aspect_ratio:
                     try:
@@ -2774,7 +2801,7 @@ class TaskProcessing(TaskAttributes):
         layerdiffuse_args = {}
         reactor_args = {}
         extensions = config['sd'].get('extensions', {})
-        accept_only_first = ['flow', 'aspect_ratio', 'img2img', 'img2img_mask', 'sd_output_dir']
+        accept_only_first = ['flow', 'aspect_ratio', 'img2img', 'img2img_mask', 'sd_output_dir', 'last_img_payload']
         try:
             for tag in self.tags.matches:
                 # Filter out any prompt insertion indexes
@@ -2882,7 +2909,7 @@ class TaskProcessing(TaskAttributes):
             neg_prompt = f"{neg_prompt}, {negative_style}" if negative_style else neg_prompt
 
             # Initialize img_payload settings
-            self.img_payload = {"prompt": self.img_prompt, "negative_prompt": neg_prompt}
+            self.img_payload = {"prompt": self.img_prompt, "negative_prompt": neg_prompt, "seed": -1}
 
             # Apply settings from imgmodel configuration
             imgmodel_img_payload = copy.deepcopy(bot_settings.settings['imgmodel'].get('payload', {}))
@@ -3638,6 +3665,8 @@ class Tasks(TaskProcessing):
             self.process_img_prompt_tags()
             # Apply menu selections from /image command
             self.apply_imgcmd_params()
+            # Retain last payload before clean_img_payload() - which creates issues when recycling
+            sd.last_img_payload = copy.deepcopy(self.img_payload)
             # Clean anything up that gets messy
             self.clean_img_payload()
             # Change imgmodel if triggered by tags
@@ -5028,7 +5057,8 @@ async def delayed_profile_update(username, avatar, remaining_cooldown):
                 await client_member.edit(nick=username)
         if avatar:
             await client.user.edit(avatar=avatar)
-        log.info(f"Updated discord client profile (Username: {username}; Avatar: {'Updated' if avatar else 'Unchanged'}).\n Profile can be updated again in 10 minutes.")
+        log.info(f"Updated discord client profile: (Username: {username}; Avatar: {'Updated' if avatar else 'Unchanged'}).")
+        log.info("Profile can be updated again in 10 minutes.")
         bot_database.set('last_change', time.time())  # Store the current time in bot_database_v2.yaml
     except Exception as e:
         log.error(f"Error while changing character username or avatar: {e}")

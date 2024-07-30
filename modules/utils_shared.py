@@ -76,6 +76,8 @@ class SharedRegex: # Search for [ (]r['"] in vscode
 
     mention_prefix = re.compile(r'^<@!?\d+>')
 
+    seed_value = re.compile(r'Seed: (\d+)')
+
 patterns = SharedRegex()
 
 from modules.database import Config
