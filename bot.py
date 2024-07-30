@@ -4227,7 +4227,8 @@ class Flows(TaskProcessing):
             descript = ''
             await bot_embeds.send('flow', f'Processing Flow for {self.user_name} with {total_flow_steps} steps', descript, channel=self.channel)
 
-            while self.queue.qsize() > 0:   # flow_queue items are removed while running the subtask()
+            while self.queue.qsize() > 0:
+                # flow_queue items are removed in init_tags() while running the subtask
                 flow_name, text = await self.peek_flow_queue(text)
                 remaining_flow_steps = self.queue.qsize()
 
