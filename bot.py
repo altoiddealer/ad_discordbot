@@ -2995,7 +2995,7 @@ class Tasks(TaskProcessing):
                     await task_manager.task_queue.put(change_llmmodel_task)
 
             # Stop typing if typing
-            if hasattr(self, 'istyping'):
+            if hasattr(self, 'istyping') and self.istyping is not None:
                 self.istyping.stop()
 
             # send responses (text, TTS, images)
@@ -4227,7 +4227,8 @@ class Flows(TaskProcessing):
             descript = ''
             await bot_embeds.send('flow', f'Processing Flow for {self.user_name} with {total_flow_steps} steps', descript, channel=self.channel)
 
-            while self.queue.qsize() > 0:   # flow_queue items are removed while running the subtask()
+            while self.queue.qsize() > 0:
+                # flow_queue items are removed in init_tags() while running the subtask
                 flow_name, text = await self.peek_flow_queue(text)
                 remaining_flow_steps = self.queue.qsize()
 
@@ -5784,7 +5785,9 @@ class MessageManager():
             await task.message_post_llm_task()
         except Exception as e:
             log.error('An error occurred while sending a delayed message:', e)
-        task.istyping.stop()
+        # Stop typing
+        if hasattr(task, 'istyping') and task.istyping is not None:
+            task.istyping.stop()
         del task                                # delete task object
         self.last_send_time = time.time()       # log time
         self.send_msg_event.clear()
