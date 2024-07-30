@@ -5028,7 +5028,8 @@ async def delayed_profile_update(username, avatar, remaining_cooldown):
                 await client_member.edit(nick=username)
         if avatar:
             await client.user.edit(avatar=avatar)
-        log.info(f"Updated discord client profile (Username: {username}; Avatar: {'Updated' if avatar else 'Unchanged'}).\n Profile can be updated again in 10 minutes.")
+        log.info(f"Updated discord client profile: (Username: {username}; Avatar: {'Updated' if avatar else 'Unchanged'}).")
+        log.info("Profile can be updated again in 10 minutes.")
         bot_database.set('last_change', time.time())  # Store the current time in bot_database_v2.yaml
     except Exception as e:
         log.error(f"Error while changing character username or avatar: {e}")
