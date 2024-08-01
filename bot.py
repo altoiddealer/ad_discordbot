@@ -1929,7 +1929,6 @@ class TaskProcessing(TaskAttributes):
         if shared.model_name == 'None':
             return
         try:
-            loop = asyncio.get_event_loop()
             # Store time for statistics
             bot_statistics._llm_gen_time_start_last = time.time()
 
@@ -1957,7 +1956,7 @@ class TaskProcessing(TaskAttributes):
                 return False
 
             # Subprocess prevents losing discord heartbeat
-            def process_responses():
+            def process_responses(callback):
                 last_resp = ''
                 tts_resp = ''
                 already_chunked = ''
@@ -1972,7 +1971,7 @@ class TaskProcessing(TaskAttributes):
                     should_chunk = check_should_chunk(partial_response)
                     if should_chunk:
                         already_chunked += partial_response
-                        self.ictx.send(partial_response)
+                        callback(partial_response)
                     # look for tts response
                     vis_resp = resp.get('visible', [])
                     if len(vis_resp) > 0:
@@ -1985,8 +1984,35 @@ class TaskProcessing(TaskAttributes):
                 self.last_resp = last_resp
                 self.tts_resp = tts_resp
 
+            loop = asyncio.get_event_loop()
+
+            async def handle_chunk(chunk):
+                chunk_message = self.message.create_chunk_message(chunk)                
+                chunk_task = Task('chunk_message', self.ictx, message=chunk_message, istyping=IsTyping())
+                updated_istyping_time = await chunk_task.message.update_timing()
+                if updated_istyping_time != chunk_task.message.istyping_time:
+                    chunk_task.istyping.start(start_time=updated_istyping_time)
+                chunk_task.message.istyping_time = updated_istyping_time
+                if hasattr(chunk_task.message, 'send_time'):
+                    await message_manager.queue_delayed_message(chunk_task)
+                else:
+                    await 
+
+
+                chunk_task.init_typing()
+                chunk_task.message.update_timing()
+                await 
+                print("chunk:", chunk)
+                print("Sent chunk")
+                print("self.ictx:", self.ictx)
+                await self.channel.send(chunk)
+
+            def callback(chunk):
+                asyncio.run_coroutine_threadsafe(handle_chunk(chunk), loop)
+
+            await loop.run_in_executor(None, process_responses, callback)
             # Offload the synchronous task to a separate thread
-            await loop.run_in_executor(None, process_responses)
+            #await loop.run_in_executor(None, process_responses)
 
             if self.last_resp:
                 self.update_llm_gen_statistics() # Update statistics
@@ -3856,7 +3882,7 @@ class IsTyping:
 ################## MESSAGE (INSTANCE IN TASK) ###################
 #################################################################
 class Message:
-    def __init__(self, num:int, received_time:float, response_delay:float, read_text_delay:float):
+    def __init__(self, num:int, received_time:float, response_delay:float, read_text_delay:float, **kwargs):
         # Values set initially
         self.num = num
         self.received_time = received_time
@@ -3872,9 +3898,22 @@ class Message:
 
         # Updated after LLM Gen
         self.seconds_to_write = 0
-        self.last_tokens = None
+        self.last_tokens = kwargs.pop('last_tokens', None)
         self.llm_gen_time = 0
         self.send_time = None
+
+        self.num_chunks = 0
+        self.chunk_msg_ids = kwargs.pop('chunk_msg_ids', [])
+    
+    def create_chunk_message(self, chunk_str):
+        response_delay = self.response_delay if self.num_chunks == 0 else 0
+        read_text_delay = self.read_text_delay if self.num_chunks == 0 else 0
+        self.num_chunks += 1
+        num = self.num + (self.num_chunks/1000)
+        last_tokens = int(count_tokens(chunk_str))
+        chunk_message = Message(num, self.received_time, response_delay, read_text_delay, last_tokens=last_tokens, chunk_msg_ids=self.chunk_msg_ids)
+        chunk_message.factor_typing_speed()
+        return chunk_message
 
     def scale_delays(self):
         total_delay = self.response_delay + self.read_text_delay
@@ -5880,7 +5919,10 @@ class MessageManager():
         task:Task
         self.send_msg_event.set()
         try:
-            await task.message_post_llm_task()
+            if task.name == 'chunk_message':
+                await task.ictx.channel.send(task.message.last_resp)
+            else:
+                await task.message_post_llm_task()
         except Exception as e:
             log.error('An error occurred while sending a delayed message:', e)
         # Stop typing
