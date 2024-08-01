@@ -78,6 +78,23 @@ class SharedRegex: # Search for [ (]r['"] in vscode
 
     seed_value = re.compile(r'Seed: (\d+)')
 
+    markdown_patterns = [
+        re.compile(r'\*'),        # *
+        re.compile(r'\*\*'),      # **
+        re.compile(r'\*\*\*'),    # ***
+        re.compile(r'__'),        # __
+        re.compile(r'`'),         # `
+        re.compile(r'```')        # ```
+    ]
+    
+    @classmethod
+    def check_markdown_balanced(cls, text):
+        for pattern in cls.markdown_patterns:
+            occurrences = len(pattern.findall(text))
+            if occurrences % 2 != 0:
+                return False
+        return True
+
 patterns = SharedRegex()
 
 from modules.database import Config

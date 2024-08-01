@@ -39,7 +39,7 @@ sys.path.append("ad_discordbot")
 
 from modules.utils_shared import task_processing, shared_path, patterns, bot_emojis
 from modules.database import Database, ActiveSettings, Config, StarBoard, Statistics
-from modules.utils_misc import fix_dict, update_dict, sum_update_dict, update_dict_matched_keys, random_value_from_range, convert_lists_to_tuples, get_time, format_time, format_time_difference, get_normalized_weights  # noqa: F401
+from modules.utils_misc import check_probability, fix_dict, update_dict, sum_update_dict, update_dict_matched_keys, random_value_from_range, convert_lists_to_tuples, get_time, format_time, format_time_difference, get_normalized_weights  # noqa: F401
 from modules.utils_discord import Embeds, guild_only, configurable_for_dm_if, is_direct_message, ireply, sleep_delete_message, send_long_message, \
     EditMessageModal, SelectedListItem, SelectOptionsView, get_user_ctx_inter, get_message_ctx_inter, apply_reactions_to_messages, replace_msg_in_history_and_discord, MAX_MESSAGE_LENGTH  # noqa: F401
 from modules.utils_files import load_file, merge_base, save_yaml_file  # noqa: F401
@@ -1784,7 +1784,7 @@ class TaskProcessing(TaskAttributes):
     async def message_img_gen(self:Union["Task","TaskProcessing"]):
         await self.tags.match_img_tags(self.img_prompt)
         self.params.update_bot_should_do(self.tags) # check for updates from tags
-        if self.params.should_gen_image:
+        if self.params.should_gen_image and await self.sd_online():
             # CLONE CURRENT TASK AND QUEUE IT
             await self.embeds.send('system', title='Generating an image', description='An image task was triggered, created and queued.', delete_after=5)
             #await self.channel.send('()', delete_after=5)
@@ -1923,25 +1923,56 @@ class TaskProcessing(TaskAttributes):
                 await self.create_bot_hmessage()
 
         return self.user_hmessage, self.bot_hmessage
-
+    
     # Send LLM Payload - get responses
-    async def llm_gen(self:Union["Task","Tasks"]) -> tuple[str, str]:
+    async def llm_gen(self:Union["Task","Tasks"], can_chunk:bool=False) -> tuple[str, str]:
         if shared.model_name == 'None':
             return
         try:
             loop = asyncio.get_event_loop()
             # Store time for statistics
             bot_statistics._llm_gen_time_start_last = time.time()
+
+            last_checked = ''
+
+            def check_should_chunk(partial_resp):
+                nonlocal last_checked
+                chance_to_chunk = bot_behavior.chance_to_stream_reply
+                chunk_syntax = ['\n', '.']
+                check_resp:str = partial_resp[len(last_checked):]
+                for syntax in chunk_syntax:
+                    if check_resp.endswith(syntax):
+                        last_checked = check_resp
+                        # Ensure markdown syntax is not divided
+                        if not patterns.check_markdown_balanced(last_checked):
+                            return False
+                        # Roll probability to chunk
+                        if syntax == '\n':
+                            chance_to_chunk = chance_to_chunk * 1.5
+                        elif syntax == '.':
+                            chance_to_chunk = chance_to_chunk * 0.5
+                        print("chance to chunk:", chance_to_chunk)
+                        return check_probability(chance_to_chunk)
+
+                return False
+
             # Subprocess prevents losing discord heartbeat
             def process_responses():
                 last_resp = ''
                 tts_resp = ''
+                already_chunked = ''
+
                 regenerate = self.llm_payload.get('regenerate', False)
                 _continue = self.llm_payload.get('_continue', False)
                 for resp in chatbot_wrapper(text=self.llm_payload['text'], state=self.llm_payload['state'], regenerate=regenerate, _continue=_continue, loading_message=True, for_ui=False):
                     i_resp = resp.get('internal', [])
                     if len(i_resp) > 0:
                         last_resp = i_resp[len(i_resp) - 1][1]
+                    partial_response = last_resp[len(already_chunked):]
+                    should_chunk = check_should_chunk(partial_response)
+                    if should_chunk:
+                        already_chunked += partial_response
+                        self.ictx.send(partial_response)
                     # look for tts response
                     vis_resp = resp.get('visible', [])
                     if len(vis_resp) > 0:
@@ -1963,7 +1994,72 @@ class TaskProcessing(TaskAttributes):
         except Exception as e:
             log.error(f'An error occurred in llm_gen(): {e}')
             traceback.print_exc()
-    
+
+
+
+    # Send LLM Payload - get responses
+    # async def llm_gen(self:Union["Task","Tasks"]) -> tuple[str, str]:
+    #     if shared.model_name == 'None':
+    #         return
+    #     try:
+    #         loop = asyncio.get_event_loop()
+    #         # Store time for statistics
+    #         bot_statistics._llm_gen_time_start_last = time.time()
+
+    #         async def handle_chunk(chunk):
+    #             print("Sent chunk")
+    #             #await self.ictx.send(chunk)
+
+    #         def process_responses(callback):
+    #             last_resp = ''
+    #             tts_resp = ''
+    #             regenerate = self.llm_payload.get('regenerate', False)
+    #             _continue = self.llm_payload.get('_continue', False)
+
+    #             for resp in chatbot_wrapper(text=self.llm_payload['text'], state=self.llm_payload['state'], regenerate=regenerate, _continue=_continue, loading_message=True, for_ui=False):
+    #                 i_resp = resp.get('internal', [])
+    #                 if len(i_resp) > 0:
+    #                     last_resp += i_resp[len(i_resp) - 1][1]
+    #                 print("last_resp:", last_resp)
+
+    #                 # Process chunked responses for last_resp
+    #                 # while '\n' in last_resp:
+    #                 #     line_break_index = last_resp.index('\n')
+    #                 #     print("line_break_index:", line_break_index)
+    #                 #     chunked_resp = last_resp[:line_break_index]
+    #                 #     print("chunked_resp", chunked_resp)
+    #                 #     last_resp = last_resp[line_break_index + 1:]  # Omit the line break for the next iteration
+    #                 #     callback(chunked_resp) # Callback to handle the chunked response
+
+    #                 # Look for tts response
+    #                 vis_resp = resp.get('visible', [])
+    #                 if len(vis_resp) > 0:
+    #                     last_vis_resp = vis_resp[-1][-1]
+    #                     if 'audio src=' in last_vis_resp:
+    #                         audio_format_match = patterns.audio_src.search(last_vis_resp)
+    #                         if audio_format_match:
+    #                             tts_resp = audio_format_match.group(1)
+
+    #             # After the loop, yield any remaining partial responses
+    #             if last_resp:
+    #                 callback(last_resp)
+
+    #             self.last_resp = last_resp
+    #             self.tts_resp = tts_resp
+
+    #         loop = asyncio.get_event_loop()
+    #         def callback(chunk):
+    #             asyncio.run_coroutine_threadsafe(handle_chunk(chunk), loop)
+
+    #         await loop.run_in_executor(None, process_responses, callback)
+
+    #         if self.last_resp:
+    #             self.update_llm_gen_statistics() # Update statistics
+
+    #     except Exception as e:
+    #         log.error(f'An error occurred in llm_gen(): {e}')
+    #         traceback.print_exc()
+
     # Warn anyone direct messaging the bot
     async def warn_direct_channel(self:Union["Task","Tasks"]):
         warned_id = f'dm_{self.user.id}'
@@ -3512,7 +3608,9 @@ class Tasks(TaskProcessing):
             if not self.ictx:
                 self.user_name = 'Automatically'
 
-            await self.sd_online() # Can't change Img model if not online!
+            if not await self.sd_online(): # Can't change Img model if not online!
+                log.warning('Bot tried to change Img Model, but SD API is offline.')
+                return
 
             imgmodel_params = self.params.imgmodel
             imgmodel_name = imgmodel_params.get('imgmodel_name', '')
@@ -5935,6 +6033,8 @@ class Behavior:
         self.go_wild_in_channel = True
         self.conversation_recency = 600
         self.user_conversations = {}
+        # Chance for bot reply to be sent in chunks to discord chat
+        self.chance_to_stream_reply = 0.0
         # Behaviors to be more like a computer program or humanlike
         self.maximum_typing_speed = -1
         self.responsiveness = 1.0
@@ -6053,13 +6153,13 @@ class Behavior:
         if message.mention_everyone:
             return False
         # Only reply to itself if configured to
-        if message.author == client.user and not self.probability_to_reply(self.reply_to_itself):
+        if message.author == client.user and not check_probability(self.reply_to_itself):
             return False
         # Whether to reply to other bots
         if message.author.bot and bot_database.last_character.lower() in text.lower() and main_condition:
             if 'bye' in text.lower(): # don't reply if another bot is saying goodbye
                 return False
-            return self.probability_to_reply(self.reply_to_bots_when_addressed)
+            return check_probability(self.reply_to_bots_when_addressed)
         # Whether to reply when text is nested in parentheses
         if self.ignore_parentheses and (message.content.startswith('(') and message.content.endswith(')')) or (message.content.startswith('<:') and message.content.endswith(':>')):
             return False
@@ -6070,7 +6170,7 @@ class Behavior:
         reply = False
         # few more conditions
         if message.author.bot and main_condition:
-            reply = self.probability_to_reply(self.chance_to_reply_to_other_bots)
+            reply = check_probability(self.chance_to_reply_to_other_bots)
         if self.go_wild_in_channel and main_condition:
             reply = True
         if reply:
