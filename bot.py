@@ -1477,12 +1477,14 @@ class Params:
 
         # discord/HMessage related params
         self.ref_message                 = kwargs.get('ref_message', None)
+        self.continued: bool             = kwargs.get('continued', False)
         self.regenerated: bool           = kwargs.get('regenerated', False)
         self.skip_create_user_hmsg: bool = kwargs.get('skip_create_user_hmsg', False)
         self.skip_create_bot_hmsg: bool  = kwargs.get('skip_create_bot_hmsg', False)
         self.bot_hmsg_hidden: bool       = kwargs.get('bot_hmsg_hidden', False)
         self.bot_hmessage_to_update      = kwargs.get('bot_hmessage_to_update', None)
         self.target_discord_msg_id       = kwargs.get('target_discord_msg_id', None)
+        self.chunk_msg_ids               = kwargs.get('chunk_msg_ids', [])
 
         # Model/Character Change params
         self.character: dict = kwargs.get('character', {})
@@ -1581,41 +1583,40 @@ class TaskProcessing(TaskAttributes):
         mention_resp = mentions.update_mention(self.user.mention, chunk_text)
         temp_hmsg = self.local_history.new_message(save=False)
         # send responses to channel - reference a message if applicable
-        sent_msg = await send_long_message(self.channel, mention_resp, temp_hmsg)
-        if self.params.should_gen_image:
-            setattr(self, 'img_ref_message', sent_msg)
-        bot_database.update_last_msg_for(self.channel.id, 'bot', save_now=False)
+        ref_message = self.params.ref_message
+        sent_msg = await send_long_message(self.channel, mention_resp, temp_hmsg, ref_message)
+        if ref_message:
+            self.params.ref_message = None
         # Add sent message IDs to collective message attribute
         sent_chunk_msg_ids = [temp_hmsg.id] + temp_hmsg.related_ids
+        print("chunk_id:", sent_chunk_msg_ids)
         del temp_hmsg # delete temp hmsg
-        self.message.chunk_msg_ids.extend(sent_chunk_msg_ids)
+        self.params.chunk_msg_ids.extend(sent_chunk_msg_ids)
+        bot_database.update_last_msg_for(self.channel.id, 'bot', save_now=False)
 
     async def send_responses(self:Union["Task","Tasks"]):
         # Process any TTS response
         if self.tts_resp:
             await voice_clients.process_tts_resp(self.ictx, self.tts_resp, self.bot_hmessage)
         if self.bot_hmessage and self.params.should_send_text:
-            last_resp = self.last_resp
-            # Handle any unsent remaining message chunk
-            chunked_text = getattr(self, 'chunked_text', None)
-            if chunked_text:
-                last_resp = last_resp[len(chunked_text):]                    
-            if last_resp:
+            # Send single reply if message was not already streamed in chunks
+            was_chunked = getattr(self.params, 'was_chunked', False)
+            if not was_chunked:
                 # @mention non-consecutive users
-                mention_resp = mentions.update_mention(self.user.mention, self.bot_hmessage.text)
+                mention_resp = mentions.update_mention(self.user.mention, self.last_resp)
                 # send responses to channel - reference a message if applicable
                 sent_msg = await send_long_message(self.channel, mention_resp, self.bot_hmessage, self.params.ref_message)
                 bot_database.update_last_msg_for(self.channel.id, 'bot', save_now=False)
                 if self.params.should_gen_image:
                     setattr(self, 'img_ref_message', sent_msg)
             # Manage IDs for chunked message handling
-            if self.message.chunk_msg_ids:
+            if self.params.chunk_msg_ids:
                 if not self.bot_hmessage.id:
-                    self.bot_hmessage.id = self.message.chunk_msg_ids.pop(0)
-                self.bot_hmessage.related_ids.extend(self.message.chunk_msg_ids)
+                    self.bot_hmessage.id = self.params.chunk_msg_ids.pop(-1)
+                self.bot_hmessage.related_ids.extend(self.params.chunk_msg_ids)
             # Apply any reactions applicable to message
             if config['discord']['history_reactions'].get('enabled', True):
-                await apply_reactions_to_messages(client.user, self.ictx, self.bot_hmessage, self.message.chunk_msg_ids)
+                await apply_reactions_to_messages(client.user, self.ictx, self.bot_hmessage, self.params.chunk_msg_ids)
         # send any user images
         send_user_image = self.params.send_user_image
         if send_user_image:
@@ -1957,35 +1958,35 @@ class TaskProcessing(TaskAttributes):
             # Store time for statistics
             bot_statistics._llm_gen_time_start_last = time.time()
 
-            last_checked = ''
-
             # Streams message chunks to MessageManager()
             async def process_chunk(chunk_text):
-                chunk_message = self.message.create_chunk_message(chunk_text)
-                print("chunk_message:", chunk_message)
-                # Assign some values to the task. 'last_resp' used later if queued.
-                chunk_task = Task('chunk_message', self.ictx, last_resp=chunk_text, message=chunk_message, params=self.params, istyping=IsTyping())
-                print("chunk_task:", chunk_task)
-                updated_istyping_time = await chunk_task.message.update_timing()
-                if updated_istyping_time != chunk_task.message.istyping_time:
-                    chunk_task.istyping.start(start_time=updated_istyping_time)
-                chunk_task.message.istyping_time = updated_istyping_time
-                if hasattr(chunk_task.message, 'send_time'):
-                    print("QUEUING")
-                    await message_manager.queue_delayed_message(chunk_task)
-                else:
-                    print("SENDING")
-                    await self.send_response_chunk(chunk_task)
+                if bot_behavior.responsiveness < 1.0:
+                    chunk_message = self.message.create_chunk_message(chunk_text)
+                    # Assign some values to the task. 'last_resp' used later if queued.
+                    chunk_task = Task('chunk_message', self.ictx, channel=self.channel, user=self.user, user_name=self.user_name, last_resp=chunk_text, message=chunk_message, params=self.params, istyping=IsTyping(self.channel))
+                    updated_istyping_time = await chunk_task.message.update_timing()
+                    if updated_istyping_time != chunk_task.message.istyping_time:
+                        chunk_task.istyping.start(start_time=updated_istyping_time)
+                    chunk_task.message.istyping_time = updated_istyping_time
+                    # check for delayed response
+                    if chunk_task.message.send_time is not None:
+                        print("QUEUING")
+                        await message_manager.queue_delayed_message(chunk_task)
+                        return
+
+                await self.send_response_chunk(chunk_text)
+
+            last_checked = ''
 
             def check_should_chunk(partial_resp):
                 nonlocal last_checked
                 chance_to_chunk = bot_behavior.chance_to_stream_reply
-                chunk_syntax = ['\n', '.']
+                chunk_syntax = bot_behavior.stream_reply_triggers # ['\n', '.']
                 check_resp:str = partial_resp[len(last_checked):]
                 for syntax in chunk_syntax:
                     if check_resp.endswith(syntax):
                         # update for next iteration
-                        last_checked = check_resp
+                        last_checked += check_resp
                         # Ensure markdown syntax is not cut off
                         if not patterns.check_markdown_balanced(last_checked):
                             return False
@@ -1994,33 +1995,43 @@ class TaskProcessing(TaskAttributes):
                             chance_to_chunk = chance_to_chunk * 1.5
                         elif syntax == '.':
                             chance_to_chunk = chance_to_chunk * 0.5
-                        print("chance_to_chunk:", chance_to_chunk)
                         return check_probability(chance_to_chunk)
 
                 return False
 
             # Subprocess prevents losing discord heartbeat
             def process_responses(callback):
+                nonlocal last_checked
                 last_resp = ''
                 tts_resp = ''
 
+                regenerate = self.llm_payload.get('regenerate', False)
+
+                continued_from = ''
+                _continue = self.llm_payload.get('_continue', False)
+                if _continue:
+                    continued_from = self.llm_payload['state']['history']['internal'][-1][-1]
+
                 already_chunked = ''
 
-                regenerate = self.llm_payload.get('regenerate', False)
-                _continue = self.llm_payload.get('_continue', False)
                 for resp in chatbot_wrapper(text=self.llm_payload['text'], state=self.llm_payload['state'], regenerate=regenerate, _continue=_continue, loading_message=True, for_ui=False):
                     i_resp = resp.get('internal', [])
                     if len(i_resp) > 0:
                         last_resp = i_resp[len(i_resp) - 1][1]
-                    # Only chunk messages if actually sending them
+                    # Only chunk messages if actually sending them. Skip chunking for "Regenerate Replace"
                     if self.params.should_send_text:
-                        partial_response = last_resp[len(already_chunked):]
+                        # Omit continued text from response processing
+                        base_resp = last_resp
+                        if _continue and len(base_resp) >= len(continued_from):
+                            base_resp = base_resp[len(continued_from):]
+                        partial_response = base_resp[len(already_chunked):]
                         should_chunk = check_should_chunk(partial_response)
                         if should_chunk:
+                            last_checked = ''
                             already_chunked += partial_response
                             # process message chunk
-                            print("CHUNKING")
                             callback(partial_response)
+                    
                     # look for tts response
                     vis_resp = resp.get('visible', [])
                     if len(vis_resp) > 0:
@@ -2029,9 +2040,14 @@ class TaskProcessing(TaskAttributes):
                             audio_format_match = patterns.audio_src.search(last_vis_resp)
                             if audio_format_match:
                                 tts_resp = audio_format_match.group(1)
-
+                
+                # Handle last chunk
                 if already_chunked:
-                    setattr(self, 'chunked_text', already_chunked)
+                    last_chunk = base_resp[len(already_chunked):]
+                    if last_chunk:
+                        callback(last_chunk)
+                    # retain
+                    setattr(self.params, 'was_chunked', True)
                 self.last_resp = last_resp
                 self.tts_resp = tts_resp
 
@@ -2040,9 +2056,8 @@ class TaskProcessing(TaskAttributes):
             def callback(chunk):
                 asyncio.run_coroutine_threadsafe(process_chunk(chunk), loop)
 
+            # Offload the synchronous tasks to a separate thread
             await loop.run_in_executor(None, process_responses, callback)
-            # Offload the synchronous task to a separate thread
-            #await loop.run_in_executor(None, process_responses)
 
             if self.last_resp:
                 self.update_llm_gen_statistics() # Update statistics
@@ -2178,18 +2193,26 @@ class TaskProcessing(TaskAttributes):
             print(traceback.format_exc())
             log.error(f'An error occurred while sending greeting or history for "{char_name}": {e}')
 
-####################### MOSTLY IMAGE GEN ORICESSING #########################
-    async def sd_online(self:Union["Task","Tasks"]):
-        try:
-            r = requests.get(f'{sd.url}/')
-            status = r.raise_for_status()
-            log.debug(f'Request status to SD: {status}')
-            return True
-        except Exception as exc:
-            log.warning(exc)
-            await self.embeds.send('system', f"{sd.client} api is not running at {sd.url}", f"Launch {sd.client} with `--api --listen` commandline arguments\n\
-                                Read more [here](https://github.com/AUTOMATIC1111/stable-diffusion-webui/wiki/API)")
-            return False
+####################### MOSTLY IMAGE GEN PROCESSING #########################
+
+    async def sd_online(self: Union["Task", "Tasks"]):
+        async with aiohttp.ClientSession() as session:
+            e_title = f"{sd.client} api is not running at {sd.url}"
+            e_description = f"Launch {sd.client} with `--api --listen` commandline arguments\n\
+                Read more [here](https://github.com/AUTOMATIC1111/stable-diffusion-webui/wiki/API)"
+            try:
+                async with session.get(f'{sd.url}/') as response:
+                    if response.status == 200:
+                        log.debug(f'Request status to SD: {response.status}')
+                        return True
+                    else:
+                        log.warning(f'Non-200 status code received: {response.status}')
+                        await self.embeds.send('system', e_title, e_description)
+                        return False
+            except aiohttp.ClientError as exc:
+                log.warning(exc)
+                await self.embeds.send('system', e_title, e_description)
+                return False
 
     async def sd_progress_warning(self:Union["Task","Tasks"]):
         log.error('Reached maximum retry limit')
@@ -3206,15 +3229,34 @@ class Tasks(TaskProcessing):
             if temp_reveal_bot_hmsg:
                 original_bot_hmessage.update(hidden=True)
 
-            await self.embeds.send('system', 'Continuing ... ', f'Continuing text for {self.user_name}')
+            self.embeds.create('continue', 'Continuing ... ', f'Continuing text for {self.user_name}')
+            await self.embeds.send('continue')
+
+            # Get a possible message to reply to
+            ref_message = self.target_discord_msg
+            if original_bot_hmessage.id != self.target_discord_msg.id:
+                ref_message = await self.channel.fetch_message(original_bot_hmessage.id)
+
+            # Assign ref message to params. Will become 'None' if message responses are streamed (chunked)
+            self.params.ref_message = ref_message
 
             ## Finalize payload, generate text via TGWUI.
-            # does not create hmessages or process responses
+            # Does not create hmessages. Responses may be streamed.
             await self.message_llm_gen()
 
-            await self.embeds.delete('system') # delete embed
+            await self.embeds.delete('continue') # delete embed
+
+            # Return if failed
             if not self.last_resp:
                 await self.ictx.followup.send('Failed to continue text.', silent=True)
+                return
+
+            # Extract the continued text from previous text
+            continued_text = self.last_resp[len(original_bot_hmessage.text):]
+
+            # Return if nothing new generated
+            if not continued_text.strip():
+                await self.ictx.followup.send(':warning: Generation was continued, but nothing new was added.')
                 return
 
             # Log message exchange
@@ -3222,38 +3264,23 @@ class Tasks(TaskProcessing):
             log.info('Continued text:')
             log.info(f'''{self.llm_payload['state']['name2']}: "{self.last_resp}"''')
 
-            # Extract the continued text from previous text
-            continued_text = self.last_resp[len(original_bot_hmessage.text):]
-
-            # Get a possible message to reply to
-            ref_message = self.target_discord_msg
-            if original_bot_hmessage.id != self.target_discord_msg.id:
-                ref_message = await self.channel.fetch_message(original_bot_hmessage.id)
-
             # Update the original message in history manager
             updated_bot_hmessage = original_bot_hmessage
-            
+            updated_bot_hmessage.is_continued = True                         # Mark message as continued
+            updated_bot_hmessage.update(text=self.last_resp, text_visible=self.tts_resp) # replace responses
+            updated_bot_hmessage.related_ids.insert(0, updated_bot_hmessage.id) # Insert previous last message id into related ids
+
             new_discord_msg = None
-            if not continued_text.strip():
-                await self.ictx.followup.send(':warning: Generation was continued, but nothing new was added.')
+
+            was_chunked = getattr(self.params, 'was_chunked', False)
+
+            if was_chunked and self.params.chunk_msg_ids:
+                updated_bot_hmessage.id = self.params.chunk_msg_ids.pop(-1)
+                updated_bot_hmessage.related_ids.extend(self.params.chunk_msg_ids)
+
             else:
-                # Mark original message as being continued and update reactions for it
-                original_bot_hmessage.is_continued = True
-                if config['discord']['history_reactions'].get('enabled', True):
-                    await apply_reactions_to_messages(client.user, self.ictx, original_bot_hmessage, [original_bot_hmessage.id], ref_message)
-
-                # Add previous last message id to related ids
-                updated_bot_hmessage.related_ids.append(original_bot_hmessage.id)
-
-                if len(continued_text) < MAX_MESSAGE_LENGTH:
-                    new_discord_msg = await self.channel.send(content=continued_text, reference=ref_message)
-                    # replace original id with new
-                    updated_bot_hmessage.update(id=new_discord_msg.id)
-                else:
-                    # Pass to send_long_message which will add more ids and update last.
-                    await send_long_message(self.channel, continued_text, bot_hmessage=updated_bot_hmessage)
-
-            updated_bot_hmessage.update(text=self.last_resp, text_visible=self.tts_resp)
+                # Pass to send_long_message which will add more ids and update last.
+                new_discord_msg = await send_long_message(self.channel, continued_text, bot_hmessage=updated_bot_hmessage, reference=self.params.ref_message)
 
             # Apply any reactions applicable to message
             msg_ids_to_edit = [updated_bot_hmessage.id] + updated_bot_hmessage.related_ids
@@ -3268,7 +3295,7 @@ class Tasks(TaskProcessing):
             e_msg = 'An error occurred while processing "Continue"'
             log.error(f'{e_msg}: {e}')
             await self.ictx.followup.send(e_msg, silent=True)
-            await self.embeds.delete('system') # delete embed
+            await self.embeds.delete('continue') # delete embed
 
     #################################################################
     ####################### REGENERATE TASK #########################
@@ -3340,7 +3367,8 @@ class Tasks(TaskProcessing):
             self.llm_payload['state']['history']['internal'] = copy.deepcopy(sliced_i)
             self.llm_payload['state']['history']['visible'] = copy.deepcopy(sliced_i)
 
-            await self.embeds.send('system', 'Regenerating ... ', f'Regenerating text for {self.user_name}')
+            self.embeds.create('regenerate', 'Regenerating ... ', f'Regenerating text for {self.user_name}')
+            await self.embeds.send('regenerate')
 
             # Flags to skip message logging/special message handling
             regen_params = Params()
@@ -3383,14 +3411,14 @@ class Tasks(TaskProcessing):
             if config['discord']['history_reactions'].get('enabled', True):
                 await apply_reactions_to_messages(client.user, self.ictx, self.user_hmessage)
 
-            await self.embeds.delete('system')
+            await self.embeds.delete('regenerate')
 
         except Exception as e:
             print(traceback.format_exc())
             e_msg = 'An error occurred while processing "Regenerate"'
             log.error(f'{e_msg}: {e}')
             await self.ictx.followup.send(e_msg, silent=True)
-            await self.embeds.delete('system')
+            await self.embeds.delete('regenerate')
 
     #################################################################
     ################# HIDE OR REVEAL HISTORY TASK ###################
@@ -3870,7 +3898,6 @@ class Message:
         self.send_time = None
 
         self.num_chunks = 0
-        self.chunk_msg_ids = kwargs.pop('chunk_msg_ids', [])
     
     def create_chunk_message(self, chunk_str):
         response_delay = self.response_delay if self.num_chunks == 0 else 0
@@ -3878,7 +3905,7 @@ class Message:
         self.num_chunks += 1
         num = self.num + (self.num_chunks/1000)
         last_tokens = int(count_tokens(chunk_str))
-        chunk_message = Message(num, self.received_time, response_delay, read_text_delay, last_tokens=last_tokens, chunk_msg_ids=self.chunk_msg_ids)
+        chunk_message = Message(num, self.received_time, response_delay, read_text_delay, last_tokens=last_tokens)
         chunk_message.factor_typing_speed()
         return chunk_message
 
@@ -6046,6 +6073,7 @@ class Behavior:
         self.user_conversations = {}
         # Chance for bot reply to be sent in chunks to discord chat
         self.chance_to_stream_reply = 0.0
+        self.stream_reply_triggers = ['\n', '.']
         # Behaviors to be more like a computer program or humanlike
         self.maximum_typing_speed = -1
         self.responsiveness = 1.0
@@ -6226,7 +6254,7 @@ class ImgModel:
             if sd.client:
                 log.info('"Forge Couple" extension support is enabled and active.')
             # Warn Non-Forge:
-            if sd.client and sd.client not in forge_clients:
+            if sd.client and sd.client != 'SD WebUI Forge':
                 log.warning(f'"Forge Couple" is not known to be compatible with "{sd.client}". If you experience errors, disable this extension in config.yaml')
         # Initialize layerdiffuse defaults
         if extensions.get('layerdiffuse_enabled'):
@@ -6235,7 +6263,7 @@ class ImgModel:
                 'blending': None, 'resize_mode': 'Crop and Resize', 'output_mat_for_i2i': False, 'fg_prompt': '', 'bg_prompt': '', 'blended_prompt': ''}}
             if sd.client:
                 log.info('"layerdiffuse" extension support is enabled and active.')
-            if sd.client and sd.client not in forge_clients:
+            if sd.client and sd.client != 'SD WebUI Forge':
                 log.warning(f'"layerdiffuse" is not known to be compatible with "{sd.client}". If you experience errors, disable this extension in config.yaml')
         # Initialize ReActor defaults
         if extensions.get('reactor_enabled'):
