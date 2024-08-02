@@ -47,15 +47,13 @@ from modules.utils_files import load_file, merge_base, save_yaml_file  # noqa: F
 from modules.utils_aspect_ratios import round_to_precision, res_to_model_fit, dims_from_ar, avg_from_dims, get_aspect_ratio_parts, calculate_aspect_ratio_sizes  # noqa: F401
 from modules.history import HistoryManager, History, HMessage, cnf
 from modules.typing import TAG_LIST, TAG_LIST_DICT, AlertUserError
-from modules.utils_asyncio import CoroHandler
+from modules.utils_asyncio import generate_in_executor
 
 from discord.ext.commands.errors import HybridCommandError, CommandError
 from discord.errors import DiscordException
 from discord.app_commands import AppCommandError, CommandInvokeError
 from modules.logs import import_track, get_logger, log_file_handler, log_file_formatter; import_track(__file__, fp=True); log = get_logger(__name__)  # noqa: E702
 logging = log
-
-coro_handler = CoroHandler()
 
 
 # Databases
@@ -2016,9 +2014,9 @@ class TaskProcessing(TaskAttributes):
                     continued_from = self.llm_payload['state']['history']['internal'][-1][-1]
 
                 already_chunked = ''
-
+                
                 func = partial(chatbot_wrapper, text=self.llm_payload['text'], state=self.llm_payload['state'], regenerate=regenerate, _continue=_continue, loading_message=True, for_ui=False)
-                async for resp in coro_handler.generate_in_executor(func):
+                async for resp in generate_in_executor(func):
                     i_resp = resp.get('internal', [])
                     if len(i_resp) > 0:
                         self.last_resp = i_resp[len(i_resp) - 1][1]
