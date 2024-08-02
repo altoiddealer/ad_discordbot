@@ -34,6 +34,7 @@ import traceback
 from modules.typing import ChannelID, UserID, MessageID, CtxInteraction  # noqa: F401
 import signal
 from typing import Union
+from functools import partial
 
 sys.path.append("ad_discordbot")
 
@@ -46,12 +47,16 @@ from modules.utils_files import load_file, merge_base, save_yaml_file  # noqa: F
 from modules.utils_aspect_ratios import round_to_precision, res_to_model_fit, dims_from_ar, avg_from_dims, get_aspect_ratio_parts, calculate_aspect_ratio_sizes  # noqa: F401
 from modules.history import HistoryManager, History, HMessage, cnf
 from modules.typing import TAG_LIST, TAG_LIST_DICT, AlertUserError
+from modules.utils_asyncio import CoroHandler
 
 from discord.ext.commands.errors import HybridCommandError, CommandError
 from discord.errors import DiscordException
 from discord.app_commands import AppCommandError, CommandInvokeError
 from modules.logs import import_track, get_logger, log_file_handler, log_file_formatter; import_track(__file__, fp=True); log = get_logger(__name__)  # noqa: E702
 logging = log
+
+coro_handler = CoroHandler()
+
 
 # Databases
 bot_active_settings = ActiveSettings()
@@ -1999,11 +2004,9 @@ class TaskProcessing(TaskAttributes):
 
                 return False
 
-            # Subprocess prevents losing discord heartbeat
-            def process_responses(callback):
+            async def process_responses():
                 nonlocal last_checked
-                last_resp = ''
-                tts_resp = ''
+                self.last_resp = '' # clear incase edge case
 
                 regenerate = self.llm_payload.get('regenerate', False)
 
@@ -2014,14 +2017,16 @@ class TaskProcessing(TaskAttributes):
 
                 already_chunked = ''
 
-                for resp in chatbot_wrapper(text=self.llm_payload['text'], state=self.llm_payload['state'], regenerate=regenerate, _continue=_continue, loading_message=True, for_ui=False):
+                func = partial(chatbot_wrapper, text=self.llm_payload['text'], state=self.llm_payload['state'], regenerate=regenerate, _continue=_continue, loading_message=True, for_ui=False)
+                async for resp in coro_handler.generate_in_executor(func):
                     i_resp = resp.get('internal', [])
                     if len(i_resp) > 0:
-                        last_resp = i_resp[len(i_resp) - 1][1]
+                        self.last_resp = i_resp[len(i_resp) - 1][1]
+                        
                     # Only chunk messages if actually sending them. Skip chunking for "Regenerate Replace"
                     if self.params.should_send_text:
                         # Omit continued text from response processing
-                        base_resp = last_resp
+                        base_resp = self.last_resp
                         if _continue and len(base_resp) >= len(continued_from):
                             base_resp = base_resp[len(continued_from):]
                         partial_response = base_resp[len(already_chunked):]
@@ -2030,7 +2035,7 @@ class TaskProcessing(TaskAttributes):
                             last_checked = ''
                             already_chunked += partial_response
                             # process message chunk
-                            callback(partial_response)
+                            yield partial_response
                     
                     # look for tts response
                     vis_resp = resp.get('visible', [])
@@ -2039,26 +2044,24 @@ class TaskProcessing(TaskAttributes):
                         if 'audio src=' in last_vis_resp:
                             audio_format_match = patterns.audio_src.search(last_vis_resp)
                             if audio_format_match:
-                                tts_resp = audio_format_match.group(1)
+                                self.tts_resp = audio_format_match.group(1)
                 
                 # Handle last chunk
                 if already_chunked:
-                    last_chunk = base_resp[len(already_chunked):]
-                    if last_chunk:
-                        callback(last_chunk)
+                    # run before yield
+                    
                     # retain
                     setattr(self.params, 'was_chunked', True)
-                self.last_resp = last_resp
-                self.tts_resp = tts_resp
+                    
+                    last_chunk = base_resp[len(already_chunked):]
+                    if last_chunk:
+                        yield last_chunk
 
-            loop = asyncio.get_event_loop()
-
-            def callback(chunk):
-                asyncio.run_coroutine_threadsafe(process_chunk(chunk), loop)
 
             # Offload the synchronous tasks to a separate thread
-            await loop.run_in_executor(None, process_responses, callback)
-
+            async for chunk in process_responses():
+                await process_chunk(chunk)
+                
             if self.last_resp:
                 self.update_llm_gen_statistics() # Update statistics
 
