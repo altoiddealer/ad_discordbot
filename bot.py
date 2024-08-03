@@ -1227,14 +1227,15 @@ class Tags:
             updated_unmatched:TAG_LIST_DICT = dict(copy.deepcopy(self.unmatched)) # type: ignore
             for list_name, unmatched_list in self.unmatched.items(): # type: ignore
                 unmatched_list: TAG_LIST
-                
+
                 for tag in unmatched_list:
-                    if 'trigger' not in tag:
+                    # Check if any key starts with 'trigger'
+                    if not any(key.startswith('trigger') for key in tag):
                         updated_unmatched[list_name].remove(tag)
                         tag['phase'] = phase
                         updated_matches.append(tag)
                         continue
-                    
+
                     case_sensitive = tag.get('case_sensitive', False)
                     triggers = [t.strip() for t in tag['trigger'].split(',')]
                     for index, trigger in enumerate(triggers):
@@ -1250,7 +1251,6 @@ class Tags:
                                 tag['matched_trigger'] = trigger  # retain the matched trigger phrase
                                 if (('insert_text' in tag and phase == 'llm') or ('positive_prompt' in tag and phase == 'img')):
                                     updated_matches.append((tag, trigger_match.start(), trigger_match.end()))  # Add as a tuple with start/end indexes if inserting text later
-                                    # TODO tag class
                                 else:
                                     if 'positive_prompt' in tag:
                                         tag['imgtag_matched_early'] = True
