@@ -24,6 +24,16 @@
 <details>
   <summary>click to expand</summary>
 
+   **08/02/2024:** New Behavior - Streaming Responses!
+
+   - Base Behavior / Character Behavior now have option to stream responses!
+
+   - You no longer have to wait for the entire message to generate!
+
+   - Actually works with all the other crazy features!
+   
+  ---
+
    **07/24/2024:** New [Behaviors](https://github.com/altoiddealer/ad_discordbot/wiki/behaviors) to bring your characters to life!
 
    Some new settings appeared recently... which were slightly buggy.  Today, I announce that they are working very well!
