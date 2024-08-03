@@ -5,6 +5,10 @@ from datetime import datetime, timedelta
 import math
 import random
 
+def check_probability(probability) -> bool:
+    probability = max(0.0, min(1.0, probability))
+    return random.random() < probability
+
 def fix_dict(set, req, src: str | None = None, warned: bool = False, path=""):
     was_warned = warned
     ignored_keys = ['regenerate', '_continue', 'text', 'bot_in_character_menu', 'imgmodel_name', 'tags', 'override_settings']

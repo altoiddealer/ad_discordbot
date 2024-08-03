@@ -239,21 +239,32 @@ async def replace_msg_in_history_and_discord(client_user:discord.Client, ictx:Ct
                 if local_message:
                     await local_message.delete()
 
-            # Update original discord message, or send new one if too long
-            if len(text) < MAX_MESSAGE_LENGTH:
+            was_chunked = getattr(params, 'was_chunked', False)
+
+            # Update original discord message if short enough and response was not chunked
+            if len(text) < MAX_MESSAGE_LENGTH and not was_chunked:
                 await target_discord_msg.edit(content=text)
+            # Otherwise delete target message and send new message(s)
             else:
                 await target_discord_msg.delete()
-                if getattr(params, 'bot_hmessage_to_update', None):
-                    await send_long_message(channel, text, bot_hmessage=updated_hmessage, ref_message=ref_message)
-                else:
-                    await send_long_message(channel, text, bot_hmessage=None, ref_message=ref_message)
+                # Send new messages if not already sent
+                if not was_chunked:
+                    if getattr(params, 'bot_hmessage_to_update', None):
+                        await send_long_message(channel, text, bot_hmessage=updated_hmessage, ref_message=ref_message)
+                    else:
+                        await send_long_message(channel, text, bot_hmessage=None, ref_message=ref_message)
 
         # Clear related IDs attribute
         updated_hmessage.related_ids.clear() # TODO maybe add a 'fresh' method to HMessage? - For Reality
         # Update the HMessage
         updated_hmessage.update(text=text, text_visible=text_visible, hidden=hmsg_hidden)
 
+        # Update with chunked IDs
+        chunk_msg_ids = getattr(params, 'chunk_msg_ids', None)
+        if chunk_msg_ids and updated_hmessage.role == 'assistant':
+            new_id = chunk_msg_ids.pop(-1)
+            updated_hmessage.update(id=new_id, related_ids=chunk_msg_ids)
+            
         # Apply any reactions applicable to message
         if apply_reactions:
             await apply_reactions_to_messages(client_user, ictx, updated_hmessage)
@@ -428,6 +439,9 @@ class Embeds:
         self.init_default_embeds()
 
     def enabled(self, name:str) -> bool:
+        # Allow some additional unique embeds to be defined
+        if name in ['regenerate', 'continue']:
+            return self.enabled_embeds.get('system', True)
         return self.enabled_embeds.get(name, True) # all enabled by default
 
     def init_default_embeds(self):
@@ -444,6 +458,10 @@ class Embeds:
     def create(self, name:str, title:str=' ', description:str=' ', url_suffix:str|None=None, url:str|None=None, color:int|None=None) -> discord.Embed:
         if url or url_suffix:
             url = url if url_suffix is None else f'{self.root_url}{url_suffix}'
+        else:
+            url = self.root_url
+        if color is None:
+            color = self.color
         self.embeds[name] = discord.Embed(title=title, description=description, url=url, color=color)
         return self.embeds[name]
 

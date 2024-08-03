@@ -53,6 +53,10 @@ behavior:
   go_wild_in_channel: true            # Whether or not the bot will always reply in the main channel
   conversation_recency: 600           # How long (in seconds) a user is determined to be "in active conversation". Only applicable if 'go_wild_in_channel' is false
 
+  # Streaming responses. Note: You may want to disable the 'history reactions' feature in 'config.yaml' (discord limits speed for processing reactions)
+  chance_to_stream_reply: 0.5         # Chance trigger sending partial message as it is generating. Range: 0.0 - 2.0. 0.0 = Never split reply / 1.0 = Splits very often / 2.0 = Always splits for any trigger
+  stream_reply_triggers: ['\n', '.']  # If you may want to adjust triggers. default: ['\n', '.']
+
   # Settings to control whether the bot behaves as a computer program (default), or optionally make the bot behave more humanlike by throttling its responses.
   # Only affects "normal messaging" - not commands/features.
   maximum_typing_speed: -1            # Words per Minute. 80 = 80 WPM (good typist) / -1 = no restriction (default). Basically a shortcut to the 'max_tokens_second' param (scales it to WPM).
