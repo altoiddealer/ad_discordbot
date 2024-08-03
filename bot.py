@@ -1592,7 +1592,6 @@ class TaskProcessing(TaskAttributes):
             self.params.ref_message = None
         # Add sent message IDs to collective message attribute
         sent_chunk_msg_ids = [temp_hmsg.id] + temp_hmsg.related_ids
-        print("chunk_id:", sent_chunk_msg_ids)
         del temp_hmsg # delete temp hmsg
         self.params.chunk_msg_ids.extend(sent_chunk_msg_ids)
         bot_database.update_last_msg_for(self.channel.id, 'bot', save_now=False)
@@ -1953,31 +1952,33 @@ class TaskProcessing(TaskAttributes):
 
         return self.user_hmessage, self.bot_hmessage
     
-    # Send LLM Payload - get responses
-    async def llm_gen(self:Union["Task","Tasks"], can_chunk:bool=False) -> tuple[str, str]:
+
+    # Get responses from LLM Payload
+    async def llm_gen(self:Union["Task","Tasks"]) -> tuple[str, str]:
         if shared.model_name == 'None':
             return
         try:
             # Store time for statistics
             bot_statistics._llm_gen_time_start_last = time.time()
 
-            # Streams message chunks to MessageManager()
+            # Stream message chunks
             async def process_chunk(chunk_text):
-                if bot_behavior.responsiveness < 1.0:
+                # Immediately send message chunks (Do not queue)
+                if bot_behavior.responsiveness == 1.0 or self.name in ['regenerate', 'continue']:
+                    await self.send_response_chunk(chunk_text)
+                # Queue message chunks to MessageManager()
+                else:
                     chunk_message = self.message.create_chunk_message(chunk_text)
+                    chunk_message.factor_typing_speed()
                     # Assign some values to the task. 'last_resp' used later if queued.
-                    chunk_task = Task('chunk_message', self.ictx, channel=self.channel, user=self.user, user_name=self.user_name, last_resp=chunk_text, message=chunk_message, params=self.params, istyping=IsTyping(self.channel))
+                    chunk_task = Task('chunk_message', self.ictx, channel=self.channel, user=self.user, user_name=self.user_name, last_resp=chunk_text, message=chunk_message, params=self.params, local_history=self.local_history, istyping=IsTyping(self.channel))
                     updated_istyping_time = await chunk_task.message.update_timing()
                     if updated_istyping_time != chunk_task.message.istyping_time:
                         chunk_task.istyping.start(start_time=updated_istyping_time)
                     chunk_task.message.istyping_time = updated_istyping_time
                     # check for delayed response
                     if chunk_task.message.send_time is not None:
-                        print("QUEUING")
                         await message_manager.queue_delayed_message(chunk_task)
-                        return
-
-                await self.send_response_chunk(chunk_text)
 
             last_checked = ''
 
@@ -1993,10 +1994,12 @@ class TaskProcessing(TaskAttributes):
                         # Ensure markdown syntax is not cut off
                         if not patterns.check_markdown_balanced(last_checked):
                             return False
-                        # Roll probability to chunk
-                        if syntax == '\n':
-                            chance_to_chunk = chance_to_chunk * 1.5
+                        # Special handling if syntax is '.' (sentence completion)
                         elif syntax == '.':
+                            if len(check_resp) > 1 and check_resp[-2].isdigit(): # avoid chunking on numerical list
+                                return False
+                            elif len(check_resp) > 2 and ('\n' in check_resp[-3:-1]): # avoid chunking on other lists
+                                return False
                             chance_to_chunk = chance_to_chunk * 0.5
                         return check_probability(chance_to_chunk)
 
@@ -2004,8 +2007,6 @@ class TaskProcessing(TaskAttributes):
 
             async def process_responses():
                 nonlocal last_checked
-                self.last_resp = '' # clear incase edge case
-
                 regenerate = self.llm_payload.get('regenerate', False)
 
                 continued_from = ''
@@ -2014,19 +2015,24 @@ class TaskProcessing(TaskAttributes):
                     continued_from = self.llm_payload['state']['history']['internal'][-1][-1]
 
                 already_chunked = ''
+
+                can_chunk = False
+                # Only try chunking responses if sending to channel, configured to chunk, and not '/speak' command
+                if self.params.should_send_text and bot_behavior.chance_to_stream_reply > 0 and self.name not in ['speak']:
+                    can_chunk = True
                 
                 func = partial(chatbot_wrapper, text=self.llm_payload['text'], state=self.llm_payload['state'], regenerate=regenerate, _continue=_continue, loading_message=True, for_ui=False)
                 async for resp in generate_in_executor(func):
                     i_resp = resp.get('internal', [])
                     if len(i_resp) > 0:
                         self.last_resp = i_resp[len(i_resp) - 1][1]
-                        
-                    # Only chunk messages if actually sending them. Skip chunking for "Regenerate Replace"
-                    if self.params.should_send_text:
+
+                    if can_chunk:
                         # Omit continued text from response processing
                         base_resp = self.last_resp
                         if _continue and len(base_resp) >= len(continued_from):
                             base_resp = base_resp[len(continued_from):]
+                        # Check current iteration to see if it meets criteria
                         partial_response = base_resp[len(already_chunked):]
                         should_chunk = check_should_chunk(partial_response)
                         if should_chunk:
@@ -2043,23 +2049,20 @@ class TaskProcessing(TaskAttributes):
                             audio_format_match = patterns.audio_src.search(last_vis_resp)
                             if audio_format_match:
                                 self.tts_resp = audio_format_match.group(1)
-                
-                # Handle last chunk
+
+                # Check for an unsent chunk
                 if already_chunked:
-                    # run before yield
-                    
-                    # retain
+                    # Flag that the task sent chunked responses
                     setattr(self.params, 'was_chunked', True)
-                    
+                    # Handle last chunk
                     last_chunk = base_resp[len(already_chunked):]
                     if last_chunk:
                         yield last_chunk
 
-
-            # Offload the synchronous tasks to a separate thread
+            # Runs chatbot_wrapper(), gets responses
             async for chunk in process_responses():
                 await process_chunk(chunk)
-                
+
             if self.last_resp:
                 self.update_llm_gen_statistics() # Update statistics
 
@@ -3907,7 +3910,6 @@ class Message:
         num = self.num + (self.num_chunks/1000)
         last_tokens = int(count_tokens(chunk_str))
         chunk_message = Message(num, self.received_time, response_delay, read_text_delay, last_tokens=last_tokens)
-        chunk_message.factor_typing_speed()
         return chunk_message
 
     def scale_delays(self):
@@ -5952,7 +5954,7 @@ class MessageManager():
         task.istyping.start(start_time=updated_istyping_time)
         # Ensure at least enough time elapsed to write message
         minimum_send_time = self.last_send_time + task.message.seconds_to_write
-        updated_send_time = max(minimum_send_time, send_time)
+        updated_send_time = min(minimum_send_time, send_time)
         # put task back and schedule it
         await self.send_msg_queue.put((num, updated_send_time, task))
         await self.schedule_send_message(updated_send_time)
