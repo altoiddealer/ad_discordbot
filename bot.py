@@ -916,8 +916,9 @@ def _expand_value(value:str) -> str:
 async def expand_triggers(all_tags:list) -> list:
     try:
         for tag in all_tags:
-            if 'trigger' in tag:
-                tag['trigger'] = _expand_value(tag['trigger'])
+            for key in tag:
+                if key.startswith('trigger'):
+                    tag[key] = _expand_value(tag[key])
 
     except Exception as e:
         log.error(f"Error expanding tags: {e}")
@@ -1106,12 +1107,13 @@ class Tags:
             # Unmatch any previously matched tags which try to insert text into the img_prompt
             matches_:TAG_LIST = self.matches # type: ignore
             for tag in matches_[:]:  # Iterate over a copy of the list
-                if tag.get('imgtag_matched_early'): # extract text insertion key pairs from previously matched tags
+                # extract text insertion key pairs from previously matched tags
+                if tag.get('imgtag_matched_early'):
                     new_tag = {}
                     tag_copy = copy.copy(tag)
                     for key, value in tag_copy.items(): # Iterate over a copy of the tag
-                        if (key in ["trigger", "matched_trigger", "imgtag_matched_early", "case_sensitive", "on_prefix_only", "search_mode", "img_text_joining", "phase"]
-                            or key.startswith(('positive_prompt', 'negative_prompt'))):
+                        if (key in ["matched_trigger", "imgtag_matched_early", "case_sensitive", "on_prefix_only", "search_mode", "img_text_joining", "phase"]
+                            or key.startswith(('trigger', 'positive_prompt', 'negative_prompt'))):
                             new_tag[key] = value
                             if not key == 'phase':
                                 del tag[key] # Remove the key from the original tag
@@ -1202,14 +1204,26 @@ class Tags:
                     tag_dict = tag[0]  # get tag value if tuple
                 else:
                     tag_dict = tag
-                # Extract and clean triggers
-                triggers = [trigger.strip().lower() for trigger in tag_dict.get('trigger', '').split(',')]
+
+                # Collect all trigger phrases from all trigger keys
+                all_triggers = []
+                for key in tag_dict:
+                    if key.startswith('trigger'):
+                        triggers = [trigger.strip().lower() for trigger in tag_dict[key].split(',')]
+                        all_triggers.extend(triggers)
+
                 # Check if any trigger is in the trump parameters set
-                is_trumped = any(trigger in self.tag_trumps for trigger in triggers)
-                if is_trumped:
-                    log.info(f'''[TAGS] Tag with triggers "{tag_dict['trigger']}" was trumped by another tag.''')
+                trumped_trigger = None
+                for trigger in all_triggers:
+                    if trigger in self.tag_trumps:
+                        trumped_trigger = trigger
+                        break
+
+                if trumped_trigger:
+                    log.info(f'''[TAGS] A Tag was trumped by another tag for phrase: "{trumped_trigger}".''')
                 else:
                     untrumped_matches.append(tag)
+
             return untrumped_matches
         except Exception as e:
             log.error(f"Error processing matched tags: {e}")
@@ -1227,39 +1241,83 @@ class Tags:
             updated_unmatched:TAG_LIST_DICT = dict(copy.deepcopy(self.unmatched)) # type: ignore
             for list_name, unmatched_list in self.unmatched.items(): # type: ignore
                 unmatched_list: TAG_LIST
-                
+
                 for tag in unmatched_list:
-                    if 'trigger' not in tag:
+                    # Collect list of all key pairs in tag dict that begin with 'trigger'
+                    trigger_keys = [key for key in tag if key.startswith('trigger')]
+
+                    # Consider tag as matched if no trigger keys
+                    if not trigger_keys:
                         updated_unmatched[list_name].remove(tag)
                         tag['phase'] = phase
                         updated_matches.append(tag)
                         continue
-                    
+
                     case_sensitive = tag.get('case_sensitive', False)
-                    triggers = [t.strip() for t in tag['trigger'].split(',')]
-                    for index, trigger in enumerate(triggers):
-                        trigger_regex = r'\b{}\b'.format(re.escape(trigger))
-                        if case_sensitive:
-                            trigger_match = re.search(trigger_regex, search_text)
-                        else:
-                            trigger_match = re.search(trigger_regex, search_text, flags=re.IGNORECASE)
-                        if trigger_match:
-                            if not (tag.get('on_prefix_only', False) and trigger_match.start() != 0):
-                                updated_unmatched[list_name].remove(tag)
-                                tag['phase'] = phase
-                                tag['matched_trigger'] = trigger  # retain the matched trigger phrase
-                                if (('insert_text' in tag and phase == 'llm') or ('positive_prompt' in tag and phase == 'img')):
-                                    updated_matches.append((tag, trigger_match.start(), trigger_match.end()))  # Add as a tuple with start/end indexes if inserting text later
-                                    # TODO tag class
-                                else:
-                                    if 'positive_prompt' in tag:
-                                        tag['imgtag_matched_early'] = True
-                                    updated_matches.append(tag)
-                                break  # Exit the loop after a match is found
-                        else:
-                            if ('imgtag_matched_early' in tag) and (index == len(triggers) - 1): # Was previously matched in 'user' text, but not in 'llm' text.
-                                tag['imgtag_uninserted'] = True
-                                updated_matches.append(tag)
+                    all_triggers_matched = True
+                    trigger_match = None
+                    matched_trigger = None
+
+                    # iterate over trigger keys in reverse so first trigger definition may be used for text insertions
+                    for key in reversed(trigger_keys):
+                        triggers = [t.strip() for t in tag[key].split(',')]
+
+                        for index, trigger in enumerate(triggers):
+                            trigger_regex = r'\b{}\b'.format(re.escape(trigger))
+                            if case_sensitive:
+                                trigger_match = re.search(trigger_regex, search_text)
+                            else:
+                                trigger_match = re.search(trigger_regex, search_text, flags=re.IGNORECASE)
+
+                            if trigger_match:
+                                # Check any on_prefix_only condition
+                                if tag.get('on_prefix_only', False) and trigger_match.start() != 0:
+                                    # Revert trigger match if on_prefix_only is unsatisfied
+                                    if len(trigger_keys) == 1:
+                                        trigger_match = None
+                                        continue
+                                    # Warn for invalid tags definition
+                                    elif not bot_database.was_warned('tags_on_prefix'):
+                                        bot_database.update_was_warned('tags_on_prefix')
+                                        log.warning('[TAGS] Tag with multiple trigger definitions has "on_prefix_only". Ignoring this parameter.')
+
+                                # retain the matched trigger phrase, from first trigger definition due to reverse()
+                                matched_trigger = str(trigger)
+                                break
+
+                            if not trigger_match:
+                                # If last trigger phrase in the trigger key
+                                if index == len(triggers) - 1:
+                                    # If Tag was previously matched in 'user' text, but not in 'llm' text.
+                                    if (phase=='img') and ('imgtag_matched_early' in tag):
+                                        tag['imgtag_uninserted'] = True
+                                        updated_matches.append(tag) # Will be suffixed to image prompt instead of inserted
+
+                                    all_triggers_matched = False
+                                    break
+
+                        # stop checking trigger keys if any unmatched
+                        if not all_triggers_matched:
+                            break
+
+                    if all_triggers_matched:
+                        # If all triggers matched in search text
+                        updated_unmatched[list_name].remove(tag)
+                        tag['matched_trigger'] = matched_trigger
+                        tag['phase'] = phase
+
+                        if (('insert_text' in tag and phase == 'llm') or ('positive_prompt' in tag and phase == 'img')):
+                            if len(trigger_keys) > 1 and not bot_database.was_warned('tags_triggers_insert'):
+                                bot_database.update_was_warned('tags_triggers_insert')
+                                log.warning(f'[TAGS] Matched definition with multiple "trigger" keys has a text insertion key. This will be applied to the match from first "trigger" definition, phrase: {matched_trigger}')
+                            updated_matches.append((tag, trigger_match.start(), trigger_match.end()))  # Add as a tuple with start/end indexes if inserting text later
+                            break
+
+                        if phase == 'llm' and 'positive_prompt' in tag:
+                            tag['imgtag_matched_early'] = True
+                        updated_matches.append(tag)
+                        break
+                                
             if updated_matches:
                 updated_matches = self.process_tag_trumps(updated_matches) # type: ignore # trump tags
             # Add LLM sublist back to unmatched tags list if LLM phase
@@ -1273,6 +1331,7 @@ class Tags:
 
         except Exception as e:
             log.error(f"Error matching tags: {e}")
+            traceback.print_exc()
 
 #################################################################
 ###################### DYNAMIC PROMPTING ########################

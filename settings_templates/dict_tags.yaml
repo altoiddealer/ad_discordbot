@@ -5,6 +5,7 @@
 # - 'trigger' key is recommended for most tags (except 'global_tag_keys' and 'tag_preset_name').
 # - Multiple comma-separated trigger phrases can be used per each tag (trigger: 'a boy,a dog' can match either 'a boy' or 'a dog')
 # - You may simplify triggers using this syntax: 'a {boy|dog}' --- the script will read this as 'a boy,a dog'
+# - You may use multiple trigger keys in a tag definition such as 'trigger1', 'trigger2' - in which case, a trigger phrase must match the search text from each one
 # - The behavior of tags listed higher may override ones listed lower. Sources are also prioritized: character > imgmodel > base_tags
 # - Valid tag keys are detailed at the end of this file and on GitHub
 
@@ -184,6 +185,7 @@ tag_presets:
 # Conditional tags:
 #   search_mode: userllm              Search method for trigger matching. 'user' = user prompt only / 'llm' = bot reply only / 'userllm' = search both for matches
 #   trigger: 'trigger,another one'    Recommended for most tags (except 'global_tag_keys' and 'tag_preset_name').
+#     Additional triggers (trigger1, trigger2, etc) - if using multiple trigger keys, a trigger phrase must match the search text from each one
 #   random: 0.5                       Chance for tag to process. 0.0 = 0% chance and 1.0 = 100% chance.
 #   case_sensitive: (true/false)      If the triggers are case sensitive
 #   on_prefix_only: (true/false)      If triggers must be matched at beginning of the searched text
