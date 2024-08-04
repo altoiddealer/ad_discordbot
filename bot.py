@@ -1316,7 +1316,7 @@ class Tags:
                         if phase == 'llm' and 'positive_prompt' in tag:
                             tag['imgtag_matched_early'] = True
                         updated_matches.append(tag)
-                        break
+                        continue
                                 
             if updated_matches:
                 updated_matches = self.process_tag_trumps(updated_matches) # type: ignore # trump tags
