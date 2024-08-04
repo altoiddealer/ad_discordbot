@@ -1282,7 +1282,7 @@ class Tags:
                                         log.warning('[TAGS] Tag with multiple trigger definitions has "on_prefix_only". Ignoring this parameter.')
 
                                 # retain the matched trigger phrase, from first trigger definition due to reverse()
-                                matched_trigger = trigger
+                                matched_trigger = str(trigger)
                                 break
 
                             if not trigger_match:
@@ -1307,8 +1307,9 @@ class Tags:
                         tag['phase'] = phase
 
                         if (('insert_text' in tag and phase == 'llm') or ('positive_prompt' in tag and phase == 'img')):
-                            if len(trigger_keys) > 1:
-                                log.warning('[TAGS] Matched definition with multiple "trigger" keys has a text insertion key. This will be applied to the match from first "trigger" definition, phrase:', matched_trigger)
+                            if len(trigger_keys) > 1 and not bot_database.was_warned('tags_triggers_insert'):
+                                bot_database.update_was_warned('tags_triggers_insert')
+                                log.warning(f'[TAGS] Matched definition with multiple "trigger" keys has a text insertion key. This will be applied to the match from first "trigger" definition, phrase: {matched_trigger}')
                             updated_matches.append((tag, trigger_match.start(), trigger_match.end()))  # Add as a tuple with start/end indexes if inserting text later
                             break
 
