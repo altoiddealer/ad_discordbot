@@ -38,7 +38,7 @@ from functools import partial
 
 sys.path.append("ad_discordbot")
 
-from modules.utils_shared import task_processing, shared_path, patterns, bot_emojis
+from modules.utils_shared import bg_task_queue, task_processing, shared_path, patterns, bot_emojis
 from modules.database import Database, ActiveSettings, Config, StarBoard, Statistics
 from modules.utils_misc import check_probability, fix_dict, update_dict, sum_update_dict, update_dict_matched_keys, random_value_from_range, convert_lists_to_tuples, get_time, format_time, format_time_difference, get_normalized_weights  # noqa: F401
 from modules.utils_discord import Embeds, guild_only, configurable_for_dm_if, is_direct_message, ireply, sleep_delete_message, send_long_message, \
@@ -481,7 +481,6 @@ tgwui = TGWUI()
 #################################################################
 ##################### BACKGROUND QUEUE TASK #####################
 #################################################################
-bg_task_queue = asyncio.Queue()
 
 async def process_tasks_in_background():
     while True:
@@ -1677,7 +1676,7 @@ class TaskProcessing(TaskAttributes):
                 self.bot_hmessage.related_ids.extend(self.params.chunk_msg_ids)
             # Apply any reactions applicable to message
             if config['discord']['history_reactions'].get('enabled', True):
-                await apply_reactions_to_messages(client.user, self.ictx, self.bot_hmessage, self.params.chunk_msg_ids)
+                await bg_task_queue.put(apply_reactions_to_messages(client.user, self.ictx, self.bot_hmessage, self.params.chunk_msg_ids))
         # send any user images
         send_user_image = self.params.send_user_image
         if send_user_image:
@@ -3160,7 +3159,7 @@ class Tasks(TaskProcessing):
 
                 # add history reactions to user message
                 if config['discord']['history_reactions'].get('enabled', True):
-                    await apply_reactions_to_messages(client.user, self.ictx, self.user_hmessage)
+                    await bg_task_queue.put(apply_reactions_to_messages(client.user, self.ictx, self.user_hmessage))
 
                 # Swap LLM Model back if triggered
                 if self.params.llmmodel and self.params.llmmodel.get('mode', 'change') == 'swap':
@@ -3348,7 +3347,7 @@ class Tasks(TaskProcessing):
             # Apply any reactions applicable to message
             msg_ids_to_edit = [updated_bot_hmessage.id] + updated_bot_hmessage.related_ids
             if config['discord']['history_reactions'].get('enabled', True):
-                await apply_reactions_to_messages(client.user, self.ictx, updated_bot_hmessage, msg_ids_to_edit, new_discord_msg)
+                await bg_task_queue.put(apply_reactions_to_messages(client.user, self.ictx, updated_bot_hmessage, msg_ids_to_edit, new_discord_msg))
 
             # process any tts resp
             if self.tts_resp:
@@ -3468,11 +3467,11 @@ class Tasks(TaskProcessing):
 
                 target_bot_hmessage_ids = [target_bot_hmessage.id] + target_bot_hmessage.related_ids
                 if config['discord']['history_reactions'].get('enabled', True):
-                    await apply_reactions_to_messages(client.user, self.ictx, target_bot_hmessage, target_bot_hmessage_ids, self.target_discord_msg)
+                    await bg_task_queue.put(apply_reactions_to_messages(client.user, self.ictx, target_bot_hmessage, target_bot_hmessage_ids, self.target_discord_msg))
 
             # Update reactions for user message
             if config['discord']['history_reactions'].get('enabled', True):
-                await apply_reactions_to_messages(client.user, self.ictx, self.user_hmessage)
+                await bg_task_queue.put(apply_reactions_to_messages(client.user, self.ictx, self.user_hmessage))
 
             await self.embeds.delete('regenerate')
 
@@ -3584,7 +3583,7 @@ class Tasks(TaskProcessing):
 
             # Apply reaction to user message
             if config['discord']['history_reactions'].get('enabled', True):
-                await apply_reactions_to_messages(client.user, self.ictx, user_hmessage)
+                await bg_task_queue.put(apply_reactions_to_messages(client.user, self.ictx, user_hmessage))
 
             # Process all messages that need label updates
             for target_hmsg in bot_hmsgs_to_react:
@@ -3594,7 +3593,7 @@ class Tasks(TaskProcessing):
                     msg_ids_to_edit.extend(target_hmsg.related_ids)
                 # Process reactions for all affected messages
                 if config['discord']['history_reactions'].get('enabled', True):
-                    await apply_reactions_to_messages(client.user, self.ictx, target_hmsg, msg_ids_to_edit, self.target_discord_msg)
+                    await bg_task_queue.put(apply_reactions_to_messages(client.user, self.ictx, target_hmsg, msg_ids_to_edit, self.target_discord_msg))
             
             result = f"**Modified message exchange pair in history for {self.user_name}** (messages {verb})."
             log.info(result)

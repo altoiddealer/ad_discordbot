@@ -8,6 +8,8 @@ logging = log
 
 task_processing = asyncio.Event()
 
+bg_task_queue = asyncio.Queue()
+
 class SharedPath:
 
     def init_user_config_files(root, src_dir, file) -> str:
