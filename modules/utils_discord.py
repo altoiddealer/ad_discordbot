@@ -1,4 +1,4 @@
-from modules.utils_shared import task_processing, bot_emojis
+from modules.utils_shared import bg_task_queue, task_processing, bot_emojis
 import discord
 from discord.ext import commands
 from typing import Optional, Union
@@ -267,7 +267,7 @@ async def replace_msg_in_history_and_discord(client_user:discord.Client, ictx:Ct
             
         # Apply any reactions applicable to message
         if apply_reactions:
-            await apply_reactions_to_messages(client_user, ictx, updated_hmessage)
+            await bg_task_queue.put(apply_reactions_to_messages(client_user, ictx, updated_hmessage))
 
         return updated_hmessage
     except Exception as e:
