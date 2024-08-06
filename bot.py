@@ -1274,7 +1274,11 @@ class Tags:
                                     # Revert trigger match if on_prefix_only is unsatisfied
                                     if len(trigger_keys) == 1:
                                         trigger_match = None
-                                        continue
+                                        if index == len(triggers) - 1:
+                                            all_triggers_matched = False
+                                            break
+                                        else:
+                                            continue
                                     # Warn for invalid tags definition
                                     elif not bot_database.was_warned('tags_on_prefix'):
                                         bot_database.update_was_warned('tags_on_prefix')
