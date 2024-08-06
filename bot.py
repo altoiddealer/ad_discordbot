@@ -1709,6 +1709,7 @@ class TaskProcessing(TaskAttributes):
     async def process_llm_payload_tags(self:Union["Task","Tasks"], mods:dict):
         try:
             char_params: dict       = {}
+            begin_reply_with: str   = mods.get('begin_reply_with', None)
             flow: dict              = mods.get('flow', None)
             save_history: bool      = mods.get('save_history', None)
             load_history: bool      = mods.get('load_history', None)
@@ -1720,6 +1721,13 @@ class TaskProcessing(TaskAttributes):
             swap_character: str     = mods.get('swap_character', None)
             change_llmmodel: str    = mods.get('change_llmmodel', None)
             swap_llmmodel: str      = mods.get('swap_llmmodel', None)
+
+            # Begin reply with handling
+            if begin_reply_with is not None:
+                setattr(self.params, 'begin_reply_with', begin_reply_with)
+                self.apply_begin_reply_with()
+                log.info(f"[TAGS] Reply is being continued from: '{begin_reply_with}'")
+
             # Flow handling
             if flow is not None and not flows.event.is_set():
                 await flows.build_queue(flow)
@@ -1801,6 +1809,8 @@ class TaskProcessing(TaskAttributes):
         try:
             for tag in self.tags.matches:
                 # Values that will only apply from the first tag matches
+                if 'begin_reply_with' in tag and not llm_payload_mods.get('begin_reply_with'):
+                    llm_payload_mods['begin_reply_with'] = tag.pop('begin_reply_with')
                 if 'flow' in tag and not llm_payload_mods.get('flow'):
                     llm_payload_mods['flow'] = tag.pop('flow')
                 if 'save_history' in tag and not llm_payload_mods.get('save_history'):
@@ -1860,6 +1870,14 @@ class TaskProcessing(TaskAttributes):
             log.error(f"Error collecting LLM tag values: {e}")
         return llm_payload_mods, formatting
 
+    def apply_begin_reply_with(self:Union["Task","Tasks"]):
+        # Continue from value of 'begin_reply_with'
+        begin_reply_with = getattr(self.params, 'begin_reply_with', None)
+        if begin_reply_with:
+            self.llm_payload['state']['history']['internal'].append([self.text, begin_reply_with])
+            self.llm_payload['state']['history']['visible'].append([self.text, begin_reply_with])
+            self.llm_payload['_continue'] = True
+
     async def init_llm_payload(self:Union["Task","Tasks"]):
         self.llm_payload = copy.deepcopy(bot_settings.settings['llmstate'])
         self.llm_payload['text'] = self.text
@@ -1870,6 +1888,7 @@ class TaskProcessing(TaskAttributes):
         self.llm_payload['state']['character_menu'] = bot_settings.name
         self.llm_payload['state']['context'] = bot_settings.settings['llmcontext']['context']
         self.llm_payload['state']['history'] = self.local_history.render_to_tgwui()
+        self.apply_begin_reply_with()
 
     async def message_img_gen(self:Union["Task","TaskProcessing"]):
         await self.tags.match_img_tags(self.img_prompt)
@@ -5610,7 +5629,7 @@ if tgwui.enabled:
             await ctx.send('There are no LLM models available', ephemeral=True)
 
 #################################################################
-####################### /SPEAK COMMAND #######################
+######################### /SPEAK COMMAND ########################
 #################################################################
 async def process_speak_silero_non_eng(ctx: commands.Context, lang):
     non_eng_speaker = None
@@ -5852,6 +5871,41 @@ if tgwui.enabled and tts.client and tts.client in tts.supported_clients:
             voice_input = voice_input if voice_input is not None else ''
             lang = lang.value if lang is not None else ''
             await process_speak(ctx, input_text, selected_voice, lang, voice_input)
+
+#################################################################
+######################## /PROMPT COMMAND ########################
+#################################################################
+async def process_prompt(ctx: commands.Context, selections:dict):
+    # User inputs from /image command
+    prompt = selections.get('prompt', '')
+    begin_reply_with = selections.get('begin_reply_with', None)
+
+    if not prompt:
+        await ctx.reply("A prompt is required for '/prompt' command", ephemeral=True, delete_after=5)
+        return
+
+    try:
+        await ireply(ctx, 'prompt') # send a response msg to the user
+
+        log.info(f'{ctx.author.display_name} used "/prompt": "{prompt}"')
+        # offload to TaskManager() queue
+        prompt_params = Params()
+        if begin_reply_with:
+            setattr(prompt_params, 'begin_reply_with', begin_reply_with)
+        prompt_task = Task('message', ctx, text=prompt, params=prompt_params)
+        await task_manager.task_queue.put(prompt_task)
+
+    except Exception as e:
+        log.error(f"Error processing '/prompt': {e}")
+        await ctx.send(f"Error processing '/prompt': {e}", ephemeral=True)
+
+if tgwui.enabled:
+    @client.hybrid_command(name="prompt", description=f'Generate text with advanced options')
+    @app_commands.describe(prompt=f'Your prompt to the LLM.')
+    @app_commands.describe(begin_reply_with=f'The LLM will continue their reply from this.')
+    async def prompt(ctx: commands.Context, prompt: str, begin_reply_with: typing.Optional[str]):
+        user_selections = {"prompt": prompt, "begin_reply_with": begin_reply_with if begin_reply_with else None}
+        await process_prompt(ctx, user_selections)
 
 #################################################################
 ######################### BOT STATUS ############################
