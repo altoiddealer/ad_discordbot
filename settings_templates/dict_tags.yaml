@@ -200,6 +200,7 @@ tag_presets:
 # Relevant to text generation (LLM):
 #   should_gen_text: (true/false)     If LLM should generate text. If False and 'should_gen_image' is True, passes the user's text as prompt for image gen.
 #   should_send_text: (true/false)    If LLM should send generated text to channel. Mainly used for 'flows' tag.
+#   begin_reply_with: 'string'        The LLM will continue their reply from this.
 #   change_llmmodel: 'string'         For (change/swap)_llmmodel: 'change' will trigger a persistent change. 'swap' will only change the LLM model for the current interaction.
 #   swap_llmmodel: 'string'           Name of an LLM model (ei: 'Mistral-7B-OpenOrca-GPTQ'). Value 'None' will unload the LLM model!
 #   time_offset: 0.0                  0 = today's date (system time). -0.5 shifts the current date to be 12 hours ago. (UOM = days). Use with '{time}' anywhere in your prompts
