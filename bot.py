@@ -135,7 +135,36 @@ class SD:
         self.last_img_payload = {}
 
         if self.enabled:
-            asyncio.run(self.get_sysinfo())
+            if asyncio.run(self.online()):
+                asyncio.run(self.get_sysinfo())
+
+    async def online(self, ictx:CtxInteraction|None=None):
+        channel = ictx.channel if ictx else None
+        e_title = f"Stable Diffusion is not running at: {self.url}"
+        e_description = f"Launch your SD WebUI client with `--api --listen` command line arguments\n\
+            Read more [here](https://github.com/AUTOMATIC1111/stable-diffusion-webui/wiki/API)"
+
+        async with aiohttp.ClientSession() as session:
+            try:
+                async with session.get(f'{self.url}/') as response:
+                    if response.status == 200:
+                        log.debug(f'Request status to SD: {response.status}')
+                        return True
+                    else:
+                        log.warning(f'Non-200 status code received: {response.status}')
+                        await bot_embeds.send('system', e_title, e_description, channel=channel, delete_after=10)
+                        return False
+            except aiohttp.ClientError as exc:
+                # never successfully connected
+                if self.client is None:
+                    log.warning(e_title)
+                    log.warning("Launch your SD WebUI client with `--api --listen` command line arguments")
+                    log.warning("Image commands/features will function when client is active and accessible via API.'")
+                # was previously connected
+                else:
+                    log.warning(exc)
+                await bot_embeds.send('system', e_title, e_description, channel=channel, delete_after=10)
+                return False
 
     async def api(self, endpoint:str, method='get', json=None, retry=True) -> dict:
         try:
@@ -1933,7 +1962,7 @@ class TaskProcessing(TaskAttributes):
     async def message_img_gen(self:Union["Task","TaskProcessing"]):
         await self.tags.match_img_tags(self.img_prompt)
         self.params.update_bot_should_do(self.tags) # check for updates from tags
-        if self.params.should_gen_image and await self.sd_online():
+        if self.params.should_gen_image and await sd.online(self.ictx):
             # CLONE CURRENT TASK AND QUEUE IT
             await self.embeds.send('system', title='Generating an image', description='An image task was triggered, created and queued.', delete_after=5)
             #await self.channel.send('()', delete_after=5)
@@ -2319,25 +2348,6 @@ class TaskProcessing(TaskAttributes):
             log.error(f'An error occurred while sending greeting or history for "{char_name}": {e}')
 
 ####################### MOSTLY IMAGE GEN PROCESSING #########################
-
-    async def sd_online(self: Union["Task", "Tasks"]):
-        async with aiohttp.ClientSession() as session:
-            e_title = f"{sd.client} api is not running at {sd.url}"
-            e_description = f"Launch {sd.client} with `--api --listen` commandline arguments\n\
-                Read more [here](https://github.com/AUTOMATIC1111/stable-diffusion-webui/wiki/API)"
-            try:
-                async with session.get(f'{sd.url}/') as response:
-                    if response.status == 200:
-                        log.debug(f'Request status to SD: {response.status}')
-                        return True
-                    else:
-                        log.warning(f'Non-200 status code received: {response.status}')
-                        await self.embeds.send('system', e_title, e_description)
-                        return False
-            except aiohttp.ClientError as exc:
-                log.warning(exc)
-                await self.embeds.send('system', e_title, e_description)
-                return False
 
     async def sd_progress_warning(self:Union["Task","Tasks"]):
         log.error('Reached maximum retry limit')
@@ -3246,7 +3256,7 @@ class Tasks(TaskProcessing):
 
             # Create an img gen task if bot did not generate text but should generate image:
             if not self.last_resp and self.params.should_gen_image:
-                if await self.sd_online():   # Notify user their prompt will be used directly for img gen
+                if await sd.online(self.ictx):   # Notify user their prompt will be used directly for img gen
                     await self.channel.send('Bot was triggered to not generate a text response.\n \
                                     **Creating an image generation task using your input as the prompt...**', delete_after=5)
                 # CREATE A TASK AND QUEUE IT
@@ -3753,7 +3763,7 @@ class Tasks(TaskProcessing):
             if not self.ictx:
                 self.user_name = 'Automatically'
 
-            if not await self.sd_online(): # Can't change Img model if not online!
+            if not await sd.online(self.ictx): # Can't change Img model if not online!
                 log.warning('Bot tried to change Img Model, but SD API is offline.')
                 return
 
@@ -4692,8 +4702,8 @@ if sd.enabled:
         image_cmd_task = Task('image_cmd', ctx)
         setattr(image_cmd_task, 'imgcmd_task', True)
         # Do not process if SD WebUI is offline
-        if not await image_cmd_task.sd_online():
-            await ctx.defer()
+        if not await sd.online(ictx=ctx):
+            await ctx.reply("Stable Diffusion is not online.", ephemeral=True, delete_after=5)
             return
         # User inputs from /image command
         prompt = selections.get('prompt', '')
