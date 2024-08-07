@@ -189,6 +189,10 @@ tag_presets:
 #   random: 0.5                       Chance for tag to process. 0.0 = 0% chance and 1.0 = 100% chance.
 #   case_sensitive: (true/false)      If the triggers are case sensitive
 #   on_prefix_only: (true/false)      If triggers must be matched at beginning of the searched text
+#                                     To access the "id" needed for the following conditions, you must enable "Developer Mode" for your account (Account Settings > Advanced > Developer Mode).
+#                                     These can be either one id, example: int / or a comma separated list, example: [int, int, int]
+#   for_guild_ids_only: int           Value is a 'server_id' number. Get this by right-clicking a Server and selecting "Copy Server ID".
+#   for_channel_ids_only: int         Value is a 'channel_id' number. Get this by right-clicking a channel (or DM) and selecting "Copy Channel ID"
 
 # Relevant to both text/img generation:
 #   send_user_image: 'string'         Sends a local image to the channel. Value values: Image in 'user_images' (png/jpg/txt in base64) -OR- Directory name in '/user_images/'
