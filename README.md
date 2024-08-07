@@ -330,8 +330,18 @@
 - **Automatic Img model changing:**
   - Adjustable duration and mode (random / cycle)
   - Smart filters and settings to auto-update relavent settings (SD1.5, SDXL, Turbo, etc)
+ 
+- **Powerful Context Menu commands** (right-click on a message):
 
-- **Continue and Regenerate text replies via Context Menu (right click on the reply)**
+  <img width="285" alt="338729061-92d1ef4f-56c2-46aa-be9e-5ce69284900e" src="https://github.com/user-attachments/assets/8964bf42-e7b5-43b1-aed5-5ebafcc79ee2">
+  
+  - Can target **any** message in chat history (not only the most recent one!), making **Continue** & **Regenerate** more powerful than native TGWUI.
+  - Custom **Regenerate** methods:
+    - **regenerate replace** works as everyone is familiar with (generates a new reply and replaces the original).
+    - **regenerate create** makes a new generation while "hiding" the previous response. These can be easily toggled with **toggle as hidden** command, so you can choose your favorite reply!
+  - **edit history** allows you to edit any message in history
+  - **toggle as hidden** will hide or reveal the user/bot reply exchange in history.
+  - The above are restricted to your own / the bot's messages (can't target other users' messages).
 
 - **All tasks queue up and process elagently - go ahead, spam it with requests!**
 
