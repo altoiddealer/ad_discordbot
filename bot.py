@@ -122,8 +122,6 @@ warnings.filterwarnings("ignore", category=UserWarning, message="You have modifi
 # Set discord intents
 intents = discord.Intents.default()
 intents.message_content = True
-intents.reactions = True  # Enable reaction events
-intents.guild_messages = True # Allows updating topic
 client = commands.Bot(command_prefix=".", intents=intents)
 
 #################################################################
@@ -958,7 +956,9 @@ async def update_tags(tags:list) -> list:
         return tags
 
 class Tags:
-    def __init__(self):
+    def __init__(self, ictx:CtxInteraction|None=None):
+        self.ictx = ictx
+        self.user: Union[discord.User, discord.Member] = get_user_ctx_inter(self.ictx) if self.ictx else None
         self.tags_initialized = False
         self.matches:list = []
         self.unmatched = {'user': [], 'llm': [], 'userllm': []}
@@ -986,20 +986,60 @@ class Tags:
         except Exception as e:
             log.error(f"Error getting tags: {e}")
 
+    # Check for discord conditions
+    def pass_discord_check(self, key, value) -> bool:
+        # Must have an interaction to check
+        if not key in ['for_guild_ids_only', 'for_channel_ids_only'] or self.ictx is None: # TODO 'for_role_ids_only' (requires 'members' intent)
+            return True
+
+        # Adjust values
+        if isinstance(value, int):
+            id_values_list = [value]
+        elif isinstance(value, list):
+            id_values_list = value
+        else:
+            log.error(f"Error: Value for '{key}' in tags must be an integer or a list of integers (a valid discord ID, or [list, of, IDs]).")
+            return False
+
+        # check each value against the interaction
+        for id_value in id_values_list:
+            if key == 'for_guild_ids_only' and not is_direct_message(self.ictx) and id_value != self.ictx.guild.id:
+                return False
+            elif key == 'for_channel_ids_only' and id_value != self.ictx.channel.id:
+                return False
+            # TODO 'for_role_ids_only' (requires 'members' intent)
+            # elif key == 'for_role_ids_only' and self.user and not is_direct_message(self.ictx):
+            #     member = self.ictx.guild.get_member(self.user.id)
+            #     role_ids = [role.id for role in member.roles]
+            #     if id_value not in role_ids:
+            #         return False
+        return True
+
+    # Check if 'random' key exists and handle its value
+    def pass_random_check(self, key, value) -> bool:
+        if not isinstance(value, (int, float)):
+            log.error("Error: Value for 'random' in tags should be float value (ex: 0.8).")
+            return False
+        if not random.random() < value:
+            return False
+        return True
+
     def sort_tags(self, all_tags: TAG_LIST):
         for tag in all_tags:
-            if 'random' in tag.keys():
-                if not isinstance(tag['random'], (int, float)):
-                    log.error("Error: Value for 'random' in tags should be float value (ex: 0.8).")
-                    continue # Skip this tag
-                if not random.random() < tag['random']:
-                    continue # Skip this tag
-                
-            search_mode = tag.get('search_mode', 'userllm')  # Default to 'userllm' if 'search_mode' is not present
-            if search_mode in self.unmatched:
-                self.unmatched[search_mode].append({k: v for k, v in tag.items() if k != 'search_mode'})
+            # check initial conditions
+            for key, value in tag.items():
+                if key == 'random' and not self.pass_random_check(key, value):
+                    break # Skip this tag
+                if not self.pass_discord_check(key, value):
+                    break # Skip this tag
+            # sort tags that passed condition for further processing
             else:
-                log.warning(f"Ignoring unknown search_mode: {search_mode}")
+                search_mode = tag.get('search_mode', 'userllm')  # Default to 'userllm' if 'search_mode' is not present
+                if search_mode in self.unmatched:
+                    self.unmatched[search_mode].append({k: v for k, v in tag.items() if k != 'search_mode'})
+                else:
+                    log.warning(f"Ignoring unknown search_mode: {search_mode}")
+
 
     # Function to convert string values to bool/int/float
     def extract_value(self, value_str:str) -> Optional[Union[bool, int, float, str]]:
@@ -3847,7 +3887,7 @@ class Tasks(TaskProcessing):
     async def img_gen_task(self:"Task"):
         try:
             if not self.tags:
-                self.tags = Tags()
+                self.tags = Tags(self.ictx)
                 await self.tags.init(phase='img')
                 self.tags.match_img_tags(self.img_prompt)
                 self.params.update_bot_should_do(self.tags)
@@ -4118,7 +4158,7 @@ class Task(Tasks):
         self.llm_payload: dict       = self.llm_payload if self.llm_payload else {}
         # Misc parameters
         self.params: Params          = self.params if self.params else Params()
-        self.tags: Tags              = self.tags if self.tags else Tags()
+        self.tags: Tags              = self.tags if self.tags else Tags(self.ictx)
         # Image specific attributes
         self.img_prompt: str         = self.img_prompt if self.img_prompt else None
         self.img_payload: dict       = self.img_payload if self.img_payload else {}
@@ -4411,7 +4451,7 @@ class Flows(TaskProcessing):
                 formatted_value = self.format_prompt_with_recent_output(value, self.local_history)       # output will be a string
                 # if the value changed...
                 if formatted_value != value:         
-                    tags = Tags() # Simply to access Tags methods
+                    tags = Tags(self.ictx) # Simply to access Tags methods
                     formatted_value = tags.parse_tag_from_text_value(formatted_value)    # convert new string to correct value type
                 formatted_flow_tags[key] = formatted_value
             # apply wildcards
@@ -6754,7 +6794,12 @@ else:
 # Manually start the bot so we can catch keyboard interupts
 async def runner():
     async with client:
-        await client.start(bot_token, reconnect=True)
+        try:
+            await client.start(bot_token, reconnect=True)
+        except discord.errors.PrivilegedIntentsRequired:
+            log.error("The bot requires the privileged intent 'message_content' to be enabled in your discord developer portal.")
+            log.error("Please update the intents for the bot and try again.")
+            sys.exit(2)
 
 discord.utils.setup_logging(
             handler=log_file_handler,
