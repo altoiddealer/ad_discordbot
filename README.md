@@ -363,16 +363,20 @@
 
 2. **[Create a Discord bot account](https://discordpy.readthedocs.io/en/stable/discord.html), invite it to your server, and note its authentication token**.
 
-3. Clone this repository into **/text-generation-webui/**
+   !!! **IMPORTANT: You must allow your bot to have "Privileged Intents" for "`MESSAGE_CONTENT`"** !!!
+   
+   !!! **[Enabling Privileged Intents](https://discord.com/developers/docs/topics/gateway#enabling-privileged-intents)** !!!
+
+4. Clone this repository into **/text-generation-webui/**
    ```
    git clone https://github.com/altoiddealer/ad_discordbot
    ```
 
-4. **Run the updater** for your OS (**ex: update_windows.bat**) which will install requirements:
+5. **Run the updater** for your OS (**ex: update_windows.bat**) which will install requirements:
 
-5. **Run the launcher** for your OS (**ex: start_windows.bat**)
+6. **Run the launcher** for your OS (**ex: start_windows.bat**)
 
-6. **Enter your bot token (from Step 2) into the CMD window**
+7. **Enter your bot token (from Step 2) into the CMD window**
 
    <img width="559" alt="Screenshot 2024-05-25 100216" src="https://github.com/altoiddealer/ad_discordbot/assets/1613484/ff5207ec-954e-4e71-975d-ce171c1c42c8">
 
@@ -439,7 +443,7 @@
    pip install -r extensions\coqui_tts\requirements.txt
    ```
 
-2. Ensure that your bot has sufficient permissions to use the Voice channel and/or upload files (From your bot invite/Discord Developer portal, and your Discord server/channel settings)
+2. Ensure that your bot has sufficient permissions to access the Voice channel and/or upload files (From your bot invite/Discord Developer portal, and your Discord server/channel settings)
 
 3. Configure **config.yaml** in the section **discord** > **tts_settings**
 
