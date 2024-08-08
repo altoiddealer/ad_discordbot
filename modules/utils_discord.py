@@ -146,9 +146,10 @@ async def ireply(ictx: 'CtxInteraction', process):
         log.error(f"Error sending message response to user's interaction command: {e}")
 
 
-async def send_long_message(channel, message_text, bot_hmessage:Optional['HMessage']=None, ref_message:Optional[discord.Message]=None) -> discord.Message:
+async def send_long_message(channel, message_text, ref_message:Optional[discord.Message]=None) -> discord.Message:
     """ Splits a longer message into parts while preserving sentence boundaries and code blocks """
     active_lang = ''
+    sent_msg_ids = []
 
     # Helper function to ensure even pairs of code block markdown
     def ensure_even_code_blocks(chunk_text, code_block_inserted):
@@ -200,8 +201,7 @@ async def send_long_message(channel, message_text, bot_hmessage:Optional['HMessa
                 sent_message = await channel.send(chunk_text, reference=ref_message)
             else:
                 sent_message = await channel.send(chunk_text)
-            if bot_hmessage:
-                bot_hmessage.related_ids.append(sent_message.id)
+            sent_msg_ids.append(sent_message.id)
                 
             message_text = message_text[chunk_length:]
             if len(message_text) <= MAX_MESSAGE_LENGTH:
@@ -209,11 +209,10 @@ async def send_long_message(channel, message_text, bot_hmessage:Optional['HMessa
                 chunk_text, code_block_inserted = ensure_even_code_blocks(message_text, code_block_inserted)
                 sent_message = await channel.send(chunk_text)
                 break
-            
-    if bot_hmessage:
-        bot_hmessage.id = sent_message.id
 
-    return sent_message
+    sent_msg_ids.append(sent_message.id) # append ID for last message
+
+    return sent_msg_ids, sent_message
 
 async def replace_msg_in_history_and_discord(client_user:discord.Client, ictx:CtxInteraction, params, text:str, text_visible:str, apply_reactions:bool=True) -> Optional['HMessage']:
     channel = ictx.channel
@@ -249,10 +248,12 @@ async def replace_msg_in_history_and_discord(client_user:discord.Client, ictx:Ct
                 await target_discord_msg.delete()
                 # Send new messages if not already sent
                 if not was_chunked:
+                    sent_msg_ids, _ = await send_long_message(channel, text, ref_message)
+                    # Update IDs for Bot HMessage
                     if getattr(params, 'bot_hmessage_to_update', None):
-                        await send_long_message(channel, text, bot_hmessage=updated_hmessage, ref_message=ref_message)
-                    else:
-                        await send_long_message(channel, text, bot_hmessage=None, ref_message=ref_message)
+                        sent_msg_ids:list
+                        last_msg_id = sent_msg_ids.pop(-1)
+                        updated_hmessage.update(id=last_msg_id, related_ids=sent_msg_ids)
 
         # Clear related IDs attribute
         updated_hmessage.related_ids.clear() # TODO maybe add a 'fresh' method to HMessage? - For Reality
@@ -455,7 +456,11 @@ class Embeds:
         if self.enabled('flow'):
             self.create("flow", "Flow Notification", " ", url_suffix="/wiki/tags", color=self.color)
 
-    def create(self, name:str, title:str=' ', description:str=' ', url_suffix:str|None=None, url:str|None=None, color:int|None=None) -> discord.Embed:
+    def create(self, name:str, title:str=' ', description:str=' ', **kwargs) -> discord.Embed:
+        color = kwargs.get('color', None)
+        footer = kwargs.get('footer', None)
+        url = kwargs.get('url', None)
+        url_suffix = kwargs.get('url_suffix', None)
         if url or url_suffix:
             url = url if url_suffix is None else f'{self.root_url}{url_suffix}'
         else:
@@ -463,6 +468,8 @@ class Embeds:
         if color is None:
             color = self.color
         self.embeds[name] = discord.Embed(title=title, description=description, url=url, color=color)
+        if footer:
+            self.embeds[name] = self.embeds[name].set_footer(text=footer)
         return self.embeds[name]
 
     def get(self, name:str) -> discord.Embed|None:
@@ -476,19 +483,30 @@ class Embeds:
         if previously_sent_embed:
             await previously_sent_embed.delete()
 
-    def update(self, name:str, title:str|None=None, description:str|None=None, color:int|None=None, url_suffix:str|None=None, url:str|None=None) -> discord.Embed:
+    def update(self, name:str, title:str|None=None, description:str|None=None, **kwargs) -> discord.Embed:
         embed:discord.Embed = self.embeds.get(name)
-        if title:
+        color = kwargs.get('color', None)
+        url_suffix = kwargs.get('url_suffix', None)
+        url = kwargs.get('url', None)
+        footer = kwargs.get('footer', None)
+
+        if title is not None:
             embed.title = title
-        if description:
+        if description is not None:
             embed.description = description
-        if color:
+        if color is not None:
             embed.color = color
-        if url or url_suffix:
+        #update footer
+        if footer is not None:
+            embed = embed.set_footer(text=footer)
+        else:
+            embed = embed.remove_footer()
+        # update url
+        if url is not None or url_suffix is not None:
             embed.url = url if url else f'{self.root_url}{url_suffix}'
         return embed
     
-    async def edit(self, name:str, title:str|None=None, description:str|None=None, color:int|None=None, url_suffix:str|None=None, url:str|None=None) -> None|discord.Message:
+    async def edit(self, name:str, title:str|None=None, description:str|None=None, **kwargs) -> None|discord.Message:
         # Return if not configured
         if not self.enabled(name):
             return
@@ -496,22 +514,24 @@ class Embeds:
         previously_sent_embed:discord.Message = self.sent_msg_embeds.pop(name, None)
         # Retain the message while editing Embed
         if previously_sent_embed:
-            self.sent_msg_embeds[name] = await previously_sent_embed.edit(embed = self.update(name, title, description, color, url_suffix, url))
+            self.sent_msg_embeds[name] = await previously_sent_embed.edit(embed = self.update(name, title, description, **kwargs))
             return self.sent_msg_embeds[name]
         return None
 
-    async def send(self, name:str, title:str|None=None, description:str|None=None, color:int|None=None, url_suffix:str|None=None, url:str|None=None, channel:discord.TextChannel|None=None, delete_after:int|None=None) -> None|discord.Message:
-        send_channel = channel or self.channel or None
+    async def send(self, name:str, title:str|None=None, description:str|None=None, **kwargs) -> None|discord.Message:
+        send_channel = kwargs.get('channel') or self.channel or None
+        delete_after = kwargs.get('delete_after', None)
+
         # Return if not configured
-        if not self.enabled(name) or (self.channel is None and channel is None):
+        if not self.enabled(name) or send_channel is None:
             return
         # Retain the message while sending Embed
-        updated_embed = self.update(name, title, description, color, url_suffix, url)
-        self.sent_msg_embeds[name] = await send_channel.send(embed = updated_embed, delete_after=delete_after)
+        updated_embed = self.update(name, title, description, **kwargs)
+        self.sent_msg_embeds[name] = await send_channel.send(embed=updated_embed, delete_after=delete_after)
         return self.sent_msg_embeds[name]
 
-    async def edit_or_send(self, name:str, title:str|None=None, description:str|None=None, color:int|None=None, url_suffix:str|None=None, url:str|None=None, channel:discord.TextChannel|None=None) -> None|discord.Embed|discord.Message:
-        send_channel = channel or self.channel or None
+    async def edit_or_send(self, name:str, title:str|None=None, description:str|None=None, **kwargs) -> None|discord.Embed|discord.Message:
+        send_channel = kwargs.get('channel') or self.channel or None
         # Return if not configured
         if not self.enabled(name):
             return
@@ -519,12 +539,12 @@ class Embeds:
         previously_sent_embed:discord.Message = self.sent_msg_embeds.pop(name, None)
         # Retain the message while sending/editing Embed
         if previously_sent_embed:
-            self.sent_msg_embeds[name] = await previously_sent_embed.edit(embed = self.update(name, title, description, color, url_suffix, url))
+            self.sent_msg_embeds[name] = await previously_sent_embed.edit(embed = self.update(name, title, description, **kwargs))
             return self.sent_msg_embeds[name]
         elif send_channel is None:
             return None
         else:
-            self.sent_msg_embeds[name] = await send_channel.send(embed = self.update(name, title, description, color, url_suffix, url))
+            self.sent_msg_embeds[name] = await send_channel.send(embed = self.update(name, title, description, **kwargs))
             return self.sent_msg_embeds[name]
 
     def helpmenu(self) -> discord.Embed:

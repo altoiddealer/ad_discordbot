@@ -385,12 +385,14 @@ class TGWUI:
                         raise
                     extension = getattr(extensions, name).script
                     extensions_module.apply_settings(extension, name)
-                    if hasattr(extension, "setup"):
-                        log.warning(f'Extension "{name}" is hasattr "setup". Trying to load...')
+                    setup_name = f"{name}_setup"
+                    if hasattr(extension, "setup") and not bot_database.was_warned(setup_name):
+                        bot_database.update_was_warned(setup_name)
+                        log.warning(f'Extension "{name}" has "setup" attribute. Trying to load...')
                         try:
                             extension.setup()
                         except Exception as e:
-                            log.error(f'Setup failed for extension {extension}:', e)
+                            log.error(f'Setup failed for extension {name}:', e)
                     extensions_module.state[name] = [True, index]
                 except Exception:
                     log.error(f'Failed to load the extension "{name}".')
@@ -472,7 +474,7 @@ class TGWUI:
                 # Load the model
                 loop = asyncio.get_event_loop()
                 shared.model, shared.tokenizer = await loop.run_in_executor(None, load_model, model_name, loader)
-            # shared.model, shared.tokenizer = load_model(model_name, loader)
+                # Load any LORA
                 if shared.args.lora:
                     add_lora_to_model(shared.args.lora)
         except Exception as e:
@@ -1715,15 +1717,10 @@ class TaskProcessing(TaskAttributes):
     async def send_response_chunk(self:Union["Task","Tasks"], chunk_text:str):
         # @mention non-consecutive users
         mention_resp = mentions.update_mention(self.user.mention, chunk_text)
-        temp_hmsg = self.local_history.new_message(save=False)
         # send responses to channel - reference a message if applicable
-        ref_message = self.params.ref_message
-        sent_msg = await send_long_message(self.channel, mention_resp, temp_hmsg, ref_message)
-        if ref_message:
-            self.params.ref_message = None
+        sent_chunk_msg_ids, _ = await send_long_message(self.channel, mention_resp, self.params.ref_message)
+        self.params.ref_message = None
         # Add sent message IDs to collective message attribute
-        sent_chunk_msg_ids = [temp_hmsg.id] + temp_hmsg.related_ids
-        del temp_hmsg # delete temp hmsg
         self.params.chunk_msg_ids.extend(sent_chunk_msg_ids)
         bot_database.update_last_msg_for(self.channel.id, 'bot', save_now=False)
 
@@ -1738,7 +1735,12 @@ class TaskProcessing(TaskAttributes):
                 # @mention non-consecutive users
                 mention_resp = mentions.update_mention(self.user.mention, self.last_resp)
                 # send responses to channel - reference a message if applicable
-                sent_msg = await send_long_message(self.channel, mention_resp, self.bot_hmessage, self.params.ref_message)
+                sent_msg_ids, sent_msg = await send_long_message(self.channel, mention_resp, self.params.ref_message)
+                # Update IDs for Bot HMessage
+                sent_msg_ids:list
+                last_msg_id = sent_msg_ids.pop(-1)
+                self.bot_hmessage.update(id=last_msg_id, related_ids=sent_msg_ids)
+                # Update last messages
                 bot_database.update_last_msg_for(self.channel.id, 'bot', save_now=False)
                 if self.params.should_gen_image:
                     setattr(self, 'img_ref_message', sent_msg)
@@ -3414,10 +3416,14 @@ class Tasks(TaskProcessing):
                 updated_bot_hmessage.related_ids.extend(self.params.chunk_msg_ids)
 
             else:
-                # Pass to send_long_message which will add more ids and update last.
-                new_discord_msg = await send_long_message(self.channel, continued_text, bot_hmessage=updated_bot_hmessage, reference=self.params.ref_message)
+                # Send new response to discord, get IDs and Message()
+                sent_msg_ids, new_discord_msg = await send_long_message(self.channel, continued_text, self.params.ref_message)
+                # Update IDs for the new Bot HMessage
+                sent_msg_ids:list
+                last_msg_id = sent_msg_ids.pop(-1)
+                updated_bot_hmessage.update(id=last_msg_id, related_ids=sent_msg_ids)
 
-            # Apply any reactions applicable to message
+            # Apply any reactions applicable to HMessage
             msg_ids_to_edit = [updated_bot_hmessage.id] + updated_bot_hmessage.related_ids
             if config['discord']['history_reactions'].get('enabled', True):
                 await bg_task_queue.put(apply_reactions_to_messages(client.user, self.ictx, updated_bot_hmessage, msg_ids_to_edit, new_discord_msg))
@@ -3940,8 +3946,7 @@ class Tasks(TaskProcessing):
             await self.process_image_gen()
             imgcmd_task = getattr(self, 'imgcmd_task', False)
             if imgcmd_task or (self.params.should_send_text and not self.params.should_gen_text):
-                await self.embeds.send('img_send', f"{self.user_name} requested an image:", self.params.imgcmd.get('message', self.img_prompt)[:2000])
-                await self.channel.send(f">>> {self.img_prompt}"[:2000])
+                await self.embeds.send('img_send', f"{self.user_name} requested an image:", '', footer=self.params.imgcmd.get('message', self.img_prompt)[:2000])
             send_user_image = self.params.send_user_image
             if send_user_image:
                 await self.channel.send(file=send_user_image) if len(send_user_image) == 1 else await self.channel.send(files=send_user_image)
@@ -4723,20 +4728,22 @@ if sd.enabled:
         cnet_dict = {}
         try:
             prompt = await dynamic_prompting(prompt)
-            log_msg = f"**Prompt:** {prompt}"
+            log_msg = f"{ctx.author.name}'s prompt: {prompt}"
+            if use_llm:
+                log_msg += "\nUse LLM: True (image was generated from LLM reply)"
             if size:
                 selected_size = next((option for option in size_options if option['name'] == size), None)
                 if selected_size:
                     size_dict['width'] = selected_size.get('width')
                     size_dict['height'] = selected_size.get('height')
-                log_msg += f" | **Size:** {size}"
+                log_msg += f"\nSize: {size}"
             if style:
                 selected_style_option = next((option for option in style_options if option['name'] == style), None)
                 if selected_style_option:
                     style = selected_style_option
-                log_msg += f" | **Style:** {style}"
+                log_msg += f"\nStyle: {style.get('name', 'Unknown')}"
             if neg_prompt:
-                log_msg += f" | **Negative Prompt:** {neg_prompt}"
+                log_msg += f"\nNegative Prompt: {neg_prompt}"
             if img2img:
                 async def process_image_img2img(img2img, img2img_dict, endpoint, log_msg):
                     #Convert attached image to base64
@@ -4761,7 +4768,7 @@ if sd.enabled:
                     await interaction.response.defer() # defer response for this interaction
                     await select_message.delete()
                     endpoint = '/sdapi/v1/img2img' # Change API endpoint to img2img
-                    log_msg += f" | **Img2Img**, denoise strength: {denoising_strength}"
+                    log_msg += f"\nImg2Img with denoise strength: {denoising_strength}"
                     return img2img_dict, endpoint, log_msg
                 try:
                     img2img_dict, endpoint, log_msg = await process_image_img2img(img2img, img2img_dict, endpoint, log_msg)
@@ -4772,13 +4779,13 @@ if sd.enabled:
                     attached_img2img_mask_img = await img2img_mask.read()
                     img2img_mask_img = base64.b64encode(attached_img2img_mask_img).decode('utf-8')
                     img2img_dict['mask'] = img2img_mask_img
-                    log_msg += " | **Inpainting:** Image Provided"
+                    log_msg += "\nInpainting Mask Provided"
                 else:
                     await ctx.send("Inpainting requires im2img. Not applying img2img_mask mask...", ephemeral=True)
             if face_swap:
                 attached_face_img = await face_swap.read()
                 faceswapimg = base64.b64encode(attached_face_img).decode('utf-8')
-                log_msg += " | **Face Swap:** Image Provided"
+                log_msg += "\nFace Swap Image Provided"
             if cnet:
                 # Get filtered ControlNet data
                 cnet_data = await get_cnet_data()
@@ -4981,7 +4988,7 @@ if sd.enabled:
                     except Exception as e:
                         log.error(f"An error occurred while configuring secondary ControlNet options from /image command: {e}")
                     cnet_dict.update({'enabled': True, 'save_detected_map': True})
-                    log_msg += f" | **ControlNet:** (Module: {cnet_dict['module']}, Model: {cnet_dict['model']})"
+                    log_msg += f"\nControlNet: (Module: {cnet_dict['module']}, Model: {cnet_dict['model']})"
                     return cnet_dict, log_msg
                 try:
                     cnet_dict, log_msg = await process_image_controlnet(cnet, cnet_dict, log_msg)
@@ -5008,7 +5015,6 @@ if sd.enabled:
             # QUEUE TASK
             log.info(f'{ctx.author.display_name} used "/image": "{prompt}"')
             if use_llm:
-                log.info(f'reply requested: {ctx.author.display_name} said: "{prompt}"')
                 # Set more parameters
                 params: Params = image_cmd_task.params
                 params.should_gen_text = True
