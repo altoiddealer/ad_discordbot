@@ -1720,7 +1720,6 @@ class TaskProcessing(TaskAttributes):
         self.params.ref_message = None
         # Add sent message IDs to collective message attribute
         self.params.chunk_msg_ids.extend(sent_chunk_msg_ids)
-        print("self.params.chunk_msg_ids:", self.params.chunk_msg_ids)
         bot_database.update_last_msg_for(self.channel.id, 'bot', save_now=False)
 
     async def send_responses(self:Union["Task","Tasks"]):
