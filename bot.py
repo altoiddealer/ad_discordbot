@@ -385,12 +385,14 @@ class TGWUI:
                         raise
                     extension = getattr(extensions, name).script
                     extensions_module.apply_settings(extension, name)
-                    if hasattr(extension, "setup"):
-                        log.warning(f'Extension "{name}" is hasattr "setup". Trying to load...')
+                    setup_name = f"{name}_setup"
+                    if hasattr(extension, "setup") and not bot_database.was_warned(setup_name):
+                        bot_database.update_was_warned(setup_name)
+                        log.warning(f'Extension "{name}" has "setup" attribute. Trying to load...')
                         try:
                             extension.setup()
                         except Exception as e:
-                            log.error(f'Setup failed for extension {extension}:', e)
+                            log.error(f'Setup failed for extension {name}:', e)
                     extensions_module.state[name] = [True, index]
                 except Exception:
                     log.error(f'Failed to load the extension "{name}".')
@@ -472,7 +474,7 @@ class TGWUI:
                 # Load the model
                 loop = asyncio.get_event_loop()
                 shared.model, shared.tokenizer = await loop.run_in_executor(None, load_model, model_name, loader)
-            # shared.model, shared.tokenizer = load_model(model_name, loader)
+                # Load any LORA
                 if shared.args.lora:
                     add_lora_to_model(shared.args.lora)
         except Exception as e:
@@ -4726,7 +4728,9 @@ if sd.enabled:
         cnet_dict = {}
         try:
             prompt = await dynamic_prompting(prompt)
-            log_msg = f"Prompt: {prompt}"
+            log_msg = f"{ctx.author.name}'s prompt: {prompt}"
+            if use_llm:
+                log_msg += "\nUse LLM: True (image was generated from LLM reply)"
             if size:
                 selected_size = next((option for option in size_options if option['name'] == size), None)
                 if selected_size:
