@@ -158,6 +158,8 @@ class Database(BaseFileMemory):
         self.announce_channels:list[int]
         self.main_channels:list[int]
         self.voice_channels:dict[str, int]
+        self.settings_channels:dict[int, int]
+        self.settings_sent:dict[dict[str, int]]
         self.warned_once:dict[str, bool]
 
         super().__init__(shared_path.database, version=2, missing_okay=True)
@@ -193,19 +195,22 @@ class Database(BaseFileMemory):
         self.announce_channels = data.pop('announce_channels', [])
         self.main_channels = data.pop('main_channels', [])
         self.voice_channels = data.pop('voice_channels', {})
+        self.settings_channels = data.pop('settings_channels', {})
+        self.settings_sent = data.pop('settings_sent', {})
         data['warned_once'] = {}
 
+    def save_pre_process(self, data):
+        data.pop('warned_once', None)
+        return data
+
+
+    # Last messages logging
     def get_member_dict(self, member:str) -> dict:
         member_attr_str = f"last_{member}_msg"
         member_dict = getattr(self, member_attr_str, None)
         if not isinstance(member_dict, dict):
             member_dict = {}
         return member_dict
-
-    def last_msg_for(self, channel_id, member:str):
-        member_dict = self.get_member_dict(member)
-        if member_dict:
-            return member_dict.get(channel_id, None)
 
     def update_last_msg_for(self, channel_id, member:str, save_now=False):
         member_dict = self.get_member_dict(member)
@@ -231,20 +236,53 @@ class Database(BaseFileMemory):
         return max(last_user_msg, last_bot_msg) # Return most recent from any user/bot
 
 
-    def save_pre_process(self, data):
-        data.pop('warned_once', None)
-        return data
-
+    # Warning log management
     def was_warned(self, flag_name):
         return self.warned_once.get(flag_name, False)
 
     def update_was_warned(self, flag_name, value=True):
         self.warned_once[flag_name] = value
 
+
+    # Voice channels management
     def update_voice_channels(self, guild_id, channel_id, save_now=True):
         self.voice_channels[guild_id] = channel_id
         if save_now:
             self.save()
+    
+
+    # Settings channels management (channel where new/updated settings will be posted)
+    def get_settings_channel_id_for(self, guild_id:int) -> int:
+        return self.settings_channels.get(guild_id)
+
+    def update_settings_channel(self, guild_id:int, new_channel_id:int, save_now=True):
+        self.settings_channels[guild_id] = new_channel_id
+        self.settings_sent[guild_id] = {}
+        if save_now:
+            self.save()
+
+
+    # Post active settings feature management
+    def get_settings_msgs_for(self, guild_id:int, key:str|None=None) -> None|dict|list:
+        settings_sent:dict|None = self.settings_sent.get(guild_id)
+        if settings_sent is None:
+            return None # No channel ever set
+        if not key:
+            return settings_sent # return entire dict
+
+        # create key if not yet existing
+        old_msg_ids_list = self.settings_sent[guild_id].setdefault(key, [])
+        return old_msg_ids_list
+
+    def update_settings_key_msgs_for(self, guild_id, key:str, new_msg_ids:list, save_now=True):
+        settings_key = self.get_settings_msgs_for(guild_id, key)
+        if settings_key is None:
+            return
+        # Update settings key value with new msg ids list
+        self.settings_sent[guild_id][key] = new_msg_ids
+        if save_now:
+            self.save()
+
 
 class Config(BaseFileMemory):
     def __init__(self) -> None:
