@@ -309,15 +309,15 @@
   - "chunks" messages by looking back to nearest line break or sentence completion.
   - Preserves syntax between chunks such as **bold**, *italic*, and even `code formatting`
 
-- **Commands!**
-  - **/helpmenu** - Display information message
+- **[Commands](https://github.com/altoiddealer/ad_discordbot/wiki/commands)!**
   - **/character** - Change character
-  - **/main** - Toggle if Bot always replies, per channel
-  - **/announce** - Toggle channels as "Announcement" channels
+  - **/reset_conversation** - Starts a new conversation in the current channel.
   - **/image** - Allows more controlled image prompting (positive prompt, neg prompt, Size settings, **ControlNet**, **ReActor**)
   - **/speak** - Bot can speak any text, using any voices (including user attach .mp3 or .wav for alltalk_tts)!
-  - **/imgmodel** - Change A1111 model & img_payload settings
+  - **/imgmodel** - Change image model along with any custom settings for it
   - **/llmmodel** - Change LLM model
+  - **/set_X_for_server** - A number of commands to assign a specific channel in your servers (Voice channel for TTS, Announcement channel, Settings channel, Starboard channel, etc).
+  - Plus many more!
 
 - **Dynamic settings handling:**
   - Core bot settings managed in **`config.yaml`** (bot behavior, discord features, extensions, etc.)
