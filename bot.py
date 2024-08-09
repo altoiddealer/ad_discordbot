@@ -751,14 +751,14 @@ async def delete_old_settings_messages(channel:discord.TextChannel, old_msg_ids:
         try:
             message = await channel.fetch_message(msg_id)
         except Exception as e:
-            log.warning("[Post Active Settings] Tried deleting an old settings message which was not found.")
+            log.warning(f"[Post Active Settings] Tried deleting an old settings message which was not found: {e}")
         if message:
             await message.delete()
 
 # Post settings to a dedicated channel
 async def post_active_settings(guild:discord.Guild, key_str_list:Optional[list[str]]=None, channel:discord.TextChannel|None=None):
     # List of settings keys to update
-    key_str_list = key_str_list if key_str_list is not None else ['behavior', 'character', 'tags', 'imgmodel', 'llmstate']
+    key_str_list = key_str_list if key_str_list is not None else ['character', 'behavior', 'tags', 'imgmodel', 'llmstate']
     # For configured keys: Delete old settings messages -> Send new settings
     managed_keys = config.discord['post_active_settings'].get('post_settings_for', [])
 
@@ -769,89 +769,111 @@ async def post_active_settings(guild:discord.Guild, key_str_list:Optional[list[s
         log.warning("[Post Active Settings] This feature now uses channels set by a command '/set_server_settings_channel'.")
         log.warning("Ignoring value for 'target_channel_id'. Check '.../settings_templates/config.yaml' for current settings.")
 
-    # get settings channel
+    # get settings channel if not provided to function
     if channel is None:
-        channel_id = bot_database.get_settings_channel_id_for_guild(guild.id)
+        channel_id = bot_database.get_settings_channel_id_for(guild.id)
+        # Warn (once) if no ID set for server while setting is enabled
         if not channel_id and not bot_database.was_warned(f'{guild.id}_chan'):
             bot_database.update_was_warned(f'{guild.id}_chan')
-            log.warning(f"[Post Active Settings] This feature is enabled, but a channel is not yet set for server: '{guild.name}'.")
-            log.info("Use command '/set_server_settings_channel' to set a channel for this feature.")
+            log.warning(f"[Post Active Settings] This feature is enabled, but a channel is not yet set for server '{guild.name}'.")
+            log.info("Use command '/set_server_settings_channel' to designate a 'settings channel'.")
             return
         try:
             channel = await guild.fetch_channel(channel_id)
         except:
             log.error(f"[Post Active Settings] Failed to fetch channel from stored id '{channel_id}'")
-            log.info("Use command '/set_server_settings_channel' to update the channel for this feature.")
+            log.info("Use command '/set_server_settings_channel' to set a new channel.")
             return
 
+    # Collect current settings
+    active_settings = bot_active_settings.get_vars() # get complete settings dict
+    active_settings = copy.deepcopy(active_settings)
+    # Extract tags for Tags message
+    char_tags = active_settings['llmcontext'].pop('tags', [])
+    imgmodel_tags = active_settings['imgmodel'].pop('tags', [])
     # Manage settings messages for the provided list of settings keys, as configured
     for key_name in key_str_list:
         if key_name not in managed_keys:
             continue # skip keys not configured
         # Get stored IDs for old settings messages
-        old_msg_ids_list = bot_database.get_settings_msgs_for_guild(guild.id, key_name)
-        print("old_msg_ids_list:", old_msg_ids_list)
+        old_msg_ids_list = bot_database.get_settings_msgs_for(guild.id, key_name)
         # Fetch and delete the old messages
         if old_msg_ids_list:
-            print("deleting old messages")
             await delete_old_settings_messages(channel, old_msg_ids_list)
-            print("Done deleting old messages")
 
         # Send the updated settings content to the settings channel
         # Resolve aliases
-        print("key_name:", key_name)
         if key_name == 'character':
-            settings_att = getattr(bot_active_settings, 'llm_context')
-        elif key_name == 'tags':
-            continue # Deal with this later
+            settings_key = active_settings.get('llmcontext', {})
         else:
-            setting_att = getattr(bot_active_settings, key_name)
-        print("setting_att:", setting_att)
-        settings_content = yaml.dump(setting_att, default_flow_style=False)
-        # Send settings messages -> Update the database with the new message IDs
-        print("Sending message")
-        new_settings_ids, _ = await send_long_message(channel, f"## {key_name}:\n```yaml\n{settings_content}\n```")
-        print("new_settings_ids:", new_settings_ids)
-        bot_database.update_settings_key_msgs_for_guild(guild.id, key_name, new_settings_ids)
+            settings_key = active_settings.get(key_name, {})
 
-async def update_server_settings(guild:discord.Guild, channel:discord.TextChannel):
+        settings_content = yaml.dump(settings_key, default_flow_style=False)
+        # Send settings message(s)
+        if key_name == 'tags':
+            char_tags_ids, imgmodel_tags_ids, base_tags_ids = [], [], []
+            if char_tags:
+                char_tags = yaml.dump(char_tags, default_flow_style=False)
+                char_tags_ids, _ = await send_long_message(channel, f"## Tags:\n### Character Tags:\n```yaml\n{char_tags}\n\
+                    ───────────────────────────────────────────────────────────────────────────────────────────────────```")
+            if imgmodel_tags:
+                imgmodel_tags = yaml.dump(imgmodel_tags, default_flow_style=False)
+                imgmodel_tags_ids, _ = await send_long_message(channel, f"### ImgModel Tags:\n```yaml\n{imgmodel_tags}\n\
+                    ───────────────────────────────────────────────────────────────────────────────────────────────────```")
+            if bot_settings.base_tags:
+                base_tags = yaml.dump(bot_settings.base_tags, default_flow_style=False)
+                base_tags_ids, _ = await send_long_message(channel, f"### Base Tags:\n```yaml\n{base_tags}\n\
+                    ───────────────────────────────────────────────────────────────────────────────────────────────────```")
+            new_settings_ids = char_tags_ids + imgmodel_tags_ids + base_tags_ids
+        else:
+            new_settings_ids, _ = await send_long_message(channel, f"## {key_name}:\n```yaml\n{settings_content}\n\
+                ───────────────────────────────────────────────────────────────────────────────────────────────────```")
+        # Update the database with the new message ID(s)
+        bot_database.update_settings_key_msgs_for(guild.id, key_name, new_settings_ids)
+
+async def switch_settings_channels(guild:discord.Guild, channel:discord.TextChannel):
     # Get old settings dict (if any)
-    old_settings_dict = bot_database.get_settings_msgs_for_guild(guild.id)
-    print("old_settings_dict:", old_settings_dict)
-    # Update the guild settings channel while getting old channel ID (if any)
-    old_channel_id = bot_database.update_settings_channels(guild.id, channel.id)
-    print("old_channel_id:", old_channel_id)
+    old_settings_dict = bot_database.get_settings_msgs_for(guild.id)
+    # Get old settings channel ID (if any)
+    old_channel_id = bot_database.get_settings_channel_id_for(guild.id)
+    # Update the guild settings channel
+    bot_database.update_settings_channel(guild.id, channel.id)
     # Delete messages from old settings channel
     if old_channel_id and old_settings_dict:
-        log.warning("Trying to delete old messages from previous channel...")
+        log.info("Trying to delete old messages from previous settings channel...")
         old_channel = None
         try:
             old_channel = await guild.fetch_channel(old_channel_id)
         except Exception as e:
-            log.error(f"[Post Active Settings] Failed to delete old settings messages from channel id '{old_channel_id}': {e}")
+            log.error(f"[Post Active Settings] Failed to fetch old settings channel from ID '{old_channel_id}': {e}")
         if old_channel:
-            print("deleting...")
-            for old_list in old_settings_dict:
-                await delete_old_settings_messages(old_channel, old_list)
-            print("done deleting.")
-    else:
-        await post_active_settings(guild, channel=channel)
+            for _, old_msg_ids in old_settings_dict.items():
+                await delete_old_settings_messages(old_channel, old_msg_ids)
+    # Post all current settings to new settings channel
+    await post_active_settings(guild, channel=channel)
 
-if config.discord['post_active_settings'].get('enabled', False):
+if config.discord['post_active_settings'].get('enabled', True):
     # Command to set settings channels (post_active_settings feature)
     @client.hybrid_command(name="set_server_settings_channel", description="Assign a channel as the settings channel for this server")
     @app_commands.checks.has_permissions(manage_channels=True)
     @guild_only()
     async def set_server_settings_channel(ctx: commands.Context, channel: Optional[discord.TextChannel]=None):
-        if channel not in ctx.guild.channels:
-            raise AlertUserError('Channel not found in this server.')
         if channel is None:
-            raise AlertUserError('Please input a text channel to set.')
+            raise AlertUserError("Please select a text channel to set (select from 'channel').")
+        if channel not in ctx.guild.channels:
+            raise AlertUserError('Selected channel not found in this server.')
         
+        # Skip update process if same channel as previously set
+        old_channel_id = bot_database.get_settings_channel_id_for(ctx.guild.id)
+        if channel.id == old_channel_id:
+            await ctx.send("New settings channel is the same as the previously set one.", delete_after=5)
+            return
+        
+        # Reply to interaction
         await ctx.send(f"Settings channel for **{ctx.guild.name}** set to **{channel.id}**.", delete_after=5)
 
         # Process message updates in the background
-        await bg_task_queue.put(update_server_settings(ctx.guild, channel))          
+        await bg_task_queue.put(switch_settings_channels(ctx.guild, channel))          
 
 
 #################################################################
@@ -3894,7 +3916,7 @@ class Tasks(TaskProcessing):
                 await bg_task_queue.put(announce_changes('changed Img model', imgmodel_name, self.ictx))
 
             log.info(f"Image model changed to: {imgmodel_name}")
-            if config['discord']['post_active_settings']['enabled']:
+            if config['discord']['post_active_settings'].get('enabled', True):
                 settings_keys = ['imgmodel', 'tags']
                 await bg_task_queue.put(post_active_settings(self.ictx.guild.id, settings_keys))
         except Exception as e:
