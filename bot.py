@@ -756,6 +756,11 @@ async def delete_old_settings_messages(channel:discord.TextChannel, old_msg_ids:
             await message.delete()
 
 # Post settings to a dedicated channel
+async def post_active_settings_to_all(key_str_list:Optional[list[str]]=None):
+    for guild in client.guilds:
+        await post_active_settings(guild, key_str_list)
+
+# Post settings to a dedicated channel
 async def post_active_settings(guild:discord.Guild, key_str_list:Optional[list[str]]=None, channel:discord.TextChannel|None=None):
     # List of settings keys to update
     key_str_list = key_str_list if key_str_list is not None else ['character', 'behavior', 'tags', 'imgmodel', 'llmstate']
@@ -786,50 +791,62 @@ async def post_active_settings(guild:discord.Guild, key_str_list:Optional[list[s
             return
 
     log.info(f"[Post Active Settings] Posting updated settings for '{guild.name}': {key_str_list}.")
+
     # Collect current settings
     active_settings = bot_active_settings.get_vars() # get complete settings dict
     active_settings = copy.deepcopy(active_settings)
     # Extract tags for Tags message
     char_tags = active_settings['llmcontext'].pop('tags', [])
     imgmodel_tags = active_settings['imgmodel'].pop('tags', [])
+
     # Manage settings messages for the provided list of settings keys, as configured
     for key_name in key_str_list:
         if key_name not in managed_keys:
             continue # skip keys not configured
+
         # Get stored IDs for old settings messages
         old_msg_ids_list = bot_database.get_settings_msgs_for(guild.id, key_name)
         # Fetch and delete the old messages
         if old_msg_ids_list:
             await delete_old_settings_messages(channel, old_msg_ids_list)
 
-        # Send the updated settings content to the settings channel
-        # Resolve aliases
+        # Set empty defaults
+        tags_ids = []
+        tags_key = None
+        custom_prefix = ''
+        
+        # Determine settings sources for current key
         if key_name == 'character':
+            custom_prefix = f'name: {bot_database.last_character}\n'
+            # resolve alias
             settings_key = active_settings.get('llmcontext', {})
+            # check if updating character tags
+            if 'tags' in managed_keys:
+                tags_key = char_tags
+        elif key_name == 'imgmodel':
+            custom_prefix = f'name: {bot_database.last_imgmodel_name}\n'
+            settings_key = active_settings.get(key_name, {})
+            # check if updating imgmodel tags
+            if 'tags' in managed_keys:
+                tags_key = imgmodel_tags
+        elif key_name == 'tags':
+            settings_key = bot_settings.base_tags
         else:
             settings_key = active_settings.get(key_name, {})
 
+        # Convert dictionary to yaml for message
         settings_content = yaml.dump(settings_key, default_flow_style=False)
-        # Send settings message(s)
-        if key_name == 'tags':
-            char_tags_ids, imgmodel_tags_ids, base_tags_ids = [], [], []
-            tags_header = await channel.send("## Tags:\n")
-            if char_tags:
-                char_tags = yaml.dump(char_tags, default_flow_style=False)
-                char_tags_ids, _ = await send_long_message(channel, f"### Character Tags:\n```yaml\n{char_tags}\n\
-                    ───────────────────────────────────────────────────────────────────────────────────────────────────```")
-            if imgmodel_tags:
-                imgmodel_tags = yaml.dump(imgmodel_tags, default_flow_style=False)
-                imgmodel_tags_ids, _ = await send_long_message(channel, f"### ImgModel Tags:\n```yaml\n{imgmodel_tags}\n\
-                    ───────────────────────────────────────────────────────────────────────────────────────────────────```")
-            if bot_settings.base_tags:
-                base_tags = yaml.dump(bot_settings.base_tags, default_flow_style=False)
-                base_tags_ids, _ = await send_long_message(channel, f"### Base Tags:\n```yaml\n{base_tags}\n\
-                    ───────────────────────────────────────────────────────────────────────────────────────────────────```")
-            new_settings_ids = [tags_header.id] + char_tags_ids + imgmodel_tags_ids + base_tags_ids
-        else:
-            new_settings_ids, _ = await send_long_message(channel, f"## {key_name}:\n```yaml\n{settings_content}\n\
-                ───────────────────────────────────────────────────────────────────────────────────────────────────```")
+
+        # Send the updated settings content to the settings channel
+        new_settings_ids, _ = await send_long_message(channel, f"## {key_name.upper()}:\n```yaml\n{custom_prefix}{settings_content}\n────────────────────────────────```")
+        # Also send relavent Tags for the item in a second process
+        if tags_key is not None:
+            # Convert tags list to yaml for message
+            tags_content = yaml.dump(tags_key, default_flow_style=False)
+            tags_ids, _ = await send_long_message(channel, f"### {key_name.upper()} TAGS:\n```yaml\n{tags_content}\n────────────────────────────────```")
+        # Merge all sent message IDs while retaining them to database
+        new_settings_ids = new_settings_ids + tags_ids
+
         # Update the database with the new message ID(s)
         bot_database.update_settings_key_msgs_for(guild.id, key_name, new_settings_ids)
 
@@ -856,7 +873,8 @@ async def switch_settings_channels(guild:discord.Guild, channel:discord.TextChan
 
 if config.discord['post_active_settings'].get('enabled', True):
     # Command to set settings channels (post_active_settings feature)
-    @client.hybrid_command(name="set_server_settings_channel", description="Assign a channel as the settings channel for this server")
+    @client.hybrid_command(name="set_server_settings_channel", description="Assign a channel as the settings channel for this server.")
+    @app_commands.describe(channel='Begin typing the channel name and it should appear in the menu.')
     @app_commands.checks.has_permissions(manage_channels=True)
     @guild_only()
     async def set_server_settings_channel(ctx: commands.Context, channel: Optional[discord.TextChannel]=None):
@@ -1848,6 +1866,7 @@ class TaskProcessing(TaskAttributes):
         # Process any TTS response
         if self.tts_resp:
             await voice_clients.process_tts_resp(self.ictx, self.tts_resp, self.bot_hmessage)
+        # Send text responses
         if self.bot_hmessage and self.params.should_send_text:
             # Send single reply if message was not already streamed in chunks
             was_chunked = getattr(self.params, 'was_chunked', False)
@@ -1865,13 +1884,15 @@ class TaskProcessing(TaskAttributes):
                 if self.params.should_gen_image:
                     setattr(self, 'img_ref_message', sent_msg)
             # Manage IDs for chunked message handling
+            msg_ids_to_react = None
             if self.params.chunk_msg_ids:
+                msg_ids_to_react = copy.deepcopy(self.params.chunk_msg_ids)
                 if not self.bot_hmessage.id:
                     self.bot_hmessage.id = self.params.chunk_msg_ids.pop(-1)
                 self.bot_hmessage.related_ids.extend(self.params.chunk_msg_ids)
             # Apply any reactions applicable to message
             if config['discord']['history_reactions'].get('enabled', True):
-                await bg_task_queue.put(apply_reactions_to_messages(client.user, self.ictx, self.bot_hmessage, self.params.chunk_msg_ids))
+                await bg_task_queue.put(apply_reactions_to_messages(client.user, self.ictx, self.bot_hmessage, msg_ids_to_react))
         # send any user images
         send_user_image = self.params.send_user_image
         if send_user_image:
@@ -3924,8 +3945,11 @@ class Tasks(TaskProcessing):
 
             log.info(f"Image model changed to: {imgmodel_name}")
             if config['discord']['post_active_settings'].get('enabled', True):
-                settings_keys = ['imgmodel', 'tags']
+                settings_keys = ['imgmodel']
+                # Auto-change imgmodel task will not have an interaction
+                await bg_task_queue.put(post_active_settings_to_all(settings_keys))
                 await bg_task_queue.put(post_active_settings(self.ictx.guild.id, settings_keys))
+
         except Exception as e:
             log.error(f"Error changing Img model: {e}")
             traceback.print_exc()
