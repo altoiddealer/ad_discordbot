@@ -785,6 +785,7 @@ async def post_active_settings(guild:discord.Guild, key_str_list:Optional[list[s
             log.info("Use command '/set_server_settings_channel' to set a new channel.")
             return
 
+    log.info(f"[Post Active Settings] Posting updated settings for '{guild.name}': {key_str_list}.")
     # Collect current settings
     active_settings = bot_active_settings.get_vars() # get complete settings dict
     active_settings = copy.deepcopy(active_settings)
@@ -812,9 +813,10 @@ async def post_active_settings(guild:discord.Guild, key_str_list:Optional[list[s
         # Send settings message(s)
         if key_name == 'tags':
             char_tags_ids, imgmodel_tags_ids, base_tags_ids = [], [], []
+            tags_header = await channel.send("## Tags:\n")
             if char_tags:
                 char_tags = yaml.dump(char_tags, default_flow_style=False)
-                char_tags_ids, _ = await send_long_message(channel, f"## Tags:\n### Character Tags:\n```yaml\n{char_tags}\n\
+                char_tags_ids, _ = await send_long_message(channel, f"### Character Tags:\n```yaml\n{char_tags}\n\
                     ───────────────────────────────────────────────────────────────────────────────────────────────────```")
             if imgmodel_tags:
                 imgmodel_tags = yaml.dump(imgmodel_tags, default_flow_style=False)
@@ -824,7 +826,7 @@ async def post_active_settings(guild:discord.Guild, key_str_list:Optional[list[s
                 base_tags = yaml.dump(bot_settings.base_tags, default_flow_style=False)
                 base_tags_ids, _ = await send_long_message(channel, f"### Base Tags:\n```yaml\n{base_tags}\n\
                     ───────────────────────────────────────────────────────────────────────────────────────────────────```")
-            new_settings_ids = char_tags_ids + imgmodel_tags_ids + base_tags_ids
+            new_settings_ids = [tags_header.id] + char_tags_ids + imgmodel_tags_ids + base_tags_ids
         else:
             new_settings_ids, _ = await send_long_message(channel, f"## {key_name}:\n```yaml\n{settings_content}\n\
                 ───────────────────────────────────────────────────────────────────────────────────────────────────```")
@@ -840,7 +842,7 @@ async def switch_settings_channels(guild:discord.Guild, channel:discord.TextChan
     bot_database.update_settings_channel(guild.id, channel.id)
     # Delete messages from old settings channel
     if old_channel_id and old_settings_dict:
-        log.info("Trying to delete old messages from previous settings channel...")
+        log.info("[Post Active Settings] Trying to delete old messages from previous settings channel...")
         old_channel = None
         try:
             old_channel = await guild.fetch_channel(old_channel_id)
@@ -868,9 +870,12 @@ if config.discord['post_active_settings'].get('enabled', True):
         if channel.id == old_channel_id:
             await ctx.send("New settings channel is the same as the previously set one.", delete_after=5)
             return
-        
+
+        log.info(f'{ctx.author.display_name} used "/set_server_settings_channel".')
+        log.info(f"[Post Active Settings] Settings channel for '{ctx.guild.name}' was set to '{channel.name}'")
+
         # Reply to interaction
-        await ctx.send(f"Settings channel for **{ctx.guild.name}** set to **{channel.id}**.", delete_after=5)
+        await ctx.send(f"Settings channel for **{ctx.guild.name}** set to **{channel.name}**.", delete_after=5)
 
         # Process message updates in the background
         await bg_task_queue.put(switch_settings_channels(ctx.guild, channel))          
@@ -1016,6 +1021,8 @@ async def set_server_voice_channel(ctx: commands.Context, channel: Optional[disc
         
     if channel is None:
         raise AlertUserError('Please select or join a voice channel to set.')
+
+    log.info(f'{ctx.author.display_name} used "/set_server_voice_channel".')
     
     bot_database.update_voice_channels(ctx.guild.id, channel.id)
     await ctx.send(f"Voice channel for **{ctx.guild}** set to **{channel.name}**.", delete_after=5)
