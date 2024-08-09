@@ -23,7 +23,7 @@ discord:
       flows: true   # Embeds for the Flows feature
   # Feature for bot to copy current settings in a dedicated channel when changing settings via commands (ei: /imgmodel).
   post_active_settings:
-    enabled: false # When enabled, you can set a "Settings Channel" for each server the bot is in via command '/set_server_settings_channel'
+    enabled: true # When enabled, you can set a "Settings Channel" for each server the bot is in via command '/set_server_settings_channel'
     post_settings_for: ['behavior', 'character', 'tags', 'imgmodel', 'llmstate'] # Limit the settings to be posted by removing them from list.
   # Feature for bot to automatically send a copy of image to starboard channel.
   starboard:
