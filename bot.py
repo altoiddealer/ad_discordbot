@@ -3947,8 +3947,10 @@ class Tasks(TaskProcessing):
             if config['discord']['post_active_settings'].get('enabled', True):
                 settings_keys = ['imgmodel']
                 # Auto-change imgmodel task will not have an interaction
-                await bg_task_queue.put(post_active_settings_to_all(settings_keys))
-                await bg_task_queue.put(post_active_settings(self.ictx.guild.id, settings_keys))
+                if not self.ictx:
+                    await bg_task_queue.put(post_active_settings_to_all(settings_keys))
+                else:
+                    await bg_task_queue.put(post_active_settings(self.ictx.guild.id, settings_keys))
 
         except Exception as e:
             log.error(f"Error changing Img model: {e}")
