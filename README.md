@@ -1,6 +1,6 @@
 # altoiddealer's Discord Bot
 
-### Uniting [text-generation-webui](https://github.com/oobabooga/text-generation-webui) (LLMs) and Stable Diffusion Web UIs ([A1111](https://github.com/AUTOMATIC1111/stable-diffusion-webui) / [Forge](https://github.com/lllyasviel/stable-diffusion-webui-forge) / [ReForge](https://github.com/Panchovix/stable-diffusion-webui-reForge)) for casual fun, creativity & professional use.
+### Uniting [text-generation-webui](https://github.com/oobabooga/text-generation-webui) and Stable Diffusion ([A1111](https://github.com/AUTOMATIC1111/stable-diffusion-webui) / [Forge](https://github.com/lllyasviel/stable-diffusion-webui-forge) / [ReForge](https://github.com/Panchovix/stable-diffusion-webui-reForge)) for casual fun, creativity & professional use.
 
 - **text-generation-webui** is required. **Stable Diffusion** is optional.
 - The features of both can be independently enabled/disabled in the main config file.
