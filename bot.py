@@ -778,10 +778,11 @@ async def post_active_settings(guild:discord.Guild, key_str_list:Optional[list[s
     if channel is None:
         channel_id = bot_database.get_settings_channel_id_for(guild.id)
         # Warn (once) if no ID set for server while setting is enabled
-        if not channel_id and not bot_database.was_warned(f'{guild.id}_chan'):
-            bot_database.update_was_warned(f'{guild.id}_chan')
-            log.warning(f"[Post Active Settings] This feature is enabled, but a channel is not yet set for server '{guild.name}'.")
-            log.info("Use command '/set_server_settings_channel' to designate a 'settings channel'.")
+        if not channel_id:
+            if not bot_database.was_warned(f'{guild.id}_chan'):
+                bot_database.update_was_warned(f'{guild.id}_chan')
+                log.warning(f"[Post Active Settings] This feature is enabled, but a channel is not yet set for server '{guild.name}'.")
+                log.info("Use command '/set_server_settings_channel' to designate a 'settings channel'.")
             return
         try:
             channel = await guild.fetch_channel(channel_id)
@@ -4026,7 +4027,10 @@ class Tasks(TaskProcessing):
                     bot_history.new_history_for(self.ictx.channel.id)
                 else:
                     history.fresh().replace()
+            log.info(f"Character loaded: {char_name}")
+            await self.send_char_greeting_or_history(char_name)
 
+            # Announce change
             if self.embeds.enabled('change'):
                 await self.embeds.delete('change')
                 change_message = 'reset the conversation' if mode == 'reset' else 'changed character'
@@ -4035,8 +4039,12 @@ class Tasks(TaskProcessing):
                 # Send embeds to announcement channels
                 if bot_database.announce_channels and not is_direct_message(self.ictx):
                     await bg_task_queue.put(announce_changes(change_message, char_name, self.ictx))
-            await self.send_char_greeting_or_history(char_name)
-            log.info(f"Character loaded: {char_name}")
+
+            # Post settings
+            if config['discord']['post_active_settings'].get('enabled', True):
+                settings_keys = ['character']
+                await bg_task_queue.put(post_active_settings(self.ictx.guild.id, settings_keys))
+
         except Exception as e:
             log.error(f'An error occurred while loading character for "{self.name}": {e}')
             await self.embeds.edit_or_send('change', "An error occurred while loading character", e)
