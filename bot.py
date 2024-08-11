@@ -778,10 +778,11 @@ async def post_active_settings(guild:discord.Guild, key_str_list:Optional[list[s
     if channel is None:
         channel_id = bot_database.get_settings_channel_id_for(guild.id)
         # Warn (once) if no ID set for server while setting is enabled
-        if not channel_id and not bot_database.was_warned(f'{guild.id}_chan'):
-            bot_database.update_was_warned(f'{guild.id}_chan')
-            log.warning(f"[Post Active Settings] This feature is enabled, but a channel is not yet set for server '{guild.name}'.")
-            log.info("Use command '/set_server_settings_channel' to designate a 'settings channel'.")
+        if not channel_id:
+            if not bot_database.was_warned(f'{guild.id}_chan'):
+                bot_database.update_was_warned(f'{guild.id}_chan')
+                log.warning(f"[Post Active Settings] This feature is enabled, but a channel is not yet set for server '{guild.name}'.")
+                log.info("Use command '/set_server_settings_channel' to designate a 'settings channel'.")
             return
         try:
             channel = await guild.fetch_channel(channel_id)
