@@ -4027,7 +4027,10 @@ class Tasks(TaskProcessing):
                     bot_history.new_history_for(self.ictx.channel.id)
                 else:
                     history.fresh().replace()
+            log.info(f"Character loaded: {char_name}")
+            await self.send_char_greeting_or_history(char_name)
 
+            # Announce change
             if self.embeds.enabled('change'):
                 await self.embeds.delete('change')
                 change_message = 'reset the conversation' if mode == 'reset' else 'changed character'
@@ -4036,8 +4039,12 @@ class Tasks(TaskProcessing):
                 # Send embeds to announcement channels
                 if bot_database.announce_channels and not is_direct_message(self.ictx):
                     await bg_task_queue.put(announce_changes(change_message, char_name, self.ictx))
-            await self.send_char_greeting_or_history(char_name)
-            log.info(f"Character loaded: {char_name}")
+
+            # Post settings
+            if config['discord']['post_active_settings'].get('enabled', True):
+                settings_keys = ['character']
+                await bg_task_queue.put(post_active_settings(self.ictx.guild.id, settings_keys))
+
         except Exception as e:
             log.error(f'An error occurred while loading character for "{self.name}": {e}')
             await self.embeds.edit_or_send('change', "An error occurred while loading character", e)
