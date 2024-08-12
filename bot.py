@@ -2328,12 +2328,13 @@ class TaskProcessing(TaskAttributes):
                             base_resp = base_resp[len(continued_from):]
                         # Check current iteration to see if it meets criteria
                         partial_response = base_resp[len(already_chunked):]
-                        should_chunk = check_should_chunk(partial_response)
-                        if should_chunk:
-                            last_checked = ''
-                            already_chunked += partial_response
-                            # process message chunk
-                            yield partial_response
+                        if len(partial_response) > 0:
+                            should_chunk = check_should_chunk(partial_response)
+                            if should_chunk:
+                                last_checked = ''
+                                already_chunked += partial_response
+                                # process message chunk
+                                yield partial_response
                     
                     # look for tts response
                     vis_resp = resp.get('visible', [])
