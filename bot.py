@@ -1856,6 +1856,7 @@ class TaskProcessing(TaskAttributes):
     async def send_response_chunk(self:Union["Task","Tasks"], chunk_text:str):
         # @mention non-consecutive users
         mention_resp = mentions.update_mention(self.user.mention, chunk_text)
+        print("mention_resp:", mention_resp)
         # send responses to channel - reference a message if applicable
         sent_chunk_msg_ids, _ = await send_long_message(self.channel, mention_resp, self.params.ref_message)
         self.params.ref_message = None
@@ -2090,6 +2091,19 @@ class TaskProcessing(TaskAttributes):
             self.llm_payload['state']['history']['internal'].append([self.text, begin_reply_with])
             self.llm_payload['state']['history']['visible'].append([self.text, begin_reply_with])
             self.llm_payload['_continue'] = True
+            setattr(self.params, "include_continued_text", True)
+
+    def apply_prompt_params(self:Union["Task","Tasks"]):
+        self.apply_begin_reply_with()
+        mode = getattr(self.params, 'mode', None)
+        if mode:
+            self.llm_payload['state']['mode'] = mode
+        system_message = getattr(self.params, 'system_message', None)
+        if system_message:
+            self.llm_payload['state']['system_message'] = system_message
+        save_to_history = getattr(self.params, 'prompt_save_to_history', None)
+        if save_to_history is not None:
+            self.params.save_to_history = save_to_history
 
     async def init_llm_payload(self:Union["Task","Tasks"]):
         self.llm_payload = copy.deepcopy(bot_settings.settings['llmstate'])
@@ -2101,7 +2115,6 @@ class TaskProcessing(TaskAttributes):
         self.llm_payload['state']['character_menu'] = bot_settings.name
         self.llm_payload['state']['context'] = bot_settings.settings['llmcontext']['context']
         self.llm_payload['state']['history'] = self.local_history.render_to_tgwui()
-        self.apply_begin_reply_with()
 
     async def message_img_gen(self:Union["Task","TaskProcessing"]):
         await self.tags.match_img_tags(self.img_prompt)
@@ -2152,6 +2165,8 @@ class TaskProcessing(TaskAttributes):
         await self.process_llm_payload_tags(llm_payload_mods)
         # apply formatting tags to LLM prompt
         self.process_prompt_formatting(self.llm_prompt, formatting)
+        # apply params from /prompt command
+        self.apply_prompt_params()
         # assign finalized prompt to payload
         self.llm_payload['text'] = self.llm_prompt
 
@@ -2307,6 +2322,7 @@ class TaskProcessing(TaskAttributes):
                 _continue = self.llm_payload.get('_continue', False)
                 if _continue:
                     continued_from = self.llm_payload['state']['history']['internal'][-1][-1]
+                include_continued_text = getattr(self.params, "include_continued_text", False)
 
                 already_chunked = ''
 
@@ -2324,16 +2340,20 @@ class TaskProcessing(TaskAttributes):
                     if can_chunk:
                         # Omit continued text from response processing
                         base_resp = self.last_resp
-                        if _continue and len(base_resp) >= len(continued_from):
+                        if _continue and len(base_resp) > len(continued_from):
                             base_resp = base_resp[len(continued_from):]
                         # Check current iteration to see if it meets criteria
                         partial_response = base_resp[len(already_chunked):]
                         should_chunk = check_should_chunk(partial_response)
                         if should_chunk:
                             last_checked = ''
+                            chunked_response = partial_response
+                            # Prefix the first chunk message with the "continued from" text, for some cases
+                            if not already_chunked and _continue and include_continued_text:
+                                chunked_response = continued_from + partial_response
                             already_chunked += partial_response
                             # process message chunk
-                            yield partial_response
+                            yield chunked_response
                     
                     # look for tts response
                     vis_resp = resp.get('visible', [])
@@ -2349,7 +2369,7 @@ class TaskProcessing(TaskAttributes):
                     # Flag that the task sent chunked responses
                     setattr(self.params, 'was_chunked', True)
                     # Handle last chunk
-                    last_chunk = base_resp[len(already_chunked):]
+                    last_chunk = base_resp[len(already_chunked):].strip()
                     if last_chunk:
                         yield last_chunk
 
@@ -6090,6 +6110,9 @@ async def process_prompt(ctx: commands.Context, selections:dict):
     # User inputs from /image command
     prompt = selections.get('prompt', '')
     begin_reply_with = selections.get('begin_reply_with', None)
+    mode = selections.get('mode', None)
+    system_message = selections.get('system_message', None)
+    save_to_history = selections.get('save_to_history', None)
 
     if not prompt:
         await ctx.reply("A prompt is required for '/prompt' command", ephemeral=True, delete_after=5)
@@ -6103,6 +6126,12 @@ async def process_prompt(ctx: commands.Context, selections:dict):
         prompt_params = Params()
         if begin_reply_with:
             setattr(prompt_params, 'begin_reply_with', begin_reply_with)
+        if mode:
+            setattr(prompt_params, 'mode', mode)
+        if system_message:
+            setattr(prompt_params, 'system_message', system_message)
+        if save_to_history:
+            setattr(prompt_params, 'prompt_save_to_history', True if save_to_history == "yes" else False)
         prompt_task = Task('message', ctx, text=prompt, params=prompt_params)
         await task_manager.task_queue.put(prompt_task)
 
@@ -6112,10 +6141,17 @@ async def process_prompt(ctx: commands.Context, selections:dict):
 
 if tgwui.enabled:
     @client.hybrid_command(name="prompt", description=f'Generate text with advanced options')
-    @app_commands.describe(prompt=f'Your prompt to the LLM.')
-    @app_commands.describe(begin_reply_with=f'The LLM will continue their reply from this.')
-    async def prompt(ctx: commands.Context, prompt: str, begin_reply_with: typing.Optional[str]):
-        user_selections = {"prompt": prompt, "begin_reply_with": begin_reply_with if begin_reply_with else None}
+    @app_commands.describe(prompt='Your prompt to the LLM.')
+    @app_commands.describe(begin_reply_with='The LLM will continue their reply from this.')
+    @app_commands.describe(mode='"instruct" will omit character context and draw more attention to your prompt.')
+    @app_commands.choices(mode=[app_commands.Choice(name="chat", value="chat"), app_commands.Choice(name="instruct", value="instruct")])
+    @app_commands.describe(system_message='A non-user instruction to the LLM. May not have any effect in "chat" mode (model dependent).')
+    @app_commands.describe(save_to_history='Whether the LLM should remember this message exchange.')
+    @app_commands.choices(save_to_history=[app_commands.Choice(name="Yes", value="yes"), app_commands.Choice(name="No", value="no")])
+    async def prompt(ctx: commands.Context, prompt: str, begin_reply_with: typing.Optional[str], mode: typing.Optional[app_commands.Choice[str]], 
+                     system_message: typing.Optional[str], save_to_history: typing.Optional[app_commands.Choice[str]]):
+        user_selections = {"prompt": prompt, "begin_reply_with": begin_reply_with if begin_reply_with else None, "mode": mode.value if mode else None, 
+                           "system_message": system_message if system_message else None, "save_to_history": save_to_history.value if save_to_history else None}
         await process_prompt(ctx, user_selections)
 
 #################################################################
