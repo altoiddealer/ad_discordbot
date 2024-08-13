@@ -24,6 +24,20 @@
 <details>
   <summary>click to expand</summary>
 
+   **08/12/2024:** New **/prompt** command! Enhanced **Post Active Settings** feature!
+
+   There is now a **/prompt** command to add some advanced options to your message request.
+
+   Also, the **Post Active Settings** feature received a nice overhaul and is definitely worth trying out!
+
+   Requires using yet another new command, **/set_server_settings_channel**, in each server that you would like to share settings in.
+
+   This feature will automatically post a copy of your settings to the channel (*EXCLUDING* `config.yaml`)
+
+   <img width="689" alt="Screenshot 2024-08-12 221633" src="https://github.com/user-attachments/assets/ba4be59f-69d9-494b-86d4-f2a7b010df33">
+   
+  ---
+
    **08/02/2024:** New Behavior - Streaming Responses!
 
    - Base Behavior / Character Behavior now have option to stream responses!
