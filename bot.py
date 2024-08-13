@@ -1856,7 +1856,6 @@ class TaskProcessing(TaskAttributes):
     async def send_response_chunk(self:Union["Task","Tasks"], chunk_text:str):
         # @mention non-consecutive users
         mention_resp = mentions.update_mention(self.user.mention, chunk_text)
-        print("mention_resp:", mention_resp)
         # send responses to channel - reference a message if applicable
         sent_chunk_msg_ids, _ = await send_long_message(self.channel, mention_resp, self.params.ref_message)
         self.params.ref_message = None
