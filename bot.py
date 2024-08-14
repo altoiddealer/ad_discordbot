@@ -794,8 +794,7 @@ async def post_active_settings(guild:discord.Guild, key_str_list:Optional[list[s
     log.info(f"[Post Active Settings] Posting updated settings for '{guild.name}': {key_str_list}.")
 
     # Collect current settings
-    active_settings = bot_active_settings.get_vars() # get complete settings dict
-    active_settings = copy.deepcopy(active_settings)
+    active_settings = copy.deepcopy(bot_settings.settings)
     # Extract tags for Tags message
     char_tags = active_settings['llmcontext'].pop('tags', [])
     imgmodel_tags = active_settings['imgmodel'].pop('tags', [])
@@ -6598,6 +6597,7 @@ class ImgModel:
     def refresh_enabled_extensions(self):
         self.init_sd_extensions()
         new_payload = merge_base(self.payload, 'imgmodel,payload')
+        update_dict(bot_settings.settings['imgmodel']['payload'], new_payload)
         update_dict(bot_active_settings['imgmodel']['payload'], new_payload)
         bot_active_settings.save()
 
