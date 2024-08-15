@@ -2339,20 +2339,16 @@ class TaskProcessing(TaskAttributes):
                     if can_chunk:
                         # Omit continued text from response processing
                         base_resp = self.last_resp
-                        if _continue and len(base_resp) > len(continued_from):
+                        if (_continue and not include_continued_text) and (len(base_resp) > len(continued_from)):
                             base_resp = base_resp[len(continued_from):]
                         # Check current iteration to see if it meets criteria
                         partial_response = base_resp[len(already_chunked):]
                         should_chunk = check_should_chunk(partial_response)
                         if should_chunk:
                             last_checked = ''
-                            chunked_response = partial_response
-                            # Prefix the first chunk message with the "continued from" text, for some cases
-                            if not already_chunked and _continue and include_continued_text:
-                                chunked_response = continued_from + partial_response
                             already_chunked += partial_response
                             # process message chunk
-                            yield chunked_response
+                            yield partial_response
                     
                     # look for tts response
                     vis_resp = resp.get('visible', [])
