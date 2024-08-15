@@ -6,6 +6,7 @@ from modules.database_migration_v1_v2 import OldDatabase
 from modules.utils_shared import shared_path
 from modules.utils_files import make_fp_unique
 from modules.utils_misc import fix_dict
+from modules.utils_aspect_ratios import init_avg_from_dims
 
 import os
 
@@ -153,6 +154,8 @@ class Database(BaseFileMemory):
         self.last_change:float
         self.last_imgmodel_name:str
         self.last_imgmodel_checkpoint:str
+        self.last_imgmodel_res: int
+        self.last_guild_settings:dict[dict[str, int]]
         self.last_user_msg:dict[str, float]
         self.last_bot_msg:dict[str, float]
         self.announce_channels:list[int]
@@ -190,6 +193,10 @@ class Database(BaseFileMemory):
         self.last_change = data.pop('last_change', (time.time() - timedelta(minutes=10).seconds))
         self.last_imgmodel_name = data.pop('last_imgmodel_name', '')
         self.last_imgmodel_checkpoint = data.pop('last_imgmodel_checkpoint', '')
+        self.last_imgmodel_res = data.pop('last_imgmodel_res', None)
+        if not self.last_imgmodel_res:
+            self.last_imgmodel_res = init_avg_from_dims()
+        self.last_guild_settings = data.pop('last_guild_settings', {})
         self.last_user_msg = data.pop('last_user_msg', {})
         self.last_bot_msg = data.pop('last_bot_msg', {})
         self.announce_channels = data.pop('announce_channels', [])
@@ -202,6 +209,25 @@ class Database(BaseFileMemory):
     def save_pre_process(self, data):
         data.pop('warned_once', None)
         return data
+    
+    # # Last settings logging
+    # def get_last_setting(self, key:str):
+    #     return getattr(self, key)
+
+    # def set_last_setting(self, key:str):
+    #     return getattr(self, key)
+
+
+    # Per guild last settings logging
+    def get_last_guild_setting(self, guild_id:int, key:str):
+        last_guild_settings:dict = self.last_guild_settings.get(guild_id, {})
+        return last_guild_settings.get(key)
+
+    def set_last_guild_setting(self, guild_id:int, key:str, value, save_now=False):
+        self.last_guild_settings.setdefault(guild_id, {})
+        self.last_guild_settings[guild_id][key] = value
+        if save_now:
+            self.save()
 
 
     # Last messages logging
@@ -287,6 +313,7 @@ class Database(BaseFileMemory):
 class Config(BaseFileMemory):
     def __init__(self) -> None:
         self.discord: dict
+        self.per_server_settings: dict
         self.dynamic_prompting_enabled: bool
         self.textgenwebui: dict
         self.sd: dict
@@ -300,31 +327,20 @@ class Config(BaseFileMemory):
         # Update the user config with any missing values from the template
         fix_dict(config_dict, config_template, 'config.yaml')
 
+    def is_per_server(self):
+        return self.per_server_settings.get('enabled', False)
+    
+    def is_per_character(self):
+        if self.is_per_server:
+            return self.per_server_settings.get('per_server_characters', False)
+        return False
+
     def run_migration(self):
         _old_active = os.path.join(shared_path.dir_root, 'config.py')
         self._migrate_from_file(_old_active, load=True)
 
     def discord_dm_setting(self, key, default=None):
         return self.get('discord', {}).get('direct_messages', {}).get(key, default)
-
-
-class ActiveSettings(BaseFileMemory):
-    def __init__(self) -> None:
-        self.behavior: dict
-        self.imgmodel: dict
-        self.llmcontext: dict
-        self.llmstate: dict
-        super().__init__(shared_path.active_settings, version=2, missing_okay=True)
-
-    def load_defaults(self, data: dict):
-        self.behavior = data.pop('behavior', {})
-        self.imgmodel = data.pop('imgmodel', {})
-        self.llmcontext = data.pop('llmcontext', {})
-        self.llmstate = data.pop('llmstate', {})
-
-    def run_migration(self):
-        _old_active = os.path.join(shared_path.dir_root, 'activesettings.yaml')
-        self._migrate_from_file(_old_active, load=True)
 
 
 class StarBoard(BaseFileMemory):
@@ -364,7 +380,6 @@ class _Statistic:
 
     def __getitem__(self, key):
         return self.data[key]
-
 
 
 class Statistics(BaseFileMemory):

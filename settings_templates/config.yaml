@@ -34,6 +34,14 @@ discord:
     target_channel_id: 11111111111111111111 # bot requires message / msg management permissions
 
 
+# If enabled, all user settings will be managed seperately for each server.
+per_server_settings:
+  enabled: false
+  # The following settings only apply if 'enabled = true'
+  per_server_characters: false # This is a bit experimental. **If enabled, all characters must share the same avatar.**
+  character_avatar: '' # The name of a PNG file in your 'user_images' directory (do not include the '.png' extension).
+
+
 # Dynamic Prompting feature. Uses similar syntax and usage as the SD WebUI extension 'sd-dynamic-prompts'.
 # More details here: https://github.com/altoiddealer/ad_discordbot/wiki/dynamic-prompting
 dynamic_prompting_enabled: true

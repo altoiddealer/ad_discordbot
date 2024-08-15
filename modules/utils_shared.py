@@ -7,8 +7,9 @@ from modules.logs import import_track, get_logger; import_track(__file__, fp=Tru
 logging = log
 
 task_processing = asyncio.Event()
-
 bg_task_queue = asyncio.Queue()
+flows_queue = asyncio.Queue()
+flows_event = asyncio.Event()
 
 class SharedPath:
 
@@ -36,7 +37,8 @@ class SharedPath:
 
     # Internal
     dir_internal = init_shared_paths(dir_root, 'internal', 'persistent settings not intended to be modified by users')
-    active_settings = os.path.join(dir_internal, 'activesettings.yaml')
+    dir_internal_settings = init_shared_paths(dir_internal, 'settings', 'more persistent settings not intended to be modified by users')
+    active_settings = os.path.join(dir_internal_settings, 'activesettings.yaml')
     starboard = os.path.join(dir_internal, 'starboard_messages.yaml')
     database = os.path.join(dir_internal, 'database.yaml')
     statistics = os.path.join(dir_internal, 'statistics.yaml')
@@ -54,6 +56,9 @@ class SharedPath:
 
     # Wildcards
     dir_wildcards = init_shared_paths(dir_root, 'wildcards', "wildcard files for Dynamic Prompting feature. Refer to the bot's wiki on GitHub for more information.")
+
+    # User images
+    dir_user_images = init_shared_paths(dir_root, 'user_images', "Images that the user may use for various bot functions.")
 
 shared_path = SharedPath()
 
