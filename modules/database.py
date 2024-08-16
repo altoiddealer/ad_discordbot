@@ -5,7 +5,6 @@ import time
 from modules.database_migration_v1_v2 import OldDatabase
 from modules.utils_shared import shared_path
 from modules.utils_files import make_fp_unique
-from modules.utils_misc import fix_dict
 from modules.utils_aspect_ratios import init_avg_from_dims
 
 import os
@@ -308,39 +307,6 @@ class Database(BaseFileMemory):
         self.settings_sent[guild_id][key] = new_msg_ids
         if save_now:
             self.save()
-
-
-class Config(BaseFileMemory):
-    def __init__(self) -> None:
-        self.discord: dict
-        self.per_server_settings: dict
-        self.dynamic_prompting_enabled: bool
-        self.textgenwebui: dict
-        self.sd: dict
-        super().__init__(shared_path.config, version=2, missing_okay=True)
-        self.fix_config()
-
-    def fix_config(self):
-        config_dict = self.get_vars()
-        # Load the template config
-        config_template = load_file(shared_path.config_template, {})
-        # Update the user config with any missing values from the template
-        fix_dict(config_dict, config_template, 'config.yaml')
-
-    def is_per_server(self):
-        return self.per_server_settings.get('enabled', False)
-    
-    def is_per_character(self):
-        if self.is_per_server:
-            return self.per_server_settings.get('per_server_characters', False)
-        return False
-
-    def run_migration(self):
-        _old_active = os.path.join(shared_path.dir_root, 'config.py')
-        self._migrate_from_file(_old_active, load=True)
-
-    def discord_dm_setting(self, key, default=None):
-        return self.get('discord', {}).get('direct_messages', {}).get(key, default)
 
 
 class StarBoard(BaseFileMemory):

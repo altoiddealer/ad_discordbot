@@ -37,17 +37,16 @@ from functools import partial
 
 sys.path.append("ad_discordbot")
 
-from modules.utils_shared import bg_task_queue, task_processing, flows_queue, flows_event, shared_path, patterns, bot_emojis
-from modules.database import Database, Config, StarBoard, Statistics, BaseFileMemory
+from modules.utils_files import load_file, merge_base, save_yaml_file  # noqa: F401
+from modules.utils_shared import shared_path, bg_task_queue, task_processing, flows_queue, flows_event, patterns, bot_emojis, config
+from modules.database import Database, StarBoard, Statistics, BaseFileMemory
 from modules.utils_misc import check_probability, fix_dict, update_dict, sum_update_dict, update_dict_matched_keys, random_value_from_range, convert_lists_to_tuples, get_time, format_time, format_time_difference, get_normalized_weights  # noqa: F401
 from modules.utils_discord import Embeds, guild_only, configurable_for_dm_if, is_direct_message, ireply, sleep_delete_message, send_long_message, \
     EditMessageModal, SelectedListItem, SelectOptionsView, get_user_ctx_inter, get_message_ctx_inter, apply_reactions_to_messages, replace_msg_in_history_and_discord, MAX_MESSAGE_LENGTH  # noqa: F401
-from modules.utils_files import load_file, merge_base, save_yaml_file  # noqa: F401
 from modules.utils_aspect_ratios import dims_from_ar, avg_from_dims, get_aspect_ratio_parts, calculate_aspect_ratio_sizes  # noqa: F401
 from modules.history import HistoryManager, History, HMessage, cnf
 from modules.typing import AlertUserError
 from modules.utils_asyncio import generate_in_executor
-from modules.defaults import Behavior, ImgModel, LLMContext, LLMState
 from modules.tags import base_tags, Tags
 
 from discord.ext.commands.errors import HybridCommandError, CommandError
@@ -61,7 +60,6 @@ logging = log
 starboard = StarBoard()
 bot_database = Database()
 bot_statistics = Statistics()
-config = Config()
 
 #################################################################
 #################### DISCORD / BOT STARTUP ######################
@@ -92,7 +90,7 @@ def parse_bot_args():
 bot_args = parse_bot_args()
 
 # Set Discord bot token from config, or args, or prompt for it, or exit
-TOKEN = config['discord'].get('TOKEN', None)
+TOKEN = config.discord.get('TOKEN', None)
 
 bot_token = bot_args.token if bot_args.token else TOKEN
 if not bot_token:
@@ -107,7 +105,7 @@ if not bot_token:
         log.error("Discord bot token is required. Exiting.")
         sys.exit(2)
     elif bot_token:
-        config['discord']['TOKEN'] = bot_token
+        config.discord['TOKEN'] = bot_token
         config.save()
         log.info("Discord bot token saved to 'config.yaml'")
     else:
@@ -129,8 +127,8 @@ client = commands.Bot(command_prefix=".", intents=intents)
 #################################################################
 class SD:
     def __init__(self):
-        self.enabled:bool = config['sd'].get('enabled', True)
-        self.url:str = config['sd'].get('SD_URL', 'http://127.0.0.1:7860')
+        self.enabled:bool = config.sd.get('enabled', True)
+        self.url:str = config.sd.get('SD_URL', 'http://127.0.0.1:7860')
         self.client:str = None
         self.last_img_payload = {}
 
@@ -175,7 +173,10 @@ class SD:
                         r = await response.json()
                         if self.client is None and endpoint != '/sdapi/v1/cmd-flags':
                             await self.get_sysinfo()
-                            bot_settings.refresh_enabled_extensions()
+                            bot_settings.imgmodel.refresh_enabled_extensions()
+                            for settings in guild_settings.values():
+                                settings:Settings
+                                settings.imgmodel.refresh_enabled_extensions()
                         return r
                     else:
                         log.error(f'{self.url}{endpoint} response: {response.status} "{response.reason}"')
@@ -264,7 +265,7 @@ from modules.prompts import count_tokens
 class TTS:
     def __init__(self):
         self.enabled:bool = False
-        self.settings:dict = config['textgenwebui']['tts_settings']
+        self.settings:dict = config.textgenwebui['tts_settings']
         self.supported_clients = ['alltalk_tts', 'coqui_tts', 'silero_tts', 'elevenlabs_tts', 'edge_tts']
         self.client:str = self.settings.get('extension', '')
         self.api_key:str = ''
@@ -302,10 +303,11 @@ class TTS:
                 shared.args.extensions.append(self.client)
 
     # Toggles TTS on/off
-    async def apply_toggle_tts(self, toggle:str='on', tts_sw:bool=False):
+    async def apply_toggle_tts(self, ictx:CtxInteraction, toggle:str='on', tts_sw:bool=False):
         try:
-            self.settings:Settings
-            extensions = copy.deepcopy(self.settings.llmcontext.get('extensions', {}))
+            settings:"Settings" = get_settings(ictx)
+            llmcontext_dict = settings.llmcontext.get_vars()
+            extensions:dict = copy.deepcopy(llmcontext_dict.get('extensions', {}))
             if toggle == 'off' and extensions.get(self.client, {}).get('activate'):
                 extensions[self.client]['activate'] = False
                 await tgwui.update_extensions(extensions)
@@ -323,7 +325,7 @@ tts = TTS()
 # Majority of this code section is sourced from 'modules/server.py'
 class TGWUI:
     def __init__(self):
-        self.enabled:bool = config['textgenwebui'].get('enabled', True)
+        self.enabled:bool = config.textgenwebui.get('enabled', True)
 
         self.instruction_template_str:str = None
 
@@ -603,8 +605,7 @@ async def init_auto_change_imgmodels():
         imgmodels_data = load_file(shared_path.img_models, {})
         if imgmodels_data and imgmodels_data.get('settings', {}).get('auto_change_imgmodels', {}).get('enabled', False):
             if config.is_per_server():
-                log.warning('[Auto Change Imgmodels] Main config is set for per-guild settings management.')
-                log.info('[Auto Change Imgmodels] Disabling this task, as it is not compatible with per-guild settings.')
+                log.warning('[Auto Change Imgmodels] Main config is set for per-guild settings management. Disabling this task.')
                 # Remove the registered command '/toggle_auto_change_imgmodels'
                 client.remove_command("toggle_auto_change_imgmodels")
             else:
@@ -617,7 +618,7 @@ def get_character(guild_id:int|None=None, guild_settings=None):
         # Try loading last known character with fallback sources
         sources = [
             bot_settings.get_last_setting_for("last_character", guild_id=guild_id),
-            settings.llmcontext['name'],
+            settings.llmcontext.name,
             client.user.display_name
         ]
         char_name = None
@@ -652,6 +653,12 @@ async def init_characters():
         char_name = get_character()
         if char_name:
             await character_loader(char_name, bot_settings)
+
+# Creates instances of Settings() for all guilds the bot is in
+def init_guild_settings():
+    global guild_settings
+    for guild in client.guilds:
+        guild_settings[guild.id] = Settings(guild.id)
 
 # If first time bot script is run
 async def first_run():
@@ -692,7 +699,7 @@ async def on_ready():
         await first_run()
     # Initialize guild specific settings instances
     if config.is_per_server():
-        bot_settings.init_guild_settings()
+        init_guild_settings()
     # Create background task processing queue
     client.loop.create_task(process_tasks_in_background())
     # Start the Task Manager
@@ -721,12 +728,12 @@ async def on_ready():
 async def on_message(message: discord.Message):
     text = message.clean_content # primarily converts @mentions to actual user names
     settings:Settings = get_settings(message)
-    if tgwui.enabled and not settings.bot_should_reply(message, text): 
+    last_character = bot_settings.get_last_setting_for("last_character", message)
+    if tgwui.enabled and not settings.behavior.bot_should_reply(message, text, last_character): 
         return # Check that bot should reply or not
     # Store the current time. The value will save locally to database.yaml at another time
     bot_database.update_last_msg_for(message.channel.id, 'user', save_now=False)
     # if @ mentioning bot, remove the @ mention from user prompt
-    last_character = bot_settings.get_last_setting_for("last_character", message)
     if text.startswith(f"@{last_character} "):
         text = text.replace(f"@{last_character} ", "", 1)
     # apply wildcards
@@ -739,13 +746,13 @@ async def on_message(message: discord.Message):
 # Starboard feature
 @client.event
 async def on_raw_reaction_add(endorsed_img):
-    if not config['discord'].get('starboard', {}).get('enabled', False):
+    if not config.discord.get('starboard', {}).get('enabled', False):
         return
     channel = await client.fetch_channel(endorsed_img.channel_id)
     message = await channel.fetch_message(endorsed_img.message_id)
     total_reaction_count = 0
-    if config['discord']['starboard'].get('emoji_specific', False):
-        for emoji in config['discord']['starboard'].get('react_emojis', []):
+    if config.discord['starboard'].get('emoji_specific', False):
+        for emoji in config.discord['starboard'].get('react_emojis', []):
             reaction = discord.utils.get(message.reactions, emoji=emoji)
             if reaction:
                 total_reaction_count += reaction.count
@@ -755,9 +762,9 @@ async def on_raw_reaction_add(endorsed_img):
             if reaction.emoji in bot_emojis_list:
                 continue
             total_reaction_count += reaction.count
-    if total_reaction_count >= config['discord']['starboard'].get('min_reactions', 2):
+    if total_reaction_count >= config.discord['starboard'].get('min_reactions', 2):
 
-        target_channel_id = config['discord']['starboard'].get('target_channel_id', None)
+        target_channel_id = config.discord['starboard'].get('target_channel_id', None)
         if target_channel_id == 11111111111111111111:
             target_channel_id = None
 
@@ -794,18 +801,17 @@ async def delete_old_settings_messages(channel:discord.TextChannel, old_msg_ids:
 # Post settings to all servers
 async def post_active_settings_to_all(key_str_list:Optional[list[str]]=None):
     for guild in client.guilds:
-        settings = guild_settings.get(guild.id, bot_settings)
-        await post_active_settings(guild, settings, key_str_list)
+        await post_active_settings(guild, key_str_list)
 
 # Post settings to a dedicated channel
-async def post_active_settings(guild:discord.Guild, settings:"Settings", key_str_list:Optional[list[str]]=None, channel:discord.TextChannel|None=None):
+async def post_active_settings(guild:discord.Guild, key_str_list:Optional[list[str]]=None, channel:discord.TextChannel|None=None):
     # List of settings keys to update
     key_str_list = key_str_list if key_str_list is not None else ['character', 'behavior', 'tags', 'imgmodel', 'llmstate']
     # For configured keys: Delete old settings messages -> Send new settings
     managed_keys = config.discord['post_active_settings'].get('post_settings_for', [])
 
     # Warn for old config setting
-    old_settings_chan = config['discord']['post_active_settings'].get('target_channel_id', None)
+    old_settings_chan = config.discord['post_active_settings'].get('target_channel_id', None)
     if old_settings_chan and not bot_database.was_warned('old_settings_chan'):
         bot_database.update_was_warned('old_settings_chan')
         log.warning("[Post Active Settings] This feature now uses channels set by a command '/set_server_settings_channel'.")
@@ -831,6 +837,7 @@ async def post_active_settings(guild:discord.Guild, settings:"Settings", key_str
     log.info(f"[Post Active Settings] Posting updated settings for '{guild.name}': {key_str_list}.")
 
     # Collect current settings
+    settings:"Settings" = guild_settings.get(guild.id, bot_settings)
     settings_copy = copy.deepcopy(settings.get_vars())
     # Extract tags for Tags message
     char_tags = settings_copy['llmcontext'].pop('tags', [])
@@ -1441,7 +1448,7 @@ class TaskProcessing(TaskAttributes):
                     self.bot_hmessage.id = self.params.chunk_msg_ids.pop(-1)
                 self.bot_hmessage.related_ids.extend(self.params.chunk_msg_ids)
             # Apply any reactions applicable to message
-            if config['discord']['history_reactions'].get('enabled', True):
+            if config.discord['history_reactions'].get('enabled', True):
                 await bg_task_queue.put(apply_reactions_to_messages(client.user, self.ictx, self.bot_hmessage, msg_ids_to_react))
         # send any user images
         send_user_image = self.params.send_user_image
@@ -1504,7 +1511,8 @@ class TaskProcessing(TaskAttributes):
                     log.info("[TAGS] History is being ignored")
                     
                 elif load_history > 0:
-                    i_list, v_list = bot_history.get_history_for(self.ictx.channel.id).render_to_tgwui_tuple()
+                    history_char, history_mode = get_char_mode_for_history(settings=self.settings)
+                    i_list, v_list = bot_history.get_history_for(self.ictx.channel.id, history_char, history_mode).render_to_tgwui_tuple()
 
                     # Calculate the number of items to retain (up to the length of history)
                     num_to_retain = min(load_history, len(i_list))
@@ -1581,13 +1589,13 @@ class TaskProcessing(TaskAttributes):
                     llm_payload_mods['load_history'] = int(tag.pop('load_history'))
                     
                 # change_character is higher priority, if added ignore swap_character
-                if 'change_character' in tag and not (llm_payload_mods.get('change_character') or llm_payload_mods.get('swap_character')):
+                if 'change_character' in tag and not is_direct_message(self.ictx) and not (llm_payload_mods.get('change_character') or llm_payload_mods.get('swap_character')):
                     llm_payload_mods['change_character'] = str(tag.pop('change_character'))
                 if 'swap_character' in tag and not (llm_payload_mods.get('change_character') or llm_payload_mods.get('swap_character')):
                     llm_payload_mods['swap_character'] = str(tag.pop('swap_character'))
                     
                 # change_llmmodel is higher priority, if added ignore swap_llmmodel
-                if 'change_llmmodel' in tag and not (llm_payload_mods.get('change_llmmodel') or llm_payload_mods.get('swap_llmmodel')):
+                if 'change_llmmodel' in tag and not is_direct_message(self.ictx) and not (llm_payload_mods.get('change_llmmodel') or llm_payload_mods.get('swap_llmmodel')):
                     llm_payload_mods['change_llmmodel'] = str(tag.pop('change_llmmodel'))
                 if 'swap_llmmodel' in tag and not (llm_payload_mods.get('change_llmmodel') or llm_payload_mods.get('swap_llmmodel')):
                     llm_payload_mods['swap_llmmodel'] = str(tag.pop('swap_llmmodel'))
@@ -1654,18 +1662,18 @@ class TaskProcessing(TaskAttributes):
             self.params.save_to_history = save_to_history
 
     async def init_llm_payload(self:Union["Task","Tasks"]):
-        self.llm_payload = copy.deepcopy(self.settings.llmstate)
+        self.llm_payload = copy.deepcopy(self.settings.llmstate.get_vars())
         self.llm_payload['text'] = self.text
         self.llm_payload['state']['name1'] = self.user_name
         self.llm_payload['state']['name2'] = self.settings.name
         self.llm_payload['state']['name1_instruct'] = self.user_name
         self.llm_payload['state']['name2_instruct'] = self.settings.name
         self.llm_payload['state']['character_menu'] = self.settings.name
-        self.llm_payload['state']['context'] = self.settings.llmcontext['context']
+        self.llm_payload['state']['context'] = self.settings.llmcontext.context
         self.llm_payload['state']['history'] = self.local_history.render_to_tgwui()
 
     async def message_img_gen(self:Union["Task","TaskProcessing"]):
-        await self.tags.match_img_tags(self.img_prompt, self.settings)
+        await self.tags.match_img_tags(self.img_prompt, self.settings.get_vars())
         self.params.update_bot_should_do(self.tags) # check for updates from tags
         if self.params.should_gen_image and await sd.online(self.ictx):
             # CLONE CURRENT TASK AND QUEUE IT
@@ -1687,7 +1695,7 @@ class TaskProcessing(TaskAttributes):
         if (not self.params.should_send_text) \
             or (hasattr(self.ictx, 'guild') and getattr(self.ictx.guild, 'voice_client', None) \
             and not voice_clients.guild_vcs.get(self.ictx.guild.id) and int(tts.settings.get('play_mode', 0)) == 0):
-            tts_sw = await tts.apply_toggle_tts(toggle='off')
+            tts_sw = await tts.apply_toggle_tts(self.ictx, toggle='off')
         # Check to apply Server Mode
         self.apply_server_mode()
         # Update names in stopping strings
@@ -1695,7 +1703,7 @@ class TaskProcessing(TaskAttributes):
         # generate text with text-generation-webui
         await self.llm_gen()
         # Toggle TTS back on if it was toggled off
-        await tts.apply_toggle_tts(toggle='on', tts_sw=tts_sw)
+        await tts.apply_toggle_tts(self.ictx, toggle='on', tts_sw=tts_sw)
 
     async def build_llm_payload(self:Union["Task","Tasks"]):
         # Update an existing LLM payload (Flows), or initialize with defaults
@@ -1719,7 +1727,7 @@ class TaskProcessing(TaskAttributes):
         self.llm_payload['text'] = self.llm_prompt
 
     def apply_server_mode(self:Union["Task","Tasks"]):
-        if self.ictx and config['textgenwebui'].get('server_mode', False):
+        if self.ictx and config.textgenwebui.get('server_mode', False):
             try:
                 name1 = f'Server: {self.ictx.guild}'
                 self.llm_payload['state']['name1'] = name1
@@ -1764,7 +1772,7 @@ class TaskProcessing(TaskAttributes):
                 self.bot_hmessage.dont_save()
 
             if self.last_resp:
-                truncation = int(self.settings.llmstate['state']['truncation_length'] * 4) #approx tokens
+                truncation = int(self.settings.llmstate.state['truncation_length'] * 4) #approx tokens
                 self.bot_hmessage.history.truncate(truncation)
                 client.loop.create_task(self.bot_hmessage.history.save())
 
@@ -1801,7 +1809,7 @@ class TaskProcessing(TaskAttributes):
         if not self.params.skip_create_bot_hmsg:
             # Replacing original Bot HMessage via "regenerate replace"
             if self.params.bot_hmessage_to_update:
-                apply_reactions = config['discord']['history_reactions'].get('enabled', True)
+                apply_reactions = config.discord['history_reactions'].get('enabled', True)
                 self.bot_hmessage = await replace_msg_in_history_and_discord(client.user, self.ictx, self.params, self.last_resp, self.tts_resp, apply_reactions)
                 self.params.should_send_text = False
             else:
@@ -1821,7 +1829,7 @@ class TaskProcessing(TaskAttributes):
             # Stream message chunks
             async def process_chunk(chunk_text):
                 # Immediately send message chunks (Do not queue)
-                if self.settings.behavior['responsiveness'] == 1.0 or self.name in ['regenerate', 'continue']:
+                if self.settings.behavior.responsiveness == 1.0 or self.name in ['regenerate', 'continue']:
                     await self.send_response_chunk(chunk_text)
                 # Queue message chunks to MessageManager()
                 else:
@@ -1841,8 +1849,8 @@ class TaskProcessing(TaskAttributes):
 
             def check_should_chunk(partial_resp):
                 nonlocal last_checked
-                chance_to_chunk = self.settings.behavior['chance_to_stream_reply']
-                chunk_syntax = self.settings.behavior['stream_reply_triggers'] # ['\n', '.']
+                chance_to_chunk = self.settings.behavior.chance_to_stream_reply
+                chunk_syntax = self.settings.behavior.stream_reply_triggers # ['\n', '.']
                 check_resp:str = partial_resp[len(last_checked):]
                 for syntax in chunk_syntax:
                     if check_resp.endswith(syntax):
@@ -1876,7 +1884,7 @@ class TaskProcessing(TaskAttributes):
 
                 can_chunk = False
                 # Only try chunking responses if sending to channel, configured to chunk, and not '/speak' command
-                if self.params.should_send_text and self.settings.behavior['chance_to_stream_reply'] > 0 and self.name not in ['speak']:
+                if self.params.should_send_text and self.settings.behavior.chance_to_stream_reply > 0 and self.name not in ['speak']:
                     can_chunk = True
                 
                 func = partial(chatbot_wrapper, text=self.llm_payload['text'], state=self.llm_payload['state'], regenerate=regenerate, _continue=_continue, loading_message=True, for_ui=False)
@@ -2045,12 +2053,13 @@ class TaskProcessing(TaskAttributes):
             # Send last_exchange to channel
             greeting_msg = ''
             if bot_history.greeting_or_history == 'history':
-                last_user_hmessage, last_bot_hmessage = bot_history.get_history_for(self.ictx.channel.id).last_exchange()
+                history_char, history_mode = get_char_mode_for_history(settings=self.settings)
+                last_user_hmessage, last_bot_hmessage = bot_history.get_history_for(self.ictx.channel.id, history_char, history_mode).last_exchange()
                 if last_user_hmessage:
                     last_character = bot_settings.get_last_setting_for("last_character", self.ictx)
                     greeting_msg = f'__**Last message exchange**__:\n>>> **User**: "{last_user_hmessage.text_visible}"\n **{last_character}**: "{last_bot_hmessage.text_visible}"'
             if not greeting_msg:
-                greeting:str = self.settings.llmcontext['greeting']
+                greeting:str = self.settings.llmcontext.greeting
                 if greeting:
                     greeting_msg = greeting.replace('{{user}}', 'user')
                     greeting_msg = greeting_msg.replace('{{char}}', char_name)
@@ -2282,7 +2291,7 @@ class TaskProcessing(TaskAttributes):
             self.img_payload['negative_prompt'] = processed_negative_prompt
 
             # Clean up extension keys
-            extensions = config['sd']['extensions']
+            extensions = config.sd['extensions']
             alwayson_scripts = self.img_payload.get('alwayson_scripts', {})
             # Clean ControlNet
             if alwayson_scripts.get('controlnet'):
@@ -2333,8 +2342,8 @@ class TaskProcessing(TaskAttributes):
                                 start_index = sampler_name.lower().rfind(value)
                                 fixed_sampler_name = sampler_name[:start_index].strip()
                                 self.img_payload['sampler_name'] = fixed_sampler_name
-                                self.settings.imgmodel['payload']['sampler_name'] = fixed_sampler_name
-                                self.settings.imgmodel['payload']['scheduler'] = value.strip()
+                                self.settings.imgmodel.payload['sampler_name'] = fixed_sampler_name
+                                self.settings.imgmodel.payload['scheduler'] = value.strip()
                             else:
                                 log.warning(f'Img payload value "sampler_name": "{sampler_name}" may cause an error due to the scheduler ("{value}") being part of the value. The scheduler may be expected as a separate parameter in current version of "{sd.client}".')
                             break
@@ -2357,13 +2366,13 @@ class TaskProcessing(TaskAttributes):
                     bot_database.update_was_warned('loractl')
                     log.warning(f'loractl is not known to be compatible with "{sd.client}". Not applying loractl...')
                 return
-            scaling_settings = [v for k, v in config['sd']['extensions'].get('lrctl', {}).items() if 'scaling' in k]
+            scaling_settings = [v for k, v in config.sd['extensions'].get('lrctl', {}).items() if 'scaling' in k]
             scaling_settings = scaling_settings if scaling_settings else ['']
             # Flatten the matches dictionary values to get a list of all tags (including those within tuples)
             all_matched_tags = [tag if isinstance(tag, dict) else tag[0] for tag in matched_tags]
             # Filter the matched tags to include only those with certain patterns in their text fields
             lora_tags = [tag for tag in all_matched_tags if any(patterns.sd_lora.findall(text) for text in (tag.get('positive_prompt', ''), tag.get('positive_prompt_prefix', ''), tag.get('positive_prompt_suffix', '')))]
-            if len(lora_tags) >= config['sd']['extensions']['lrctl']['min_loras']:
+            if len(lora_tags) >= config.sd['extensions']['lrctl']['min_loras']:
                 for index, tag in enumerate(lora_tags):
                     # Determine the key with a non-empty value among the specified keys
                     used_key = next((key for key in ['positive_prompt', 'positive_prompt_prefix', 'positive_prompt_suffix'] if tag.get(key, '')), None)
@@ -2377,7 +2386,7 @@ class TaskProcessing(TaskAttributes):
                                     lora_weight = float(lora_weight_match.group())
                                     # Selecting the appropriate scaling based on the index
                                     scaling_key = f'lora_{index + 1}_scaling' if index+1 < len(scaling_settings) else 'additional_loras_scaling'
-                                    scaling_values = config['sd']['extensions']['lrctl'].get(scaling_key, '')
+                                    scaling_values = config.sd['extensions']['lrctl'].get(scaling_key, '')
                                     if scaling_values:
                                         scaling_factors = [round(float(factor.split('@')[0]) * lora_weight, 2) for factor in scaling_values.split(',')]
                                         scaling_steps = [float(step.split('@')[1]) for step in scaling_values.split(',')]
@@ -2652,20 +2661,20 @@ class TaskProcessing(TaskAttributes):
                     log.info(f"[TAGS] Applied Param Variances: '{processed_params}'")
                     sum_update_dict(self.img_payload, processed_params)
                 # Controlnet handling
-                if controlnet and config['sd']['extensions'].get('controlnet_enabled', False):
+                if controlnet and config.sd['extensions'].get('controlnet_enabled', False):
                     self.img_payload['alwayson_scripts']['controlnet']['args'] = controlnet
                 # forge_couple handling
-                if forge_couple and config['sd']['extensions'].get('forgecouple_enabled', False):
+                if forge_couple and config.sd['extensions'].get('forgecouple_enabled', False):
                     self.img_payload['alwayson_scripts']['forge_couple']['args'].update(forge_couple)
                     self.img_payload['alwayson_scripts']['forge_couple']['args']['enable'] = True
                     log.info(f"[TAGS] Enabled forge_couple: {forge_couple}")
                 # layerdiffuse handling
-                if layerdiffuse and config['sd']['extensions'].get('layerdiffuse_enabled', False):
+                if layerdiffuse and config.sd['extensions'].get('layerdiffuse_enabled', False):
                     self.img_payload['alwayson_scripts']['layerdiffuse']['args'].update(layerdiffuse)
                     self.img_payload['alwayson_scripts']['layerdiffuse']['args']['enabled'] = True
                     log.info(f"[TAGS] Enabled layerdiffuse: {layerdiffuse}")
                 # ReActor face swap handling
-                if reactor and config['sd']['extensions'].get('reactor_enabled', False):
+                if reactor and config.sd['extensions'].get('reactor_enabled', False):
                     self.img_payload['alwayson_scripts']['reactor']['args'].update(reactor)
                     if reactor.get('mask'):
                         self.img_payload['alwayson_scripts']['reactor']['args']['save_original'] = True
@@ -2760,7 +2769,7 @@ class TaskProcessing(TaskAttributes):
         forge_couple_args = {}
         layerdiffuse_args = {}
         reactor_args = {}
-        extensions = config['sd'].get('extensions', {})
+        extensions = config.sd.get('extensions', {})
         accept_only_first = ['flow', 'aspect_ratio', 'img2img', 'img2img_mask', 'sd_output_dir', 'last_img_payload']
         try:
             for tag in self.tags.matches:
@@ -2776,7 +2785,7 @@ class TaskProcessing(TaskAttributes):
                         if value != 0:
                             log.info(f"[TAGS] Censoring: {'Image Blurred' if value == 1 else 'Generation Blocked'}")
                     # Accept only first 'change' or 'swap'
-                    elif key == 'change_imgmodel' or key == 'swap_imgmodel' and not (img_payload_mods.get('change_imgmodel') or img_payload_mods.get('swap_imgmodel')):
+                    elif (key == 'change_imgmodel' and not is_direct_message(self.ictx)) or key == 'swap_imgmodel' and not (img_payload_mods.get('change_imgmodel') or img_payload_mods.get('swap_imgmodel')):
                         img_payload_mods[key] = str(value)
                     # Allow multiple to accumulate
                     elif key == 'payload':
@@ -2838,7 +2847,7 @@ class TaskProcessing(TaskAttributes):
             if controlnet_args:
                 img_payload_mods.setdefault('controlnet', [])
                 for index in sorted(set(controlnet_args.keys())):   # This flattens down any gaps between collected ControlNet units (ensures lowest index is 0, next is 1, and so on)
-                    cnet_basesettings = copy.copy(self.settings.imgmodel['payload']['alwayson_scripts']['controlnet']['args'][0])  # Copy of required dict items
+                    cnet_basesettings = copy.copy(self.settings.imgmodel.payload['alwayson_scripts']['controlnet']['args'][0])  # Copy of required dict items
                     cnet_unit_args = controlnet_args.get(index, {})
                     cnet_unit = update_dict(cnet_basesettings, cnet_unit_args)
                     img_payload_mods['controlnet'].append(cnet_unit)
@@ -2872,7 +2881,7 @@ class TaskProcessing(TaskAttributes):
             self.img_payload = {"prompt": self.img_prompt, "negative_prompt": neg_prompt, "seed": -1}
 
             # Apply settings from imgmodel configuration
-            imgmodel_img_payload = copy.deepcopy(self.settings.imgmodel.get('payload', {}))
+            imgmodel_img_payload = copy.deepcopy(self.settings.imgmodel.payload)
             self.img_payload.update(imgmodel_img_payload)
 
         except Exception as e:
@@ -2898,7 +2907,7 @@ class Tasks(TaskProcessing):
         try:
             await spontaneous_messaging.reset_for_channel(self.ictx) # Stop any pending spontaneous message task for current channel
 
-            await self.tags.match_tags(self.text, self.settings, phase='llm') # match tags labeled for user / userllm.
+            await self.tags.match_tags(self.text, self.settings.get_vars(), phase='llm') # match tags labeled for user / userllm.
             self.params.update_bot_should_do(self.tags)  # check what bot should do
 
             # Bot should generate text...
@@ -2945,7 +2954,7 @@ class Tasks(TaskProcessing):
                 await self.create_hmessages()
 
                 # add history reactions to user message
-                if config['discord']['history_reactions'].get('enabled', True):
+                if config.discord['history_reactions'].get('enabled', True):
                     await bg_task_queue.put(apply_reactions_to_messages(client.user, self.ictx, self.user_hmessage))
 
                 # Swap LLM Model back if triggered
@@ -3000,7 +3009,7 @@ class Tasks(TaskProcessing):
             if send_time:
                 self.name = 'message_post_llm' # Change self task name
                 if message_manager.send_msg_queue.empty():
-                    writing_message = '' if self.settings.behavior['maximum_typing_speed'] < 0 else f' (seconds to write: {round(self.message.seconds_to_write, 2)})'
+                    writing_message = '' if self.settings.behavior.maximum_typing_speed < 0 else f' (seconds to write: {round(self.message.seconds_to_write, 2)})'
                     log.info(f'Response to message #{self.message.num} will send in {round(send_time - time.time(), 2)} seconds.{writing_message}')
                 proceed = False
 
@@ -3137,7 +3146,7 @@ class Tasks(TaskProcessing):
 
             # Apply any reactions applicable to HMessage
             msg_ids_to_edit = [updated_bot_hmessage.id] + updated_bot_hmessage.related_ids
-            if config['discord']['history_reactions'].get('enabled', True):
+            if config.discord['history_reactions'].get('enabled', True):
                 await bg_task_queue.put(apply_reactions_to_messages(client.user, self.ictx, updated_bot_hmessage, msg_ids_to_edit, new_discord_msg))
 
             # process any tts resp
@@ -3257,11 +3266,11 @@ class Tasks(TaskProcessing):
                 target_bot_hmessage.update(hidden=True) # always hide previous regen when creating
 
                 target_bot_hmessage_ids = [target_bot_hmessage.id] + target_bot_hmessage.related_ids
-                if config['discord']['history_reactions'].get('enabled', True):
+                if config.discord['history_reactions'].get('enabled', True):
                     await bg_task_queue.put(apply_reactions_to_messages(client.user, self.ictx, target_bot_hmessage, target_bot_hmessage_ids, self.target_discord_msg))
 
             # Update reactions for user message
-            if config['discord']['history_reactions'].get('enabled', True):
+            if config.discord['history_reactions'].get('enabled', True):
                 await bg_task_queue.put(apply_reactions_to_messages(client.user, self.ictx, self.user_hmessage))
 
             await self.embeds.delete('regenerate')
@@ -3373,7 +3382,7 @@ class Tasks(TaskProcessing):
                     toggle_hmessages(bot_hmessage, user_hmessage, verb)
 
             # Apply reaction to user message
-            if config['discord']['history_reactions'].get('enabled', True):
+            if config.discord['history_reactions'].get('enabled', True):
                 await bg_task_queue.put(apply_reactions_to_messages(client.user, self.ictx, user_hmessage))
 
             # Process all messages that need label updates
@@ -3383,7 +3392,7 @@ class Tasks(TaskProcessing):
                 if target_hmsg.related_ids:
                     msg_ids_to_edit.extend(target_hmsg.related_ids)
                 # Process reactions for all affected messages
-                if config['discord']['history_reactions'].get('enabled', True):
+                if config.discord['history_reactions'].get('enabled', True):
                     await bg_task_queue.put(apply_reactions_to_messages(client.user, self.ictx, target_hmsg, msg_ids_to_edit, self.target_discord_msg))
             
             result = f"**Modified message exchange pair in history for {self.user_name}** (messages {verb})."
@@ -3411,11 +3420,11 @@ class Tasks(TaskProcessing):
     async def toggle_tts_task(self:"Task"):
         try:
             if tts.enabled:
-                await tts.apply_toggle_tts(toggle='off')
+                await tts.apply_toggle_tts(self.ictx, toggle='off')
                 tts.enabled = False
                 message = 'disabled'
             else:
-                await tts.apply_toggle_tts(toggle='on', tts_sw=True)
+                await tts.apply_toggle_tts(self.ictx, toggle='on', tts_sw=True)
                 tts.enabled = True
                 message = 'enabled'
             await voice_clients.toggle_voice_client(self.ictx.guild.id, message)
@@ -3466,7 +3475,7 @@ class Tasks(TaskProcessing):
                 if 'api_key' in sub_dict:
                     sub_dict.pop('api_key')
             await self.embeds.send('system', f'{self.user_name} requested tts:', f"**Params:** {tts_args}\n**Text:** {self.text}")
-            await tgwui.update_extensions(self.settings.llmcontext.get('extensions', {})) # Restore character specific extension settings
+            await tgwui.update_extensions(self.settings.llmcontext.extensions) # Restore character specific extension settings
             if self.params.user_voice:
                 os.remove(self.params.user_voice)
         except Exception as e:
@@ -3515,16 +3524,13 @@ class Tasks(TaskProcessing):
                 await bg_task_queue.put(announce_changes('changed Img model', imgmodel_name, self.ictx))
 
             log.info(f"Image model changed to: {imgmodel_name}")
-            if config['discord']['post_active_settings'].get('enabled', True):
+            if config.discord['post_active_settings'].get('enabled', True):
                 settings_keys = ['imgmodel']
                 # Auto-change imgmodel task will not have an interaction
-                if not self.ictx:
-                    await bg_task_queue.put(post_active_settings_to_all(settings_keys))
+                if self.ictx and config.is_per_server():
+                    await bg_task_queue.put(post_active_settings(self.ictx.guild.id, settings_keys))
                 else:
-                    settings = bot_settings
-                    if not is_direct_message(self.ictx):
-                        settings = guild_settings.get(self.ictx.guild.id, bot_settings) # guild specific settings
-                    await bg_task_queue.put(post_active_settings(self.ictx.guild.id, settings, settings_keys))
+                    await bg_task_queue.put(post_active_settings_to_all(settings_keys))
 
         except Exception as e:
             log.error(f"Error changing Img model: {e}")
@@ -3590,19 +3596,16 @@ class Tasks(TaskProcessing):
             mode = char_params.get('mode', 'change')
             await self.embeds.send('change', f'{verb} character ... ', f'{self.user_name} requested character {mode}: "{char_name}"')
 
-            settings:Settings = get_settings(self.ictx)
-            guild = None
-            if not is_direct_message(self.ictx):
-                guild = self.ictx.guild
-
             # Change character
-            await change_character(char_name, settings, self.channel, guild)
+            await change_character(char_name, self.ictx)
             # Set history
             if not bot_history.autoload_history or bot_history.change_char_history_method == 'new': # if we don't keep history...
                 # create a clone of History with same settings but empty, and replace it in the manager
-                history = bot_history.get_history_for(self.ictx.channel.id, cached_only=True)
+                history_char, history_mode = get_char_mode_for_history(settings=self.settings)
+                history = bot_history.get_history_for(self.ictx.channel.id, history_char, history_mode, cached_only=True)
                 if history is None:
-                    bot_history.new_history_for(self.ictx.channel.id)
+                    history_char, history_mode = get_char_mode_for_history(self.ictx)
+                    bot_history.new_history_for(self.ictx.channel.id, history_char, history_mode)
                 else:
                     history.fresh().replace()
             log.info(f"Character loaded: {char_name}")
@@ -3619,10 +3622,10 @@ class Tasks(TaskProcessing):
                     await bg_task_queue.put(announce_changes(change_message, char_name, self.ictx))
 
             # Post settings
-            if config['discord']['post_active_settings'].get('enabled', True):
+            if config.discord['post_active_settings'].get('enabled', True):
                 settings_keys = ['character']
                 if config.is_per_character():
-                    await bg_task_queue.put(post_active_settings(guild, settings, settings_keys))
+                    await bg_task_queue.put(post_active_settings(self.ictx.guild, settings_keys))
                 else:
                     await bg_task_queue.put(post_active_settings_to_all(settings_keys))
                 
@@ -3655,7 +3658,7 @@ class Tasks(TaskProcessing):
                 await self.embeds.send('img_send', "Image prompt was flagged as inappropriate.", "")
                 return
             # Process loractl
-            if config['sd']['extensions'].get('lrctl', {}).get('enabled', False):
+            if config.sd['extensions'].get('lrctl', {}).get('enabled', False):
                 self.apply_loractl()
             # Apply tags relevant to Img prompts
             self.process_img_prompt_tags()
@@ -3789,18 +3792,18 @@ class Message:
     def scale_delays(self):
         total_delay = self.response_delay + self.read_text_delay
         # Check if the total delay exceeds the maximum allowed delay
-        if total_delay > self.parent_settings.behavior['max_reply_delay']:
+        if total_delay > self.parent_settings.behavior.max_reply_delay:
             # Calculate the scaling factor
-            scaling_factor = self.parent_settings.behavior['max_reply_delay'] / total_delay
+            scaling_factor = self.parent_settings.behavior.max_reply_delay / total_delay
             # Scale the delays proportionally
             self.response_delay *= scaling_factor
             self.read_text_delay *= scaling_factor
 
     def factor_typing_speed(self):
         # Calculate and apply effect of "typing speed", if configured
-        if self.parent_settings.behavior['maximum_typing_speed'] > 0 and self.last_tokens is not None:
+        if self.parent_settings.behavior.maximum_typing_speed > 0 and self.last_tokens is not None:
             words_generated = self.last_tokens*0.75
-            words_per_second = self.parent_settings.behavior['maximum_typing_speed'] / 60
+            words_per_second = self.parent_settings.behavior.maximum_typing_speed / 60
             # update seconds_to_write
             self.seconds_to_write = (words_generated / words_per_second)
 
@@ -3864,7 +3867,7 @@ class Task(Tasks):
 
         Valid Task names:
         'on_message' / 'message_llm' / 'message_post_llm' / 'spontaneous_message' / 'flows'
-        'edit_history' / 'continue' / 'regenerate' / ''hide_or_reveal_history'
+        'edit_history' / 'continue' / 'regenerate' / 'hide_or_reveal_history' / 'toggle_tts'
         'change_imgmodel' / 'change_llmmodel' / 'change_char' / 'img_gen' / 'msg_image_cmd' / 'speak'
 
         Default kwargs:
@@ -3923,7 +3926,7 @@ class Task(Tasks):
         self.user_hmessage: HMessage = self.user_hmessage if self.user_hmessage else None
         self.bot_hmessage: HMessage  = self.bot_hmessage if self.bot_hmessage else None
         # Get history for interaction channel
-        non_history_tasks = ['imgmodel', 'character'] # tasks that definitely do not need history
+        non_history_tasks = ['change_char', 'change_imgmodel', 'change_llmmodel', 'toggle_tts'] # tasks that definitely do not need history
         # Establish correct Settings instance and Local History values
         self.settings: Settings      = self.settings if self.settings else None
         if self.ictx:
@@ -3932,10 +3935,11 @@ class Task(Tasks):
                 # Assign guild-specific settings
                 self.settings = guild_settings.get(self.ictx.guild.id, bot_settings)
             if self.name not in non_history_tasks:
+                history_char, history_mode = get_char_mode_for_history(settings=self.settings)
                 if is_dm:
-                    self.local_history   = self.local_history if self.local_history else bot_history.get_history_for(self.channel.id).dont_save()
+                    self.local_history   = self.local_history if self.local_history else bot_history.get_history_for(self.ictx.channel.id, history_char, history_mode).dont_save()
                 else:
-                    self.local_history   = self.local_history if self.local_history else bot_history.get_history_for(self.channel.id)
+                    self.local_history   = self.local_history if self.local_history else bot_history.get_history_for(self.ictx.channel.id, history_char, history_mode)
         # Fall back to main bot settings
         if not self.settings:
             self.settings = bot_settings
@@ -4123,7 +4127,7 @@ class TaskManager(Tasks):
             self.current_task = task.name
             await task.run_task()
             # flows queue is populated in process_llm_payload_tags()
-            if flows.queue.qsize() > 0:
+            if flows_queue.qsize() > 0:
                 await flows.run_flow_if_any(task.text, task.ictx)
         except Exception as e:
             logging.error(f"An error occurred while processing task {task.name}: {e}")
@@ -4272,10 +4276,11 @@ class Flows(TaskProcessing):
             self.ictx      = ictx
             self.user_name = get_user_ctx_inter(ictx).display_name
             self.channel   = ictx.channel
+            history_char, history_mode = get_char_mode_for_history(self.ictx)
             if is_direct_message(ictx):
-                self.local_history = self.local_history if self.local_history else bot_history.get_history_for(self.channel.id).dont_save()
+                self.local_history = self.local_history if self.local_history else bot_history.get_history_for(self.ictx.channel.id, history_char, history_mode).dont_save()
             else:
-                self.local_history = self.local_history if self.local_history else bot_history.get_history_for(self.channel.id)
+                self.local_history = self.local_history if self.local_history else bot_history.get_history_for(self.ictx.channel.id, history_char, history_mode)
 
             # flows are activated in process_llm_payload_tags(), and is where the flow queue is populated
             await self.flow_task(text)
@@ -4340,7 +4345,7 @@ if sd.enabled:
     async def get_cnet_data() -> dict:
 
         async def check_cnet_online(endpoint):
-            if config['sd']['extensions'].get('controlnet_enabled', False):
+            if config.sd['extensions'].get('controlnet_enabled', False):
                 try:
                     online = await sd.api(endpoint='/controlnet/model_list', method='get', json=None, retry=False)
                     if online: 
@@ -4352,7 +4357,7 @@ if sd.enabled:
             return False
 
         filtered_cnet_data = {}
-        if config['sd']['extensions'].get('controlnet_enabled', False):
+        if config.sd['extensions'].get('controlnet_enabled', False):
             try:
                 all_cnet_data = await sd.api(endpoint='/controlnet/control_types', method='get', json=None, retry=False)
                 for key, value in all_cnet_data["control_types"].items():
@@ -4376,8 +4381,8 @@ if sd.enabled:
     size_choices, style_choices, use_llm_choices = asyncio.run(get_imgcmd_choices(size_options, style_options))
 
     # Check if extensions enabled in config
-    cnet_enabled = config['sd']['extensions'].get('controlnet_enabled', False)
-    reactor_enabled = config['sd']['extensions'].get('reactor_enabled', False)
+    cnet_enabled = config.sd['extensions'].get('controlnet_enabled', False)
+    reactor_enabled = config.sd['extensions'].get('reactor_enabled', False)
 
     if cnet_enabled and reactor_enabled:
         @client.hybrid_command(name="image", description=f'Generate an image using {sd.client}')
@@ -4877,7 +4882,8 @@ if tgwui.enabled:
         shared.stop_everything = True
         await ireply(ctx, 'conversation reset') # send a response msg to the user
         # Create a new instance of the history and set it to active
-        bot_history.get_history_for(ctx.channel.id).fresh().replace()
+        history_char, history_mode = get_char_mode_for_history(ctx)
+        bot_history.get_history_for(ctx.channel.id, history_char, history_mode).fresh().replace()
         
         last_character = bot_settings.get_last_setting_for("last_character", ctx)
         log.info(f'{ctx.author.display_name} used "/reset_conversation": "{last_character}"')
@@ -4890,7 +4896,8 @@ if tgwui.enabled:
     @client.hybrid_command(description="Saves the current conversation to a new file in text-generation-webui/logs/")
     @guild_only()
     async def save_conversation(ctx: commands.Context):
-        await bot_history.get_history_for(ctx.channel.id).save(timeout=0, force=True)
+        history_char, history_mode = get_char_mode_for_history(ctx)
+        await bot_history.get_history_for(ctx.channel.id, history_char, history_mode).save(timeout=0, force=True)
         await ctx.reply('Saved current conversation history', ephemeral=True)
 
     # Context menu command to edit both a discord message and HMessage
@@ -4899,7 +4906,8 @@ if tgwui.enabled:
         if not (message.author == inter.user or message.author == client.user):
             await inter.response.send_message("You can only edit your own or bot's messages.", ephemeral=True, delete_after=5)
             return
-        local_history = bot_history.get_history_for(inter.channel.id)
+        history_char, history_mode = get_char_mode_for_history(inter)
+        local_history = bot_history.get_history_for(inter.channel.id, history_char, history_mode)
         if not local_history:
             await inter.response.send(f'There is currently no chat history to "edit history" from.', ephemeral=True, delete_after=5)
             return
@@ -4920,7 +4928,8 @@ if tgwui.enabled:
             await inter.response.send_message("You can only hide your own or bot's messages.", ephemeral=True, delete_after=5)
             return
         try:
-            local_history = bot_history.get_history_for(inter.channel.id)
+            history_char, history_mode = get_char_mode_for_history(inter)
+            local_history = bot_history.get_history_for(inter.channel.id, history_char, history_mode)
             target_hmessage = local_history.search(lambda m: m.id == message.id or message.id in m.related_ids)
             if not target_hmessage:
                 await inter.response.send_message("Message not found in current chat history.", ephemeral=True, delete_after=5)
@@ -4939,7 +4948,8 @@ if tgwui.enabled:
         if not (message.author == inter.user or message.author == client.user):
             await inter.response.send_message(f'You can only "{cmd}" from messages written by yourself or from the bot.', ephemeral=True, delete_after=7)
             return
-        local_history = bot_history.get_history_for(inter.channel.id)
+        history_char, history_mode = get_char_mode_for_history(inter)
+        local_history = bot_history.get_history_for(inter.channel.id, history_char, history_mode)
         if not local_history:
             await inter.response.send(f'There is currently no chat history to "{cmd}" from.', ephemeral=True, delete_after=5)
             return
@@ -4994,10 +5004,8 @@ async def load_character_data(char_name):
     return char_data
 
 # Collect character information
-async def character_loader(char_name, settings:"Settings", channel=None, guild:discord.Guild|None=None, guild_id:int|None=None):
+async def character_loader(char_name, settings:"Settings", guild_id:int|None=None):
     try:
-        if guild:
-            guild_id = guild.id
         # Get data using textgen-webui native character loading function
         _, name, _, greeting, context = load_character(char_name, '', '')
         missing_keys = [key for key, value in {'name': name, 'greeting': greeting, 'context': context}.items() if not value]
@@ -5027,15 +5035,14 @@ async def character_loader(char_name, settings:"Settings", channel=None, guild:d
                     await voice_clients.voice_channel(vc_guild_id, value)
                 char_llmcontext['use_voice_channel'] = value
             elif key == 'tags':
-                value = await base_tags.update_tags(value) # Unpack any tag presets
+                value = base_tags.update_tags(value) # Unpack any tag presets
                 char_llmcontext['tags'] = value
         # Merge llmcontext data and extra data
         char_llmcontext.update(textgen_data)
         # Update stored database / shared.settings values for character
         bot_settings.set_last_setting_for("last_character", char_name, guild_id=guild_id, save_now=True)
         shared.settings['character'] = char_name
-        # Update discord username / avatar
-        await update_client_profile(char_name, channel, guild)
+
         # Collect behavior data
         char_behavior = char_data.get('behavior', {})
         char_behavior = merge_base(char_behavior, 'behavior')
@@ -5045,10 +5052,12 @@ async def character_loader(char_name, settings:"Settings", channel=None, guild:d
         char_llmstate['character_menu'] = char_name
 
         # Commit the character data to settings
-        settings.set('llmcontext', dict(char_llmcontext))
-        state_dict = settings.llmstate['state']
+        settings.llmcontext.update(dict(char_llmcontext))
+        # Update State dict
+        state_dict = settings.llmstate.state
         update_dict(state_dict, dict(char_llmstate))
-        settings.update_behavior(dict(char_behavior))
+        # Update Behavior
+        settings.behavior.update(dict(char_behavior), char_name)
         settings.save()
 
         # Print mode in cmd
@@ -5059,6 +5068,7 @@ async def character_loader(char_name, settings:"Settings", channel=None, guild:d
             state_dict['instruction_template_str'] = update_instruct
     except Exception as e:
         log.error(f"Error loading character. Check spelling and file structure. Use bot cmd '/character' to try again. {e}")
+        print(traceback.format_exc())
 
 # Task to manage discord profile updates
 delayed_profile_update_task = None
@@ -5091,7 +5101,7 @@ async def delayed_profile_update(username, avatar_fp, remaining_cooldown, guild:
     except Exception as e:
         log.error(f"Error while changing character username or avatar: {e}")
 
-async def update_client_profile(char_name:str, channel:discord.TextChannel|None=None, guild:discord.Guild|None=None):
+async def update_client_profile(char_name:str, ictx:CtxInteraction):
     try:
         global delayed_profile_update_task
         # Cancel delayed profile update task if one is already pending
@@ -5100,10 +5110,6 @@ async def update_client_profile(char_name:str, channel:discord.TextChannel|None=
         # Do not update profile if name is same and no update task is scheduled
         elif all(guild.get_member(client.user.id).display_name == char_name for guild in client.guilds):
             return
-        
-        guild_id = None
-        if guild:
-            guild_id = guild.id
 
         # Avatar defaults
         avatar_p = os.path.join(shared_path.dir_tgwui, 'characters')
@@ -5117,35 +5123,37 @@ async def update_client_profile(char_name:str, channel:discord.TextChannel|None=
                 avatar_fn = char_name
         avatar_fp = os.path.join(avatar_p, f'{avatar_fn}.png')
         # Only update avatar if different from previous
-        last_avatar = bot_settings.get_last_setting_for("last_avatar", guild_id=guild_id)
+        last_avatar = bot_settings.get_last_setting_for("last_avatar", guild_id=ictx.guild.id)
         if (avatar_fp == last_avatar) or not os.path.exists(avatar_fp):
             avatar_fp = None
 
         # Check for cooldown before allowing profile change
-        last_change = bot_settings.get_last_setting_for("last_change", guild_id=guild_id)
+        last_change = bot_settings.get_last_setting_for("last_change", guild_id=ictx.guild.id)
         last_cooldown = last_change + timedelta(minutes=10).seconds
         if time.time() >= last_cooldown:
             # Apply changes immediately if outside 10 minute cooldown
-            delayed_profile_update_task = asyncio.create_task(delayed_profile_update(char_name, avatar_fp, 0, guild))
+            delayed_profile_update_task = asyncio.create_task(delayed_profile_update(char_name, avatar_fp, 0, ictx.guild))
         else:
             remaining_cooldown = last_cooldown - time.time()
             seconds = int(remaining_cooldown)
-            if channel:
-                await channel.send(f'**Due to Discord limitations, character name/avatar will update in {seconds} seconds.**', delete_after=10)
+            await ictx.channel.send(f'**Due to Discord limitations, character name/avatar will update in {seconds} seconds.**', delete_after=10)
             log.info(f"Due to Discord limitations, character name/avatar will update in {remaining_cooldown} seconds.")
-            delayed_profile_update_task = asyncio.create_task(delayed_profile_update(char_name, avatar_fp, seconds, guild))
+            delayed_profile_update_task = asyncio.create_task(delayed_profile_update(char_name, avatar_fp, seconds, ictx.guild))
     except Exception as e:
         log.error(f"An error occurred while updating Discord profile: {e}")
 
 # Apply character changes
-async def change_character(char_name, settings:"Settings", channel, guild:discord.Guild|None=None):
+async def change_character(char_name, ictx:CtxInteraction):
     try:
+        settings:Settings = get_settings(ictx)
         # Load the character
-        await character_loader(char_name, settings, channel, guild)
+        await character_loader(char_name, settings, ictx.guild.id)
+        # Update discord username / avatar
+        await update_client_profile(char_name, ictx)
         # Update all settings
         settings.update_settings()
     except Exception as e:
-        await channel.send(f"An error occurred while changing character: {e}")
+        await ictx.channel.send(f"An error occurred while changing character: {e}")
         log.error(f"An error occurred while changing character: {e}")
 
 async def process_character(ctx, selected_character_value):
@@ -5308,7 +5316,7 @@ async def change_imgmodel(selected_imgmodel_params:dict, ictx:CtxInteraction=Non
             # Merge the selected imgmodel data with base imgmodel data
             updated_imgmodel_params = merge_base(imgmodel_settings, 'imgmodel')
             # Unpack any tag presets
-            imgmodel_tags = await base_tags.update_tags(imgmodel_tags)
+            imgmodel_tags = base_tags.update_tags(imgmodel_tags)
             return updated_imgmodel_params, imgmodel_tags
         except Exception as e:
             log.error(f"Error merging selected imgmodel data with base imgmodel data: {e}")
@@ -5320,9 +5328,10 @@ async def change_imgmodel(selected_imgmodel_params:dict, ictx:CtxInteraction=Non
             settings:Settings = get_settings(ictx)
             # get current/new average width/height for '/image' cmd size options
             new_avg = avg_from_dims(updated_imgmodel_params['payload']['width'], updated_imgmodel_params['payload']['height'])
-            settings.imgmodel = updated_imgmodel_params
-            settings.imgmodel['payload'].pop('override_settings', {}) # Not saving to bot_active_settings
-            settings.imgmodel['tags'] = imgmodel_tags
+            imgmodel_settings:dict = settings.imgmodel.get_vars()
+            imgmodel_settings = updated_imgmodel_params
+            imgmodel_settings['payload'].pop('override_settings', {}) # Not saving to bot_active_settings
+            imgmodel_settings['tags'] = imgmodel_tags
             settings.save()
             # Update all settings
             settings.update_settings()
@@ -5340,7 +5349,7 @@ async def change_imgmodel(selected_imgmodel_params:dict, ictx:CtxInteraction=Non
 
     # Save model details to bot database
     bot_settings.set_last_setting_for("last_imgmodel_name", selected_imgmodel_params['imgmodel_name'], ictx)
-    bot_settings.set_last_setting_for("last_imgmodel_checkpoint", selected_imgmodel_params['last_imgmodel_checkpoint'], ictx, save_now=True)
+    bot_settings.set_last_setting_for("last_imgmodel_checkpoint", selected_imgmodel_params['sd_model_checkpoint'], ictx, save_now=True)
     # Retain the model checkpoint
     load_new_model = {'sd_model_checkpoint': selected_imgmodel_params['sd_model_checkpoint']}
     # Guess model params, merge with basesettings
@@ -5771,7 +5780,7 @@ class BotStatus:
             self.online = True
             await client.change_presence(status=discord.Status.online)
         # Reset variables
-        bot_settings.behavior['current_response_delay'] = None # only reset this when completed without cancel
+        bot_settings.behavior.current_response_delay = None # only reset this when completed without cancel
         self.come_online_time = None
         self.come_online_task = None
 
@@ -5833,13 +5842,13 @@ class BotStatus:
         if not message_manager.send_msg_queue.empty():
             return
         '''Sets the bot status to idle at a randomly selected time'''
-        responsiveness = max(0.0, min(1.0, bot_settings.behavior['responsiveness'])) # clamped between 0.0 and 1.0
+        responsiveness = max(0.0, min(1.0, bot_settings.behavior.responsiveness)) # clamped between 0.0 and 1.0
         if responsiveness == 1.0:
             return # Never go idle
         # cancel previously set go idle task
         self.cancel_go_idle_task()
         # choose a value with weighted probability based on 'responsiveness' bot behavior
-        time_until_idle = random.choices(bot_settings.behavior['idle_range'], bot_settings.behavior['idle_weights'])[0]
+        time_until_idle = random.choices(bot_settings.behavior.idle_range, bot_settings.behavior.idle_weights)[0]
         self.go_idle_task = asyncio.create_task(self.go_idle_after(time_until_idle))
 
 bot_status = BotStatus()
@@ -5935,8 +5944,8 @@ class MessageManager():
         num = self.counter
         received_time = time.time()
         # Determine any response / read text delays (Only applicable to 'normal discord messages')
-        response_delay = settings.set_response_delay() if task.name == 'on_message' else 0
-        read_text_delay = settings.get_text_delay(task.text) if task.name == 'on_message' else 0
+        response_delay = settings.behavior.set_response_delay() if task.name == 'on_message' else 0
+        read_text_delay = settings.behavior.get_text_delay(task.text) if task.name == 'on_message' else 0
         # Assign Message() and attributes
         task.message = Message(settings, num, received_time, response_delay, read_text_delay)
         # Schedule come online. Typing will be scheduled when message is unqueued.
@@ -5980,10 +5989,10 @@ class SpontaneousMessaging():
         # get settings instance
         settings:Settings = get_settings(ictx)
         # Randomly select wait duration from start/end range 
-        wait = random.uniform(settings.behavior['spontaneous_msg_min_wait'], settings.behavior['spontaneous_msg_max_wait'])
+        wait = random.uniform(settings.behavior.spontaneous_msg_min_wait, settings.behavior.spontaneous_msg_max_wait)
         wait_secs = round(wait*60)
         # select a random prompt
-        random_prompt = random.choice(settings.behavior['spontaneous_msg_prompts'])
+        random_prompt = random.choice(settings.behavior.spontaneous_msg_prompts)
         if not random_prompt:
             random_prompt = '''[SYSTEM] The conversation has been inactive for {time_since_last_msg}, so you should say something.'''
 
@@ -6002,13 +6011,13 @@ class SpontaneousMessaging():
         if ictx:
             # get settings instance
             settings:Settings = get_settings(ictx)
-            if (random.random() < settings.behavior['spontaneous_msg_chance']):
+            if (random.random() < settings.behavior.spontaneous_msg_chance):
                 # Get any existing message task
                 current_chan_msg_task = self.tasks.get(ictx.channel.id, (None, 0))
                 task, tally = current_chan_msg_task
                 # Second conditional check
-                if task is None or settings.behavior['spontaneous_msg_max_consecutive'] == -1 \
-                    or tally + 1 < settings.behavior['spontaneous_msg_max_consecutive']:
+                if task is None or settings.behavior.spontaneous_msg_max_consecutive == -1 \
+                    or tally + 1 < settings.behavior.spontaneous_msg_max_consecutive:
                     # Initialize the spontaneous message task
                     await self.init_task(settings, ictx, task, tally)
 
@@ -6019,6 +6028,352 @@ spontaneous_messaging = SpontaneousMessaging()
 #################################################################
 guild_settings:dict["Settings"] = {}
 
+# Returns either guild specific or main instance of Settings() 
+def get_settings(ictx:CtxInteraction|None=None):
+    if config.is_per_server() and ictx and not is_direct_message(ictx):
+        return guild_settings.get(ictx.guild.id, bot_settings)
+    return bot_settings
+
+def get_char_mode_for_history(ictx:CtxInteraction|None=None, settings=None):
+    settings:"Settings" = settings or get_settings(ictx)
+    state_dict = settings.llmstate.state
+    mode = state_dict['mode']
+    character = state_dict["character_menu"] or 'unknown_character'
+    return character, mode
+
+class SettingsBase:
+    def get_vars(self):
+        return {k:v for k,v in vars(self).items() if not k.startswith('_')}
+
+    def update(self, new_dict:dict):
+        for key, value in new_dict.items():
+            if hasattr(self, key):
+                setattr(self, key, value)
+
+    def get_nested_var(self, keys):
+        current_level = self.__dict__
+        for key in keys:
+            if isinstance(current_level, dict) and key in current_level:
+                current_level = current_level[key]
+            elif hasattr(current_level, key):
+                current_level = getattr(current_level, key)
+            else:
+                return None  # Return None if the path is invalid
+        return current_level
+
+# Sub-classes under a main class 'Settings'
+class Behavior(SettingsBase):
+    def __init__(self):
+        self.reply_to_itself = 0.0
+        self.chance_to_reply_to_other_bots = 0.5
+        self.reply_to_bots_when_addressed = 0.3
+        self.only_speak_when_spoken_to = True
+        self.ignore_parentheses = True
+        self.go_wild_in_channel = True
+        self.conversation_recency = 600
+        self.user_conversations = {}
+        # Chance for bot reply to be sent in chunks to discord chat
+        self.chance_to_stream_reply = 0.0
+        self.stream_reply_triggers = ['\n', '.']
+        # Behaviors to be more like a computer program or humanlike
+        self.maximum_typing_speed = -1
+        self.responsiveness = 1.0
+        self.msg_size_affects_delay = False
+        self.max_reply_delay = 30.0
+        self.response_delay_values = []   # self.response_delay_values and self.response_delay_weights
+        self.response_delay_weights = []  # are calculated from the 3 settings above them via build_response_weights()
+        self.text_delay_values = []       # similar to response_delays, except weights need to be made for each message
+        self.current_response_delay:Optional[float] = None # If bot status is idle (not "online"), the next message will set the delay. When bot is online, resets to None.
+        self.idle_range = []
+        self.idle_weights = []
+        # Spontaneous messaging
+        self.spontaneous_msg_chance = 0.0
+        self.spontaneous_msg_max_consecutive = 1
+        self.spontaneous_msg_min_wait = 10.0
+        self.spontaneous_msg_max_wait = 60.0
+        self.spontaneous_msg_prompts = []
+
+    def update(self, new_behavior:dict, char_name:str):
+        for key, value in new_behavior.items():
+            if hasattr(self, key):
+                setattr(self, key, value)
+        self.build_response_delay_weights()
+        self.build_text_delay_values()
+        self.build_idle_weights()
+        self.print_behavior_message(char_name)
+
+    def print_behavior_message(self, char_name:str):
+        log.info("----------------------------------------------")
+        log.info(f"{char_name}'s Behavior:")
+        max_responsiveness_msg = '• Processes messages at uncapped speeds, and will never go idle.'
+        responsiveness_msg = '• Behaves more humanlike. Delays to respond after going idle.'
+        log.info(f'{max_responsiveness_msg if self.responsiveness >= 1.0 else responsiveness_msg} (responsiveness: {self.responsiveness})')
+        if self.msg_size_affects_delay:
+            log.info(f'• Takes time to read messages. (msg_size_affects_delay: {self.msg_size_affects_delay})')
+        if self.maximum_typing_speed > 0:
+            log.info(f'• Takes longer to write responses. (maximum_typing_speed: {self.maximum_typing_speed})')
+        log.info("----------------------------------------------")
+
+    # Response delays
+    def build_response_delay_weights(self):
+        responsiveness = max(0.0, min(1.0, self.responsiveness)) # clamped between 0.0 and 1.0
+        if responsiveness == 1.0:
+            return
+        num_values = 10 # arbitrary number of values and weights to generate
+        # Generate evenly spaced values from 0 to max_reply_delay
+        self.response_delay_values = [round(i * self.max_reply_delay / (num_values - 1), 3) for i in range(num_values)]
+        # Generate the weights from responsiveness (inverted)
+        inv_responsiveness = (1.0 - responsiveness)
+        self.response_delay_weights = get_normalized_weights(target = inv_responsiveness, list_len = num_values)
+
+    def build_text_delay_values(self):
+        responsiveness = max(0.0, min(1.0, self.responsiveness)) # clamped between 0.0 and 1.0
+        if responsiveness == 1.0 or not self.msg_size_affects_delay:
+            return
+        # Manipulate the possible text delays to something more reasonable, while still rooted in 'responsiveness'
+        self.text_delay_values = copy.deepcopy(self.response_delay_values)
+        self.text_delay_values.pop(0) # Remove "0" delay
+        # Remove second half of delay values
+        # num_values = len(text_values) // 2
+        # self.text_delay_values = text_values[:num_values]
+
+    # Currently not used...
+    def merge_weights(self, text_weights:list) -> list:
+        # Combine text weights with delay weights
+        combined_weights = [w1 + w2 for w1, w2 in zip(self.response_delay_weights, text_weights)]
+        # Normalize combined weights to sum up to 1.0
+        total_combined_weight = sum(combined_weights)
+        merged_weights = [weight / total_combined_weight for weight in combined_weights]
+        return merged_weights
+
+    def set_response_delay(self) -> float:
+        # No delay if bot is online or user config is max responsiveness
+        if bot_status.online or self.responsiveness >= 1.0:
+            self.current_response_delay = 0
+            return 0
+        # Choose a delay if none currently set
+        if self.current_response_delay is None:
+            chosen_delay = random.choices(self.response_delay_values, self.response_delay_weights)[0]
+            self.current_response_delay = chosen_delay
+        return self.current_response_delay
+
+    def get_text_delay(self, text:str) -> float:
+        if not self.msg_size_affects_delay:
+            return 0
+        # calculate text_weights for message text
+        num_values = len(self.text_delay_values)
+        text_len = len(text)
+        text_factor = min(max(text_len / 450, 0.0), 1.0)  # Normalize text length to [0, 1]
+        text_delay_weights = get_normalized_weights(target = text_factor, list_len = num_values, strength=2.0) # use stronger weights for text factor
+        # randomly select and return text delay
+        chosen_delay = (random.choices(self.text_delay_values, text_delay_weights)[0]) / 2 # Halve it
+        log.debug(f"Read Text delay: {chosen_delay}. Chosen from range: {self.text_delay_values}")
+        return chosen_delay
+
+    def build_idle_weights(self):
+        responsiveness = max(0.0, min(1.0, self.responsiveness)) # clamped between 0.0 and 1.0
+        if responsiveness == 1.0:
+            return
+        num_values = 10           # arbitrary number of values and weights to generate
+        max_time_until_idle = 600 # arbitrary max timeframe in seconds
+        # Generate evenly spaced values in range of num_values
+        self.idle_range = [round(i * max_time_until_idle / (num_values - 1), 3) for i in range(num_values)]
+        self.idle_range[0] = self.idle_range[1] # Never go idle immediately
+        # Generate the weights from responsiveness
+        self.idle_weights = get_normalized_weights(target = responsiveness, list_len = num_values)
+
+
+    # Active conversations
+    def update_user_dict(self, user_id):
+        # Update the last conversation time for a user
+        self.user_conversations[user_id] = datetime.now()
+
+    def in_active_conversation(self, user_id) -> bool:
+        # Check if a user is in an active conversation with the bot
+        last_conversation_time = self.user_conversations.get(user_id)
+        if last_conversation_time:
+            time_since_last_conversation = datetime.now() - last_conversation_time
+            return time_since_last_conversation.total_seconds() < self.conversation_recency
+        return False
+
+
+    # Checks if bot should reply to a message
+    def bot_should_reply(self, message:discord.Message, text:str, last_character:str) -> bool:
+        main_condition = is_direct_message(message) or (message.channel.id in bot_database.main_channels)
+
+        if is_direct_message(message) and not config.discord['direct_messages'].get('allow_chatting', True):
+            return False
+        # Don't reply to @everyone
+        if message.mention_everyone:
+            return False
+        # Only reply to itself if configured to
+        if message.author == client.user and not check_probability(self.reply_to_itself):
+            return False
+        # Whether to reply to other bots
+        if message.author.bot and last_character.lower() in text.lower() and main_condition:
+            if 'bye' in text.lower(): # don't reply if another bot is saying goodbye
+                return False
+            return check_probability(self.reply_to_bots_when_addressed)
+        # Whether to reply when text is nested in parentheses
+        if self.ignore_parentheses and (message.content.startswith('(') and message.content.endswith(')')) or (message.content.startswith('<:') and message.content.endswith(':>')):
+            return False
+        # Whether to reply if only speak when spoken to
+        if (self.only_speak_when_spoken_to and (client.user.mentioned_in(message) or any(word in message.content.lower() for word in last_character.lower().split()))) \
+            or (self.in_active_conversation(message.author.id) and main_condition):
+            return True
+        reply = False
+        # few more conditions
+        if message.author.bot and main_condition:
+            reply = check_probability(self.chance_to_reply_to_other_bots)
+        if self.go_wild_in_channel and main_condition:
+            reply = True
+        if reply:
+            self.update_user_dict(message.author.id)
+        return reply
+
+    def probability_to_reply(self, probability) -> bool:
+        probability = max(0.0, min(1.0, probability))
+        # Determine if the bot should reply based on a probability
+        return random.random() < probability
+
+
+class ImgModel(SettingsBase):
+    def __init__(self):
+        self.tags = []
+        self.imgmodel_name = '' # label used for /imgmodel command
+        self.override_settings = {}
+        self.payload = {'alwayson_scripts': {}}
+
+    def refresh_enabled_extensions(self):
+        self.init_sd_extensions()
+        merge_base(self.payload, 'imgmodel,payload')
+
+    def init_sd_extensions(self):
+        extensions:dict = config.sd['extensions']
+        forge_clients = ['SD WebUI Forge', 'SD WebUI ReForge']
+        # Initialize ControlNet defaults
+        if extensions.get('controlnet_enabled'):
+            self.payload['alwayson_scripts']['controlnet'] = {'args': [{
+                'enabled': False, 'image': None, 'mask_image': None, 'model': 'None', 'module': 'None', 'weight': 1.0, 'processor_res': 64, 'pixel_perfect': True,
+                'guidance_start': 0.0, 'guidance_end': 1.0, 'threshold_a': 64, 'threshold_b': 64, 'control_mode': 0, 'resize_mode': 1, 'lowvram': False, 'save_detected_map': False}]}
+            if sd.client:
+                log.info('"ControlNet" extension support is enabled and active.')
+        # Initialize Forge Couple defaults
+        if extensions.get('forgecouple_enabled'):
+            self.payload['alwayson_scripts']['forge_couple'] = {'args': {
+                'enable': False, 'mode': 'Basic', 'sep': 'SEP', 'direction': 'Horizontal', 'global_effect': 'First Line',
+                'global_weight': 0.5, 'maps': [['0:0.5', '0.0:1.0', '1.0'],['0.5:1.0', '0.0:1.0', '1.0']]}}
+            if sd.client:
+                log.info('"Forge Couple" extension support is enabled and active.')
+            # Warn Non-Forge:
+            if sd.client and sd.client != 'SD WebUI Forge':
+                log.warning(f'"Forge Couple" is not known to be compatible with "{sd.client}". If you experience errors, disable this extension in config.yaml')
+        # Initialize layerdiffuse defaults
+        if extensions.get('layerdiffuse_enabled'):
+            self.payload['alwayson_scripts']['layerdiffuse'] = {'args': {
+                'enabled': False, 'method': '(SDXL) Only Generate Transparent Image (Attention Injection)', 'weight': 1.0, 'stop_at': 1.0, 'foreground': None, 'background': None,
+                'blending': None, 'resize_mode': 'Crop and Resize', 'output_mat_for_i2i': False, 'fg_prompt': '', 'bg_prompt': '', 'blended_prompt': ''}}
+            if sd.client:
+                log.info('"layerdiffuse" extension support is enabled and active.')
+            if sd.client and sd.client != 'SD WebUI Forge':
+                log.warning(f'"layerdiffuse" is not known to be compatible with "{sd.client}". If you experience errors, disable this extension in config.yaml')
+        # Initialize ReActor defaults
+        if extensions.get('reactor_enabled'):
+            self.payload['alwayson_scripts']['reactor'] = {'args': {
+                'image': '', 'enabled': False, 'source_faces': '0', 'target_faces': '0', 'model': 'inswapper_128.onnx', 'restore_face': 'CodeFormer', 'restore_visibility': 1,
+                'restore_upscale': True, 'upscaler': '4x_NMKD-Superscale-SP_178000_G', 'scale': 1.5, 'upscaler_visibility': 1, 'swap_in_source_img': False, 'swap_in_gen_img': True, 'log_level': 1,
+                'gender_detect_source': 0, 'gender_detect_target': 0, 'save_original': False, 'codeformer_weight': 0.8, 'source_img_hash_check': False, 'target_img_hash_check': False, 'system': 'CUDA',
+                'face_mask_correction': True, 'source_type': 0, 'face_model': '', 'source_folder': '', 'multiple_source_images': None, 'random_img': True, 'force_upscale': True, 'threshold': 0.6, 'max_faces': 2, 'tab_single': None}}
+            if sd.client:
+                log.info('"ReActor" extension support is enabled and active.')
+
+
+class LLMContext(SettingsBase):
+    def __init__(self):
+        self.context = 'The following is a conversation with an AI Large Language Model. The AI has been trained to answer questions, provide recommendations, and help with decision making. The AI follows user requests. The AI thinks outside the box.'
+        self.extensions = {}
+        self.greeting = '' # 'How can I help you today?'
+        self.name = 'AI'
+        self.use_voice_channel = False
+        self.bot_in_character_menu = True
+        self.tags = []
+
+
+class LLMState(SettingsBase):
+    def __init__(self):
+        self.text = ''
+        self.state = {
+            # These are defaults for 'Midnight Enigma' preset
+            'preset': '',
+            'grammar_string': '',
+            'add_bos_token': True,
+            'auto_max_new_tokens': False,
+            'ban_eos_token': False,
+            'character_menu': '',
+            'chat_generation_attempts': 1,
+            'chat_prompt_size': 2048,
+            'custom_stopping_strings': '',
+            'custom_system_message': '',
+            'custom_token_bans': '',
+            'do_sample': True,
+            'dry_multiplier': 0,
+            'dry_base': 1.75,
+            'dry_allowed_length': 2,
+            'dry_sequence_breakers': '"\\n", ":", "\\"", "*"',
+            'dynamic_temperature': False,
+            'dynatemp_low': 1,
+            'dynatemp_high': 1,
+            'dynatemp_exponent': 1,
+            'encoder_repetition_penalty': 1,
+            'epsilon_cutoff': 0,
+            'eta_cutoff': 0,
+            'frequency_penalty': 0,
+            'greeting': '',
+            'guidance_scale': 1,
+            'history': {'internal': [], 'visible': []},
+            'max_new_tokens': 512,
+            'max_tokens_second': 0,
+            'max_updates_second': 0,
+            'min_p': 0.00,
+            'mirostat_eta': 0.1,
+            'mirostat_mode': 0,
+            'mirostat_tau': 5,
+            'mode': 'chat',
+            'name1': '',
+            'name1_instruct': '',
+            'name2': '',
+            'name2_instruct': '',
+            'negative_prompt': '',
+            'no_repeat_ngram_size': 0,
+            'penalty_alpha': 0,
+            'presence_penalty': 0,
+            'prompt_lookup_num_tokens': 0,
+            'repetition_penalty': 1.18,
+            'repetition_penalty_range': 1024,
+            'sampler_priority': [],
+            'seed': -1.0,
+            'skip_special_tokens': True,
+            'stop_at_newline': False,
+            'stopping_strings': '',
+            'stream': True,
+            'temperature': 0.98,
+            'temperature_last': False,
+            'tfs': 1,
+            'top_a': 0,
+            'top_k': 100,
+            'top_p': 0.37,
+            'truncation_length': 2048,
+            'turn_template': '',
+            'typical_p': 1,
+            'user_bio': '',
+            'chat_template_str': '''{%- for message in messages %}\n    {%- if message['role'] == 'system' -%}\n        {{- message['content'] + '\\n\\n' -}}\n    {%- else -%}\n        {%- if message['role'] == 'user' -%}\n            {{- name1 + ': ' + message['content'] + '\\n'-}}\n        {%- else -%}\n            {{- name2 + ': ' + message['content'] + '\\n' -}}\n        {%- endif -%}\n    {%- endif -%}\n{%- endfor -%}''',
+            'instruction_template_str': '''{%- set ns = namespace(found=false) -%}\n{%- for message in messages -%}\n    {%- if message['role'] == 'system' -%}\n        {%- set ns.found = true -%}\n    {%- endif -%}\n{%- endfor -%}\n{%- if not ns.found -%}\n    {{- '' + 'Below is an instruction that describes a task. Write a response that appropriately completes the request.' + '\\n\\n' -}}\n{%- endif %}\n{%- for message in messages %}\n    {%- if message['role'] == 'system' -%}\n        {{- '' + message['content'] + '\\n\\n' -}}\n    {%- else -%}\n        {%- if message['role'] == 'user' -%}\n            {{-'### Instruction:\\n' + message['content'] + '\\n\\n'-}}\n        {%- else -%}\n            {{-'### Response:\\n' + message['content'] + '\\n\\n' -}}\n        {%- endif -%}\n    {%- endif -%}\n{%- endfor -%}\n{%- if add_generation_prompt -%}\n    {{-'### Response:\\n'-}}\n{%- endif -%}''',
+            'chat-instruct_command': '''Continue the chat dialogue below. Write a single reply for the character "<|character|>".\n\n<|prompt|>'''
+            }
+        self.regenerate = False
+        self._continue = False
+
+
 # Returns the value of default settings as a dictionary
 def defaults_to_dict():
     return {'behavior': Behavior().get_vars(),
@@ -6026,6 +6381,7 @@ def defaults_to_dict():
             'llmcontext': LLMContext().get_vars(),
             'llmstate': LLMState().get_vars()}
 
+# Initializes as settings file (bot_database -> BaseFileMemory)
 class Settings(BaseFileMemory):
     def __init__(self, guild_id:int|None=None):
         self._bot_id = 0
@@ -6035,29 +6391,51 @@ class Settings(BaseFileMemory):
         if guild_id:
             self._settings_fp = os.path.join(shared_path.dir_internal_settings, f'{guild_id}_settings.yaml')
         # settings values
-        self.behavior: Union[dict|Behavior]
-        self.imgmodel: Union[dict|ImgModel]
-        self.llmcontext: Union[dict|LLMContext]
-        self.llmstate: Union[dict|LLMState]
+        self.behavior = Behavior()
+        self.imgmodel = ImgModel()
+        self.llmcontext = LLMContext()
+        self.llmstate = LLMState()
+        self._db_version:int
         # init settings file
         super().__init__(self._settings_fp, version=3, missing_okay=True)
         self.update_settings()
-        self.init_sd_extensions()
+        self.imgmodel.init_sd_extensions()
 
+    # overrides BaseFileMemory method
+    def load(self, data:dict=None):
+        if not data:
+            data = load_file(self._fp, {}, missing_okay=self._missing_okay)
+            if not isinstance(data, dict):
+                raise Exception(f'Failed to import: "{self._fp}" wrong data type, expected dict, got {type(data)}')
+
+        for k, v in data.items():
+            if k in ['db_version', '_db_version']:
+                setattr(self, '_db_version', v)
+            elif k in ['behavior', 'imgmodel', 'llmcontext', 'llmstate']:
+                main_key = getattr(self, k, None)
+                main_key_dict = main_key.get_vars()
+                if isinstance(v, dict) and isinstance(main_key_dict, dict):
+                    update_dict_matched_keys(main_key_dict, v)
+            else:
+                log.warning(f'Received unexpected key when initializing Settings: "{k}"')
+                setattr(self, k, v)
+
+    # overrides BaseFileMemory method
     def run_migration(self):
         if self._settings_fp == shared_path.active_settings:
             _old_active = os.path.join(shared_path.dir_internal, 'activesettings.yaml')
             self._migrate_from_file(_old_active, load=True)
 
-    def load_defaults(self, data: dict):
-        self.behavior = data.pop('behavior', Behavior().get_vars())
-        self.imgmodel = data.pop('imgmodel', ImgModel().get_vars())
-        self.llmcontext = data.pop('llmcontext', LLMContext().get_vars())
-        self.llmstate = data.pop('llmstate', LLMState().get_vars())
+    # overrides BaseFileMemory method
+    def get_vars(self):
+        return {'behavior': vars(self.behavior),
+                'imgmodel': vars(self.imgmodel),
+                'llmcontext': vars(self.llmcontext),
+                'llmstate': vars(self.llmstate)}
 
     @property
     def name(self):
-        return self.llmcontext.get('name', 'AI')
+        return self.llmcontext.name
 
     def update_settings(self, save_now=False):
         default_settings:dict = defaults_to_dict()
@@ -6069,10 +6447,6 @@ class Settings(BaseFileMemory):
         if save_now:
             self.save()
 
-    def init_guild_settings(self):
-        global guild_settings
-        for guild in client.guilds:
-            guild_settings[guild.id] = Settings(guild.id)
 
     # Manage get/set database information for guild-specific or not
     def get_last_setting_for(self, key:str, ictx:CtxInteraction|None=None, guild_id:int|None=None):
@@ -6095,204 +6469,7 @@ class Settings(BaseFileMemory):
         bot_database.set(key, value, save_now)
         return
 
-    def update_behavior(self, behavior:dict):
-        for key, value in behavior.items():
-            if hasattr(self.behavior, key):
-                setattr(self.behavior, key, value)
-        self.build_response_delay_weights()
-        self.build_text_delay_values()
-        self.build_idle_weights()
-        self.print_behavior_message()
-
-    def print_behavior_message(self):
-        last_character = self.get_last_setting_for("last_character")
-        log.info("----------------------------------------------")
-        log.info(f"{last_character}'s Behavior:")
-        max_responsiveness_msg = '• Processes messages at uncapped speeds, and will never go idle.'
-        responsiveness_msg = '• Behaves more humanlike. Delays to respond after going idle.'
-        log.info(f"{max_responsiveness_msg if self.behavior['responsiveness'] >= 1.0 else responsiveness_msg} (responsiveness: {self.behavior['responsiveness']})")
-        if self.behavior['msg_size_affects_delay']:
-            log.info(f"• Takes time to read messages. (msg_size_affects_delay: {self.behavior['msg_size_affects_delay']})")
-        if self.behavior['maximum_typing_speed'] > 0:
-            log.info(f"• Takes longer to write responses. (maximum_typing_speed: {self.behavior['maximum_typing_speed']})")
-        log.info("----------------------------------------------")
-
-    # Response delays
-    def build_response_delay_weights(self):
-        responsiveness = max(0.0, min(1.0, self.behavior['responsiveness'])) # clamped between 0.0 and 1.0
-        if responsiveness == 1.0:
-            return
-        num_values = 10 # arbitrary number of values and weights to generate
-        # Generate evenly spaced values from 0 to max_reply_delay
-        self.behavior['response_delay_values'] = [round(i * self.behavior['max_reply_delay'] / (num_values - 1), 3) for i in range(num_values)]
-        # Generate the weights from responsiveness (inverted)
-        inv_responsiveness = (1.0 - responsiveness)
-        self.behavior['response_delay_weights'] = get_normalized_weights(target = inv_responsiveness, list_len = num_values)
-
-    def build_text_delay_values(self):
-        responsiveness = max(0.0, min(1.0, self.behavior['responsiveness'])) # clamped between 0.0 and 1.0
-        if responsiveness == 1.0 or not self.behavior['msg_size_affects_delay']:
-            return
-        # Manipulate the possible text delays to something more reasonable, while still rooted in 'responsiveness'
-        self.behavior['text_delay_values'] = copy.deepcopy(self.behavior['response_delay_values'])
-        self.behavior['text_delay_values'].pop(0) # Remove "0" delay
-        # Remove second half of delay values
-        # num_values = len(text_values) // 2
-        # self.behavior['text_delay_values'] = text_values[:num_values]
-
-    # Currently not used...
-    def merge_weights(self, text_weights:list) -> list:
-        # Combine text weights with delay weights
-        combined_weights = [w1 + w2 for w1, w2 in zip(self.behavior['response_delay_weights'], text_weights)]
-        # Normalize combined weights to sum up to 1.0
-        total_combined_weight = sum(combined_weights)
-        merged_weights = [weight / total_combined_weight for weight in combined_weights]
-        return merged_weights
-
-    def set_response_delay(self) -> float:
-        # No delay if bot is online or user config is max responsiveness
-        if bot_status.online or self.behavior['responsiveness'] >= 1.0:
-            self.behavior['current_response_delay'] = 0
-            return 0
-        # Choose a delay if none currently set
-        if self.behavior['current_response_delay'] is None:
-            chosen_delay = random.choices(self.behavior['response_delay_values'], self.behavior['response_delay_weights'])[0]
-            self.behavior['current_response_delay'] = chosen_delay
-        return self.behavior['current_response_delay']
-
-    def get_text_delay(self, text:str) -> float:
-        if not self.behavior['msg_size_affects_delay']:
-            return 0
-        # calculate text_weights for message text
-        num_values = len(self.behavior['text_delay_values'])
-        text_len = len(text)
-        text_factor = min(max(text_len / 450, 0.0), 1.0)  # Normalize text length to [0, 1]
-        text_delay_weights = get_normalized_weights(target = text_factor, list_len = num_values, strength=2.0) # use stronger weights for text factor
-        # randomly select and return text delay
-        chosen_delay = (random.choices(self.behavior['text_delay_values'], text_delay_weights)[0]) / 2 # Halve it
-        log.debug(f"Read Text delay: {chosen_delay}. Chosen from range: {self.behavior['text_delay_values']}")
-        return chosen_delay
-
-    def build_idle_weights(self):
-        responsiveness = max(0.0, min(1.0, self.behavior['responsiveness'])) # clamped between 0.0 and 1.0
-        if responsiveness == 1.0:
-            return
-        num_values = 10           # arbitrary number of values and weights to generate
-        max_time_until_idle = 600 # arbitrary max timeframe in seconds
-        # Generate evenly spaced values in range of num_values
-        self.behavior['idle_range'] = [round(i * max_time_until_idle / (num_values - 1), 3) for i in range(num_values)]
-        self.behavior['idle_range'][0] = self.behavior['idle_range'][1] # Never go idle immediately
-        # Generate the weights from responsiveness
-        self.behavior['idle_weights'] = get_normalized_weights(target = responsiveness, list_len = num_values)
-
-    # Active conversations
-    def update_user_dict(self, user_id):
-        # Update the last conversation time for a user
-        self.behavior['user_conversations'][user_id] = datetime.now()
-
-    def in_active_conversation(self, user_id) -> bool:
-        # Check if a user is in an active conversation with the bot
-        last_conversation_time = self.behavior['user_conversations'].get(user_id)
-        if last_conversation_time:
-            time_since_last_conversation = datetime.now() - last_conversation_time
-            return time_since_last_conversation.total_seconds() < self.behavior['conversation_recency']
-        return False
-
-    # Checks if bot should reply to a message
-    def bot_should_reply(self, message:discord.Message, text:str) -> bool:
-        main_condition = is_direct_message(message) or (message.channel.id in bot_database.main_channels)
-        last_character:str = self.get_last_setting_for("last_character", guild_id=self._guild_id)
-
-        if is_direct_message(message) and not config['discord']['direct_messages'].get('allow_chatting', True):
-            return False
-        # Don't reply to @everyone
-        if message.mention_everyone:
-            return False
-        # Only reply to itself if configured to
-        if message.author == client.user and not check_probability(self.behavior['reply_to_itself']):
-            return False
-        # Whether to reply to other bots
-        if message.author.bot and last_character.lower() in text.lower() and main_condition:
-            if 'bye' in text.lower(): # don't reply if another bot is saying goodbye
-                return False
-            return check_probability(self.behavior['reply_to_bots_when_addressed'])
-        # Whether to reply when text is nested in parentheses
-        if self.behavior['ignore_parentheses'] and (message.content.startswith('(') and message.content.endswith(')')) or (message.content.startswith('<:') and message.content.endswith(':>')):
-            return False
-        # Whether to reply if only speak when spoken to
-        if (self.behavior['only_speak_when_spoken_to'] and (client.user.mentioned_in(message) or any(word in message.content.lower() for word in last_character.lower().split()))) \
-            or (self.in_active_conversation(message.author.id) and main_condition):
-            return True
-        reply = False
-        # few more conditions
-        if message.author.bot and main_condition:
-            reply = check_probability(self.behavior['chance_to_reply_to_other_bots'])
-        if self.behavior['go_wild_in_channel'] and main_condition:
-            reply = True
-        if reply:
-            self.update_user_dict(message.author.id)
-        return reply
-
-    def probability_to_reply(self, probability) -> bool:
-        probability = max(0.0, min(1.0, probability))
-        # Determine if the bot should reply based on a probability
-        return random.random() < probability
-
-    def refresh_enabled_extensions(self, settings_fn:str):
-        self.init_sd_extensions()
-        new_payload = merge_base(self.payload, 'imgmodel,payload')
-        shared_f = getattr(shared_path, settings_fn)
-        settings = load_file(shared_f, {})
-        update_dict(settings['imgmodel']['payload'], new_payload)
-        update_dict(settings['imgmodel']['payload'], new_payload)
-        settings.save()
-
-    def init_sd_extensions(self):
-        extensions = config['sd']['extensions']
-        forge_clients = ['SD WebUI Forge', 'SD WebUI ReForge']
-        # Initialize ControlNet defaults
-        if extensions.get('controlnet_enabled'):
-            self.imgmodel['payload']['alwayson_scripts']['controlnet'] = {'args': [{
-                'enabled': False, 'image': None, 'mask_image': None, 'model': 'None', 'module': 'None', 'weight': 1.0, 'processor_res': 64, 'pixel_perfect': True,
-                'guidance_start': 0.0, 'guidance_end': 1.0, 'threshold_a': 64, 'threshold_b': 64, 'control_mode': 0, 'resize_mode': 1, 'lowvram': False, 'save_detected_map': False}]}
-            if sd.client:
-                log.info('"ControlNet" extension support is enabled and active.')
-        # Initialize Forge Couple defaults
-        if extensions.get('forgecouple_enabled'):
-            self.imgmodel['payload']['alwayson_scripts']['forge_couple'] = {'args': {
-                'enable': False, 'mode': 'Basic', 'sep': 'SEP', 'direction': 'Horizontal', 'global_effect': 'First Line',
-                'global_weight': 0.5, 'maps': [['0:0.5', '0.0:1.0', '1.0'],['0.5:1.0', '0.0:1.0', '1.0']]}}
-            if sd.client:
-                log.info('"Forge Couple" extension support is enabled and active.')
-            # Warn Non-Forge:
-            if sd.client and sd.client != 'SD WebUI Forge':
-                log.warning(f'"Forge Couple" is not known to be compatible with "{sd.client}". If you experience errors, disable this extension in config.yaml')
-        # Initialize layerdiffuse defaults
-        if extensions.get('layerdiffuse_enabled'):
-            self.imgmodel['payload']['alwayson_scripts']['layerdiffuse'] = {'args': {
-                'enabled': False, 'method': '(SDXL) Only Generate Transparent Image (Attention Injection)', 'weight': 1.0, 'stop_at': 1.0, 'foreground': None, 'background': None,
-                'blending': None, 'resize_mode': 'Crop and Resize', 'output_mat_for_i2i': False, 'fg_prompt': '', 'bg_prompt': '', 'blended_prompt': ''}}
-            if sd.client:
-                log.info('"layerdiffuse" extension support is enabled and active.')
-            if sd.client and sd.client != 'SD WebUI Forge':
-                log.warning(f'"layerdiffuse" is not known to be compatible with "{sd.client}". If you experience errors, disable this extension in config.yaml')
-        # Initialize ReActor defaults
-        if extensions.get('reactor_enabled'):
-            self.imgmodel['payload']['alwayson_scripts']['reactor'] = {'args': {
-                'image': '', 'enabled': False, 'source_faces': '0', 'target_faces': '0', 'model': 'inswapper_128.onnx', 'restore_face': 'CodeFormer', 'restore_visibility': 1,
-                'restore_upscale': True, 'upscaler': '4x_NMKD-Superscale-SP_178000_G', 'scale': 1.5, 'upscaler_visibility': 1, 'swap_in_source_img': False, 'swap_in_gen_img': True, 'log_level': 1,
-                'gender_detect_source': 0, 'gender_detect_target': 0, 'save_original': False, 'codeformer_weight': 0.8, 'source_img_hash_check': False, 'target_img_hash_check': False, 'system': 'CUDA',
-                'face_mask_correction': True, 'source_type': 0, 'face_model': '', 'source_folder': '', 'multiple_source_images': None, 'random_img': True, 'force_upscale': True, 'threshold': 0.6, 'max_faces': 2, 'tab_single': None}}
-            if sd.client:
-                log.info('"ReActor" extension support is enabled and active.')
-
 bot_settings = Settings()
-
-# Returns either guild specific or main instance of Settings() 
-def get_settings(ictx:CtxInteraction|None=None):
-    if config.is_per_server() and ictx and not is_direct_message(ictx):
-        return guild_settings.get(ictx.guild.id, bot_settings)
-    return bot_settings
 
 @dataclass_json
 @dataclass
@@ -6463,7 +6640,7 @@ class CustomHistoryManager(HistoryManager):
     
     
     def get_id_parts(self, id_: Optional[ChannelID|int], character=None, mode=None):
-        state_dict = bot_settings.settings['llmstate']['state']
+        state_dict = bot_settings.llmstate.state
         mode = mode or state_dict['mode']
         character = character or state_dict["character_menu"] or 'unknown_character'
         
@@ -6476,7 +6653,7 @@ class CustomHistoryManager(HistoryManager):
         
         return id_, character, mode
 
-bot_history = CustomHistoryManager(class_builder_history=CustomHistory, **config['textgenwebui'].get('chat_history', {}))
+bot_history = CustomHistoryManager(class_builder_history=CustomHistory, **config.textgenwebui.get('chat_history', {}))
 
 
 def exit_handler():

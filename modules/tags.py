@@ -109,7 +109,8 @@ class Tags():
     async def init_tags(self, text:str, settings, phase:str='llm') -> str:
         try:
             self.tags_initialized = True
-            base_tags: TAG_LIST      = getattr(base_tags, "tags", [])
+            base_tags_obj = BaseTags()
+            base_tags: TAG_LIST      = getattr(base_tags_obj, "tags", [])
             char_tags: TAG_LIST      = settings['llmcontext'].get('tags', []) # character specific tags
             imgmodel_tags: TAG_LIST  = settings['imgmodel'].get('tags', []) # imgmodel specific tags
             tags_from_text           = self.get_tags_from_text(text, phase)
@@ -117,7 +118,7 @@ class Tags():
             if flows_queue.qsize() > 0:
                 flow_step_tags = [await flows_queue.get()]
             # merge tags to one list (Priority is important!!)
-            all_tags: TAG_LIST = tags_from_text + flow_step_tags + char_tags + imgmodel_tags + base_tags.tags
+            all_tags: TAG_LIST = tags_from_text + flow_step_tags + char_tags + imgmodel_tags + base_tags
             self.sort_tags(all_tags) # sort tags into phases (user / llm / userllm)
         except Exception as e:
             log.error(f"Error getting tags: {e}")
