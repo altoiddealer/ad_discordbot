@@ -76,6 +76,13 @@ class Config(BaseFileMemory):
         super().__init__(shared_path.config, version=2, missing_okay=True)
         self.fix_config()
 
+    def load_defaults(self, data: dict):
+        self.discord = data.pop('discord', {})
+        self.per_server_settings = data.pop('per_server_settings', {})
+        self.dynamic_prompting_enabled = data.pop('dynamic_prompting_enabled', True)
+        self.textgenwebui = data.pop('textgenwebui', {})
+        self.sd = data.pop('sd', {})
+
     def fix_config(self):
         config_dict = self.get_vars()
         # Load the template config

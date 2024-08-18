@@ -149,6 +149,7 @@ class Database(BaseFileMemory):
         self.read_chatlog = None # not yet implemented
 
         self.first_run:bool
+        self.last_base_tags_modified:float
         self.last_character:str
         self.last_change:float
         self.last_imgmodel_name:str
@@ -188,6 +189,7 @@ class Database(BaseFileMemory):
 
     def load_defaults(self, data: dict):
         self.first_run = data.pop('first_run', True)
+        self.last_base_tags_modified = data.pop('last_base_tags_modified', None)
         self.last_character = data.pop('last_character', None)
         self.last_change = data.pop('last_change', (time.time() - timedelta(minutes=10).seconds))
         self.last_imgmodel_name = data.pop('last_imgmodel_name', '')
@@ -208,13 +210,6 @@ class Database(BaseFileMemory):
     def save_pre_process(self, data):
         data.pop('warned_once', None)
         return data
-    
-    # # Last settings logging
-    # def get_last_setting(self, key:str):
-    #     return getattr(self, key)
-
-    # def set_last_setting(self, key:str):
-    #     return getattr(self, key)
 
 
     # Per guild last settings logging

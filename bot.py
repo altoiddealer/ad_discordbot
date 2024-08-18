@@ -604,8 +604,8 @@ async def init_auto_change_imgmodels():
     if sd.enabled:
         imgmodels_data = load_file(shared_path.img_models, {})
         if imgmodels_data and imgmodels_data.get('settings', {}).get('auto_change_imgmodels', {}).get('enabled', False):
-            if config.is_per_server():
-                log.warning('[Auto Change Imgmodels] Main config is set for per-guild settings management. Disabling this task.')
+            if config.is_per_server() and len(guild_settings > 1):
+                log.warning('[Auto Change Imgmodels] Main config is set for "per-guild" settings management. Disabling this task.')
                 # Remove the registered command '/toggle_auto_change_imgmodels'
                 client.remove_command("toggle_auto_change_imgmodels")
             else:
@@ -654,11 +654,29 @@ async def init_characters():
         if char_name:
             await character_loader(char_name, bot_settings)
 
+def update_base_tags_modified():
+    mod_time = os.path.getmtime(shared_path.tags)
+    last_mod_time = bot_database.last_base_tags_modified
+    updated = (mod_time > last_mod_time) if last_mod_time else False
+    bot_database.set("last_base_tags_modified", mod_time, save_now=updated) # update value
+    return updated
+
 # Creates instances of Settings() for all guilds the bot is in
-def init_guild_settings():
+async def init_guilds():
     global guild_settings
-    for guild in client.guilds:
-        guild_settings[guild.id] = Settings(guild.id)
+    per_server_settings = config.is_per_server()
+    post_settings = config.discord['post_active_settings'].get('enabled', True)
+    if per_server_settings or post_settings:
+        # check/update last time modified for dict_tags.yaml
+        tags_updated = update_base_tags_modified()
+        # iterate over guilds and create Settings() / post tags settings
+        for guild in client.guilds:
+            if per_server_settings:
+                guild_settings[guild.id] = Settings(guild)
+            previously_sent_tags = bool(bot_database.get_settings_msgs_for(guild.id, 'tags'))
+            # post tags if file was updated, or if guild has not yet posted them
+            if post_settings and (tags_updated or not previously_sent_tags):
+                await bg_task_queue.put(post_active_settings(guild, ['tags']))
 
 # If first time bot script is run
 async def first_run():
@@ -697,13 +715,14 @@ async def on_ready():
     # If first time running bot
     if bot_database.first_run:
         await first_run()
-    # Initialize guild specific settings instances
-    if config.is_per_server():
-        init_guild_settings()
+
     # Create background task processing queue
     client.loop.create_task(process_tasks_in_background())
     # Start the Task Manager
     client.loop.create_task(task_manager.process_tasks())
+
+    # Run guild startup tasks
+    await init_guilds()
 
     # Load character(s)
     if tgwui.enabled:
@@ -873,8 +892,8 @@ async def post_active_settings(guild:discord.Guild, key_str_list:Optional[list[s
             # check if updating imgmodel tags
             if 'tags' in managed_keys:
                 tags_key = imgmodel_tags
-        # elif key_name == 'tags':
-        #     settings_key = base_tags.tags
+        elif key_name == 'tags':
+            settings_key = base_tags.tags
         else:
             settings_key = settings_copy.get(key_name, {})
 
@@ -2653,8 +2672,8 @@ class TaskProcessing(TaskAttributes):
                         w, h = dims_from_ar(current_avg, n, d)
                         self.img_payload['width'], self.img_payload['height'] = w, h
                         log.info(f'[TAGS] Applied aspect ratio "{aspect_ratio}" (Width: "{w}", Height: "{h}").')
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        log.error(f"[TAGS] Error applying aspect ratio: {e}")
                 # Param variances handling
                 if param_variances:
                     processed_params = self.process_param_variances(param_variances)
@@ -5023,9 +5042,9 @@ async def character_loader(char_name, settings:"Settings", guild_id:int|None=Non
         # Gather context specific keys from the character data
         char_llmcontext = {}
         for key, value in char_data.items():
-            if key == 'extensions':
+            if key == 'extensions' and isinstance(value, dict):
                 if not tts.enabled:
-                    for subkey, subvalue in value.items():
+                    for subkey, _ in value.items():
                         if subkey in tts.supported_clients and char_data[key][subkey].get('activate'):
                             char_data[key][subkey]['activate'] = False
                 await tgwui.update_extensions(value)
@@ -5058,10 +5077,12 @@ async def character_loader(char_name, settings:"Settings", guild_id:int|None=Non
         update_dict(state_dict, dict(char_llmstate))
         # Update Behavior
         settings.behavior.update(dict(char_behavior), char_name)
+        # save settings
         settings.save()
 
         # Print mode in cmd
-        log.info(f"        Initializing in {state_dict['mode']} mode")
+        guild_name = f'" {settings._guild_name}"' if guild_id else ''
+        log.info(f"{' ' * max(0, 8 - len(guild_name))}Initializing{guild_name} in {state_dict['mode']} mode")
         # Check for any char defined or model defined instruct_template
         update_instruct = char_instruct or tgwui.instruction_template_str or None
         if update_instruct:
@@ -5328,14 +5349,25 @@ async def change_imgmodel(selected_imgmodel_params:dict, ictx:CtxInteraction=Non
             settings:Settings = get_settings(ictx)
             # get current/new average width/height for '/image' cmd size options
             new_avg = avg_from_dims(updated_imgmodel_params['payload']['width'], updated_imgmodel_params['payload']['height'])
-            imgmodel_settings:dict = settings.imgmodel.get_vars()
-            imgmodel_settings = updated_imgmodel_params
-            imgmodel_settings['payload'].pop('override_settings', {}) # Not saving to bot_active_settings
-            imgmodel_settings['tags'] = imgmodel_tags
+            # Update settings
+            settings.imgmodel.update(updated_imgmodel_params)
+            # Update tags
+            settings.imgmodel.tags = imgmodel_tags
+            # Remove settings we do not want to retain
+            override_settings = settings.imgmodel.payload.get('override_settings', {})
+            popped = []
+            popped_value = override_settings.pop('sd_model_checkpoint', None)
+            if popped_value is not None:
+                popped.append(popped_value)
+            popped_value = override_settings.pop('sd_vae', None)
+            if popped_value is not None:
+                popped.append(popped_value)
+            if popped:
+                log.warning(f'[Change Imgmodel] These settings were applied, but are not being retained/applied automatically for next bot startup: {popped}')
+            # Save file
             settings.save()
             # Update all settings
             settings.update_settings()
-
             # load the model
             _ = await sd.api(endpoint='/sdapi/v1/options', method='post', json=load_new_model, retry=True)
             # Check if old/new average resolution is different
@@ -6383,42 +6415,71 @@ def defaults_to_dict():
 
 # Initializes as settings file (bot_database -> BaseFileMemory)
 class Settings(BaseFileMemory):
-    def __init__(self, guild_id:int|None=None):
+    def __init__(self, guild:discord.Guild|None=None):
         self._bot_id = 0
-        self._guild_id = guild_id
-        # Can initialize as one settings instance, or per-guild settings instances
-        self._settings_fp = shared_path.active_settings
-        if guild_id:
-            self._settings_fp = os.path.join(shared_path.dir_internal_settings, f'{guild_id}_settings.yaml')
+        self._guild_id = guild.id if guild else None
+        self._guild_name = guild.name if guild else None
         # settings values
-        self.behavior = Behavior()
-        self.imgmodel = ImgModel()
-        self.llmcontext = LLMContext()
-        self.llmstate = LLMState()
-        self._db_version:int
-        # init settings file
+        self.behavior: Behavior
+        self.imgmodel: ImgModel
+        self.llmcontext: LLMContext
+        self.llmstate: LLMState
+        # Always initializes 'bot_settings' instance. Can initialize per-guild settings instances.
+        self._settings_fp = shared_path.active_settings
+        if guild:
+            self._settings_fp = os.path.join(shared_path.dir_internal_settings, f'{self._guild_id}_settings.yaml')
+        # Initializes the settings file -> load() -> updates values -> run_migration()
         super().__init__(self._settings_fp, version=3, missing_okay=True)
-        self.update_settings()
-        self.imgmodel.init_sd_extensions()
 
-    # overrides BaseFileMemory method
-    def load(self, data:dict=None):
-        if not data:
-            data = load_file(self._fp, {}, missing_okay=self._missing_okay)
-            if not isinstance(data, dict):
-                raise Exception(f'Failed to import: "{self._fp}" wrong data type, expected dict, got {type(data)}')
-
+    def init_settings(self, data):
+        if not isinstance(data, dict):
+            raise Exception(f'Failed to import: "{self._fp}" wrong data type, expected dict, got {type(data)}')
         for k, v in data.items():
-            if k in ['db_version', '_db_version']:
-                setattr(self, '_db_version', v)
+            if k in ['db_version']:
+                continue
             elif k in ['behavior', 'imgmodel', 'llmcontext', 'llmstate']:
                 main_key = getattr(self, k, None)
+                main_key:Union[Behavior|ImgModel|LLMContext|LLMState]
                 main_key_dict = main_key.get_vars()
                 if isinstance(v, dict) and isinstance(main_key_dict, dict):
                     update_dict_matched_keys(main_key_dict, v)
             else:
                 log.warning(f'Received unexpected key when initializing Settings: "{k}"')
                 setattr(self, k, v)
+
+    def print_per_server_msg(self):
+        bot_database.update_was_warned('first_server_setting')
+        #log.info("[Per Server Settings] Important information about this feature:")
+        log.info("[Per Server Settings] Note: 'dict_base_settings.yaml' applies to ALL server settings. Omit settings you do not want shared!")
+
+    def load_defaults(self):
+        self.behavior = Behavior()
+        self.imgmodel = ImgModel()
+        self.llmcontext = LLMContext()
+        self.llmstate = LLMState()
+
+    # overrides BaseFileMemory method
+    def load(self, data=None):
+        self.load_defaults()
+        # check if any settings were ever retained for guild
+        last_guild_settings = None
+        if self._guild_id:
+            if not bot_database.last_guild_settings and not bot_database.was_warned('first_server_settings'):
+                self.print_per_server_msg()
+            last_guild_settings = bot_database.last_guild_settings.get(self._guild_id)
+        # load file for 'bot_settings' or for existing guild settings
+        if (not self._guild_id) or last_guild_settings:
+            data = load_file(self._fp, {}, missing_okay=self._missing_okay)
+            self.init_settings(data)
+            self.update_settings()             # Fixes any broken settings while warning user
+            self.imgmodel.init_sd_extensions() # Modifies ImgModel depending on current SD extension config
+        # Initialize new guild settings from current bot_settings
+        else:
+            log.info(f'[Per Server Settings] Initializing "{self._guild_name}" with copy of your main settings.')
+            data = copy.deepcopy(bot_settings.get_vars())
+            self.init_settings(data)
+            # Skip update_settings() and init_sd_extensions() (already applied to bot_settings)
+            self.save() # save new settings file
 
     # overrides BaseFileMemory method
     def run_migration(self):
