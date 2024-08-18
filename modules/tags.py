@@ -106,7 +106,7 @@ class Tags():
         or they may be initialized on demand using 'init()'
         '''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
 
-    async def init_tags(self, text:str, settings, phase:str='llm') -> str:
+    async def init_tags(self, text:str, settings:dict, phase:str='llm') -> str:
         try:
             self.tags_initialized = True
             base_tags_obj = BaseTags()
@@ -278,7 +278,7 @@ class Tags():
             log.error(f"Error getting tags from text: {e}")
             return []
 
-    async def match_img_tags(self, img_prompt:str, settings):
+    async def match_img_tags(self, img_prompt:str, settings:dict):
         try:
             # Unmatch any previously matched tags which try to insert text into the img_prompt
             matches_:TAG_LIST = self.matches # type: ignore
@@ -405,7 +405,7 @@ class Tags():
             log.error(f"Error processing matched tags: {e}")
             return matches
 
-    async def match_tags(self, search_text:str, settings, phase:str='llm'):
+    async def match_tags(self, search_text:str, settings:dict, phase:str='llm'):
         if not self.tags_initialized:
             await self.init_tags(search_text, settings, phase)
         try:

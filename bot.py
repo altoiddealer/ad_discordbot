@@ -306,7 +306,7 @@ class TTS:
     async def apply_toggle_tts(self, ictx:CtxInteraction, toggle:str='on', tts_sw:bool=False):
         try:
             settings:"Settings" = get_settings(ictx)
-            llmcontext_dict = settings.llmcontext.get_vars()
+            llmcontext_dict = vars(settings.llmcontext)
             extensions:dict = copy.deepcopy(llmcontext_dict.get('extensions', {}))
             if toggle == 'off' and extensions.get(self.client, {}).get('activate'):
                 extensions[self.client]['activate'] = False
@@ -1476,7 +1476,7 @@ class TaskProcessing(TaskAttributes):
 
     async def fix_llm_payload(self:Union["Task","Tasks"]):
         # Fix llm_payload by adding any missing required settings
-        default_llmstate = LLMState().get_vars()
+        default_llmstate = vars(LLMState())
         default_state = default_llmstate['state']
         current_state = self.llm_payload['state']
         self.llm_payload['state'], _ = fix_dict(current_state, default_state)
@@ -1681,7 +1681,7 @@ class TaskProcessing(TaskAttributes):
             self.params.save_to_history = save_to_history
 
     async def init_llm_payload(self:Union["Task","Tasks"]):
-        self.llm_payload = copy.deepcopy(self.settings.llmstate.get_vars())
+        self.llm_payload = copy.deepcopy(vars(self.settings.llmstate))
         self.llm_payload['text'] = self.text
         self.llm_payload['state']['name1'] = self.user_name
         self.llm_payload['state']['name2'] = self.settings.name
@@ -5077,6 +5077,8 @@ async def character_loader(char_name, settings:"Settings", guild_id:int|None=Non
         update_dict(state_dict, dict(char_llmstate))
         # Update Behavior
         settings.behavior.update(dict(char_behavior), char_name)
+        # Fix any invalid settings while warning user
+        settings.fix_settings()
         # save settings
         settings.save()
 
@@ -5171,8 +5173,6 @@ async def change_character(char_name, ictx:CtxInteraction):
         await character_loader(char_name, settings, ictx.guild.id)
         # Update discord username / avatar
         await update_client_profile(char_name, ictx)
-        # Update all settings
-        settings.update_settings()
     except Exception as e:
         await ictx.channel.send(f"An error occurred while changing character: {e}")
         log.error(f"An error occurred while changing character: {e}")
@@ -5364,10 +5364,10 @@ async def change_imgmodel(selected_imgmodel_params:dict, ictx:CtxInteraction=Non
                 popped.append(popped_value)
             if popped:
                 log.warning(f'[Change Imgmodel] These settings were applied, but are not being retained/applied automatically for next bot startup: {popped}')
+            # Fix any invalid settings
+            settings.fix_settings()
             # Save file
             settings.save()
-            # Update all settings
-            settings.update_settings()
             # load the model
             _ = await sd.api(endpoint='/sdapi/v1/options', method='post', json=load_new_model, retry=True)
             # Check if old/new average resolution is different
@@ -5812,7 +5812,7 @@ class BotStatus:
             self.online = True
             await client.change_presence(status=discord.Status.online)
         # Reset variables
-        bot_settings.behavior.current_response_delay = None # only reset this when completed without cancel
+        bot_settings.behavior._current_response_delay = None # only reset this when completed without cancel
         self.come_online_time = None
         self.come_online_task = None
 
@@ -5880,7 +5880,7 @@ class BotStatus:
         # cancel previously set go idle task
         self.cancel_go_idle_task()
         # choose a value with weighted probability based on 'responsiveness' bot behavior
-        time_until_idle = random.choices(bot_settings.behavior.idle_range, bot_settings.behavior.idle_weights)[0]
+        time_until_idle = random.choices(bot_settings.behavior._idle_range, bot_settings.behavior._idle_weights)[0]
         self.go_idle_task = asyncio.create_task(self.go_idle_after(time_until_idle))
 
 bot_status = BotStatus()
@@ -6103,7 +6103,7 @@ class Behavior(SettingsBase):
         self.ignore_parentheses = True
         self.go_wild_in_channel = True
         self.conversation_recency = 600
-        self.user_conversations = {}
+        self._user_conversations = {}
         # Chance for bot reply to be sent in chunks to discord chat
         self.chance_to_stream_reply = 0.0
         self.stream_reply_triggers = ['\n', '.']
@@ -6112,12 +6112,12 @@ class Behavior(SettingsBase):
         self.responsiveness = 1.0
         self.msg_size_affects_delay = False
         self.max_reply_delay = 30.0
-        self.response_delay_values = []   # self.response_delay_values and self.response_delay_weights
-        self.response_delay_weights = []  # are calculated from the 3 settings above them via build_response_weights()
-        self.text_delay_values = []       # similar to response_delays, except weights need to be made for each message
-        self.current_response_delay:Optional[float] = None # If bot status is idle (not "online"), the next message will set the delay. When bot is online, resets to None.
-        self.idle_range = []
-        self.idle_weights = []
+        self._response_delay_values = []   # self.response_delay_values and self.response_delay_weights
+        self._response_delay_weights = []  # are calculated from the 3 settings above them via build_response_weights()
+        self._text_delay_values = []       # similar to response_delays, except weights need to be made for each message
+        self._current_response_delay:Optional[float] = None # If bot status is idle (not "online"), the next message will set the delay. When bot is online, resets to None.
+        self._idle_range = []
+        self._idle_weights = []
         # Spontaneous messaging
         self.spontaneous_msg_chance = 0.0
         self.spontaneous_msg_max_consecutive = 1
@@ -6153,18 +6153,18 @@ class Behavior(SettingsBase):
             return
         num_values = 10 # arbitrary number of values and weights to generate
         # Generate evenly spaced values from 0 to max_reply_delay
-        self.response_delay_values = [round(i * self.max_reply_delay / (num_values - 1), 3) for i in range(num_values)]
+        self._response_delay_values = [round(i * self.max_reply_delay / (num_values - 1), 3) for i in range(num_values)]
         # Generate the weights from responsiveness (inverted)
         inv_responsiveness = (1.0 - responsiveness)
-        self.response_delay_weights = get_normalized_weights(target = inv_responsiveness, list_len = num_values)
+        self._response_delay_weights = get_normalized_weights(target = inv_responsiveness, list_len = num_values)
 
     def build_text_delay_values(self):
         responsiveness = max(0.0, min(1.0, self.responsiveness)) # clamped between 0.0 and 1.0
         if responsiveness == 1.0 or not self.msg_size_affects_delay:
             return
         # Manipulate the possible text delays to something more reasonable, while still rooted in 'responsiveness'
-        self.text_delay_values = copy.deepcopy(self.response_delay_values)
-        self.text_delay_values.pop(0) # Remove "0" delay
+        self._text_delay_values = copy.deepcopy(self._response_delay_values)
+        self._text_delay_values.pop(0) # Remove "0" delay
         # Remove second half of delay values
         # num_values = len(text_values) // 2
         # self.text_delay_values = text_values[:num_values]
@@ -6172,7 +6172,7 @@ class Behavior(SettingsBase):
     # Currently not used...
     def merge_weights(self, text_weights:list) -> list:
         # Combine text weights with delay weights
-        combined_weights = [w1 + w2 for w1, w2 in zip(self.response_delay_weights, text_weights)]
+        combined_weights = [w1 + w2 for w1, w2 in zip(self._response_delay_weights, text_weights)]
         # Normalize combined weights to sum up to 1.0
         total_combined_weight = sum(combined_weights)
         merged_weights = [weight / total_combined_weight for weight in combined_weights]
@@ -6181,25 +6181,25 @@ class Behavior(SettingsBase):
     def set_response_delay(self) -> float:
         # No delay if bot is online or user config is max responsiveness
         if bot_status.online or self.responsiveness >= 1.0:
-            self.current_response_delay = 0
+            self._current_response_delay = 0
             return 0
         # Choose a delay if none currently set
-        if self.current_response_delay is None:
-            chosen_delay = random.choices(self.response_delay_values, self.response_delay_weights)[0]
-            self.current_response_delay = chosen_delay
-        return self.current_response_delay
+        if self._current_response_delay is None:
+            chosen_delay = random.choices(self._response_delay_values, self._response_delay_weights)[0]
+            self._current_response_delay = chosen_delay
+        return self._current_response_delay
 
     def get_text_delay(self, text:str) -> float:
         if not self.msg_size_affects_delay:
             return 0
         # calculate text_weights for message text
-        num_values = len(self.text_delay_values)
+        num_values = len(self._text_delay_values)
         text_len = len(text)
         text_factor = min(max(text_len / 450, 0.0), 1.0)  # Normalize text length to [0, 1]
         text_delay_weights = get_normalized_weights(target = text_factor, list_len = num_values, strength=2.0) # use stronger weights for text factor
         # randomly select and return text delay
-        chosen_delay = (random.choices(self.text_delay_values, text_delay_weights)[0]) / 2 # Halve it
-        log.debug(f"Read Text delay: {chosen_delay}. Chosen from range: {self.text_delay_values}")
+        chosen_delay = (random.choices(self._text_delay_values, text_delay_weights)[0]) / 2 # Halve it
+        log.debug(f"Read Text delay: {chosen_delay}. Chosen from range: {self._text_delay_values}")
         return chosen_delay
 
     def build_idle_weights(self):
@@ -6209,20 +6209,20 @@ class Behavior(SettingsBase):
         num_values = 10           # arbitrary number of values and weights to generate
         max_time_until_idle = 600 # arbitrary max timeframe in seconds
         # Generate evenly spaced values in range of num_values
-        self.idle_range = [round(i * max_time_until_idle / (num_values - 1), 3) for i in range(num_values)]
-        self.idle_range[0] = self.idle_range[1] # Never go idle immediately
+        self._idle_range = [round(i * max_time_until_idle / (num_values - 1), 3) for i in range(num_values)]
+        self._idle_range[0] = self._idle_range[1] # Never go idle immediately
         # Generate the weights from responsiveness
-        self.idle_weights = get_normalized_weights(target = responsiveness, list_len = num_values)
+        self._idle_weights = get_normalized_weights(target = responsiveness, list_len = num_values)
 
 
     # Active conversations
     def update_user_dict(self, user_id):
         # Update the last conversation time for a user
-        self.user_conversations[user_id] = datetime.now()
+        self._user_conversations[user_id] = datetime.now()
 
     def in_active_conversation(self, user_id) -> bool:
         # Check if a user is in an active conversation with the bot
-        last_conversation_time = self.user_conversations.get(user_id)
+        last_conversation_time = self._user_conversations.get(user_id)
         if last_conversation_time:
             time_since_last_conversation = datetime.now() - last_conversation_time
             return time_since_last_conversation.total_seconds() < self.conversation_recency
@@ -6439,10 +6439,10 @@ class Settings(BaseFileMemory):
                 continue
             elif k in ['behavior', 'imgmodel', 'llmcontext', 'llmstate']:
                 main_key = getattr(self, k, None)
-                main_key:Union[Behavior|ImgModel|LLMContext|LLMState]
-                main_key_dict = main_key.get_vars()
-                if isinstance(v, dict) and isinstance(main_key_dict, dict):
-                    update_dict_matched_keys(main_key_dict, v)
+                if isinstance(main_key, (Behavior, ImgModel, LLMContext, LLMState)):
+                    main_key_dict = vars(main_key)
+                    if isinstance(v, dict) and isinstance(main_key_dict, dict):
+                        update_dict_matched_keys(main_key_dict, v)
             else:
                 log.warning(f'Received unexpected key when initializing Settings: "{k}"')
                 setattr(self, k, v)
@@ -6471,15 +6471,13 @@ class Settings(BaseFileMemory):
         if (not self._guild_id) or last_guild_settings:
             data = load_file(self._fp, {}, missing_okay=self._missing_okay)
             self.init_settings(data)
-            self.update_settings()             # Fixes any broken settings while warning user
             self.imgmodel.init_sd_extensions() # Modifies ImgModel depending on current SD extension config
         # Initialize new guild settings from current bot_settings
         else:
             log.info(f'[Per Server Settings] Initializing "{self._guild_name}" with copy of your main settings.')
-            data = copy.deepcopy(bot_settings.get_vars())
+            data = copy.deepcopy(bot_settings.get_vars(public_only=True))
             self.init_settings(data)
             # Skip update_settings() and init_sd_extensions() (already applied to bot_settings)
-            self.save() # save new settings file
 
     # overrides BaseFileMemory method
     def run_migration(self):
@@ -6488,17 +6486,31 @@ class Settings(BaseFileMemory):
             self._migrate_from_file(_old_active, load=True)
 
     # overrides BaseFileMemory method
-    def get_vars(self):
-        return {'behavior': vars(self.behavior),
-                'imgmodel': vars(self.imgmodel),
-                'llmcontext': vars(self.llmcontext),
-                'llmstate': vars(self.llmstate)}
+    def get_vars(self, public_only=False):
+        # return dict excluding "_key" keys
+        if public_only:
+            return {'behavior': self.behavior.get_vars(),
+                    'imgmodel': self.imgmodel.get_vars(),
+                    'llmcontext': self.llmcontext.get_vars(),
+                    'llmstate': self.llmstate.get_vars()}
+        # return complete dict
+        else:
+            return {'behavior': vars(self.behavior),
+                    'imgmodel': vars(self.imgmodel),
+                    'llmcontext': vars(self.llmcontext),
+                    'llmstate': vars(self.llmstate)}
+    
+    def save(self):
+        data = self.get_vars(public_only=True)
+        data['db_version'] = self._latest_version
+        data = self.save_pre_process(data)
+        save_yaml_file(self._fp, data)
 
     @property
     def name(self):
         return self.llmcontext.name
 
-    def update_settings(self, save_now=False):
+    def fix_settings(self, save_now=False):
         default_settings:dict = defaults_to_dict()
         self_settings:dict = self.get_vars()
         # Add any missing required settings, while warning for any missing
