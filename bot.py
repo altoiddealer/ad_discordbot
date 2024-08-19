@@ -41,7 +41,7 @@ from modules.utils_files import load_file, merge_base, save_yaml_file  # noqa: F
 from modules.utils_shared import shared_path, bg_task_queue, task_processing, flows_queue, flows_event, patterns, bot_emojis, config
 from modules.database import Database, StarBoard, Statistics, BaseFileMemory
 from modules.utils_misc import check_probability, fix_dict, update_dict, sum_update_dict, update_dict_matched_keys, random_value_from_range, convert_lists_to_tuples, get_time, format_time, format_time_difference, get_normalized_weights  # noqa: F401
-from modules.utils_discord import Embeds, guild_only, configurable_for_dm_if, is_direct_message, ireply, sleep_delete_message, send_long_message, \
+from modules.utils_discord import Embeds, guild_only, guild_or_owner_only, configurable_for_dm_if, is_direct_message, ireply, sleep_delete_message, send_long_message, \
     EditMessageModal, SelectedListItem, SelectOptionsView, get_user_ctx_inter, get_message_ctx_inter, apply_reactions_to_messages, replace_msg_in_history_and_discord, MAX_MESSAGE_LENGTH  # noqa: F401
 from modules.utils_aspect_ratios import dims_from_ar, avg_from_dims, get_aspect_ratio_parts, calculate_aspect_ratio_sizes  # noqa: F401
 from modules.history import HistoryManager, History, HMessage, cnf
@@ -220,7 +220,7 @@ sd = SD()
 if sd.enabled:
     # Function to attempt restarting the SD WebUI Client in the event it gets stuck
     @client.hybrid_command(description=f"Immediately Restarts the {sd.client} server. Requires '--api-server-stop' SD WebUI launch flag.")
-    @guild_only()
+    @guild_or_owner_only()
     async def restart_sd_client(ctx: commands.Context):
         await ctx.send(f"**`/restart_sd_client` __will not work__ unless {sd.client} was launched with flag: `--api-server-stop`**", delete_after=10)
         await sd.api(endpoint='/sdapi/v1/server-restart', method='post', json=None, retry=False)
@@ -574,7 +574,7 @@ imgmodel_update_task = None # Global variable allows process to be cancelled and
 if sd.enabled:
     # Register command for helper function to toggle auto-select imgmodel
     @client.hybrid_command(description='Toggles the automatic Img model changing task')
-    @guild_only()
+    @guild_or_owner_only()
     async def toggle_auto_change_imgmodels(ctx: commands.Context):
         global imgmodel_update_task
         if imgmodel_update_task and not imgmodel_update_task.done():
@@ -4803,6 +4803,10 @@ if sd.enabled:
 #################################################################
 ######################### MISC COMMANDS #########################
 #################################################################
+async def is_direct_message_and_not_owner(ictx:CtxInteraction):
+    user: Union[discord.User, discord.Member] = get_user_ctx_inter(ictx)
+    owner = await client.is_owner(ictx.user)
+    return is_direct_message(ictx) and not owner
 
 @client.event
 async def on_error(event_name, *args, **kwargs):
@@ -4888,7 +4892,7 @@ async def main(ctx: commands.Context, channel:Optional[discord.TextChannel]=None
     await ctx.reply(action_message, delete_after=15)
 
 @client.hybrid_command(description="Update dropdown menus without restarting bot script.")
-@guild_only()
+@guild_or_owner_only()
 async def sync(ctx: commands.Context):
     await ctx.reply('Syncing client tree. Note: Menus may not update instantly.', ephemeral=True, delete_after=15)
     log.info(f"{ctx.author.display_name} used '/sync' to sync the client.tree (refresh commands).")
@@ -4917,7 +4921,7 @@ if tgwui.enabled:
 
     # /save_conversation command
     @client.hybrid_command(description="Saves the current conversation to a new file in text-generation-webui/logs/")
-    @guild_only()
+    @guild_or_owner_only()
     async def save_conversation(ctx: commands.Context):
         history_char, history_mode = get_char_mode_for_history(ctx)
         await bot_history.get_history_for(ctx.channel.id, history_char, history_mode).save(timeout=0, force=True)
@@ -5449,7 +5453,7 @@ async def process_imgmodel(ctx: commands.Context, selected_imgmodel_value:str):
 if sd.enabled:
 
     @client.hybrid_command(description="Choose an Img Model")
-    @guild_only()
+    @guild_or_owner_only()
     async def imgmodel(ctx: commands.Context):
         all_imgmodels = await fetch_imgmodels()
         if all_imgmodels:
@@ -5491,7 +5495,7 @@ async def process_llmmodel(ctx, selected_llmmodel):
 if tgwui.enabled:
 
     @client.hybrid_command(description="Choose an LLM Model")
-    @guild_only()
+    @guild_or_owner_only()
     async def llmmodel(ctx: commands.Context):
         all_llmmodels = utils.get_available_models()
         if all_llmmodels:

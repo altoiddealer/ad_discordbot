@@ -23,11 +23,26 @@ def guild_only():
         return True
     return commands.check(predicate)
 
+def guild_or_owner_only():
+    async def predicate(ctx: commands.Context):
+        if isinstance(ctx.channel, discord.DMChannel):
+            if not await ctx.bot.is_owner(ctx.author):
+                raise commands.NotOwner("Only the bot owner can use this command in Direct Messages.")
+            return True
+        else:
+            if ctx.guild is None:
+                raise commands.CheckFailure("This command can only be used in a server.")
+            return True
+    return commands.check(predicate)
 
 def configurable_for_dm_if(func):
     async def predicate(ctx):
         if ctx.guild is None:
             try:
+                # Allow owner
+                if await ctx.bot.is_owner(ctx.author):
+                    return True
+                # Allow if configured
                 if func(ctx):
                     return True
                 
