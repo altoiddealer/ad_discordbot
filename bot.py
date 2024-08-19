@@ -604,7 +604,7 @@ async def init_auto_change_imgmodels():
     if sd.enabled:
         imgmodels_data = load_file(shared_path.img_models, {})
         if imgmodels_data and imgmodels_data.get('settings', {}).get('auto_change_imgmodels', {}).get('enabled', False):
-            if config.is_per_server() and len(guild_settings > 1):
+            if config.is_per_server() and len(guild_settings) > 1:
                 log.warning('[Auto Change Imgmodels] Main config is set for "per-guild" settings management. Disabling this task.')
                 # Remove the registered command '/toggle_auto_change_imgmodels'
                 client.remove_command("toggle_auto_change_imgmodels")
@@ -6465,7 +6465,7 @@ class Settings(BaseFileMemory):
                 setattr(self, k, v)
 
     def print_per_server_msg(self):
-        bot_database.update_was_warned('first_server_setting')
+        bot_database.update_was_warned('first_server_settings')
         #log.info("[Per Server Settings] Important information about this feature:")
         log.info("[Per Server Settings] Note: 'dict_base_settings.yaml' applies to ALL server settings. Omit settings you do not want shared!")
 
@@ -6495,6 +6495,9 @@ class Settings(BaseFileMemory):
             data = copy.deepcopy(bot_settings.get_vars(public_only=True))
             self.init_settings(data)
             # Skip update_settings() and init_sd_extensions() (already applied to bot_settings)
+            # file will typically save while loading each character, but may only load one character
+            if config.is_per_character:
+                self.save()
 
     # overrides BaseFileMemory method
     def run_migration(self):
