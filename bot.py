@@ -5098,9 +5098,9 @@ async def character_loader(char_name, settings:"Settings", guild_id:int|None=Non
         print(traceback.format_exc())
 
 # Task to manage discord profile updates
-delayed_profile_update_task = None
+delayed_profile_update_tasks:dict[int, asyncio.Task] = {}
 
-async def delayed_profile_update(username, avatar_fp, remaining_cooldown, guild:discord.Guild|None=None):
+async def delayed_profile_update(display_name, avatar_fp, remaining_cooldown, guild:discord.Guild|None=None):
     try:
         await asyncio.sleep(remaining_cooldown)
 
@@ -5108,13 +5108,12 @@ async def delayed_profile_update(username, avatar_fp, remaining_cooldown, guild:
         if guild:
             guild_id = guild.id
 
-        if username:
-            guilds = client.guilds
-            if config.is_per_character() and guild:
-                guilds = [guild]
-            for guild in guilds:
-                client_member = guild.get_member(client.user.id)
-                await client_member.edit(nick=username)
+        servers = client.guilds
+        if config.is_per_character() and guild:
+            servers = [guild]
+        for server in servers:
+            client_member = server.get_member(client.user.id)
+            await client_member.edit(nick=display_name)
 
         if avatar_fp:
             with open(avatar_fp, 'rb') as f:
@@ -5122,50 +5121,60 @@ async def delayed_profile_update(username, avatar_fp, remaining_cooldown, guild:
                 await client.user.edit(avatar=avatar)
                 bot_settings.set_last_setting_for("last_avatar", avatar_fp, guild_id=guild_id, save_now=True)
 
-        log.info(f"Updated discord client profile: (Username: {username}; Avatar: {'Updated' if avatar else 'Unchanged'}).")
+        log.info(f"Updated discord client profile: (display name: {display_name}; Avatar: {'Updated' if avatar else 'Unchanged'}).")
         log.info("Profile can be updated again in 10 minutes.")
         bot_settings.set_last_setting_for("last_change", time.time(), guild_id=guild_id)
     except Exception as e:
         log.error(f"Error while changing character username or avatar: {e}")
 
+def get_avatar_for(char_name:str, ictx:CtxInteraction):
+    # Avatar defaults
+    avatar_p = os.path.join(shared_path.dir_tgwui, 'characters')
+    avatar_fn = char_name
+    # If guild specific characters
+    if config.is_per_character():
+        avatar_fn = config.per_server_settings.get("character_avatar")
+        if avatar_fn:
+            avatar_p = shared_path.dir_user_images
+        else:
+            avatar_fn = char_name
+    # Try accepted formats
+    avatar_fp = None
+    for ext in ['png', 'jpg', 'gif']:
+        tried_p = os.path.join(avatar_p, f'{avatar_fn}.{ext}')
+        if os.path.exists(tried_p):
+            avatar_fp = tried_p
+            break
+    # Only update avatar if different from previous
+    last_avatar = bot_settings.get_last_setting_for("last_avatar", guild_id=ictx.guild.id)
+    if (avatar_fp == last_avatar):
+        avatar_fp = None
+    return avatar_fp
+
 async def update_client_profile(char_name:str, ictx:CtxInteraction):
     try:
-        global delayed_profile_update_task
+        global delayed_profile_update_tasks
         # Cancel delayed profile update task if one is already pending
-        if delayed_profile_update_task and not delayed_profile_update_task.done():
-            delayed_profile_update_task.cancel()
+        update_task:Optional[asyncio.Task] = delayed_profile_update_tasks.get(ictx.guild.id)
+        if update_task and not update_task.done():
+            update_task.cancel()
         # Do not update profile if name is same and no update task is scheduled
-        elif all(guild.get_member(client.user.id).display_name == char_name for guild in client.guilds):
+        elif ictx.guild.get_member(client.user.id).display_name == char_name:
             return
-
-        # Avatar defaults
-        avatar_p = os.path.join(shared_path.dir_tgwui, 'characters')
-        avatar_fn = char_name
-        # If guild specific characters
-        if config.is_per_character():
-            avatar_fn = config.per_server_settings.get("character_avatar")
-            if avatar_fn:
-                avatar_p = shared_path.dir_user_images
-            else:
-                avatar_fn = char_name
-        avatar_fp = os.path.join(avatar_p, f'{avatar_fn}.png')
-        # Only update avatar if different from previous
-        last_avatar = bot_settings.get_last_setting_for("last_avatar", guild_id=ictx.guild.id)
-        if (avatar_fp == last_avatar) or not os.path.exists(avatar_fp):
-            avatar_fp = None
-
+        # get avatar file path
+        avatar_fp = get_avatar_for(char_name, ictx)
         # Check for cooldown before allowing profile change
         last_change = bot_settings.get_last_setting_for("last_change", guild_id=ictx.guild.id)
         last_cooldown = last_change + timedelta(minutes=10).seconds
         if time.time() >= last_cooldown:
             # Apply changes immediately if outside 10 minute cooldown
-            delayed_profile_update_task = asyncio.create_task(delayed_profile_update(char_name, avatar_fp, 0, ictx.guild))
+            delayed_profile_update_tasks[ictx.guild.id] = asyncio.create_task(delayed_profile_update(char_name, avatar_fp, 0, ictx.guild))
         else:
             remaining_cooldown = last_cooldown - time.time()
             seconds = int(remaining_cooldown)
             await ictx.channel.send(f'**Due to Discord limitations, character name/avatar will update in {seconds} seconds.**', delete_after=10)
             log.info(f"Due to Discord limitations, character name/avatar will update in {remaining_cooldown} seconds.")
-            delayed_profile_update_task = asyncio.create_task(delayed_profile_update(char_name, avatar_fp, seconds, ictx.guild))
+            delayed_profile_update_tasks[ictx.guild.id] = asyncio.create_task(delayed_profile_update(char_name, avatar_fp, seconds, ictx.guild))
     except Exception as e:
         log.error(f"An error occurred while updating Discord profile: {e}")
 
@@ -6062,7 +6071,7 @@ spontaneous_messaging = SpontaneousMessaging()
 #################################################################
 ########################### SETTINGS ############################
 #################################################################
-guild_settings:dict["Settings"] = {}
+guild_settings:dict[int, "Settings"] = {}
 
 # Returns either guild specific or main instance of Settings() 
 def get_settings(ictx:CtxInteraction|None=None):

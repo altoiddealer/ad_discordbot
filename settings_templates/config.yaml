@@ -38,8 +38,8 @@ discord:
 per_server_settings:
   enabled: false
   # The following settings only apply if 'enabled = true'
-  per_server_characters: false # This is a bit experimental. **If enabled, all characters must share the same avatar.**
-  character_avatar: '' # The name of a PNG file in your 'user_images' directory (do not include the '.png' extension).
+  per_server_characters: false # **If enabled, all characters must share the same avatar.**
+  character_avatar: '' # The name of an image file in your 'user_images' directory. Do not include the extension (.png/.jpg/.gif)
 
 
 # Dynamic Prompting feature. Uses similar syntax and usage as the SD WebUI extension 'sd-dynamic-prompts'.
