@@ -654,6 +654,7 @@ async def init_characters():
         char_name = get_character()
         if char_name:
             await character_loader(char_name, bot_settings)
+    bot_status.build_idle_weights()
 
 def update_base_tags_modified():
     mod_time = os.path.getmtime(shared_path.tags)
@@ -5188,6 +5189,8 @@ async def change_character(char_name, ictx:CtxInteraction):
         settings:Settings = get_settings(ictx)
         # Load the character
         await character_loader(char_name, settings, ictx.guild.id)
+        # Rebuild idle weights
+        bot_status.build_idle_weights()
         # Update discord username / avatar
         await update_client_profile(char_name, ictx)
     except Exception as e:
@@ -5819,6 +5822,10 @@ class BotStatus:
         self.online = True
         self.come_online_time = None
         self.come_online_task = None
+        self.responsiveness = 1.0
+        self.idle_range = []
+        self.idle_weights = []
+        self.current_response_delay:Optional[float] = None # If status is idle (not "online"), the next message will set the delay. When online, resets to None.
         self.go_idle_time = None
         self.go_idle_task = None
 
@@ -5829,7 +5836,7 @@ class BotStatus:
             self.online = True
             await client.change_presence(status=discord.Status.online)
         # Reset variables
-        bot_settings.behavior._current_response_delay = None # only reset this when completed without cancel
+        self.current_response_delay = None # only reset this when completed without cancel
         self.come_online_time = None
         self.come_online_task = None
 
@@ -5856,6 +5863,26 @@ class BotStatus:
             self.come_online_task = asyncio.create_task(self.come_online_after(time_until_online))
         else:
             await self.come_online()
+
+    def build_idle_weights(self):
+        # Use largest available responsiveness setting
+        self.responsiveness = bot_settings.behavior.responsiveness
+        if config.is_per_character:
+            all_resp_sets = []
+            for _, settings in guild_settings:
+                settings:"Settings"
+                all_resp_sets.append(settings.behavior.responsiveness)
+            self.responsiveness = max(all_resp_sets)
+        responsiveness = max(0.0, min(1.0, self.responsiveness)) # clamped between 0.0 and 1.0
+        if responsiveness == 1.0:
+            return
+        num_values = 10           # arbitrary number of values and weights to generate
+        max_time_until_idle = 600 # arbitrary max timeframe in seconds
+        # Generate evenly spaced values in range of num_values
+        self.idle_range = [round(i * max_time_until_idle / (num_values - 1), 3) for i in range(num_values)]
+        self.idle_range[0] = self.idle_range[1] # Never go idle immediately
+        # Generate the weights from responsiveness
+        self.idle_weights = get_normalized_weights(target = responsiveness, list_len = num_values)
 
     async def go_idle(self):
         if self.online:
@@ -5891,13 +5918,13 @@ class BotStatus:
         if not message_manager.send_msg_queue.empty():
             return
         '''Sets the bot status to idle at a randomly selected time'''
-        responsiveness = max(0.0, min(1.0, bot_settings.behavior.responsiveness)) # clamped between 0.0 and 1.0
+        responsiveness = max(0.0, min(1.0, self.responsiveness)) # clamped between 0.0 and 1.0
         if responsiveness == 1.0:
             return # Never go idle
         # cancel previously set go idle task
         self.cancel_go_idle_task()
         # choose a value with weighted probability based on 'responsiveness' bot behavior
-        time_until_idle = random.choices(bot_settings.behavior._idle_range, bot_settings.behavior._idle_weights)[0]
+        time_until_idle = random.choices(self.idle_range, self.idle_weights)[0]
         self.go_idle_task = asyncio.create_task(self.go_idle_after(time_until_idle))
 
 bot_status = BotStatus()
@@ -6034,7 +6061,7 @@ class SpontaneousMessaging():
         except Exception as e:
             log.error(f"Error while processing a Spontaneous Message: {e}")
 
-    async def init_task(self, ictx:CtxInteraction, task, tally:int):
+    async def init_task(self, ictx:CtxInteraction, task:asyncio.Task, tally:int):
         # get settings instance
         settings:Settings = get_settings(ictx)
         # Randomly select wait duration from start/end range 
@@ -6083,13 +6110,6 @@ def get_settings(ictx:CtxInteraction|None=None):
         return guild_settings.get(ictx.guild.id, bot_settings)
     return bot_settings
 
-def get_char_mode_for_history(ictx:CtxInteraction|None=None, settings=None):
-    settings:"Settings" = settings or get_settings(ictx)
-    state_dict = settings.llmstate.state
-    mode = state_dict['mode']
-    character = state_dict["character_menu"] or 'unknown_character'
-    return character, mode
-
 class SettingsBase:
     def get_vars(self):
         return {k:v for k,v in vars(self).items() if not k.startswith('_')}
@@ -6132,9 +6152,6 @@ class Behavior(SettingsBase):
         self._response_delay_values = []   # self.response_delay_values and self.response_delay_weights
         self._response_delay_weights = []  # are calculated from the 3 settings above them via build_response_weights()
         self._text_delay_values = []       # similar to response_delays, except weights need to be made for each message
-        self._current_response_delay:Optional[float] = None # If bot status is idle (not "online"), the next message will set the delay. When bot is online, resets to None.
-        self._idle_range = []
-        self._idle_weights = []
         # Spontaneous messaging
         self.spontaneous_msg_chance = 0.0
         self.spontaneous_msg_max_consecutive = 1
@@ -6148,7 +6165,6 @@ class Behavior(SettingsBase):
                 setattr(self, key, value)
         self.build_response_delay_weights()
         self.build_text_delay_values()
-        self.build_idle_weights()
         self.print_behavior_message(char_name)
 
     def print_behavior_message(self, char_name:str):
@@ -6198,13 +6214,13 @@ class Behavior(SettingsBase):
     def set_response_delay(self) -> float:
         # No delay if bot is online or user config is max responsiveness
         if bot_status.online or self.responsiveness >= 1.0:
-            self._current_response_delay = 0
+            bot_status.current_response_delay = 0
             return 0
         # Choose a delay if none currently set
-        if self._current_response_delay is None:
+        if bot_status.current_response_delay is None:
             chosen_delay = random.choices(self._response_delay_values, self._response_delay_weights)[0]
-            self._current_response_delay = chosen_delay
-        return self._current_response_delay
+            bot_status.current_response_delay = chosen_delay
+        return bot_status.current_response_delay
 
     def get_text_delay(self, text:str) -> float:
         if not self.msg_size_affects_delay:
@@ -6218,18 +6234,6 @@ class Behavior(SettingsBase):
         chosen_delay = (random.choices(self._text_delay_values, text_delay_weights)[0]) / 2 # Halve it
         log.debug(f"Read Text delay: {chosen_delay}. Chosen from range: {self._text_delay_values}")
         return chosen_delay
-
-    def build_idle_weights(self):
-        responsiveness = max(0.0, min(1.0, self.responsiveness)) # clamped between 0.0 and 1.0
-        if responsiveness == 1.0:
-            return
-        num_values = 10           # arbitrary number of values and weights to generate
-        max_time_until_idle = 600 # arbitrary max timeframe in seconds
-        # Generate evenly spaced values in range of num_values
-        self._idle_range = [round(i * max_time_until_idle / (num_values - 1), 3) for i in range(num_values)]
-        self._idle_range[0] = self._idle_range[1] # Never go idle immediately
-        # Generate the weights from responsiveness
-        self._idle_weights = get_normalized_weights(target = responsiveness, list_len = num_values)
 
 
     # Active conversations
@@ -6563,6 +6567,16 @@ class Settings(BaseFileMemory):
         return
 
 bot_settings = Settings()
+
+#################################################################
+################## CUSTOM HISTORY MANAGEMENT ####################
+#################################################################
+def get_char_mode_for_history(ictx:CtxInteraction|None=None, settings=None):
+    settings:Settings = settings or get_settings(ictx)
+    state_dict = settings.llmstate.state
+    mode = state_dict['mode']
+    character = state_dict["character_menu"] or 'unknown_character'
+    return character, mode
 
 @dataclass_json
 @dataclass
