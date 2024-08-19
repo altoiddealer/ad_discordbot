@@ -613,6 +613,7 @@ async def init_auto_change_imgmodels():
 
 # Try getting a valid character file source
 def get_character(guild_id:int|None=None, guild_settings=None):
+    # Determine applicable Settings()
     settings:Settings = guild_settings if guild_settings is not None else bot_settings
     try:
         # Try loading last known character with fallback sources
@@ -669,13 +670,16 @@ async def init_guilds():
     if per_server_settings or post_settings:
         # check/update last time modified for dict_tags.yaml
         tags_updated = update_base_tags_modified()
-        # iterate over guilds and create Settings() / post tags settings
+        # iterate over guilds
         for guild in client.guilds:
+            # create Settings()
             if per_server_settings:
                 guild_settings[guild.id] = Settings(guild)
+            # post Tags settings
+            previously_sent_settings = bot_database.settings_sent.get(guild.id) # must have sent settings before
             previously_sent_tags = bool(bot_database.get_settings_msgs_for(guild.id, 'tags'))
             # post tags if file was updated, or if guild has not yet posted them
-            if post_settings and (tags_updated or not previously_sent_tags):
+            if post_settings and previously_sent_settings and (tags_updated or not previously_sent_tags):
                 await bg_task_queue.put(post_active_settings(guild, ['tags']))
 
 # If first time bot script is run
@@ -4928,7 +4932,7 @@ if tgwui.enabled:
         history_char, history_mode = get_char_mode_for_history(inter)
         local_history = bot_history.get_history_for(inter.channel.id, history_char, history_mode)
         if not local_history:
-            await inter.response.send(f'There is currently no chat history to "edit history" from.', ephemeral=True, delete_after=5)
+            await inter.response.send_message(f'There is currently no chat history to "edit history" from.', ephemeral=True, delete_after=5)
             return
         matched_hmessage = local_history.search(lambda m: m.id == message.id or message.id in m.related_ids)
         if not matched_hmessage:
@@ -4970,7 +4974,7 @@ if tgwui.enabled:
         history_char, history_mode = get_char_mode_for_history(inter)
         local_history = bot_history.get_history_for(inter.channel.id, history_char, history_mode)
         if not local_history:
-            await inter.response.send(f'There is currently no chat history to "{cmd}" from.', ephemeral=True, delete_after=5)
+            await inter.response.send_message(f'There is currently no chat history to "{cmd}" from.', ephemeral=True, delete_after=5)
             return
         target_hmessage = local_history.search(lambda m: m.id == message.id or message.id in m.related_ids)
         if not target_hmessage:
@@ -5018,7 +5022,7 @@ async def load_character_data(char_name):
             break  # Break the loop if data is successfully loaded
 
     if char_data is None:
-        log.error(f"Failed to load data for: {char_name}, perhaps missing file?")
+        log.error(f"Failed to load data for: {char_name} (tried: .yaml/.yml/.json). Perhaps missing file?")
 
     return char_data
 
