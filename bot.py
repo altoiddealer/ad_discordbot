@@ -5299,7 +5299,7 @@ async def fetch_imgmodels() -> list:
         return []
 
 # Check filesize/filters with selected imgmodel to assume resolution / tags
-async def guess_model_data(selected_imgmodel, presets):
+async def guess_model_data(selected_imgmodel:dict, presets:list[dict]) -> dict|None:
     try:
         filename = selected_imgmodel.get('filename', None)
         if not filename:
@@ -5333,7 +5333,7 @@ async def guess_model_data(selected_imgmodel, presets):
                 del preset['max_filesize']
             match_counts.append((preset, match_count))
         match_counts.sort(key=lambda x: x[1], reverse=True)  # Sort presets based on match counts
-        matched_preset = match_counts[0][0] if match_counts else ''
+        matched_preset = match_counts[0][0] if match_counts else None
         return matched_preset
     except Exception as e:
         log.error(f"Error guessing selected imgmodel data: {e}")
