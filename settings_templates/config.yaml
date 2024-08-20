@@ -34,12 +34,14 @@ discord:
     target_channel_id: 11111111111111111111 # bot requires message / msg management permissions
 
 
-# If enabled, all user settings will be managed seperately for each server.
+# If enabled, user settings will be managed seperately for each server (excluding the settings here in config.yaml)
 per_server_settings:
   enabled: false
   # The following settings only apply if 'enabled = true'
   per_server_characters: false # **If enabled, all characters must share the same avatar.**
   character_avatar: '' # The name of an image file in your 'user_images' directory. Do not include the extension (.png/.jpg/.gif)
+  # Only enable the following if: (1) You have lots of free VRAM (2) Your client settings allow multiple models to be loaded in VRAM.
+  per_server_imgmodel_settings: false # In addition to separate settings, this uses the payload to drive model handling (instead of /models API).
 
 
 # Dynamic Prompting feature. Uses similar syntax and usage as the SD WebUI extension 'sd-dynamic-prompts'.

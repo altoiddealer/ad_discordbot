@@ -173,7 +173,7 @@ class SD:
                         r = await response.json()
                         if self.client is None and endpoint != '/sdapi/v1/cmd-flags':
                             await self.get_sysinfo()
-                            bot_settings.imgmodel.refresh_enabled_extensions()
+                            bot_settings.imgmodel.refresh_enabled_extensions(print=True)
                             for settings in guild_settings.values():
                                 settings:Settings
                                 settings.imgmodel.refresh_enabled_extensions()
@@ -615,6 +615,9 @@ async def init_auto_change_imgmodels():
 def get_character(guild_id:int|None=None, guild_settings=None):
     # Determine applicable Settings()
     settings:Settings = guild_settings if guild_settings is not None else bot_settings
+    joined_msg = 'has joined the chat'
+    if guild_settings:
+        joined_msg = f'has joined {settings._guild_name}'
     try:
         # Try loading last known character with fallback sources
         sources = [
@@ -624,11 +627,11 @@ def get_character(guild_id:int|None=None, guild_settings=None):
         ]
         char_name = None
         for try_source in sources:
-            log.info(f'Trying to load character "{try_source}"...')
+            log.debug(f'Trying to load character "{try_source}"...')
             try:
                 _, char_name, _, _, _ = load_character(try_source, '', '')
                 if char_name:
-                    log.info(f'Initializing with character "{try_source}". Use "/character" for changing characters.')
+                    log.info(f'"{try_source}" {joined_msg}.')
                     source = try_source
                     break  # Character loaded successfully, exit the loop
             except Exception as e:
@@ -646,6 +649,8 @@ async def init_characters():
     # Per-server characters
     if config.is_per_character():
         for guild_id, settings in guild_settings.items():
+            log.info("----------------------------------------------")
+            log.info(f"Initializing {settings._guild_name}...")
             char_name = get_character(guild_id, settings)
             if char_name:
                 await character_loader(char_name, settings, guild_id=guild_id)
@@ -687,7 +692,8 @@ async def init_guilds():
 async def first_run():
     try:
         log.info('Welcome to ad_discordbot!')
-        log.info('• Use "/helpmenu" for some useful commands.')
+        log.info('• Use "/character" for changing characters.')
+        log.info('• Use "/helpmenu" to see other useful commands.')
         log.info('• Visit https://github.com/altoiddealer/ad_discordbot for more info.')
         log.info('• Learn about command permissions in the Wiki section: "Commands".')
         for guild in client.guilds:  # Iterate over all guilds the bot is a member of
@@ -849,7 +855,7 @@ async def post_active_settings(guild:discord.Guild, key_str_list:Optional[list[s
             if not bot_database.was_warned(f'{guild.id}_chan'):
                 bot_database.update_was_warned(f'{guild.id}_chan')
                 log.warning(f"[Post Active Settings] This feature is enabled, but a channel is not yet set for server '{guild.name}'.")
-                log.info("Use command '/set_server_settings_channel' to designate a 'settings channel'.")
+                log.warning("[Post Active Settings] Use command '/set_server_settings_channel' to designate a 'settings channel'.")
             return
         try:
             channel = await guild.fetch_channel(channel_id)
@@ -934,7 +940,7 @@ async def switch_settings_channels(guild:discord.Guild, channel:discord.TextChan
         except Exception as e:
             log.error(f"[Post Active Settings] Failed to fetch old settings channel from ID '{old_channel_id}': {e}")
         if old_channel:
-            for _, old_msg_ids in old_settings_dict.items():
+            for old_msg_ids in old_settings_dict.values():
                 await delete_old_settings_messages(old_channel, old_msg_ids)
     # Post all current settings to new settings channel
     await post_active_settings(guild, channel=channel)
@@ -3533,7 +3539,8 @@ class Tasks(TaskProcessing):
             # Swap Image model
             if mode == 'swap' or mode == 'swap_back':
                 new_model_settings = {'sd_model_checkpoint': imgmodel_params['sd_model_checkpoint']}
-                _ = await sd.api(endpoint='/sdapi/v1/options', method='post', json=new_model_settings, retry=True)
+                if not config.is_per_server_imgmodels():
+                    await sd.api(endpoint='/sdapi/v1/options', method='post', json=new_model_settings, retry=True)
                 await self.embeds.delete('change') # delete embed
                 return True
 
@@ -5092,8 +5099,9 @@ async def character_loader(char_name, settings:"Settings", guild_id:int|None=Non
         settings.save()
 
         # Print mode in cmd
-        guild_name = f'" {settings._guild_name}"' if guild_id else ''
-        log.info(f"{' ' * max(0, 8 - len(guild_name))}Initializing{guild_name} in {state_dict['mode']} mode")
+        guild_msg = f' in {settings._guild_name}' if guild_id else ''
+        log.info(f'Mode is set to "{state_dict["mode"]}"{guild_msg}.')
+
         # Check for any char defined or model defined instruct_template
         update_instruct = char_instruct or tgwui.instruction_template_str or None
         if update_instruct:
@@ -5356,6 +5364,9 @@ async def change_imgmodel(selected_imgmodel_params:dict, ictx:CtxInteraction=Non
 
             # Merge the selected imgmodel data with base imgmodel data
             updated_imgmodel_params = merge_base(imgmodel_settings, 'imgmodel')
+            if config.is_per_server_imgmodels():
+                override_settings = updated_imgmodel_params['payload'].setdefault('override_settings', {})
+                override_settings['sd_model_checkpoint'] = selected_imgmodel_params['sd_model_checkpoint']
             # Unpack any tag presets
             imgmodel_tags = base_tags.update_tags(imgmodel_tags)
             return updated_imgmodel_params, imgmodel_tags
@@ -5366,31 +5377,36 @@ async def change_imgmodel(selected_imgmodel_params:dict, ictx:CtxInteraction=Non
     # Save new Img model data
     async def save_new_imgmodel_settings(load_new_model, updated_imgmodel_params, imgmodel_tags):
         try:
-            settings:Settings = get_settings(ictx)
-            # get current/new average width/height for '/image' cmd size options
-            new_avg = avg_from_dims(updated_imgmodel_params['payload']['width'], updated_imgmodel_params['payload']['height'])
+            settings:Settings = bot_settings
+            if config.is_per_server_imgmodels():
+                settings:Settings = get_settings(ictx)
+
             # Update settings
             settings.imgmodel.update(updated_imgmodel_params)
             # Update tags
             settings.imgmodel.tags = imgmodel_tags
             # Remove settings we do not want to retain
-            override_settings = settings.imgmodel.payload.get('override_settings', {})
-            popped = []
-            popped_value = override_settings.pop('sd_model_checkpoint', None)
-            if popped_value is not None:
-                popped.append(popped_value)
-            popped_value = override_settings.pop('sd_vae', None)
-            if popped_value is not None:
-                popped.append(popped_value)
-            if popped:
-                log.warning(f'[Change Imgmodel] These settings were applied, but are not being retained/applied automatically for next bot startup: {popped}')
+            if not config.is_per_server_imgmodels():
+                override_settings = settings.imgmodel.payload.get('override_settings', {})
+                popped = []
+                popped_value = override_settings.pop('sd_model_checkpoint', None)
+                if popped_value is not None:
+                    popped.append(popped_value)
+                popped_value = override_settings.pop('sd_vae', None)
+                if popped_value is not None:
+                    popped.append(popped_value)
+                if popped:
+                    log.warning(f'[Change Imgmodel] These settings were applied, but are not being retained/applied automatically for next bot startup: {popped}')
             # Fix any invalid settings
             settings.fix_settings()
             # Save file
             settings.save()
             # load the model
-            _ = await sd.api(endpoint='/sdapi/v1/options', method='post', json=load_new_model, retry=True)
+            if not config.is_per_server_imgmodels():
+                await sd.api(endpoint='/sdapi/v1/options', method='post', json=load_new_model, retry=True)
+
             # Check if old/new average resolution is different
+            new_avg = avg_from_dims(settings.imgmodel.payload['width'], settings.imgmodel.payload['height'])
             if new_avg != bot_settings.get_last_setting_for("last_imgmodel_res", ictx):
                 # save new res to bot database
                 bot_settings.set_last_setting_for("last_imgmodel_res", new_avg, ictx, save_now=True)
@@ -5867,9 +5883,9 @@ class BotStatus:
     def build_idle_weights(self):
         # Use largest available responsiveness setting
         self.responsiveness = bot_settings.behavior.responsiveness
-        if config.is_per_character:
+        if config.is_per_character():
             all_resp_sets = []
-            for _, settings in guild_settings:
+            for settings in guild_settings.values():
                 settings:"Settings"
                 all_resp_sets.append(settings.behavior.responsiveness)
             self.responsiveness = max(all_resp_sets)
@@ -6168,7 +6184,6 @@ class Behavior(SettingsBase):
         self.print_behavior_message(char_name)
 
     def print_behavior_message(self, char_name:str):
-        log.info("----------------------------------------------")
         log.info(f"{char_name}'s Behavior:")
         max_responsiveness_msg = '• Processes messages at uncapped speeds, and will never go idle.'
         responsiveness_msg = '• Behaves more humanlike. Delays to respond after going idle.'
@@ -6177,7 +6192,6 @@ class Behavior(SettingsBase):
             log.info(f'• Takes time to read messages. (msg_size_affects_delay: {self.msg_size_affects_delay})')
         if self.maximum_typing_speed > 0:
             log.info(f'• Takes longer to write responses. (maximum_typing_speed: {self.maximum_typing_speed})')
-        log.info("----------------------------------------------")
 
     # Response delays
     def build_response_delay_weights(self):
@@ -6293,43 +6307,32 @@ class Behavior(SettingsBase):
 class ImgModel(SettingsBase):
     def __init__(self):
         self.tags = []
-        self.imgmodel_name = '' # label used for /imgmodel command
         self.override_settings = {}
         self.payload = {'alwayson_scripts': {}}
 
-    def refresh_enabled_extensions(self):
+    def refresh_enabled_extensions(self, print=False):
         self.init_sd_extensions()
         merge_base(self.payload, 'imgmodel,payload')
+        if print:
+            self.print_sd_extensions()
 
     def init_sd_extensions(self):
         extensions:dict = config.sd['extensions']
-        forge_clients = ['SD WebUI Forge', 'SD WebUI ReForge']
         # Initialize ControlNet defaults
         if extensions.get('controlnet_enabled'):
             self.payload['alwayson_scripts']['controlnet'] = {'args': [{
                 'enabled': False, 'image': None, 'mask_image': None, 'model': 'None', 'module': 'None', 'weight': 1.0, 'processor_res': 64, 'pixel_perfect': True,
                 'guidance_start': 0.0, 'guidance_end': 1.0, 'threshold_a': 64, 'threshold_b': 64, 'control_mode': 0, 'resize_mode': 1, 'lowvram': False, 'save_detected_map': False}]}
-            if sd.client:
-                log.info('"ControlNet" extension support is enabled and active.')
         # Initialize Forge Couple defaults
         if extensions.get('forgecouple_enabled'):
             self.payload['alwayson_scripts']['forge_couple'] = {'args': {
                 'enable': False, 'mode': 'Basic', 'sep': 'SEP', 'direction': 'Horizontal', 'global_effect': 'First Line',
                 'global_weight': 0.5, 'maps': [['0:0.5', '0.0:1.0', '1.0'],['0.5:1.0', '0.0:1.0', '1.0']]}}
-            if sd.client:
-                log.info('"Forge Couple" extension support is enabled and active.')
-            # Warn Non-Forge:
-            if sd.client and sd.client != 'SD WebUI Forge':
-                log.warning(f'"Forge Couple" is not known to be compatible with "{sd.client}". If you experience errors, disable this extension in config.yaml')
         # Initialize layerdiffuse defaults
         if extensions.get('layerdiffuse_enabled'):
             self.payload['alwayson_scripts']['layerdiffuse'] = {'args': {
                 'enabled': False, 'method': '(SDXL) Only Generate Transparent Image (Attention Injection)', 'weight': 1.0, 'stop_at': 1.0, 'foreground': None, 'background': None,
                 'blending': None, 'resize_mode': 'Crop and Resize', 'output_mat_for_i2i': False, 'fg_prompt': '', 'bg_prompt': '', 'blended_prompt': ''}}
-            if sd.client:
-                log.info('"layerdiffuse" extension support is enabled and active.')
-            if sd.client and sd.client != 'SD WebUI Forge':
-                log.warning(f'"layerdiffuse" is not known to be compatible with "{sd.client}". If you experience errors, disable this extension in config.yaml')
         # Initialize ReActor defaults
         if extensions.get('reactor_enabled'):
             self.payload['alwayson_scripts']['reactor'] = {'args': {
@@ -6337,9 +6340,24 @@ class ImgModel(SettingsBase):
                 'restore_upscale': True, 'upscaler': '4x_NMKD-Superscale-SP_178000_G', 'scale': 1.5, 'upscaler_visibility': 1, 'swap_in_source_img': False, 'swap_in_gen_img': True, 'log_level': 1,
                 'gender_detect_source': 0, 'gender_detect_target': 0, 'save_original': False, 'codeformer_weight': 0.8, 'source_img_hash_check': False, 'target_img_hash_check': False, 'system': 'CUDA',
                 'face_mask_correction': True, 'source_type': 0, 'face_model': '', 'source_folder': '', 'multiple_source_images': None, 'random_img': True, 'force_upscale': True, 'threshold': 0.6, 'max_faces': 2, 'tab_single': None}}
-            if sd.client:
-                log.info('"ReActor" extension support is enabled and active.')
 
+    def print_sd_extensions(self):
+        if not sd.client:
+            return
+        extensions:dict = config.sd['extensions']
+        forge_clients = ['SD WebUI Forge', 'SD WebUI ReForge']
+        if extensions.get('controlnet_enabled'):
+            log.info('"ControlNet" extension support is enabled and active.')
+        if extensions.get('forgecouple_enabled'):
+            log.info('"Forge Couple" extension support is enabled and active.')
+            if sd.client != 'SD WebUI Forge':
+                log.warning(f'"Forge Couple" is not known to be compatible with "{sd.client}". If you experience errors, disable this extension in config.yaml')
+        if extensions.get('layerdiffuse_enabled'):
+            log.info('"layerdiffuse" extension support is enabled and active.')
+            if sd.client != 'SD WebUI Forge':
+                log.warning(f'"layerdiffuse" is not known to be compatible with "{sd.client}". If you experience errors, disable this extension in config.yaml')
+        if extensions.get('reactor_enabled'):
+            log.info('"ReActor" extension support is enabled and active.')
 
 class LLMContext(SettingsBase):
     def __init__(self):
@@ -6492,7 +6510,11 @@ class Settings(BaseFileMemory):
         if (not self._guild_id) or last_guild_settings:
             data = load_file(self._fp, {}, missing_okay=self._missing_okay)
             self.init_settings(data)
-            self.imgmodel.init_sd_extensions() # Modifies ImgModel depending on current SD extension config
+            # Modifies ImgModel depending on current SD extension config
+            self.imgmodel.init_sd_extensions()
+            # Only print message for bot_settings instance
+            if (not self._guild_id):
+                self.imgmodel.print_sd_extensions()
         # Initialize new guild settings from current bot_settings
         else:
             log.info(f'[Per Server Settings] Initializing "{self._guild_name}" with copy of your main settings.')

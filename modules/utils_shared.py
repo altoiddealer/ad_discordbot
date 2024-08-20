@@ -97,6 +97,9 @@ class Config(BaseFileMemory):
         if self.is_per_server:
             return self.per_server_settings.get('per_server_characters', False)
         return False
+    
+    def is_per_server_imgmodels(self):
+        return self.per_server_settings.get('per_server_imgmodel_settings', False)
 
     def run_migration(self):
         _old_active = os.path.join(shared_path.dir_root, 'config.py')
