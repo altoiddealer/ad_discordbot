@@ -2,13 +2,16 @@ import asyncio
 import os
 import re
 from shutil import copyfile
+from modules.utils_files import load_file
+from modules.utils_misc import fix_dict
 
 from modules.logs import import_track, get_logger; import_track(__file__, fp=True); log = get_logger(__name__)  # noqa: E702
 logging = log
 
 task_processing = asyncio.Event()
-
 bg_task_queue = asyncio.Queue()
+flows_queue = asyncio.Queue()
+flows_event = asyncio.Event()
 
 class SharedPath:
 
@@ -36,7 +39,8 @@ class SharedPath:
 
     # Internal
     dir_internal = init_shared_paths(dir_root, 'internal', 'persistent settings not intended to be modified by users')
-    active_settings = os.path.join(dir_internal, 'activesettings.yaml')
+    dir_internal_settings = init_shared_paths(dir_internal, 'settings', 'more persistent settings not intended to be modified by users')
+    active_settings = os.path.join(dir_internal_settings, 'activesettings.yaml')
     starboard = os.path.join(dir_internal, 'starboard_messages.yaml')
     database = os.path.join(dir_internal, 'database.yaml')
     statistics = os.path.join(dir_internal, 'statistics.yaml')
@@ -55,7 +59,56 @@ class SharedPath:
     # Wildcards
     dir_wildcards = init_shared_paths(dir_root, 'wildcards', "wildcard files for Dynamic Prompting feature. Refer to the bot's wiki on GitHub for more information.")
 
+    # User images
+    dir_user_images = init_shared_paths(dir_root, 'user_images', "Images that the user may use for various bot functions.")
+
 shared_path = SharedPath()
+
+from modules.database import BaseFileMemory
+
+class Config(BaseFileMemory):
+    def __init__(self) -> None:
+        self.discord: dict
+        self.per_server_settings: dict
+        self.dynamic_prompting_enabled: bool
+        self.textgenwebui: dict
+        self.sd: dict
+        super().__init__(shared_path.config, version=2, missing_okay=True)
+        self.fix_config()
+
+    def load_defaults(self, data: dict):
+        self.discord = data.pop('discord', {})
+        self.per_server_settings = data.pop('per_server_settings', {})
+        self.dynamic_prompting_enabled = data.pop('dynamic_prompting_enabled', True)
+        self.textgenwebui = data.pop('textgenwebui', {})
+        self.sd = data.pop('sd', {})
+
+    def fix_config(self):
+        config_dict = self.get_vars()
+        # Load the template config
+        config_template = load_file(shared_path.config_template, {})
+        # Update the user config with any missing values from the template
+        fix_dict(config_dict, config_template, 'config.yaml')
+
+    def is_per_server(self):
+        return self.per_server_settings.get('enabled', False)
+    
+    def is_per_character(self):
+        if self.is_per_server:
+            return self.per_server_settings.get('per_server_characters', False)
+        return False
+    
+    def is_per_server_imgmodels(self):
+        return self.per_server_settings.get('per_server_imgmodel_settings', False)
+
+    def run_migration(self):
+        _old_active = os.path.join(shared_path.dir_root, 'config.py')
+        self._migrate_from_file(_old_active, load=True)
+
+    def discord_dm_setting(self, key, default=None):
+        return self.get('discord', {}).get('direct_messages', {}).get(key, default)
+
+config = Config()
 
 class SharedRegex: # Search for [ (]r['"] in vscode
     braces = re.compile(r'{{([^{}]+?)}}(?=[^\w$:]|$$|$)') # {{this syntax|separate items can be divided|another item}}
@@ -98,9 +151,6 @@ class SharedRegex: # Search for [ (]r['"] in vscode
         return True
 
 patterns = SharedRegex()
-
-from modules.database import Config
-config = Config()
 
 class SharedBotEmojis:
     hidden_emoji = config.discord.get('history_reactions', {}).get('hidden_emoji', '🙈')

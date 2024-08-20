@@ -1,7 +1,6 @@
 from pathlib import Path
 import json
 import yaml
-from modules.utils_shared import shared_path
 import os
 
 from modules.logs import import_track, get_logger; import_track(__file__, fp=True); log = get_logger(__name__)  # noqa: E702
@@ -38,6 +37,7 @@ def load_file(file_path, default=None, missing_okay=False):
         return default
 
 def merge_base(newsettings, basekey):
+    from modules.utils_shared import shared_path
     def deep_update(original, update):
         for key, value in update.items():
             if isinstance(value, dict) and key in original and isinstance(original[key], dict):

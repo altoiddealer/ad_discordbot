@@ -1,5 +1,8 @@
 from math import sqrt
 
+from modules.utils_files import load_file
+from modules.utils_shared import shared_path
+
 from modules.logs import import_track, get_logger; import_track(__file__, fp=True); log = get_logger(__name__)  # noqa: E702
 logging = log
 
@@ -29,6 +32,12 @@ def avg_from_dims(w, h):
     if (w + h) % 2 != 0:
         avg += 1
     return avg
+
+def init_avg_from_dims():
+    base_settings = load_file(shared_path.base_settings, {})
+    w = base_settings.get('imgmodel', {}).get('payload', {}).get('width', 512)
+    h = base_settings.get('imgmodel', {}).get('payload', {}).get('height', 512)
+    return avg_from_dims(w, h)
 
 def get_aspect_ratio_parts(ratio):
     try:
