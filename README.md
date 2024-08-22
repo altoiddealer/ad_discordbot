@@ -24,6 +24,17 @@
 <details>
   <summary>click to expand</summary>
 
+   **08/19/2024:** Major User Settings Enhancement: **Per-Server Settings!**
+
+   There is now an option to enable "Per-Server" settings:
+
+   - Settings for new servers will be initialized as a copy of the "main" settings
+   - All settings are managed separately (*EXCLUDING* `config.yaml`)
+   - There are sub-options for "per-character settings" and "per-server ImdModels"
+   - Note that `basesettings.yaml` applies to ALL settings.
+   
+  ---
+
    **08/12/2024:** New **/prompt** command! Enhanced **Post Active Settings** feature!
 
    There is now a **/prompt** command to add some advanced options to your message request.
