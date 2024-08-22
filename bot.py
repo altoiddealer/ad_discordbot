@@ -275,15 +275,24 @@ class TTS:
     # runs from TGWUI() class
     def init_tts_extensions(self):
         # Get any supported TTS client found in TGWUI CMD_FLAGS
+        fallback_client = None
         for extension in shared.args.extensions:
+            extension:str
             if extension in self.supported_clients:
                 self.client = extension
                 break
+            elif extension.endswith('_tts'):
+                fallback_client = extension
+        if fallback_client and not self.client:
+            log.warning(f'tts client "{fallback_client}" was included in launch params, but is not yet confirmed to work.')
+            log.warning(f'List of supported tts_clients: {self.supported_clients}')
+            log.warning(f'Enabling "{fallback_client}", but there could be issues.')
+            self.client = fallback_client
 
         # If any TTS extension defined in config.yaml, set tts bot vars and add extension to shared.args.extensions
         if self.client:
             if self.client not in self.supported_clients:
-                log.warning(f'tts client "{self.client}" is not yet confirmed to be work. The "/speak" command will not be registered. List of supported tts_clients: {self.supported_clients}')
+                log.warning(f'The "/speak" command will not be registered for "{self.client}".')
             self.enabled = True
             self.api_key = self.settings.get('api_key', None)
             if self.client == 'alltalk_tts':
@@ -997,17 +1006,17 @@ class VoiceClients:
         except Exception as e:
             log.error(f'[Voice Clients] An error occurred while toggling voice channel for guild ID "{guild_id}": {e}')
 
-    async def voice_channel(self, guild_id:discord.Guild, vc_setting):
+    async def voice_channel(self, guild_id:int, vc_setting:bool=True):
         try:
             # Start voice client if configured, and not explicitly deactivated in character settings
-            if not self.guild_vcs.get(guild_id) and (vc_setting is None or vc_setting) and int(tts.settings.get('play_mode', 0)) != 1:
+            if tts.enabled and vc_setting == True and int(tts.settings.get('play_mode', 0)) != 1 and not self.guild_vcs.get(guild_id):
                 try:
-                    if tts.enabled and tts.client and tts.client in shared.args.extensions:
+                    if tts.client and tts.client in shared.args.extensions:
                         await self.toggle_voice_client(guild_id, 'enabled')
                     else:
                         if not bot_database.was_warned('char_tts'):
                             bot_database.update_was_warned('char_tts')
-                            log.warning('Character "use_voice_channel" = True, and "voice channel" is specified in config.yaml, but no "tts_client" is specified in config.yaml')
+                            log.warning('[Voice Clients] No "tts_client" is specified in config.yaml')
                 except Exception as e:
                     log.error(f"[Voice Clients] An error occurred while connecting to voice channel: {e}")
             # Stop voice client if explicitly deactivated in character settings
@@ -1120,11 +1129,14 @@ async def set_server_voice_channel(ctx: commands.Context, channel: Optional[disc
     bot_database.update_voice_channels(ctx.guild.id, channel.id)
     await ctx.send(f"Voice channel for **{ctx.guild}** set to **{channel.name}**.", delete_after=5)
 
-if tgwui.enabled and tts.client:
+if tgwui.enabled:
     # Register command for helper function to toggle TTS
     @client.hybrid_command(description='Toggles TTS on/off')
     @guild_only()
     async def toggle_tts(ctx: commands.Context):
+        if not tts.client:
+            await ctx.reply('No TTS client is configured, so the TTS setting cannot be toggled.', ephemeral=True, delete_after=5)
+            return
         await ireply(ctx, 'toggle TTS') # send a response msg to the user
         # offload to TaskManager() queue
         log.info(f'{ctx.author.display_name} used "/toggle_tts"')
@@ -5053,6 +5065,7 @@ async def character_loader(char_name, settings:"Settings", guild_id:int|None=Non
 
         # Gather context specific keys from the character data
         char_llmcontext = {}
+        use_voice_channels = True
         for key, value in char_data.items():
             if key == 'extensions' and isinstance(value, dict):
                 if not tts.enabled:
@@ -5062,12 +5075,14 @@ async def character_loader(char_name, settings:"Settings", guild_id:int|None=Non
                 await tgwui.update_extensions(value)
                 char_llmcontext['extensions'] = value
             elif key == 'use_voice_channel':
-                for vc_guild_id in bot_database.voice_channels:
-                    await voice_clients.voice_channel(vc_guild_id, value)
+                use_voice_channels:bool = value
                 char_llmcontext['use_voice_channel'] = value
             elif key == 'tags':
                 value = base_tags.update_tags(value) # Unpack any tag presets
                 char_llmcontext['tags'] = value
+        # Connect to voice channels
+        for vc_guild_id in bot_database.voice_channels:
+            await voice_clients.voice_channel(vc_guild_id, value)
         # Merge llmcontext data and extra data
         char_llmcontext.update(textgen_data)
         # Update stored database / shared.settings values for character
