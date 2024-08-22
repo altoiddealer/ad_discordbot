@@ -2336,6 +2336,13 @@ class TaskProcessing(TaskAttributes):
                 # Delete all 'controlnet' keys if disabled by config
                 if not extensions.get('controlnet_enabled'):
                     del alwayson_scripts['controlnet']
+                # Delete inactive controlnets
+                for index, cnet_module in enumerate(copy.deepcopy(alwayson_scripts['controlnet']['args'])):
+                    cnet_enabled = cnet_module.get('enabled', False)
+                    if not cnet_enabled:
+                        del alwayson_scripts['controlnet']['args'][index]
+                if not alwayson_scripts['controlnet']['args']:
+                    del alwayson_scripts['controlnet']
             # Clean Forge Couple
             if alwayson_scripts.get('forge_couple'):
                 # Delete all 'forge_couple' keys if disabled by config
@@ -2365,7 +2372,7 @@ class TaskProcessing(TaskAttributes):
                 self.img_payload['denoising_strength'] = None
 
             # Fix SD Client compatibility for sampler names / schedulers
-            sampler_name = self.img_payload.get('sampler_name', '')
+            sampler_name:str = self.img_payload.get('sampler_name', '')
             if sampler_name:
                 known_schedulers = [' uniform', ' karras', ' exponential', ' polyexponential', ' sgm uniform']
                 for value in known_schedulers:
@@ -2459,7 +2466,7 @@ class TaskProcessing(TaskAttributes):
             if face_swap:
                 self.img_payload['alwayson_scripts']['reactor']['args']['image'] = face_swap # image in base64 format
                 self.img_payload['alwayson_scripts']['reactor']['args']['enabled'] = True # Enable
-            if controlnet: 
+            if controlnet:
                 self.img_payload['alwayson_scripts']['controlnet']['args'][0].update(controlnet)
         except Exception as e:
             log.error(f"Error initializing imgcmd params: {e}")
