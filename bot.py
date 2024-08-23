@@ -1513,6 +1513,7 @@ class TaskProcessing(TaskAttributes):
             self.llm_payload['state']['name2'] = char_data.get('name', 'AI')
             self.llm_payload['state']['character_menu'] = char_data.get('name', 'AI')
             self.llm_payload['state']['context'] = char_data.get('context', '')
+            setattr(self.params, 'impersonated_by', char_name)
             await self.fix_llm_payload() # Add any missing required information
         except Exception as e:
             log.error(f"An error occurred while loading the file for swap_character: {e}")
@@ -1810,6 +1811,10 @@ class TaskProcessing(TaskAttributes):
                 self.bot_hmessage.mark_as_regeneration_for(self.params.regenerated)
             if self.params.bot_hmsg_hidden or self.params.save_to_history == False:
                 self.bot_hmessage.update(hidden=True)
+            imposter_name = getattr(self.params, 'impersonated_by', None)
+            if imposter_name:
+                self.bot_hmessage.update(impersonated_by=imposter_name)
+
             if is_direct_message(self.ictx):
                 self.bot_hmessage.dont_save()
 
