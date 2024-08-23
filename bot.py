@@ -2328,44 +2328,67 @@ class TaskProcessing(TaskAttributes):
             processed_negative_prompt = ', '.join(unique_values_list)
             self.img_payload['negative_prompt'] = processed_negative_prompt
 
-            # Clean up extension keys
+            ## Clean up extension keys
+            # get alwayson_scripts dict
             extensions = config.sd['extensions']
-            alwayson_scripts = self.img_payload.get('alwayson_scripts', {})
+            alwayson_scripts:dict = self.img_payload.get('alwayson_scripts', {})
             # Clean ControlNet
             if alwayson_scripts.get('controlnet'):
-                # Delete all 'controlnet' keys if disabled by config
+                # Delete all 'controlnet' keys if disabled
                 if not extensions.get('controlnet_enabled'):
                     del alwayson_scripts['controlnet']
+                else:
+                    # Delete all 'controlnet' keys if empty
+                    if not alwayson_scripts['controlnet']['args']:
+                        del alwayson_scripts['controlnet']
+                    # Compatibility fix for 'resize_mode' and 'control_mode'
+                    else:
+                        for index, cnet_module in enumerate(copy.deepcopy(alwayson_scripts['controlnet']['args'])):
+                            cnet_enabled = cnet_module.get('enabled', False)
+                            if not cnet_enabled:
+                                del alwayson_scripts['controlnet']['args'][index]
+                            resize_mode = cnet_module.get('resize_mode')
+                            if resize_mode and isinstance(resize_mode, int):
+                                resize_mode_string = 'Just Resize' if resize_mode == 0 else 'Crop and Resize' if resize_mode == 1 else 'Resize and Fill'
+                                alwayson_scripts['controlnet']['args'][index]['resize_mode'] = resize_mode_string
+                            control_mode = cnet_module.get('control_mode')
+                            if control_mode and isinstance(control_mode, int):
+                                cnet_mode_str = 'Balanced' if control_mode == 0 else 'My prompt is more important' if control_mode == 1 else 'ControlNet is more important'
+                                alwayson_scripts['controlnet']['args'][index]['control_mode'] = cnet_mode_str
             # Clean Forge Couple
             if alwayson_scripts.get('forge_couple'):
                 # Delete all 'forge_couple' keys if disabled by config
                 if not extensions.get('forgecouple_enabled') or self.img_payload.get('init_images'):
                     del alwayson_scripts['forge_couple']
                 else:
+                    # convert dictionary to list
                     if isinstance(self.img_payload['alwayson_scripts']['forge_couple']['args'], dict):
-                        self.img_payload['alwayson_scripts']['forge_couple']['args'] = list(self.img_payload['alwayson_scripts']['forge_couple']['args'].values()) # convert dictionary to list
-                    self.img_payload['alwayson_scripts']['forge couple'] = self.img_payload['alwayson_scripts'].pop('forge_couple') # Add the required space between "forge" and "couple" ("forge couple")
+                        self.img_payload['alwayson_scripts']['forge_couple']['args'] = list(self.img_payload['alwayson_scripts']['forge_couple']['args'].values())
+                    # Add the required space between "forge" and "couple" ("forge couple")
+                    self.img_payload['alwayson_scripts']['forge couple'] = self.img_payload['alwayson_scripts'].pop('forge_couple')
             # Clean layerdiffuse
             if alwayson_scripts.get('layerdiffuse'):
                 # Delete all 'layerdiffuse' keys if disabled by config
                 if not extensions.get('layerdiffuse_enabled'):
                     del alwayson_scripts['layerdiffuse']
+                # convert dictionary to list
                 elif isinstance(self.img_payload['alwayson_scripts']['layerdiffuse']['args'], dict):
-                    self.img_payload['alwayson_scripts']['layerdiffuse']['args'] = list(self.img_payload['alwayson_scripts']['layerdiffuse']['args'].values()) # convert dictionary to list
+                    self.img_payload['alwayson_scripts']['layerdiffuse']['args'] = list(self.img_payload['alwayson_scripts']['layerdiffuse']['args'].values())
             # Clean ReActor
             if alwayson_scripts.get('reactor'):
                 # Delete all 'reactor' keys if disabled by config
                 if not extensions.get('reactor_enabled'):
                     del alwayson_scripts['reactor']
+                # convert dictionary to list
                 elif isinstance(self.img_payload['alwayson_scripts']['reactor']['args'], dict):
-                    self.img_payload['alwayson_scripts']['reactor']['args'] = list(self.img_payload['alwayson_scripts']['reactor']['args'].values()) # convert dictionary to list
+                    self.img_payload['alwayson_scripts']['reactor']['args'] = list(self.img_payload['alwayson_scripts']['reactor']['args'].values())
 
             # Workaround for denoising strength bug
             if not self.img_payload.get('enable_hr', False) and not self.img_payload.get('init_images', False):
                 self.img_payload['denoising_strength'] = None
 
             # Fix SD Client compatibility for sampler names / schedulers
-            sampler_name = self.img_payload.get('sampler_name', '')
+            sampler_name:str = self.img_payload.get('sampler_name', '')
             if sampler_name:
                 known_schedulers = [' uniform', ' karras', ' exponential', ' polyexponential', ' sgm uniform']
                 for value in known_schedulers:
@@ -2459,7 +2482,7 @@ class TaskProcessing(TaskAttributes):
             if face_swap:
                 self.img_payload['alwayson_scripts']['reactor']['args']['image'] = face_swap # image in base64 format
                 self.img_payload['alwayson_scripts']['reactor']['args']['enabled'] = True # Enable
-            if controlnet: 
+            if controlnet:
                 self.img_payload['alwayson_scripts']['controlnet']['args'][0].update(controlnet)
         except Exception as e:
             log.error(f"Error initializing imgcmd params: {e}")

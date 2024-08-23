@@ -43,6 +43,7 @@ imgmodel:
     sampler_name: "DPM++ 2M"
     scheduler: karras
     steps: 30
+    distilled_cfg_scale: 3.5
     cfg_scale: 7
     height: 896
     width: 1152
