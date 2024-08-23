@@ -5145,7 +5145,7 @@ async def delayed_profile_update(display_name, avatar_fp, remaining_cooldown, gu
                 await client.user.edit(avatar=avatar)
                 bot_settings.set_last_setting_for("last_avatar", avatar_fp, guild_id=guild_id, save_now=True)
 
-        log.info(f"Updated discord client profile: (display name: {display_name}; Avatar: {'Updated' if avatar else 'Unchanged'}).")
+        log.info(f"Updated discord client profile: (display name: {display_name}; Avatar: {'Updated' if avatar_fp else 'Unchanged'}).")
         log.info("Profile can be updated again in 10 minutes.")
         bot_settings.set_last_setting_for("last_change", time.time(), guild_id=guild_id)
     except Exception as e:
