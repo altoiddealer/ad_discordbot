@@ -674,13 +674,13 @@ class History:
 
     ###########
     # Rendering
-    def render_to_tgwui_tuple(self): # TODO create caching by storing event and clearing on render. - For Reality
+    def render_to_tgwui_tuple(self, include_hidden=False): # TODO create caching by storing event and clearing on render. - For Reality
         internal = []
         visible = []
         current_pair = HistoryPairForTGWUI()
 
         for message in self._items:
-            if message.hidden:
+            if message.hidden and not include_hidden:
                 continue
             
             if message.role == 'user':

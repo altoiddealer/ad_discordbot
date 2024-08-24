@@ -1520,20 +1520,21 @@ class TaskProcessing(TaskAttributes):
 
     async def process_llm_payload_tags(self:Union["Task","Tasks"], mods:dict):
         try:
-            char_params: dict        = {}
-            begin_reply_with: str    = mods.get('begin_reply_with', None)
-            flow: dict               = mods.get('flow', None)
-            save_history: bool       = mods.get('save_history', None)
-            filter_history_for: list = mods.get('filter_history_for', None)
-            load_history: bool       = mods.get('load_history', None)
-            param_variances: dict    = mods.get('param_variances', {})
-            state: dict              = mods.get('state', {})
-            prefix_context: str      = mods.get('prefix_context', None)
-            suffix_context: str      = mods.get('suffix_context', None)
-            change_character: str    = mods.get('change_character', None)
-            swap_character: str      = mods.get('swap_character', None)
-            change_llmmodel: str     = mods.get('change_llmmodel', None)
-            swap_llmmodel: str       = mods.get('swap_llmmodel', None)
+            char_params: dict            = {}
+            begin_reply_with: str        = mods.get('begin_reply_with', None)
+            flow: dict                   = mods.get('flow', None)
+            save_history: bool           = mods.get('save_history', None)
+            filter_history_for: list     = mods.get('filter_history_for', None)
+            load_history: bool           = mods.get('load_history', None)
+            include_hidden_history: bool = mods.get('include_hidden_history', None)
+            param_variances: dict        = mods.get('param_variances', {})
+            state: dict                  = mods.get('state', {})
+            prefix_context: str          = mods.get('prefix_context', None)
+            suffix_context: str          = mods.get('suffix_context', None)
+            change_character: str        = mods.get('change_character', None)
+            swap_character: str          = mods.get('swap_character', None)
+            change_llmmodel: str         = mods.get('change_llmmodel', None)
+            swap_llmmodel: str           = mods.get('swap_llmmodel', None)
 
             # Begin reply with handling
             if begin_reply_with is not None:
@@ -1548,14 +1549,18 @@ class TaskProcessing(TaskAttributes):
             # History handling
             if save_history is not None:
                 self.params.save_to_history = save_history # save_to_history
-            if filter_history_for is not None or load_history is not None:
+            if filter_history_for is not None or load_history is not None or include_hidden_history is not None:
                 history_to_render = self.local_history
+                include_hidden = False
                 # Filter history
                 if filter_history_for is not None:
                     history_to_render = self.local_history.get_filtered_history_for(names_list=filter_history_for)
                     log.info(f"[TAGS] History is being filtered for: {filter_history_for}")
+                # Include hidden history
+                if include_hidden_history:
+                    include_hidden = True
                 # Render history for payload
-                i_list, v_list = history_to_render.render_to_tgwui_tuple()
+                i_list, v_list = history_to_render.render_to_tgwui_tuple(include_hidden)
                 # Factor load history tag
                 if load_history is not None:
                     if load_history <= 0:
@@ -1628,6 +1633,7 @@ class TaskProcessing(TaskAttributes):
         formatting = {}
         try:
             for tag in self.tags.matches:
+                tag:dict
                 # Values that will only apply from the first tag matches
                 if 'begin_reply_with' in tag and not llm_payload_mods.get('begin_reply_with'):
                     llm_payload_mods['begin_reply_with'] = tag.pop('begin_reply_with')
@@ -1637,6 +1643,8 @@ class TaskProcessing(TaskAttributes):
                     llm_payload_mods['save_history'] = bool(tag.pop('save_history'))
                 if 'load_history' in tag and not llm_payload_mods.get('load_history'):
                     llm_payload_mods['load_history'] = int(tag.pop('load_history'))
+                if 'include_hidden_history' in tag and not llm_payload_mods.get('include_hidden_history'):
+                    llm_payload_mods['include_hidden_history'] = bool(tag.pop('include_hidden_history'))
                     
                 # change_character is higher priority, if added ignore swap_character
                 if 'change_character' in tag and not is_direct_message(self.ictx) and not (llm_payload_mods.get('change_character') or llm_payload_mods.get('swap_character')):
