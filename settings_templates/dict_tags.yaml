@@ -219,6 +219,7 @@ tag_presets:
 #   filter_history_for: 'string'      Applies before other "history" tags. Filters the history based on the name of a user or a (character/swap character). Includes the user/assistant exchange for matched items.
 #   load_history: 0                   0 = default (all history included) / -1 = prompt excludes chat history / > 1 = llm only sees this many recent exchanges.
 #   save_history: (true/false)        Whether to save this interaction to history or not.
+#   include_hidden_history: (true/false) If true, the history for this interaction will include ones previously hidden via 'save_history' tag, or toggled off via 'toggle as hidden' App Command
 #   state: {dictionary}               Update values for textgen-webui state parameters. Must be formatted as a dictionary.
 #   prefix_context: 'string'          Inserts text immediately before the 'context', joined by \n (new line). Multiple can accumulate.
 #   suffix_context: 'string'          Inserts text immediately after the 'context', joined by \n (new line). Multiple can accumulate.
