@@ -497,12 +497,13 @@ class History:
         return self
 
 
-    def append(self, message: HMessage):
+    def append(self, message: HMessage, save=True):
         assert isinstance(message, HMessage), f'History.append expected {HMessage} type, got {type(message)}'
         
         self._items.append(message)
         self._last[message.author_id] = message
-        self.event_save.set()
+        if save:
+            self.event_save.set()
         return self
 
 
@@ -551,7 +552,7 @@ class History:
         return message
 
     
-    def role_messages(self, role, is_hidden=None) -> list[HMessage]:
+    def role_messages(self, role:str, is_hidden=None) -> list[HMessage]:
         '''
         If is_hidden is left None, it will return both hidden and visible.
         False: return only visible
@@ -568,11 +569,7 @@ class History:
             
         return output
     
-    def get_history_pair_from_msg_id(self, message_id: MessageID, user_hmsg_attr:str='reply_to', bot_hmsg_list_attr:str='replies'):
-        hmessage: Optional[HMessage] = self.search(lambda m: m.id == message_id or message_id in m.related_ids)
-        if not hmessage:
-            return None, None
-
+    def get_history_pair(self, hmessage:"HMessage", user_hmsg_attr:str='reply_to', bot_hmsg_list_attr:str='replies'):
         if hmessage.role == 'assistant':
             user_hmessage = getattr(hmessage, user_hmsg_attr)
             if not user_hmessage:
@@ -583,21 +580,25 @@ class History:
         elif hmessage.role == 'user':
             user_hmessage = hmessage
             bot_hmessage = None
+            # Collect bot HMessage candidates
             bot_hmessage_list = [m for m in getattr(hmessage, bot_hmsg_list_attr) if m.role == 'assistant']
             if not bot_hmessage_list:
                 bot_hmessage_list = [m for m in hmessage.replies if m.role == 'assistant']
-            bot_hmessage = bot_hmessage_list[-1]
+            # select first non-hidden bot HMessage
+            if not user_hmessage.hidden:
+                for bot_hmsg in bot_hmessage_list:
+                    if not bot_hmsg.hidden:
+                        bot_hmessage = bot_hmsg
+                        break
+            # select first bot HMessage
+            if not bot_hmessage:
+                bot_hmessage = bot_hmessage_list[-1]
             return user_hmessage, bot_hmessage
 
         else:
             raise Exception(f'Unknown HMessage role: {hmessage.role}, should match [user/assistant]')
-        
-        
-    def get_history_pair_from_msg_id_as_list(self, message_id: MessageID):
-        hmessage: Optional[HMessage] = self.search(lambda m: m.id == message_id or message_id in m.related_ids)
-        if not hmessage:
-            return [], []
 
+    def get_history_pair_as_list(self, hmessage:"HMessage"):
         if hmessage.role == 'assistant':
             user_hmessage = hmessage.reply_to
             bot_hmessage = hmessage
@@ -612,7 +613,29 @@ class History:
         else:
             raise Exception(f'Unknown HMessage role: {hmessage.role}, should match [user/assistant]')
 
-    
+    def get_history_pair_from_msg_id(self, message_id: MessageID, user_hmsg_attr:str='reply_to', bot_hmsg_list_attr:str='replies'):
+        hmessage: Optional[HMessage] = self.search(lambda m: m.id == message_id or message_id in m.related_ids)
+        if not hmessage:
+            return None, None
+        return self.get_history_pair(self, hmessage, user_hmsg_attr, bot_hmsg_list_attr)
+
+    def get_history_pair_from_msg_id_as_list(self, message_id: MessageID):
+        hmessage: Optional[HMessage] = self.search(lambda m: m.id == message_id or message_id in m.related_ids)
+        if not hmessage:
+            return [], []
+        return self.get_history_pair_as_list(hmessage)
+
+    def get_filtered_history_for(self, names_list:list, search=['name', 'impersonated_by']):
+        filtered_history = self.fresh()
+        for hmessage in self._items:
+            # Check if any attribute in 'search' contains a name from 'names_list'
+            if hmessage not in filtered_history._items and any(getattr(hmessage, key, None) in names_list for key in search):
+                user_hmessage, bot_hmessage = self.get_history_pair(hmessage)
+                filtered_history.append(user_hmessage, save=False)
+                filtered_history.append(bot_hmessage, save=False)
+
+        return filtered_history
+
     def remove_bot_mention_from_message(self, message:Optional[HMessage], input_text:str=''):
         output_text = input_text
         mention_in_message = None
@@ -622,6 +645,7 @@ class History:
             output_text = patterns.mention_prefix.sub('', output_text).strip()
         return output_text
     
+
     def search(self, predicate):
         return find(predicate, self._items)
     

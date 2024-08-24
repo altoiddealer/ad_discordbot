@@ -1519,19 +1519,20 @@ class TaskProcessing(TaskAttributes):
 
     async def process_llm_payload_tags(self:Union["Task","Tasks"], mods:dict):
         try:
-            char_params: dict       = {}
-            begin_reply_with: str   = mods.get('begin_reply_with', None)
-            flow: dict              = mods.get('flow', None)
-            save_history: bool      = mods.get('save_history', None)
-            load_history: bool      = mods.get('load_history', None)
-            param_variances: dict   = mods.get('param_variances', {})
-            state: dict             = mods.get('state', {})
-            prefix_context: str     = mods.get('prefix_context', None)
-            suffix_context: str     = mods.get('suffix_context', None)
-            change_character: str   = mods.get('change_character', None)
-            swap_character: str     = mods.get('swap_character', None)
-            change_llmmodel: str    = mods.get('change_llmmodel', None)
-            swap_llmmodel: str      = mods.get('swap_llmmodel', None)
+            char_params: dict        = {}
+            begin_reply_with: str    = mods.get('begin_reply_with', None)
+            flow: dict               = mods.get('flow', None)
+            save_history: bool       = mods.get('save_history', None)
+            filter_history_for: list = mods.get('filter_history_for', None)
+            load_history: bool       = mods.get('load_history', None)
+            param_variances: dict    = mods.get('param_variances', {})
+            state: dict              = mods.get('state', {})
+            prefix_context: str      = mods.get('prefix_context', None)
+            suffix_context: str      = mods.get('suffix_context', None)
+            change_character: str    = mods.get('change_character', None)
+            swap_character: str      = mods.get('swap_character', None)
+            change_llmmodel: str     = mods.get('change_llmmodel', None)
+            swap_llmmodel: str       = mods.get('swap_llmmodel', None)
 
             # Begin reply with handling
             if begin_reply_with is not None:
@@ -1546,22 +1547,28 @@ class TaskProcessing(TaskAttributes):
             # History handling
             if save_history is not None:
                 self.params.save_to_history = save_history # save_to_history
-            if load_history is not None:
-                if load_history <= 0:
-                    self.llm_payload['state']['history']['internal'] = []
-                    self.llm_payload['state']['history']['visible'] = []
-                    log.info("[TAGS] History is being ignored")
-                    
-                elif load_history > 0:
-                    history_char, history_mode = get_char_mode_for_history(settings=self.settings)
-                    i_list, v_list = bot_history.get_history_for(self.ictx.channel.id, history_char, history_mode).render_to_tgwui_tuple()
-
-                    # Calculate the number of items to retain (up to the length of history)
-                    num_to_retain = min(load_history, len(i_list))
-                    self.llm_payload['state']['history']['internal'] = i_list[-num_to_retain:]
-                    self.llm_payload['state']['history']['visible'] = v_list[-num_to_retain:]
-                    log.info(f'[TAGS] History is being limited to previous {load_history} exchanges')
-                    
+            if filter_history_for is not None or load_history is not None:
+                history_to_render = self.local_history
+                # Filter history
+                if filter_history_for is not None:
+                    history_to_render = self.local_history.get_filtered_history_for(names_list=filter_history_for)
+                    log.info(f"[TAGS] History is being filtered for: {filter_history_for}")
+                # Render history for payload
+                i_list, v_list = history_to_render.render_to_tgwui_tuple()
+                # Factor load history tag
+                if load_history is not None:
+                    if load_history <= 0:
+                        i_list, v_list = [], []
+                        log.info("[TAGS] History is being ignored")
+                    else:
+                        # Calculate the number of items to retain (up to the length of history)
+                        num_to_retain = min(load_history, len(i_list))
+                        i_list, v_list = i_list[-num_to_retain:], v_list[-num_to_retain:]
+                # Apply history changes
+                self.llm_payload['state']['history']['internal'] = i_list
+                self.llm_payload['state']['history']['visible'] = v_list
+                log.info(f'[TAGS] History is being limited to previous {load_history} exchanges')
+            # Payload param variances
             if param_variances:
                 processed_params = self.process_param_variances(param_variances)
                 log.info(f'[TAGS] LLM Param Variances: {processed_params}')
@@ -1643,6 +1650,9 @@ class TaskProcessing(TaskAttributes):
                     llm_payload_mods['swap_llmmodel'] = str(tag.pop('swap_llmmodel'))
                     
                 # Values that may apply repeatedly
+                if 'filter_history_for' in tag:
+                    llm_payload_mods.setdefault('filter_history_for', [])
+                    llm_payload_mods['filter_history_for'].append(tag.pop('filter_history_for'))
                 if 'prefix_context' in tag:
                     llm_payload_mods.setdefault('prefix_context', [])
                     llm_payload_mods['prefix_context'].append(tag.pop('prefix_context'))
