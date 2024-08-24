@@ -617,7 +617,7 @@ class History:
         hmessage: Optional[HMessage] = self.search(lambda m: m.id == message_id or message_id in m.related_ids)
         if not hmessage:
             return None, None
-        return self.get_history_pair(self, hmessage, user_hmsg_attr, bot_hmsg_list_attr)
+        return self.get_history_pair(hmessage, user_hmsg_attr, bot_hmsg_list_attr)
 
     def get_history_pair_from_msg_id_as_list(self, message_id: MessageID):
         hmessage: Optional[HMessage] = self.search(lambda m: m.id == message_id or message_id in m.related_ids)
