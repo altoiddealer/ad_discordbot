@@ -115,6 +115,7 @@ class HMessage:
     text: str                           = field(default='', metadata=cnf())
     role: Optional[str]                 = field(default=None, metadata=cnf())
     author_id: Optional[UserID]         = field(default=None, metadata=cnf())
+    impersonated_by: Optional[str]      = field(default=None, metadata=cnf())
 
     replies: list['HMessage']           = field(default_factory=list,   metadata=cnf(dont_save=True))
     reply_to: Optional['HMessage']      = field(default=None,           metadata=cnf(encoder=cls_get_id, decoder=str))
