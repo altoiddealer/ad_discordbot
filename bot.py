@@ -2362,6 +2362,7 @@ class TaskProcessing(TaskAttributes):
                             cnet_enabled = cnet_module.get('enabled', False)
                             if not cnet_enabled:
                                 del alwayson_scripts['controlnet']['args'][index]
+                                continue
                             resize_mode = cnet_module.get('resize_mode')
                             if resize_mode and isinstance(resize_mode, int):
                                 resize_mode_string = 'Just Resize' if resize_mode == 0 else 'Crop and Resize' if resize_mode == 1 else 'Resize and Fill'
