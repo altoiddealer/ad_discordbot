@@ -353,7 +353,7 @@ class HMessage:
     
     
     def duplicate_history(self) -> 'History':
-        return copy.copy(self.history)
+        return copy.deepcopy(self.history)
         
     
     def new_history_end_here(self, include_self=True) -> Union['History', None]:
@@ -475,7 +475,7 @@ class History:
         '''
         Returns a copy of the history that is empty but keeps similar settings.
         '''
-        new = copy.copy(self)
+        new = copy.deepcopy(self)
         new._items = []
         new._last = {}
         log.debug(f'Created history template for: {self.id}')
@@ -628,12 +628,18 @@ class History:
 
     def get_filtered_history_for(self, names_list:list, search=['name', 'impersonated_by']):
         filtered_history = self.fresh()
+        seen_ids = set()
         for hmessage in self._items:
+            # Skip messages already filtered            
+            if hmessage.id in seen_ids:
+                continue
             # Check if any attribute in 'search' contains a name from 'names_list'
-            if hmessage not in filtered_history._items and any(getattr(hmessage, key, None) in names_list for key in search):
+            if any(getattr(hmessage, key, None) in names_list for key in search):
                 user_hmessage, bot_hmessage = self.get_history_pair(hmessage)
                 filtered_history.append(user_hmessage, save=False)
+                seen_ids.add(user_hmessage.id)
                 filtered_history.append(bot_hmessage, save=False)
+                seen_ids.add(bot_hmessage.id)
 
         return filtered_history
 

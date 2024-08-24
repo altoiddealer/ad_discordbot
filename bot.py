@@ -1565,10 +1565,10 @@ class TaskProcessing(TaskAttributes):
                         # Calculate the number of items to retain (up to the length of history)
                         num_to_retain = min(load_history, len(i_list))
                         i_list, v_list = i_list[-num_to_retain:], v_list[-num_to_retain:]
+                        log.info(f'[TAGS] History is being limited to previous {load_history} exchanges')
                 # Apply history changes
                 self.llm_payload['state']['history']['internal'] = i_list
                 self.llm_payload['state']['history']['visible'] = v_list
-                log.info(f'[TAGS] History is being limited to previous {load_history} exchanges')
             # Payload param variances
             if param_variances:
                 processed_params = self.process_param_variances(param_variances)
