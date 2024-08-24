@@ -1559,6 +1559,7 @@ class TaskProcessing(TaskAttributes):
                 # Include hidden history
                 if include_hidden_history:
                     include_hidden = True
+                    log.info(f"[TAGS] Any 'hidden' History is being included.")
                 # Render history for payload
                 i_list, v_list = history_to_render.render_to_tgwui_tuple(include_hidden)
                 # Factor load history tag
