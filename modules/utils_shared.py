@@ -64,7 +64,10 @@ class SharedPath:
 
 shared_path = SharedPath()
 
-from modules.database import BaseFileMemory
+# SharedPath() must initialize before BaseFileMemory() and Database()
+from modules.database import BaseFileMemory, Database
+
+bot_database = Database()
 
 class Config(BaseFileMemory):
     def __init__(self) -> None:
