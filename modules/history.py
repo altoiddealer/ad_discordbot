@@ -410,7 +410,7 @@ class HistoryPairForTGWUI:
         ])
         visible.append([
             user_text_visible,
-            (self.assistant.text_visible or self.assistant.text) if self.assistant else '',
+            str(self.assistant.text_visible or self.assistant.text) if self.assistant else '',
         ])
         return self
 

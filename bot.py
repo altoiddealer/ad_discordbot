@@ -836,7 +836,7 @@ class VoiceClients:
             if bot_hmessage:
                 bot_hmessage.update(audio_id=sent_message.id)
 
-    async def process_tts_resp(self, ictx:CtxInteraction, tts_resp:Optional[str]=None, bot_hmessage:Optional[HMessage]=None, is_dm:bool=False):
+    async def process_tts_resp(self, ictx:CtxInteraction, tts_resp:Optional[str]=None, bot_hmessage:Optional[HMessage]=None):
         play_mode = int(tts.settings.get('play_mode', 0))
         # Upload to interaction channel
         if play_mode > 0:
@@ -1166,7 +1166,7 @@ class TaskAttributes():
     img_prompt: str
     img_payload: dict
     last_resp: str
-    tts_resp: str
+    tts_resp: list
     user_hmessage: HMessage
     bot_hmessage: HMessage
     local_history: History
@@ -1188,6 +1188,9 @@ class TaskProcessing(TaskAttributes):
             spontaneous_messaging.tasks[self.channel.id] = (task, tally + 1)
 
     async def send_response_chunk(self:Union["Task","Tasks"], chunk_text:str):
+        # Process most recent TTS response (if any)
+        if self.tts_resp:
+            await voice_clients.process_tts_resp(self.ictx, self.tts_resp[-1], self.bot_hmessage)
         # @mention non-consecutive users
         mention_resp = mentions.update_mention(self.user.mention, chunk_text)
         # send responses to channel - reference a message if applicable
@@ -1199,8 +1202,8 @@ class TaskProcessing(TaskAttributes):
 
     async def send_responses(self:Union["Task","Tasks"]):
         # Process any TTS response
-        if self.tts_resp:
-            await voice_clients.process_tts_resp(self.ictx, self.tts_resp, self.bot_hmessage)
+        if self.tts_resp and not self.streamed_tts:
+            await voice_clients.process_tts_resp(self.ictx, self.tts_resp[0], self.bot_hmessage)
         # Send text responses
         if self.bot_hmessage and self.params.should_send_text:
             # Send single reply if message was not already streamed in chunks
@@ -1689,47 +1692,28 @@ class TaskProcessing(TaskAttributes):
                 if self.params.should_send_text and self.settings.behavior.chance_to_stream_reply > 0 and self.name not in ['speak']:
                     can_chunk = True
 
+                stream_tts = False
+                # Only try streaming TTS if TTS enabled and responses can be chunked
                 if tts.enabled and can_chunk:
                     stream_tts = True
+                    if not bot_database.was_warned('stream_tts'):
+                        char_name = bot_settings.get_last_setting_for("last_character", self.ictx)
+                        log.warning(f"The bot will try streaming TTS responses ({tts.client} is running, and {char_name} is configured to stream replies).")
+                        log.info("This MAY have unexpected side effects, particularly for other running extensions (if any).")
+                        log.info(f"If you experience issues, please try the following:")
+                        log.info(f"• Ensure your TTS client {tts.client} is updated")
+                        log.info(f"• Report any Issues (https://github.com/altoiddealer/ad_discordbot/issues)")
+                        log.info(f"• Change {char_name}'s 'chance_to_stream_reply' behavior to '0.0', or disable TTS.")
+                        bot_database.update_was_warned('stream_tts')
 
-
-                # func = partial(custom_chatbot_wrapper,
-                #                text=self.llm_payload['text'],
-                #                state=self.llm_payload['state'],
-                #                regenerate=regenerate,
-                #                _continue=_continue,
-                #                loading_message=True,
-                #                for_ui=False,
-                #                include_continued_text=include_continued_text,
-                #                can_chunk=can_chunk,
-                #                stream_tts=stream_tts,
-                #                settings=self.settings)
-
-                # # Execute the function and process the responses
-                # async for resp in generate_in_executor(func):
-                #     i_resp = resp.get('internal', [])
-                #     if len(i_resp) > 0:
-                #         self.last_resp = i_resp[-1][1]
-
-                #     # Check for TTS response
-                #     vis_resp = resp.get('visible', [])
-                #     if len(vis_resp) > 0:
-                #         last_vis_resp = vis_resp[-1][-1]
-                #         if 'audio src=' in last_vis_resp:
-                #             audio_format_match = patterns.audio_src.search(last_vis_resp)
-                #             if audio_format_match:
-                #                 self.tts_resp = audio_format_match.group(1)
-
-                #     if self.last_resp.strip():
-                #         yield self.last_resp
-
-
+                # Send payload and get responses
                 func = partial(custom_chatbot_wrapper, text=self.llm_payload['text'], state=self.llm_payload['state'], regenerate=regenerate, _continue=_continue, loading_message=True, for_ui=False, stream_tts=stream_tts)
                 async for resp in generate_in_executor(func):
                     i_resp = resp.get('internal', [])
                     if len(i_resp) > 0:
                         self.last_resp = i_resp[len(i_resp) - 1][1]
-
+                    
+                    # Yes response chunking
                     if can_chunk:
                         # Omit continued text from response processing
                         base_resp = self.last_resp
@@ -1741,22 +1725,24 @@ class TaskProcessing(TaskAttributes):
                         if should_chunk:
                             last_checked = ''
                             already_chunked += partial_response
-                            # output['visible'][-1][1]
-                            audio_path = extensions_module.apply_extensions('output', partial_response, state=self.llm_payload['state'], is_chat=True)
-                            print("audio_path:", audio_path)
-                            #yield output
-
+                            vis_resp_chunk = extensions_module.apply_extensions('output', partial_response, state=self.llm_payload['state'], is_chat=True)
+                            if 'audio src=' in vis_resp_chunk:
+                                audio_format_match = patterns.audio_src.search(vis_resp_chunk)
+                                if audio_format_match:
+                                    setattr(self.params, 'streamed_tts', True)
+                                    self.tts_resp.append(audio_format_match.group(1))
                             # process message chunk
                             yield partial_response
-                    
-                    # look for tts response
-                    # vis_resp = resp.get('visible', [])
-                    # if len(vis_resp) > 0:
-                    #     last_vis_resp = vis_resp[-1][-1]
-                    #     if 'audio src=' in last_vis_resp:
-                    #         audio_format_match = patterns.audio_src.search(last_vis_resp)
-                    #         if audio_format_match:
-                    #             self.tts_resp = audio_format_match.group(1)
+                    # No response chunking
+                    else:
+                        # look for tts response after all text generated
+                        vis_resp = resp.get('visible', [])
+                        if len(vis_resp) > 0:
+                            last_vis_resp = vis_resp[-1][-1]
+                            if 'audio src=' in last_vis_resp:
+                                audio_format_match = patterns.audio_src.search(last_vis_resp)
+                                if audio_format_match:
+                                    self.tts_resp.append(audio_format_match.group(1))
 
                 # Check for an unsent chunk
                 if already_chunked:
@@ -1765,10 +1751,11 @@ class TaskProcessing(TaskAttributes):
                     # Handle last chunk
                     last_chunk = base_resp[len(already_chunked):].strip()
                     if last_chunk:
-                        test_state = copy.deepcopy(self.llm_payload['state'])
-                        test_state['history']
-                        audio_path = extensions_module.apply_extensions('output', last_chunk, state=test_state, is_chat=True)
-                        print("audio_path:", audio_path)
+                        last_vis_resp_chunk = extensions_module.apply_extensions('output', last_chunk, state=self.llm_payload['state'], is_chat=True)
+                        if 'audio src=' in last_vis_resp_chunk:
+                            last_audio_format_match = patterns.audio_src.search(last_vis_resp_chunk)
+                            if last_audio_format_match:
+                                self.tts_resp.append(last_audio_format_match.group(1))
                         yield last_chunk
 
             # Runs custom_chatbot_wrapper(), gets responses
@@ -3756,7 +3743,7 @@ class Task(Tasks):
         self.img_prompt: str         = kwargs.pop('img_prompt', None)
         self.img_payload: dict       = kwargs.pop('img_payload', None)
         self.last_resp: str          = kwargs.pop('last_resp', None)
-        self.tts_resp: str           = kwargs.pop('tts_resp', None)
+        self.tts_resp: list          = kwargs.pop('tts_resp', None)
         self.user_hmessage: HMessage = kwargs.pop('user_hmessage', None)
         self.bot_hmessage: HMessage  = kwargs.pop('bot_hmessage', None)
         self.local_history           = kwargs.pop('local_history', None)
@@ -3788,7 +3775,7 @@ class Task(Tasks):
         self.img_payload: dict       = self.img_payload if self.img_payload else {}
         # Bot response attributes
         self.last_resp: str          = self.last_resp if self.last_resp else ''
-        self.tts_resp: str           = self.tts_resp if self.tts_resp else ''
+        self.tts_resp: list          = self.tts_resp if self.tts_resp else []
         # History attributes
         self.user_hmessage: HMessage = self.user_hmessage if self.user_hmessage else None
         self.bot_hmessage: HMessage  = self.bot_hmessage if self.bot_hmessage else None
