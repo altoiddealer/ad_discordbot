@@ -38,8 +38,8 @@ from functools import partial
 sys.path.append("ad_discordbot")
 
 from modules.utils_files import load_file, merge_base, save_yaml_file  # noqa: F401
-from modules.utils_shared import shared_path, bg_task_queue, task_processing, flows_queue, flows_event, patterns, bot_emojis, config
-from modules.database import Database, StarBoard, Statistics, BaseFileMemory
+from modules.utils_shared import shared_path, bg_task_queue, task_processing, flows_queue, flows_event, patterns, bot_emojis, config, bot_database
+from modules.database import StarBoard, Statistics, BaseFileMemory
 from modules.utils_misc import check_probability, fix_dict, update_dict, sum_update_dict, update_dict_matched_keys, random_value_from_range, convert_lists_to_tuples, get_time, format_time, format_time_difference, get_normalized_weights  # noqa: F401
 from modules.utils_discord import Embeds, guild_only, guild_or_owner_only, configurable_for_dm_if, is_direct_message, ireply, sleep_delete_message, send_long_message, \
     EditMessageModal, SelectedListItem, SelectOptionsView, get_user_ctx_inter, get_message_ctx_inter, apply_reactions_to_messages, replace_msg_in_history_and_discord, MAX_MESSAGE_LENGTH  # noqa: F401
@@ -58,7 +58,6 @@ logging = log
 
 # Databases
 starboard = StarBoard()
-bot_database = Database()
 bot_statistics = Statistics()
 
 #################################################################
@@ -253,271 +252,8 @@ if sd.enabled:
 #################################################################
 sys.path.append(shared_path.dir_tgwui)
 
-import modules.extensions as extensions_module
-from modules.chat import chatbot_wrapper, load_character, save_history
-from modules import shared
-from modules import utils
-from modules.LoRA import add_lora_to_model
-from modules.models import load_model, unload_model
-from modules.models_settings import get_model_metadata, update_model_parameters, get_fallback_settings, infer_loader
-from modules.prompts import count_tokens
-
-class TTS:
-    def __init__(self):
-        self.enabled:bool = False
-        self.settings:dict = config.textgenwebui['tts_settings']
-        self.supported_clients = ['alltalk_tts', 'coqui_tts', 'silero_tts', 'elevenlabs_tts', 'edge_tts']
-        self.client:str = self.settings.get('extension', '')
-        self.api_key:str = ''
-        self.voice_key:str = ''
-        self.lang_key:str = ''
-    
-    # runs from TGWUI() class
-    def init_tts_extensions(self):
-        # Get any supported TTS client found in TGWUI CMD_FLAGS
-        fallback_client = None
-        for extension in shared.args.extensions:
-            extension:str
-            if extension in self.supported_clients:
-                self.client = extension
-                break
-            elif extension.endswith('_tts'):
-                fallback_client = extension
-        if fallback_client and not self.client:
-            log.warning(f'tts client "{fallback_client}" was included in launch params, but is not yet confirmed to work.')
-            log.warning(f'List of supported tts_clients: {self.supported_clients}')
-            log.warning(f'Enabling "{fallback_client}", but there could be issues.')
-            self.client = fallback_client
-
-        # If any TTS extension defined in config.yaml, set tts bot vars and add extension to shared.args.extensions
-        if self.client:
-            if self.client not in self.supported_clients:
-                log.warning(f'The "/speak" command will not be registered for "{self.client}".')
-            self.enabled = True
-            self.api_key = self.settings.get('api_key', None)
-            if self.client == 'alltalk_tts':
-                self.voice_key = 'voice'
-                self.lang_key = 'language'
-            elif self.client == 'coqui_tts':
-                self.voice_key = 'voice'
-                self.lang_key = 'language'
-            elif self.client == 'elevenlabs_tts':
-                self.voice_key = 'selected_voice'
-                self.lang_key = ''
-            elif self.client in ['silero_tts', 'edge_tts']:
-                self.voice_key = 'speaker'
-                self.lang_key = 'language'
-
-            if self.client not in shared.args.extensions:
-                shared.args.extensions.append(self.client)
-
-    # Toggles TTS on/off
-    async def apply_toggle_tts(self, ictx:CtxInteraction, toggle:str='on', tts_sw:bool=False):
-        try:
-            settings:"Settings" = get_settings(ictx)
-            llmcontext_dict = vars(settings.llmcontext)
-            extensions:dict = copy.deepcopy(llmcontext_dict.get('extensions', {}))
-            if toggle == 'off' and extensions.get(self.client, {}).get('activate'):
-                extensions[self.client]['activate'] = False
-                await tgwui.update_extensions(extensions)
-                # Return True if subsequent apply_toggle_tts() should enable TTS
-                return True
-            if tts_sw:
-                extensions[self.client]['activate'] = True
-                await tgwui.update_extensions(extensions)
-        except Exception as e:
-            log.error(f'An error occurred while toggling the TTS on/off: {e}')
-        return False
-
-tts = TTS()
-
-# Majority of this code section is sourced from 'modules/server.py'
-class TGWUI:
-    def __init__(self):
-        self.enabled:bool = config.textgenwebui.get('enabled', True)
-
-        self.instruction_template_str:str = None
-
-        self.last_extension_params = {}
-
-        if self.enabled:
-            self.init_settings()
-
-            # monkey patch load_extensions behavior from pre-commit b3fc2cd
-            extensions_module.load_extensions = self.load_extensions
-            self.init_tgwui_extensions()  # build TGWUI extensions
-            tts.init_tts_extensions()   # build TTS extensions in TTS()
-            self.activate_extensions() # Activate the extensions
-
-            self.init_llmmodels() # Get model from cmd args, or present model list in cmd window
-            asyncio.run(self.load_llm_model())
-
-            shared.generation_lock = Lock()
-
-    def init_settings(self):
-        shared.settings['character'] = bot_database.last_character
-        # Loading custom settings
-        settings_file = None
-        tgwui_settings_json = os.path.join(shared_path.dir_tgwui, "settings.json")
-        tgwui_settings_yaml = os.path.join(shared_path.dir_tgwui, "settings.yaml")
-        # Check if a settings file is provided and exists
-        if shared.args.settings is not None and Path(shared.args.settings).exists():
-            settings_file = Path(shared.args.settings)
-        # Check if settings file exists
-        elif Path(tgwui_settings_json).exists():
-            settings_file = Path(tgwui_settings_json)
-        elif Path(tgwui_settings_yaml).exists():
-            settings_file = Path(tgwui_settings_yaml)
-        if settings_file is not None:
-            log.info(f"Loading text-generation-webui settings from {settings_file}...")
-            file_contents = open(settings_file, 'r', encoding='utf-8').read()
-            new_settings = json.loads(file_contents) if settings_file.suffix == "json" else yaml.safe_load(file_contents)
-            shared.settings.update(new_settings)
-
-        # Fallback settings for models
-        shared.model_config['.*'] = get_fallback_settings()
-        shared.model_config.move_to_end('.*', last=False)  # Move to the beginning
-
-    # legacy version of load_extensions() which allows extension params to be updated during runtime
-    def load_extensions(self, extensions, available_extensions):
-        extensions_module.state = {}
-        for index, name in enumerate(shared.args.extensions):
-            if name in available_extensions:
-                if name != 'api':
-                    if not bot_database.was_warned(name):
-                        bot_database.update_was_warned(name)
-                        log.info(f'Loading the extension "{name}"')
-                try:
-                    try:
-                        exec(f"import extensions.{name}.script")
-                    except ModuleNotFoundError:
-                        log.error(f"Could not import the requirements for '{name}'. Make sure to install the requirements for the extension.\n\n \
-                                  Linux / Mac:\n\npip install -r extensions/{name}/requirements.txt --upgrade\n\nWindows:\n\npip install -r extensions\\{name}\\requirements.txt --upgrade\n\n \
-                                  If you used the one-click installer, paste the command above in the terminal window opened after launching the cmd script for your OS.")
-                        raise
-                    extension = getattr(extensions, name).script
-                    extensions_module.apply_settings(extension, name)
-                    setup_name = f"{name}_setup"
-                    if hasattr(extension, "setup") and not bot_database.was_warned(setup_name):
-                        bot_database.update_was_warned(setup_name)
-                        log.warning(f'Extension "{name}" has "setup" attribute. Trying to load...')
-                        try:
-                            extension.setup()
-                        except Exception as e:
-                            log.error(f'Setup failed for extension {name}:', e)
-                    extensions_module.state[name] = [True, index]
-                except Exception:
-                    log.error(f'Failed to load the extension "{name}".')
-
-    def init_tgwui_extensions(self):
-        shared.args.extensions = []
-        extensions_module.available_extensions = utils.get_available_extensions()
-
-        # Initialize shared args extensions
-        for extension in shared.settings['default_extensions']:
-            shared.args.extensions = shared.args.extensions or []
-            if extension not in shared.args.extensions:
-                shared.args.extensions.append(extension)
-
-    def activate_extensions(self):
-        if shared.args.extensions and len(shared.args.extensions) > 0:
-            extensions_module.load_extensions(extensions_module.extensions, extensions_module.available_extensions)
-
-    def init_llmmodels(self):
-        all_llmmodels = utils.get_available_models()
-
-        # Model defined through --model
-        if shared.args.model is not None:
-            shared.model_name = shared.args.model
-
-        # Only one model is available
-        elif len(all_llmmodels) == 1:
-            shared.model_name = all_llmmodels[0]
-
-        # Select the model from a command-line menu
-        else:
-            if len(all_llmmodels) == 0:
-                log.error("No LLM models are available! Please download at least one.")
-                sys.exit(0)
-            else:
-                print('The following LLM models are available:\n')
-                for index, model in enumerate(all_llmmodels):
-                    print(f'{index+1}. {model}')
-
-                print(f'\nWhich one do you want to load? 1-{len(all_llmmodels)}\n')
-                i = int(input()) - 1
-                print()
-
-            shared.model_name = all_llmmodels[i]
-            print(f'Loading {shared.model_name}.\nTo skip model selection, use "--model" in "CMD_FLAGS.txt".')
-
-    # Check user settings (models/config-user.yaml) to determine loader
-    def get_llm_model_loader(self, model:str) -> str:
-        loader = None
-        user_model_settings = {}
-        settings = shared.user_config
-        for pat in settings:
-            if re.match(pat.lower(), model.lower()):
-                for k in settings[pat]:
-                    user_model_settings[k] = settings[pat][k]
-        if 'loader' in user_model_settings:
-            loader = user_model_settings['loader']
-            return loader
-        else:
-            loader = infer_loader(model, user_model_settings)
-        return loader
-
-    async def load_llm_model(self, loader=None):
-        try:
-            # If any model has been selected, load it
-            if shared.model_name != 'None':
-                p = Path(shared.model_name)
-                if p.exists():
-                    model_name = p.parts[-1]
-                    shared.model_name = model_name
-                else:
-                    model_name = shared.model_name
-
-                model_settings = get_model_metadata(model_name)
-
-                self.instruction_template_str = model_settings.get('instruction_template_str', '')
-
-                update_model_parameters(model_settings, initial=True)  # hijack the command-line arguments
-                # Load the model
-                loop = asyncio.get_event_loop()
-                shared.model, shared.tokenizer = await loop.run_in_executor(None, load_model, model_name, loader)
-                # Load any LORA
-                if shared.args.lora:
-                    add_lora_to_model(shared.args.lora)
-        except Exception as e:
-            log.error(f"An error occurred while loading LLM Model: {e}")
-
-    async def update_extensions(self, params):
-        try:
-            if self.last_extension_params or params:
-                if self.last_extension_params == params:
-                    return # Nothing needs updating
-                self.last_extension_params = params # Update self dict
-            # Add tts API key if one is provided in config.yaml
-            if tts.api_key:
-                if tts.client not in self.last_extension_params:
-                    self.last_extension_params[tts.client] = {'api_key': tts.api_key}
-                else:
-                    self.last_extension_params[tts.client].update({'api_key': tts.api_key})
-            # Update extension settings
-            if self.last_extension_params:
-                last_extensions = list(self.last_extension_params.keys())
-                # Update shared.settings
-                for param in last_extensions:
-                    listed_param = self.last_extension_params[param]
-                    shared.settings.update({'{}-{}'.format(param, key): value for key, value in listed_param.items()})
-            else:
-                log.warning('** No extension params for this character. Reloading extensions with initial values. **')
-            extensions_module.load_extensions(extensions_module.extensions, extensions_module.available_extensions)  # Load Extensions (again)
-        except Exception as e:
-            log.error(f"An error occurred while updating character extension settings: {e}")
-
-tgwui = TGWUI()
+from modules.utils_tgwui import tts, tgwui, shared, utils, extensions_module, \
+    custom_chatbot_wrapper, chatbot_wrapper, load_character, save_history, unload_model, count_tokens
 
 #################################################################
 ##################### BACKGROUND QUEUE TASK #####################
@@ -1097,10 +833,10 @@ class VoiceClients:
             mp3_file = File(buffer, filename=mp3_filename)
             
             sent_message = await channel.send(file=mp3_file)
-            if bot_hmessage:
-                bot_hmessage.update(audio_id=sent_message.id)
+            # if bot_hmessage:
+            #     bot_hmessage.update(audio_id=sent_message.id)
 
-    async def process_tts_resp(self, ictx:CtxInteraction, tts_resp:Optional[str]=None, bot_hmessage:Optional[HMessage]=None, is_dm:bool=False):
+    async def process_tts_resp(self, ictx:CtxInteraction, tts_resp:Optional[str]=None, bot_hmessage:Optional[HMessage]=None):
         play_mode = int(tts.settings.get('play_mode', 0))
         # Upload to interaction channel
         if play_mode > 0:
@@ -1430,7 +1166,7 @@ class TaskAttributes():
     img_prompt: str
     img_payload: dict
     last_resp: str
-    tts_resp: str
+    tts_resp: list
     user_hmessage: HMessage
     bot_hmessage: HMessage
     local_history: History
@@ -1452,6 +1188,9 @@ class TaskProcessing(TaskAttributes):
             spontaneous_messaging.tasks[self.channel.id] = (task, tally + 1)
 
     async def send_response_chunk(self:Union["Task","Tasks"], chunk_text:str):
+        # Process most recent TTS response (if any)
+        if self.tts_resp:
+            await voice_clients.process_tts_resp(self.ictx, self.tts_resp[-1], self.bot_hmessage)
         # @mention non-consecutive users
         mention_resp = mentions.update_mention(self.user.mention, chunk_text)
         # send responses to channel - reference a message if applicable
@@ -1463,8 +1202,8 @@ class TaskProcessing(TaskAttributes):
 
     async def send_responses(self:Union["Task","Tasks"]):
         # Process any TTS response
-        if self.tts_resp:
-            await voice_clients.process_tts_resp(self.ictx, self.tts_resp, self.bot_hmessage)
+        if self.tts_resp and not self.streamed_tts:
+            await voice_clients.process_tts_resp(self.ictx, self.tts_resp[0], self.bot_hmessage)
         # Send text responses
         if self.bot_hmessage and self.params.should_send_text:
             # Send single reply if message was not already streamed in chunks
@@ -1757,7 +1496,7 @@ class TaskProcessing(TaskAttributes):
         if (not self.params.should_send_text) \
             or (hasattr(self.ictx, 'guild') and getattr(self.ictx.guild, 'voice_client', None) \
             and not voice_clients.guild_vcs.get(self.ictx.guild.id) and int(tts.settings.get('play_mode', 0)) == 0):
-            tts_sw = await tts.apply_toggle_tts(self.ictx, toggle='off')
+            tts_sw = await tts.apply_toggle_tts(self.settings, toggle='off')
         # Check to apply Server Mode
         self.apply_server_mode()
         # Update names in stopping strings
@@ -1765,7 +1504,7 @@ class TaskProcessing(TaskAttributes):
         # generate text with text-generation-webui
         await self.llm_gen()
         # Toggle TTS back on if it was toggled off
-        await tts.apply_toggle_tts(self.ictx, toggle='on', tts_sw=tts_sw)
+        await tts.apply_toggle_tts(self.settings, toggle='on', tts_sw=tts_sw)
 
     async def build_llm_payload(self:Union["Task","Tasks"]):
         # Update an existing LLM payload (Flows), or initialize with defaults
@@ -1952,13 +1691,29 @@ class TaskProcessing(TaskAttributes):
                 # Only try chunking responses if sending to channel, configured to chunk, and not '/speak' command
                 if self.params.should_send_text and self.settings.behavior.chance_to_stream_reply > 0 and self.name not in ['speak']:
                     can_chunk = True
-                
-                func = partial(chatbot_wrapper, text=self.llm_payload['text'], state=self.llm_payload['state'], regenerate=regenerate, _continue=_continue, loading_message=True, for_ui=False)
+
+                stream_tts = False
+                # Only try streaming TTS if TTS enabled and responses can be chunked
+                if tts.enabled and can_chunk:
+                    stream_tts = True
+                    if not bot_database.was_warned('stream_tts'):
+                        char_name = bot_settings.get_last_setting_for("last_character", self.ictx)
+                        log.warning(f"The bot will try streaming TTS responses ('{tts.client}' is running, and '{char_name}' is configured to stream replies).")
+                        log.info("This MAY have unexpected side effects, particularly for other running extensions (if any).")
+                        log.info(f"If you experience issues, please try the following:")
+                        log.info(f"• Ensure your TTS client is updated ({tts.client})")
+                        log.info(f"• Report any Issues (https://github.com/altoiddealer/ad_discordbot/issues)")
+                        log.info(f"• Change {char_name}'s 'chance_to_stream_reply' behavior to '0.0', or disable TTS.")
+                        bot_database.update_was_warned('stream_tts')
+
+                # Send payload and get responses
+                func = partial(custom_chatbot_wrapper, text=self.llm_payload['text'], state=self.llm_payload['state'], regenerate=regenerate, _continue=_continue, loading_message=True, for_ui=False, stream_tts=stream_tts)
                 async for resp in generate_in_executor(func):
                     i_resp = resp.get('internal', [])
                     if len(i_resp) > 0:
                         self.last_resp = i_resp[len(i_resp) - 1][1]
-
+                    
+                    # Yes response chunking
                     if can_chunk:
                         # Omit continued text from response processing
                         base_resp = self.last_resp
@@ -1970,17 +1725,24 @@ class TaskProcessing(TaskAttributes):
                         if should_chunk:
                             last_checked = ''
                             already_chunked += partial_response
+                            vis_resp_chunk = extensions_module.apply_extensions('output', partial_response, state=self.llm_payload['state'], is_chat=True)
+                            if 'audio src=' in vis_resp_chunk:
+                                audio_format_match = patterns.audio_src.search(vis_resp_chunk)
+                                if audio_format_match:
+                                    setattr(self.params, 'streamed_tts', True)
+                                    self.tts_resp.append(audio_format_match.group(1))
                             # process message chunk
                             yield partial_response
-                    
-                    # look for tts response
-                    vis_resp = resp.get('visible', [])
-                    if len(vis_resp) > 0:
-                        last_vis_resp = vis_resp[-1][-1]
-                        if 'audio src=' in last_vis_resp:
-                            audio_format_match = patterns.audio_src.search(last_vis_resp)
-                            if audio_format_match:
-                                self.tts_resp = audio_format_match.group(1)
+                    # No response chunking
+                    else:
+                        # look for tts response after all text generated
+                        vis_resp = resp.get('visible', [])
+                        if len(vis_resp) > 0:
+                            last_vis_resp = vis_resp[-1][-1]
+                            if 'audio src=' in last_vis_resp:
+                                audio_format_match = patterns.audio_src.search(last_vis_resp)
+                                if audio_format_match:
+                                    self.tts_resp.append(audio_format_match.group(1))
 
                 # Check for an unsent chunk
                 if already_chunked:
@@ -1989,9 +1751,14 @@ class TaskProcessing(TaskAttributes):
                     # Handle last chunk
                     last_chunk = base_resp[len(already_chunked):].strip()
                     if last_chunk:
+                        last_vis_resp_chunk = extensions_module.apply_extensions('output', last_chunk, state=self.llm_payload['state'], is_chat=True)
+                        if 'audio src=' in last_vis_resp_chunk:
+                            last_audio_format_match = patterns.audio_src.search(last_vis_resp_chunk)
+                            if last_audio_format_match:
+                                self.tts_resp.append(last_audio_format_match.group(1))
                         yield last_chunk
 
-            # Runs chatbot_wrapper(), gets responses
+            # Runs custom_chatbot_wrapper(), gets responses
             async for chunk in process_responses():
                 await process_chunk(chunk)
 
@@ -3506,11 +3273,11 @@ class Tasks(TaskProcessing):
     async def toggle_tts_task(self:"Task"):
         try:
             if tts.enabled:
-                await tts.apply_toggle_tts(self.ictx, toggle='off')
+                await tts.apply_toggle_tts(self.settings, toggle='off')
                 tts.enabled = False
                 message = 'disabled'
             else:
-                await tts.apply_toggle_tts(self.ictx, toggle='on', tts_sw=True)
+                await tts.apply_toggle_tts(self.settings, toggle='on', tts_sw=True)
                 tts.enabled = True
                 message = 'enabled'
             await voice_clients.toggle_voice_client(self.ictx.guild.id, message)
@@ -3976,7 +3743,7 @@ class Task(Tasks):
         self.img_prompt: str         = kwargs.pop('img_prompt', None)
         self.img_payload: dict       = kwargs.pop('img_payload', None)
         self.last_resp: str          = kwargs.pop('last_resp', None)
-        self.tts_resp: str           = kwargs.pop('tts_resp', None)
+        self.tts_resp: list          = kwargs.pop('tts_resp', None)
         self.user_hmessage: HMessage = kwargs.pop('user_hmessage', None)
         self.bot_hmessage: HMessage  = kwargs.pop('bot_hmessage', None)
         self.local_history           = kwargs.pop('local_history', None)
@@ -4008,7 +3775,7 @@ class Task(Tasks):
         self.img_payload: dict       = self.img_payload if self.img_payload else {}
         # Bot response attributes
         self.last_resp: str          = self.last_resp if self.last_resp else ''
-        self.tts_resp: str           = self.tts_resp if self.tts_resp else ''
+        self.tts_resp: list          = self.tts_resp if self.tts_resp else []
         # History attributes
         self.user_hmessage: HMessage = self.user_hmessage if self.user_hmessage else None
         self.bot_hmessage: HMessage  = self.bot_hmessage if self.bot_hmessage else None
@@ -5129,8 +4896,11 @@ async def character_loader(char_name, settings:"Settings", guild_id:int|None=Non
                 value = base_tags.update_tags(value) # Unpack any tag presets
                 char_llmcontext['tags'] = value
         # Connect to voice channels
-        for vc_guild_id in bot_database.voice_channels:
-            await voice_clients.voice_channel(vc_guild_id, value)
+        if guild_id:
+            await voice_clients.voice_channel(guild_id, use_voice_channels)
+        else:
+            for vc_guild_id in bot_database.voice_channels:
+                await voice_clients.voice_channel(vc_guild_id, use_voice_channels)
         # Merge llmcontext data and extra data
         char_llmcontext.update(textgen_data)
         # Update stored database / shared.settings values for character

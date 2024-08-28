@@ -172,6 +172,10 @@ class HMessage:
     
     def __hash__(self):
         return hash(f'<HMessage {self.uuid}>')
+    
+
+    def equals(self, hmsg:"HMessage"):
+        return self.id == hmsg.id
 
 
     def delta(self) -> float:
@@ -353,7 +357,7 @@ class HMessage:
     
     
     def duplicate_history(self) -> 'History':
-        return copy.deepcopy(self.history)
+        return copy.copy(self.history)
         
     
     def new_history_end_here(self, include_self=True) -> Union['History', None]:
@@ -410,7 +414,7 @@ class HistoryPairForTGWUI:
         ])
         visible.append([
             user_text_visible,
-            (self.assistant.text_visible or self.assistant.text) if self.assistant else '',
+            str(self.assistant.text_visible or self.assistant.text) if self.assistant else '',
         ])
         return self
 
@@ -457,7 +461,10 @@ class History:
     # Item list
     def __contains__(self, message: HMessage):
         assert isinstance(message, HMessage), f'History.__contains__ expected {HMessage} type, got {type(message)}'
-        return message in self._items
+        for hmsg in self._items:
+            if message.equals(hmsg):
+                return True
+        return False
 
 
     def index(self, message: HMessage):
@@ -475,7 +482,7 @@ class History:
         '''
         Returns a copy of the history that is empty but keeps similar settings.
         '''
-        new = copy.deepcopy(self)
+        new = copy.copy(self)
         new._items = []
         new._last = {}
         log.debug(f'Created history template for: {self.id}')
@@ -628,6 +635,7 @@ class History:
 
     def get_filtered_history_for(self, names_list:list, search=['name', 'impersonated_by']):
         filtered_history = self.fresh()
+        filtered_history._items = []
         seen_ids = set()
         for hmessage in self._items:
             # Skip messages already filtered            
