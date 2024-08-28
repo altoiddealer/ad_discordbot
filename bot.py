@@ -252,7 +252,7 @@ if sd.enabled:
 #################################################################
 sys.path.append(shared_path.dir_tgwui)
 
-from modules.utils_tgwui import tts, tgwui, shared, utils, \
+from modules.utils_tgwui import tts, tgwui, shared, utils, extensions_module, \
     custom_chatbot_wrapper, chatbot_wrapper, load_character, save_history, unload_model, count_tokens
 
 #################################################################
@@ -1741,17 +1741,22 @@ class TaskProcessing(TaskAttributes):
                         if should_chunk:
                             last_checked = ''
                             already_chunked += partial_response
+                            # output['visible'][-1][1]
+                            audio_path = extensions_module.apply_extensions('output', partial_response, state=self.llm_payload['state'], is_chat=True)
+                            print("audio_path:", audio_path)
+                            #yield output
+
                             # process message chunk
                             yield partial_response
                     
                     # look for tts response
-                    vis_resp = resp.get('visible', [])
-                    if len(vis_resp) > 0:
-                        last_vis_resp = vis_resp[-1][-1]
-                        if 'audio src=' in last_vis_resp:
-                            audio_format_match = patterns.audio_src.search(last_vis_resp)
-                            if audio_format_match:
-                                self.tts_resp = audio_format_match.group(1)
+                    # vis_resp = resp.get('visible', [])
+                    # if len(vis_resp) > 0:
+                    #     last_vis_resp = vis_resp[-1][-1]
+                    #     if 'audio src=' in last_vis_resp:
+                    #         audio_format_match = patterns.audio_src.search(last_vis_resp)
+                    #         if audio_format_match:
+                    #             self.tts_resp = audio_format_match.group(1)
 
                 # Check for an unsent chunk
                 if already_chunked:
@@ -1760,6 +1765,10 @@ class TaskProcessing(TaskAttributes):
                     # Handle last chunk
                     last_chunk = base_resp[len(already_chunked):].strip()
                     if last_chunk:
+                        test_state = copy.deepcopy(self.llm_payload['state'])
+                        test_state['history']
+                        audio_path = extensions_module.apply_extensions('output', last_chunk, state=test_state, is_chat=True)
+                        print("audio_path:", audio_path)
                         yield last_chunk
 
             # Runs custom_chatbot_wrapper(), gets responses

@@ -362,9 +362,9 @@ def custom_chatbot_wrapper(text, state, regenerate=False, _continue=False, loadi
             output['visible'][-1] = [visible_text, visible_reply.lstrip(' ')]
             if is_stream:
                 yield output
-
-    output['visible'][-1][1] = extensions_module.apply_extensions('output', output['visible'][-1][1], state, is_chat=True)
-    yield output
+    
+    # output['visible'][-1][1] = extensions_module.apply_extensions('output', output['visible'][-1][1], state, is_chat=True)
+    # yield output
 
 
 # def custom_chatbot_wrapper(text, state, regenerate=False, _continue=False, loading_message=True, for_ui=False, include_continued_text=False, can_chunk=False, stream_tts=False, settings=None):
