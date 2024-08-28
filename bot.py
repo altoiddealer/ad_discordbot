@@ -1202,7 +1202,8 @@ class TaskProcessing(TaskAttributes):
 
     async def send_responses(self:Union["Task","Tasks"]):
         # Process any TTS response
-        if self.tts_resp and not self.streamed_tts:
+        streamed_tts = getattr(self, 'streamed_tts', False)
+        if self.tts_resp and not streamed_tts:
             await voice_clients.process_tts_resp(self.ictx, self.tts_resp[0], self.bot_hmessage)
         # Send text responses
         if self.bot_hmessage and self.params.should_send_text:
