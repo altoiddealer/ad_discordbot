@@ -1688,8 +1688,43 @@ class TaskProcessing(TaskAttributes):
                 # Only try chunking responses if sending to channel, configured to chunk, and not '/speak' command
                 if self.params.should_send_text and self.settings.behavior.chance_to_stream_reply > 0 and self.name not in ['speak']:
                     can_chunk = True
-                
-                func = partial(custom_chatbot_wrapper, text=self.llm_payload['text'], state=self.llm_payload['state'], regenerate=regenerate, _continue=_continue, loading_message=True, for_ui=False)
+
+                if tts.enabled and can_chunk:
+                    stream_tts = True
+
+
+                # func = partial(custom_chatbot_wrapper,
+                #                text=self.llm_payload['text'],
+                #                state=self.llm_payload['state'],
+                #                regenerate=regenerate,
+                #                _continue=_continue,
+                #                loading_message=True,
+                #                for_ui=False,
+                #                include_continued_text=include_continued_text,
+                #                can_chunk=can_chunk,
+                #                stream_tts=stream_tts,
+                #                settings=self.settings)
+
+                # # Execute the function and process the responses
+                # async for resp in generate_in_executor(func):
+                #     i_resp = resp.get('internal', [])
+                #     if len(i_resp) > 0:
+                #         self.last_resp = i_resp[-1][1]
+
+                #     # Check for TTS response
+                #     vis_resp = resp.get('visible', [])
+                #     if len(vis_resp) > 0:
+                #         last_vis_resp = vis_resp[-1][-1]
+                #         if 'audio src=' in last_vis_resp:
+                #             audio_format_match = patterns.audio_src.search(last_vis_resp)
+                #             if audio_format_match:
+                #                 self.tts_resp = audio_format_match.group(1)
+
+                #     if self.last_resp.strip():
+                #         yield self.last_resp
+
+
+                func = partial(custom_chatbot_wrapper, text=self.llm_payload['text'], state=self.llm_payload['state'], regenerate=regenerate, _continue=_continue, loading_message=True, for_ui=False, stream_tts=stream_tts)
                 async for resp in generate_in_executor(func):
                     i_resp = resp.get('internal', [])
                     if len(i_resp) > 0:

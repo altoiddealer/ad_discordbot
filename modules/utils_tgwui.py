@@ -9,7 +9,8 @@ import yaml
 from pathlib import Path
 from threading import Lock
 from modules.typing import CtxInteraction
-from modules.utils_shared import shared_path, config, bot_database
+from modules.utils_shared import shared_path, config, bot_database, patterns
+from modules.utils_misc import check_probability
 
 sys.path.append(shared_path.dir_tgwui)
 
@@ -282,16 +283,15 @@ class TGWUI():
 
 tgwui = TGWUI()
 
-def custom_chatbot_wrapper(text, state, regenerate=False, _continue=False, loading_message=True, for_ui=False):
+def custom_chatbot_wrapper(text, state, regenerate=False, _continue=False, loading_message=True, for_ui=False, stream_tts=False):
     history = state['history']
     output = copy.deepcopy(history)
-    print("apply extensions History")
     output = extensions_module.apply_extensions('history', output)
-    print("apply extensions State")
     state = extensions_module.apply_extensions('state', state)
 
     visible_text = None
     stopping_strings = get_stopping_strings(state)
+    state['stream'] = state['stream'] if stream_tts == False else True # Custom
     is_stream = state['stream']
 
     # Prepare the input
@@ -365,3 +365,119 @@ def custom_chatbot_wrapper(text, state, regenerate=False, _continue=False, loadi
 
     output['visible'][-1][1] = extensions_module.apply_extensions('output', output['visible'][-1][1], state, is_chat=True)
     yield output
+
+
+# def custom_chatbot_wrapper(text, state, regenerate=False, _continue=False, loading_message=True, for_ui=False, include_continued_text=False, can_chunk=False, stream_tts=False, settings=None):
+
+#     last_checked = ''
+
+#     def check_should_chunk(partial_resp):
+#         nonlocal last_checked
+#         chance_to_chunk = settings.behavior.chance_to_stream_reply
+#         chunk_syntax = settings.behavior.stream_reply_triggers # ['\n', '.']
+#         check_resp:str = partial_resp[len(last_checked):]
+#         for syntax in chunk_syntax:
+#             if check_resp.endswith(syntax):
+#                 # update for next iteration
+#                 last_checked += check_resp
+#                 # Ensure markdown syntax is not cut off
+#                 if not patterns.check_markdown_balanced(last_checked):
+#                     return False
+#                 # Special handling if syntax is '.' (sentence completion)
+#                 elif syntax == '.':
+#                     if len(check_resp) > 1 and check_resp[-2].isdigit(): # avoid chunking on numerical list
+#                         return False
+#                     elif len(check_resp) > 2 and ('\n' in check_resp[-3:-1]): # avoid chunking on other lists
+#                         return False
+#                     chance_to_chunk = chance_to_chunk * 0.5
+#                 return check_probability(chance_to_chunk)
+
+#         return False
+
+#     history = state['history']
+#     output = copy.deepcopy(history)
+#     output = extensions_module.apply_extensions('history', output)
+#     state = extensions_module.apply_extensions('state', state)
+
+#     visible_text = None
+#     stopping_strings = get_stopping_strings(state)
+#     state['stream'] = state['stream'] if not stream_tts else True
+#     is_stream = state['stream']
+
+#     # Prepare the input
+#     if not (regenerate or _continue):
+#         visible_text = html.escape(text)
+#         text, visible_text = extensions_module.apply_extensions('chat_input', text, visible_text, state)
+#         text = extensions_module.apply_extensions('input', text, state, is_chat=True)
+
+#         output['internal'].append([text, ''])
+#         output['visible'].append([visible_text, ''])
+
+#         if loading_message:
+#             yield {
+#                 'visible': output['visible'][:-1] + [[output['visible'][-1][0], shared.processing_message]],
+#                 'internal': output['internal']
+#             }
+#     else:
+#         text, visible_text = output['internal'][-1][0], output['visible'][-1][0]
+#         if regenerate:
+#             if loading_message:
+#                 yield {
+#                     'visible': output['visible'][:-1] + [[visible_text, shared.processing_message]],
+#                     'internal': output['internal'][:-1] + [[text, '']]
+#                 }
+#         elif _continue:
+#             last_reply = [output['internal'][-1][1], output['visible'][-1][1]]
+#             if loading_message:
+#                 yield {
+#                     'visible': output['visible'][:-1] + [[visible_text, last_reply[1] + '...']],
+#                     'internal': output['internal']
+#                 }
+
+#     kwargs = {
+#         '_continue': _continue,
+#         'history': output if _continue else {k: v[:-1] for k, v in output.items()}
+#     }
+#     prompt = extensions_module.apply_extensions('custom_generate_chat_prompt', text, state, **kwargs)
+#     if prompt is None:
+#         prompt = generate_chat_prompt(text, state, **kwargs)
+
+#     reply = None
+#     already_chunked = ""
+#     continued_from = output['internal'][-1][-1] if _continue else ''
+#     include_continued_text = getattr(state, "include_continued_text", False)
+
+#     for j, reply in enumerate(generate_reply(prompt, state, stopping_strings=stopping_strings, is_chat=True, for_ui=for_ui)):
+
+#         visible_reply = re.sub("(<USER>|<user>|{{user}})", state['name1'], reply)
+#         visible_reply = html.escape(visible_reply)
+
+#         if shared.stop_everything:
+#             output['visible'][-1][1] = extensions_module.apply_extensions('output', output['visible'][-1][1], state, is_chat=True)
+#             yield output
+#             return
+
+#         if _continue:
+#             output['internal'][-1] = [text, output['internal'][-1][1] + reply]
+#             output['visible'][-1] = [visible_text, output['visible'][-1][1] + visible_reply]
+#         elif not (j == 0 and visible_reply.strip() == ''):
+#             output['internal'][-1] = [text, reply.lstrip(' ')]
+#             output['visible'][-1] = [visible_text, visible_reply.lstrip(' ')]
+
+#         base_resp = output['internal'][-1][1]
+#         if _continue and not include_continued_text and len(base_resp) > len(continued_from):
+#             base_resp = base_resp[len(continued_from):]
+        
+#         partial_response = base_resp[len(already_chunked):]
+#         should_chunk = check_should_chunk(partial_response)
+
+#         if should_chunk:
+#             already_chunked += partial_response
+#             if is_stream:
+#                 yield {
+#                     'visible': output['visible'],
+#                     'internal': output['internal']
+#                 }
+
+#     output['visible'][-1][1] = extensions_module.apply_extensions('output', output['visible'][-1][1], state, is_chat=True)
+#     yield output
