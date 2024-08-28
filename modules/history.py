@@ -172,6 +172,10 @@ class HMessage:
     
     def __hash__(self):
         return hash(f'<HMessage {self.uuid}>')
+    
+
+    def equals(self, hmsg:"HMessage"):
+        return self.id == hmsg.id
 
 
     def delta(self) -> float:
@@ -457,7 +461,10 @@ class History:
     # Item list
     def __contains__(self, message: HMessage):
         assert isinstance(message, HMessage), f'History.__contains__ expected {HMessage} type, got {type(message)}'
-        return message in self._items
+        for hmsg in self._items:
+            if message.equals(hmsg):
+                return True
+        return False
 
 
     def index(self, message: HMessage):

@@ -833,8 +833,8 @@ class VoiceClients:
             mp3_file = File(buffer, filename=mp3_filename)
             
             sent_message = await channel.send(file=mp3_file)
-            if bot_hmessage:
-                bot_hmessage.update(audio_id=sent_message.id)
+            # if bot_hmessage:
+            #     bot_hmessage.update(audio_id=sent_message.id)
 
     async def process_tts_resp(self, ictx:CtxInteraction, tts_resp:Optional[str]=None, bot_hmessage:Optional[HMessage]=None):
         play_mode = int(tts.settings.get('play_mode', 0))
@@ -1698,10 +1698,10 @@ class TaskProcessing(TaskAttributes):
                     stream_tts = True
                     if not bot_database.was_warned('stream_tts'):
                         char_name = bot_settings.get_last_setting_for("last_character", self.ictx)
-                        log.warning(f"The bot will try streaming TTS responses ({tts.client} is running, and {char_name} is configured to stream replies).")
+                        log.warning(f"The bot will try streaming TTS responses ('{tts.client}' is running, and '{char_name}' is configured to stream replies).")
                         log.info("This MAY have unexpected side effects, particularly for other running extensions (if any).")
                         log.info(f"If you experience issues, please try the following:")
-                        log.info(f"• Ensure your TTS client {tts.client} is updated")
+                        log.info(f"• Ensure your TTS client is updated ({tts.client})")
                         log.info(f"• Report any Issues (https://github.com/altoiddealer/ad_discordbot/issues)")
                         log.info(f"• Change {char_name}'s 'chance_to_stream_reply' behavior to '0.0', or disable TTS.")
                         bot_database.update_was_warned('stream_tts')
@@ -4896,8 +4896,11 @@ async def character_loader(char_name, settings:"Settings", guild_id:int|None=Non
                 value = base_tags.update_tags(value) # Unpack any tag presets
                 char_llmcontext['tags'] = value
         # Connect to voice channels
-        for vc_guild_id in bot_database.voice_channels:
-            await voice_clients.voice_channel(vc_guild_id, value)
+        if guild_id:
+            await voice_clients.voice_channel(guild_id, use_voice_channels)
+        else:
+            for vc_guild_id in bot_database.voice_channels:
+                await voice_clients.voice_channel(vc_guild_id, use_voice_channels)
         # Merge llmcontext data and extra data
         char_llmcontext.update(textgen_data)
         # Update stored database / shared.settings values for character
