@@ -1883,12 +1883,14 @@ class TaskProcessing(TaskAttributes):
         try:
             # Send last_exchange to channel
             greeting_msg = ''
+            bot_text = None
             if bot_history.greeting_or_history == 'history':
                 history_char, history_mode = get_char_mode_for_history(settings=self.settings)
                 last_user_hmessage, last_bot_hmessage = bot_history.get_history_for(self.ictx.channel.id, history_char, history_mode).last_exchange()
                 if last_user_hmessage:
                     last_character = bot_settings.get_last_setting_for("last_character", self.ictx)
-                    greeting_msg = f'__**Last message exchange**__:\n>>> **User**: "{last_user_hmessage.text_visible}"\n **{last_character}**: "{last_bot_hmessage.text_visible}"'
+                    bot_text = last_bot_hmessage.text
+                    greeting_msg = f'__**Last message exchange**__:\n>>> **User**: "{last_user_hmessage.text}"\n **{last_character}**: "{bot_text}"'
             if not greeting_msg:
                 greeting:str = self.settings.llmcontext.greeting
                 if greeting:
@@ -1896,7 +1898,14 @@ class TaskProcessing(TaskAttributes):
                     greeting_msg = greeting_msg.replace('{{char}}', char_name)
                 else:
                     greeting_msg = f'**{char_name}** has entered the chat"'
+                bot_text = greeting_msg
             await send_long_message(self.channel, greeting_msg)
+            # Play TTS Greeting
+            if tts.enabled and config.textgenwebui.get('tts_settings', {}).get('tts_greeting', False):
+                self.text = bot_text
+                self.embeds.enabled_embeds = {'system': False}
+                self.params.tts_args = self.settings.llmcontext.extensions
+                await self.run_subtask('speak')
         except Exception as e:
             print(traceback.format_exc())
             log.error(f'An error occurred while sending greeting or history for "{char_name}": {e}')
@@ -3005,8 +3014,8 @@ class Tasks(TaskProcessing):
                 await bg_task_queue.put(apply_reactions_to_messages(client.user, self.ictx, updated_bot_hmessage, msg_ids_to_edit, new_discord_msg))
 
             # process any tts resp
-            if self.tts_resp:
-                await voice_clients.process_tts_resp(self.ictx, self.tts_resp, updated_bot_hmessage)
+            # if self.tts_resp:
+            #     await voice_clients.process_tts_resp(self.ictx, self.tts_resp, updated_bot_hmessage)
 
         except Exception as e:
             e_msg = 'An error occurred while processing "Continue"'
@@ -3324,7 +3333,7 @@ class Tasks(TaskProcessing):
             await self.embeds.delete('system') # delete embed
             if not self.bot_hmessage:
                 return
-            await voice_clients.process_tts_resp(self.ictx, self.tts_resp, self.bot_hmessage)
+            await voice_clients.process_tts_resp(self.ictx, self.tts_resp[0], self.bot_hmessage)
             # remove api key (don't want to share this to the world!)
             for sub_dict in tts_args.values():
                 if 'api_key' in sub_dict:
@@ -3335,6 +3344,7 @@ class Tasks(TaskProcessing):
                 os.remove(self.params.user_voice)
         except Exception as e:
             log.error(f"An error occurred while generating tts for '/speak': {e}")
+            traceback.print_exc()
             await self.embeds.edit_or_send('system', "An error occurred while generating tts for '/speak'", e)
 
     #################################################################
@@ -3491,6 +3501,10 @@ class Tasks(TaskProcessing):
             await self.embeds.edit_or_send('change', "An error occurred while loading character", e)
 
     async def reset_task(self:"Task"):
+        shared.stop_everything = True
+        # Create a new instance of the history and set it to active
+        history_char, history_mode = get_char_mode_for_history(self.ictx)
+        bot_history.get_history_for(self.channel.id, history_char, history_mode).fresh().replace()
         await self.change_char_task()
 
     #################################################################
@@ -4739,11 +4753,7 @@ if tgwui.enabled:
     @client.hybrid_command(description="Reset the conversation with current character")
     @configurable_for_dm_if(lambda ctx: config.discord_dm_setting('allow_chatting', True))
     async def reset_conversation(ctx: commands.Context):
-        shared.stop_everything = True
         await ireply(ctx, 'conversation reset') # send a response msg to the user
-        # Create a new instance of the history and set it to active
-        history_char, history_mode = get_char_mode_for_history(ctx)
-        bot_history.get_history_for(ctx.channel.id, history_char, history_mode).fresh().replace()
         
         last_character = bot_settings.get_last_setting_for("last_character", ctx)
         log.info(f'{ctx.author.display_name} used "/reset_conversation": "{last_character}"')
