@@ -1202,7 +1202,7 @@ class TaskProcessing(TaskAttributes):
 
     async def send_responses(self:Union["Task","Tasks"]):
         # Process any TTS response
-        streamed_tts = getattr(self, 'streamed_tts', False)
+        streamed_tts = getattr(self.params, 'streamed_tts', False)
         if self.tts_resp and not streamed_tts:
             await voice_clients.process_tts_resp(self.ictx, self.tts_resp[0], self.bot_hmessage)
         # Send text responses
@@ -1707,6 +1707,8 @@ class TaskProcessing(TaskAttributes):
                         log.info(f"• Change {char_name}'s 'chance_to_stream_reply' behavior to '0.0', or disable TTS.")
                         bot_database.update_was_warned('stream_tts')
 
+                streamed_tts = False
+
                 # Send payload and get responses
                 func = partial(custom_chatbot_wrapper, text=self.llm_payload['text'], state=self.llm_payload['state'], regenerate=regenerate, _continue=_continue, loading_message=True, for_ui=False, stream_tts=stream_tts)
                 async for resp in generate_in_executor(func):
@@ -1730,20 +1732,11 @@ class TaskProcessing(TaskAttributes):
                             if 'audio src=' in vis_resp_chunk:
                                 audio_format_match = patterns.audio_src.search(vis_resp_chunk)
                                 if audio_format_match:
+                                    streamed_tts = True
                                     setattr(self.params, 'streamed_tts', True)
                                     self.tts_resp.append(audio_format_match.group(1))
                             # process message chunk
                             yield partial_response
-                    # No response chunking
-                    else:
-                        # look for tts response after all text generated
-                        vis_resp = resp.get('visible', [])
-                        if len(vis_resp) > 0:
-                            last_vis_resp = vis_resp[-1][-1]
-                            if 'audio src=' in last_vis_resp:
-                                audio_format_match = patterns.audio_src.search(last_vis_resp)
-                                if audio_format_match:
-                                    self.tts_resp.append(audio_format_match.group(1))
 
                 # Check for an unsent chunk
                 if already_chunked:
@@ -1758,6 +1751,14 @@ class TaskProcessing(TaskAttributes):
                             if last_audio_format_match:
                                 self.tts_resp.append(last_audio_format_match.group(1))
                         yield last_chunk
+
+                # look for tts response after all text generated
+                if not streamed_tts:
+                    last_vis_resp = extensions_module.apply_extensions('output', resp['visible'][-1][1], state=self.llm_payload['state'], is_chat=True)
+                    if 'audio src=' in last_vis_resp:
+                        last_vis_audio_format_match = patterns.audio_src.search(last_vis_resp)
+                        if last_vis_audio_format_match:
+                            self.tts_resp.append(last_vis_audio_format_match.group(1))
 
             # Runs custom_chatbot_wrapper(), gets responses
             async for chunk in process_responses():

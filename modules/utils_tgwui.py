@@ -365,6 +365,5 @@ def custom_chatbot_wrapper(text, state, regenerate=False, _continue=False, loadi
                 yield output
 
     # CUSTOM FOR BOT
-    if not stream_tts:
-        output['visible'][-1][1] = extensions_module.apply_extensions('output', output['visible'][-1][1], state, is_chat=True)
-        yield output
+    #output['visible'][-1][1] = extensions_module.apply_extensions('output', output['visible'][-1][1], state, is_chat=True)
+    yield output
