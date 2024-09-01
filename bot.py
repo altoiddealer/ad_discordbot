@@ -1695,8 +1695,8 @@ class TaskProcessing(TaskAttributes):
                     log.info(f"• Change {char_name}'s 'chance_to_stream_reply' behavior to '0.0', or disable TTS.")
                     bot_database.update_was_warned('stream_tts')
 
-                def trigger_tts(self, chunk_text:str):
-                    vis_resp_chunk = extensions_module.apply_extensions('output', chunk_text, state=self.task.llm_payload['state'], is_chat=True)
+                def apply_extensions(self, chunk_text:str):
+                    vis_resp_chunk:str = extensions_module.apply_extensions('output', chunk_text, state=self.task.llm_payload['state'], is_chat=True)
                     if 'audio src=' in vis_resp_chunk:
                         audio_format_match = patterns.audio_src.search(vis_resp_chunk)
                         if audio_format_match:
@@ -1704,7 +1704,9 @@ class TaskProcessing(TaskAttributes):
                             setattr(self.task.params, 'streamed_tts', True)
                             self.task.tts_resp.append(audio_format_match.group(1))
 
-                def check_should_chunk(self, partial_resp:str):
+                def try_chunking(self, resp:str):
+                    # Strip previously sent string
+                    partial_resp = resp[len(self.already_chunked):]
                     # Strip last checked string
                     check_resp: str = partial_resp[len(self.last_checked):]
                     # Must be enough characters to compare against
@@ -1760,20 +1762,15 @@ class TaskProcessing(TaskAttributes):
                             self.last_checked += check_resp
                             self.retry_counter = 0
 
+                            # Roll random probability and return message chunk if successful
                             if check_probability(chance_to_chunk):
-                                return match_end
+                                chunk = partial_resp[:match_end] # split at correct index
+                                self.last_checked = ''           # reset for next iteration
+                                self.already_chunked += chunk    # add chunk to already chunked
+                                self.apply_extensions(chunk)     # trigger TTS response / possibly other extension behavior
 
-                    return None
-                
-                def analyze_response(self, resp:str):
-                    partial_response = resp[len(self.already_chunked):]
-                    chunk_index = self.check_should_chunk(partial_response)
-                    if chunk_index is not None:
-                        chunk = partial_response[:chunk_index]
-                        self.last_checked = ''
-                        self.already_chunked += chunk
-                        self.trigger_tts(chunk)
-                        return chunk
+                                return chunk
+
                     return None
 
             # Easier to manage this as a class
@@ -1806,16 +1803,16 @@ class TaskProcessing(TaskAttributes):
                     # Capture response internally as it is generating
                     i_resp = resp.get('internal', [])
                     if len(i_resp) > 0:
-                        self.last_resp = i_resp[len(i_resp) - 1][1]
+                        i_resp:str = i_resp[len(i_resp) - 1][1]
                     
                     # Yes response chunking
                     if stream_replies.can_chunk:
                         # Omit continued text from response processing
-                        base_resp = self.last_resp
+                        base_resp:str = i_resp
                         if continue_condition and (len(base_resp) > len(continued_from)):
                             base_resp = base_resp[len(continued_from):]
                         # Check current iteration to see if it meets criteria
-                        chunk = stream_replies.analyze_response(base_resp)
+                        chunk = stream_replies.try_chunking(base_resp)
                         # process message chunk
                         if chunk:                          
                             yield chunk
@@ -1827,12 +1824,17 @@ class TaskProcessing(TaskAttributes):
                     # Handle last chunk
                     last_chunk = base_resp[len(stream_replies.already_chunked):].strip()
                     if last_chunk:
-                        stream_replies.trigger_tts(last_chunk)
+                        # trigger TTS response / possibly other extension behavior
+                        stream_replies.apply_extensions(last_chunk)
                         yield last_chunk
 
                 # look for unprocessed tts response after all text generated
                 if not stream_replies.streamed_tts:
-                    stream_replies.trigger_tts(resp['visible'][-1][1])
+                    # trigger TTS response / possibly other extension behavior
+                    stream_replies.apply_extensions(resp['visible'][-1][1])
+
+                # Save the complete response
+                self.last_resp = i_resp
 
             ####################################
             ## RUN ALL HELPER FUNCTIONS ABOVE ##
