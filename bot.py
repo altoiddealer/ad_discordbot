@@ -1670,7 +1670,7 @@ class TaskProcessing(TaskAttributes):
                     # Behavior values
                     self.chance_to_chunk:float   = task.settings.behavior.chance_to_stream_reply
                     # Chunk syntax
-                    self.chunk_syntax:list[str]  = ['\n\n', '\n', '.'] # task.settings.behavior.stream_reply_triggers # ['\n', '.']
+                    self.chunk_syntax:list[str]  = task.settings.behavior.stream_reply_triggers # ['\n\n', '\n', '.']
                     self.longest_syntax_len:int  = max(len(syntax) for syntax in self.chunk_syntax)
                     # For if shorter syntax is initially matched
                     self.retry_counter:int       = 0
