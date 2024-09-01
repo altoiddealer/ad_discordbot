@@ -1628,12 +1628,11 @@ class TaskProcessing(TaskAttributes):
     async def llm_gen(self:Union["Task","Tasks"]) -> tuple[str, str]:
         if shared.model_name == 'None':
             return
+
         try:
-            # Store time for statistics
-            bot_statistics._llm_gen_time_start_last = time.time()
 
             # Stream message chunks
-            async def process_chunk(chunk_text):
+            async def process_chunk(chunk_text:str):
                 # Immediately send message chunks (Do not queue)
                 if self.settings.behavior.responsiveness == 1.0 or self.name in ['regenerate', 'continue']:
                     await self.send_response_chunk(chunk_text)
@@ -1642,42 +1641,148 @@ class TaskProcessing(TaskAttributes):
                     chunk_message = self.message.create_chunk_message(chunk_text)
                     chunk_message.factor_typing_speed()
                     # Assign some values to the task. 'last_resp' used later if queued.
-                    chunk_task = Task('chunk_message', self.ictx, channel=self.channel, user=self.user, user_name=self.user_name, last_resp=chunk_text, message=chunk_message, params=self.params, local_history=self.local_history, istyping=IsTyping(self.channel))
+                    chunk_task = Task('chunk_message',
+                                    self.ictx,
+                                    channel=self.channel,
+                                    user=self.user,
+                                    user_name=self.user_name,
+                                    last_resp=chunk_text,
+                                    message=chunk_message,
+                                    params=self.params,
+                                    local_history=self.local_history,
+                                    istyping=IsTyping(self.channel))
+                    # Schedule typing timing for the chunk message
                     updated_istyping_time = await chunk_task.message.update_timing()
                     if updated_istyping_time != chunk_task.message.istyping_time:
                         chunk_task.istyping.start(start_time=updated_istyping_time)
                     chunk_task.message.istyping_time = updated_istyping_time
-                    # check for delayed response
+                    # check if chunk message should be queued
                     if chunk_task.message.send_time is not None:
                         await message_manager.queue_delayed_message(chunk_task)
+                    else:
+                        await self.send_response_chunk(chunk_text)
 
-            last_checked = ''
+            class StreamReplies:
+                def __init__(self, task:"Task"):
+                    self.task:"Task"             = task
+                    # Only try chunking responses if sending to channel, configured to chunk, and not '/speak' command
+                    self.can_chunk:bool          = self.task.params.should_send_text and (self.task.settings.behavior.chance_to_stream_reply > 0) and (self.task.name not in ['speak'])
+                    # Behavior values
+                    self.chance_to_chunk:float   = task.settings.behavior.chance_to_stream_reply
+                    # Chunk syntax
+                    self.chunk_syntax:list[str]  = task.settings.behavior.stream_reply_triggers # ['\n\n', '\n', '.']
+                    self.longest_syntax_len:int  = max(len(syntax) for syntax in self.chunk_syntax)
+                    # For if shorter syntax is initially matched
+                    self.retry_counter:int       = 0
+                    # Sum of all previously sent message chunks
+                    self.already_chunked:str     = ''
+                    # Prevents re-checking same string after it fails a random probability check
+                    self.last_checked:str        = ''
+                    # TTS streaming
+                    self.stream_tts:bool         = tts.enabled and self.can_chunk
+                    self.streamed_tts:bool       = False
+                    if self.stream_tts and not bot_database.was_warned('stream_tts'):
+                        self.warn_stream_tts()
+                
+                # Only try streaming TTS if TTS enabled and responses can be chunked
+                def warn_stream_tts(self):
+                    char_name = bot_settings.get_last_setting_for("last_character", self.task.ictx)
+                    log.warning(f"The bot will try streaming TTS responses ('{tts.client}' is running, and '{char_name}' is configured to stream replies).")
+                    log.info("This MAY have unexpected side effects, particularly for other running extensions (if any).")
+                    log.info(f"If you experience issues, please try the following:")
+                    log.info(f"• Ensure your TTS client is updated ({tts.client})")
+                    log.info(f"• Report any Issues (https://github.com/altoiddealer/ad_discordbot/issues)")
+                    log.info(f"• Change {char_name}'s 'chance_to_stream_reply' behavior to '0.0', or disable TTS.")
+                    bot_database.update_was_warned('stream_tts')
 
-            def check_should_chunk(partial_resp):
-                nonlocal last_checked
-                chance_to_chunk = self.settings.behavior.chance_to_stream_reply
-                chunk_syntax = self.settings.behavior.stream_reply_triggers # ['\n', '.']
-                check_resp:str = partial_resp[len(last_checked):]
-                for syntax in chunk_syntax:
-                    if check_resp.endswith(syntax):
-                        # update for next iteration
-                        last_checked += check_resp
-                        # Ensure markdown syntax is not cut off
-                        if not patterns.check_markdown_balanced(last_checked):
-                            return False
-                        # Special handling if syntax is '.' (sentence completion)
-                        elif syntax == '.':
-                            if len(check_resp) > 1 and check_resp[-2].isdigit(): # avoid chunking on numerical list
-                                return False
-                            elif len(check_resp) > 2 and ('\n' in check_resp[-3:-1]): # avoid chunking on other lists
-                                return False
-                            chance_to_chunk = chance_to_chunk * 0.5
-                        return check_probability(chance_to_chunk)
+                def trigger_tts(self, chunk_text:str):
+                    vis_resp_chunk = extensions_module.apply_extensions('output', chunk_text, state=self.task.llm_payload['state'], is_chat=True)
+                    if 'audio src=' in vis_resp_chunk:
+                        audio_format_match = patterns.audio_src.search(vis_resp_chunk)
+                        if audio_format_match:
+                            self.streamed_tts = True
+                            setattr(self.task.params, 'streamed_tts', True)
+                            self.task.tts_resp.append(audio_format_match.group(1))
 
-                return False
+                def check_should_chunk(self, partial_resp:str):
+                    # Strip last checked string
+                    check_resp: str = partial_resp[len(self.last_checked):]
+                    # Must be enough characters to compare against
+                    if len(check_resp) < self.longest_syntax_len:
+                        return None
 
+                    # Compare each chunk_syntax to check_resp
+                    for syntax in self.chunk_syntax:
+                        syntax_len = len(syntax)
+
+                        # Create a window of characters to check for the syntax
+                        check_window = check_resp[-(self.longest_syntax_len + 2):]
+
+                        # Check if the syntax is found within this window
+                        if syntax in check_window:
+                            chance_to_chunk = self.chance_to_chunk
+
+                            # Ensure markdown syntax is not cut off
+                            if not patterns.check_markdown_balanced(self.last_checked):
+                                return None
+                            
+                            # Get the match index from the full (potential) response chunk
+                            match_start = partial_resp.rfind(syntax)
+                            match_end = match_start + syntax_len
+                            # No tiny chunks
+                            if match_start < 2:
+                                return None
+
+                            # Check if less than longest syntax
+                            if syntax_len != self.longest_syntax_len:
+                                # Allow longer syntax to have a chance to be matched, if possible
+                                if not (self.retry_counter + syntax_len) >= self.longest_syntax_len:
+                                    self.retry_counter += syntax_len
+                                    return None
+
+                            # Increase chance to chunk if double newlines
+                            if syntax == '\n\n':
+                                chance_to_chunk = chance_to_chunk * 1.5
+
+                            # Special handling for sentence completion
+                            elif syntax == '.':
+                                # Check if the character before '.' is a digit
+                                if partial_resp[match_start - 1].isdigit():
+                                    return None  # Avoid chunking on numerical lists
+                                # Check if there's a newline before '.'
+                                # if '\n' in partial_resp[match_start - 2:match_start]:
+                                #     return None  # Avoid chunking on lists with newlines
+
+                                # Reduce chance to chunk
+                                chance_to_chunk = chance_to_chunk * 0.5
+
+                            # Update for next iteration
+                            self.last_checked += check_resp
+                            self.retry_counter = 0
+
+                            if check_probability(chance_to_chunk):
+                                return match_end
+
+                    return None
+                
+                def analyze_response(self, resp:str):
+                    partial_response = resp[len(self.already_chunked):]
+                    chunk_index = self.check_should_chunk(partial_response)
+                    if chunk_index is not None:
+                        chunk = partial_response[:chunk_index]
+                        self.last_checked = ''
+                        self.already_chunked += chunk
+                        self.trigger_tts(chunk)
+                        return chunk
+                    return None
+
+            # Easier to manage this as a class
+            stream_replies = StreamReplies(self)
+
+
+            # Sends LLM Payload and processes the generated text
             async def process_responses():
-                nonlocal last_checked
+
                 regenerate = self.llm_payload.get('regenerate', False)
 
                 continued_from = ''
@@ -1685,80 +1790,56 @@ class TaskProcessing(TaskAttributes):
                 if _continue:
                     continued_from = self.llm_payload['state']['history']['internal'][-1][-1]
                 include_continued_text = getattr(self.params, "include_continued_text", False)
-
-                already_chunked = ''
-
-                can_chunk = False
-                # Only try chunking responses if sending to channel, configured to chunk, and not '/speak' command
-                if self.params.should_send_text and self.settings.behavior.chance_to_stream_reply > 0 and self.name not in ['speak']:
-                    can_chunk = True
-
-                stream_tts = False
-                # Only try streaming TTS if TTS enabled and responses can be chunked
-                if tts.enabled and can_chunk:
-                    stream_tts = True
-                    if not bot_database.was_warned('stream_tts'):
-                        char_name = bot_settings.get_last_setting_for("last_character", self.ictx)
-                        log.warning(f"The bot will try streaming TTS responses ('{tts.client}' is running, and '{char_name}' is configured to stream replies).")
-                        log.info("This MAY have unexpected side effects, particularly for other running extensions (if any).")
-                        log.info(f"If you experience issues, please try the following:")
-                        log.info(f"• Ensure your TTS client is updated ({tts.client})")
-                        log.info(f"• Report any Issues (https://github.com/altoiddealer/ad_discordbot/issues)")
-                        log.info(f"• Change {char_name}'s 'chance_to_stream_reply' behavior to '0.0', or disable TTS.")
-                        bot_database.update_was_warned('stream_tts')
-
-                streamed_tts = False
+                continue_condition = _continue and not include_continued_text
 
                 # Send payload and get responses
-                func = partial(custom_chatbot_wrapper, text=self.llm_payload['text'], state=self.llm_payload['state'], regenerate=regenerate, _continue=_continue, loading_message=True, for_ui=False, stream_tts=stream_tts)
+                func = partial(custom_chatbot_wrapper,
+                               text = self.llm_payload['text'],
+                               state = self.llm_payload['state'],
+                               regenerate = regenerate,
+                               _continue = _continue,
+                               loading_message = True,
+                               for_ui = False,
+                               stream_tts = stream_replies.stream_tts)
+
                 async for resp in generate_in_executor(func):
+                    # Capture response internally as it is generating
                     i_resp = resp.get('internal', [])
                     if len(i_resp) > 0:
                         self.last_resp = i_resp[len(i_resp) - 1][1]
                     
                     # Yes response chunking
-                    if can_chunk:
+                    if stream_replies.can_chunk:
                         # Omit continued text from response processing
                         base_resp = self.last_resp
-                        if (_continue and not include_continued_text) and (len(base_resp) > len(continued_from)):
+                        if continue_condition and (len(base_resp) > len(continued_from)):
                             base_resp = base_resp[len(continued_from):]
                         # Check current iteration to see if it meets criteria
-                        partial_response = base_resp[len(already_chunked):]
-                        should_chunk = check_should_chunk(partial_response)
-                        if should_chunk:
-                            last_checked = ''
-                            already_chunked += partial_response
-                            vis_resp_chunk = extensions_module.apply_extensions('output', partial_response, state=self.llm_payload['state'], is_chat=True)
-                            if 'audio src=' in vis_resp_chunk:
-                                audio_format_match = patterns.audio_src.search(vis_resp_chunk)
-                                if audio_format_match:
-                                    streamed_tts = True
-                                    setattr(self.params, 'streamed_tts', True)
-                                    self.tts_resp.append(audio_format_match.group(1))
-                            # process message chunk
-                            yield partial_response
+                        chunk = stream_replies.analyze_response(base_resp)
+                        # process message chunk
+                        if chunk:                          
+                            yield chunk
 
                 # Check for an unsent chunk
-                if already_chunked:
+                if stream_replies.already_chunked:
                     # Flag that the task sent chunked responses
                     setattr(self.params, 'was_chunked', True)
                     # Handle last chunk
-                    last_chunk = base_resp[len(already_chunked):].strip()
+                    last_chunk = base_resp[len(stream_replies.already_chunked):].strip()
                     if last_chunk:
-                        last_vis_resp_chunk = extensions_module.apply_extensions('output', last_chunk, state=self.llm_payload['state'], is_chat=True)
-                        if 'audio src=' in last_vis_resp_chunk:
-                            last_audio_format_match = patterns.audio_src.search(last_vis_resp_chunk)
-                            if last_audio_format_match:
-                                self.tts_resp.append(last_audio_format_match.group(1))
+                        stream_replies.trigger_tts(last_chunk)
                         yield last_chunk
 
-                # look for tts response after all text generated
-                if not streamed_tts:
-                    last_vis_resp = extensions_module.apply_extensions('output', resp['visible'][-1][1], state=self.llm_payload['state'], is_chat=True)
-                    if 'audio src=' in last_vis_resp:
-                        last_vis_audio_format_match = patterns.audio_src.search(last_vis_resp)
-                        if last_vis_audio_format_match:
-                            self.tts_resp.append(last_vis_audio_format_match.group(1))
+                # look for unprocessed tts response after all text generated
+                if not stream_replies.streamed_tts:
+                    stream_replies.trigger_tts(resp['visible'][-1][1])
+
+            ####################################
+            ## RUN ALL HELPER FUNCTIONS ABOVE ##
+            ####################################
+
+            # Store time for statistics
+            bot_statistics._llm_gen_time_start_last = time.time()
 
             # Runs custom_chatbot_wrapper(), gets responses
             async for chunk in process_responses():
@@ -1770,6 +1851,7 @@ class TaskProcessing(TaskAttributes):
         except Exception as e:
             log.error(f'An error occurred in llm_gen(): {e}')
             traceback.print_exc()
+
 
 
     # Warn anyone direct messaging the bot
