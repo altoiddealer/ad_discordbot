@@ -1669,11 +1669,9 @@ class TaskProcessing(TaskAttributes):
                     self.can_chunk:bool          = self.task.params.should_send_text and (self.task.settings.behavior.chance_to_stream_reply > 0) and (self.task.name not in ['speak'])
                     # Behavior values
                     self.chance_to_chunk:float   = task.settings.behavior.chance_to_stream_reply
+                    # Chunk syntax
                     self.chunk_syntax:list[str]  = task.settings.behavior.stream_reply_triggers # ['\n', '.']
-                    # Syntax related
                     self.longest_syntax_len:int  = max(len(syntax) for syntax in self.chunk_syntax)
-                    self.shortest_syntax_len:int = min(len(syntax) for syntax in self.chunk_syntax)
-                    self.window_len:int          = self.longest_syntax_len + 2
                     # For if shorter syntax is initially matched
                     self.retry_counter:int       = 0
                     # Sum of all previously sent message chunks
@@ -1718,7 +1716,7 @@ class TaskProcessing(TaskAttributes):
                         syntax_len = len(syntax)
 
                         # Create a window of characters to check for the syntax
-                        check_window = check_resp[-(self.window_len):]
+                        check_window = check_resp[-(self.longest_syntax_len + 2):]
 
                         # Check if the syntax is found within this window
                         if syntax in check_window:
