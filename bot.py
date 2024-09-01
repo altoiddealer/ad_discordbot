@@ -1670,7 +1670,7 @@ class TaskProcessing(TaskAttributes):
                     # Behavior values
                     self.chance_to_chunk:float   = task.settings.behavior.chance_to_stream_reply
                     # Chunk syntax
-                    self.chunk_syntax:list[str]  = task.settings.behavior.stream_reply_triggers # ['\n', '.']
+                    self.chunk_syntax:list[str]  = ['\n\n', '\n', '.'] # task.settings.behavior.stream_reply_triggers # ['\n', '.']
                     self.longest_syntax_len:int  = max(len(syntax) for syntax in self.chunk_syntax)
                     # For if shorter syntax is initially matched
                     self.retry_counter:int       = 0
@@ -1720,6 +1720,7 @@ class TaskProcessing(TaskAttributes):
 
                         # Check if the syntax is found within this window
                         if syntax in check_window:
+                            chance_to_chunk = self.chance_to_chunk
 
                             # Ensure markdown syntax is not cut off
                             if not patterns.check_markdown_balanced(self.last_checked):
@@ -1742,6 +1743,7 @@ class TaskProcessing(TaskAttributes):
                             # Increase chance to chunk if double newlines
                             if syntax == '\n\n':
                                 chance_to_chunk = chance_to_chunk * 1.5
+
                             # Special handling for sentence completion
                             elif syntax == '.':
                                 # Check if the character before '.' is a digit
@@ -1752,18 +1754,31 @@ class TaskProcessing(TaskAttributes):
                                 #     return None  # Avoid chunking on lists with newlines
 
                                 # Reduce chance to chunk
-                                self.chance_to_chunk *= 0.5
+                                chance_to_chunk = chance_to_chunk * 0.5
 
                             # Update for next iteration
                             self.last_checked += check_resp
+                            self.retry_counter = 0
 
                             if check_probability(chance_to_chunk):
                                 return match_end
 
                     return None
+                
+                def analyze_response(self, resp:str):
+                    partial_response = resp[len(self.already_chunked):]
+                    chunk_index = self.check_should_chunk(partial_response)
+                    if chunk_index is not None:
+                        chunk = partial_response[:chunk_index]
+                        self.last_checked = ''
+                        self.already_chunked += chunk
+                        self.trigger_tts(chunk)
+                        return chunk
+                    return None
 
             # Easier to manage this as a class
             stream_replies = StreamReplies(self)
+
 
             # Sends LLM Payload and processes the generated text
             async def process_responses():
@@ -1788,6 +1803,7 @@ class TaskProcessing(TaskAttributes):
                                stream_tts = stream_replies.stream_tts)
 
                 async for resp in generate_in_executor(func):
+                    # Capture response internally as it is generating
                     i_resp = resp.get('internal', [])
                     if len(i_resp) > 0:
                         self.last_resp = i_resp[len(i_resp) - 1][1]
@@ -1799,14 +1815,9 @@ class TaskProcessing(TaskAttributes):
                         if continue_condition and (len(base_resp) > len(continued_from)):
                             base_resp = base_resp[len(continued_from):]
                         # Check current iteration to see if it meets criteria
-                        partial_response = base_resp[len(stream_replies.already_chunked):]
-                        chunk_index = stream_replies.check_should_chunk(partial_response)
-                        if chunk_index is not None:
-                            chunk = partial_response[:chunk_index]
-                            stream_replies.last_checked = ''
-                            stream_replies.already_chunked += chunk
-                            stream_replies.trigger_tts(chunk)
-                            # process message chunk
+                        chunk = stream_replies.analyze_response(base_resp)
+                        # process message chunk
+                        if chunk:                          
                             yield chunk
 
                 # Check for an unsent chunk
