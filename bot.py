@@ -1679,7 +1679,11 @@ class TaskProcessing(TaskAttributes):
                     # Prevents re-checking same string after it fails a random probability check
                     self.last_checked:str        = ''
                     # TTS streaming
-                    self.stream_tts:bool         = tts.enabled and self.can_chunk
+                    cant_stream_tts = ['edge_tts']
+                    self.stream_tts:bool         = tts.enabled and self.can_chunk and config.textgenwebui['tts_settings'].get('tts_streaming', True)
+                    if self.stream_tts and tts.client not in cant_stream_tts:
+                        self.stream_tts = False
+                        log.error(f"TTS Streaming is confirmed non-functional for {tts.client} (for now), so this is being disabled.")
                     self.streamed_tts:bool       = False
                     if self.stream_tts and not bot_database.was_warned('stream_tts'):
                         self.warn_stream_tts()
@@ -1688,11 +1692,14 @@ class TaskProcessing(TaskAttributes):
                 def warn_stream_tts(self):
                     char_name = bot_settings.get_last_setting_for("last_character", self.task.ictx)
                     log.warning(f"The bot will try streaming TTS responses ('{tts.client}' is running, and '{char_name}' is configured to stream replies).")
+                    if tts.client == ['alltalk_tts']:
+                        log.warning("**The application MAY hang/crash IF using 'alltalk_tts' in low VRAM mode**")
                     log.info("This MAY have unexpected side effects, particularly for other running extensions (if any).")
                     log.info(f"If you experience issues, please try the following:")
                     log.info(f"• Ensure your TTS client is updated ({tts.client})")
-                    log.info(f"• Report any Issues (https://github.com/altoiddealer/ad_discordbot/issues)")
+                    log.info(f"• Disabled TTS Setting 'tts_streaming'")
                     log.info(f"• Change {char_name}'s 'chance_to_stream_reply' behavior to '0.0', or disable TTS.")
+                    log.info(f"• Report any Issues (https://github.com/altoiddealer/ad_discordbot/issues)")
                     bot_database.update_was_warned('stream_tts')
 
                 def apply_extensions(self, chunk_text:str):
