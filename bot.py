@@ -842,6 +842,7 @@ class VoiceClients:
         if play_mode > 0:
             await self.upload_tts_file(ictx.channel, tts_resp, bot_hmessage)
         # Play in voice channel
+        connected = self.guild_vcs.get(ictx.guild.id)
         if not is_direct_message(ictx) and play_mode != 1 and self.guild_vcs.get(ictx.guild.id):
             await bg_task_queue.put(self.play_in_voice_channel(ictx.guild.id, tts_resp)) # run task in background
         if bot_hmessage:
@@ -1664,9 +1665,8 @@ class TaskProcessing(TaskAttributes):
 
             class StreamReplies:
                 def __init__(self, task:"Task"):
-                    self.task:"Task"             = task
                     # Only try chunking responses if sending to channel, configured to chunk, and not '/speak' command
-                    self.can_chunk:bool          = self.task.params.should_send_text and (self.task.settings.behavior.chance_to_stream_reply > 0) and (self.task.name not in ['speak'])
+                    self.can_chunk:bool          = task.params.should_send_text and (task.settings.behavior.chance_to_stream_reply > 0) and (task.name not in ['speak'])
                     # Behavior values
                     self.chance_to_chunk:float   = task.settings.behavior.chance_to_stream_reply
                     # Chunk syntax
@@ -1686,30 +1686,21 @@ class TaskProcessing(TaskAttributes):
                         log.error(f"TTS Streaming is confirmed non-functional for {tts.client} (for now), so this is being disabled.")
                     self.streamed_tts:bool       = False
                     if self.stream_tts and not bot_database.was_warned('stream_tts'):
-                        self.warn_stream_tts()
+                        char_name = bot_settings.get_last_setting_for("last_character", task.ictx)
+                        self.warn_stream_tts(char_name)
                 
                 # Only try streaming TTS if TTS enabled and responses can be chunked
-                def warn_stream_tts(self):
-                    char_name = bot_settings.get_last_setting_for("last_character", self.task.ictx)
+                def warn_stream_tts(self, char_name:str):
                     log.warning(f"The bot will try streaming TTS responses ('{tts.client}' is running, and '{char_name}' is configured to stream replies).")
-                    if tts.client == ['alltalk_tts']:
+                    if tts.client == 'alltalk_tts':
                         log.warning("**The application MAY hang/crash IF using 'alltalk_tts' in low VRAM mode**")
                     log.info("This MAY have unexpected side effects, particularly for other running extensions (if any).")
                     log.info(f"If you experience issues, please try the following:")
                     log.info(f"• Ensure your TTS client is updated ({tts.client})")
-                    log.info(f"• Disabled TTS Setting 'tts_streaming'")
+                    log.info(f"• Disable the TTS Setting 'tts_streaming'")
                     log.info(f"• Change {char_name}'s 'chance_to_stream_reply' behavior to '0.0', or disable TTS.")
                     log.info(f"• Report any Issues (https://github.com/altoiddealer/ad_discordbot/issues)")
                     bot_database.update_was_warned('stream_tts')
-
-                def apply_extensions(self, chunk_text:str):
-                    vis_resp_chunk:str = extensions_module.apply_extensions('output', chunk_text, state=self.task.llm_payload['state'], is_chat=True)
-                    if 'audio src=' in vis_resp_chunk:
-                        audio_format_match = patterns.audio_src.search(vis_resp_chunk)
-                        if audio_format_match:
-                            self.streamed_tts = True
-                            setattr(self.task.params, 'streamed_tts', True)
-                            self.task.tts_resp.append(audio_format_match.group(1))
 
                 def try_chunking(self, resp:str):
                     # Strip previously sent string
@@ -1774,7 +1765,7 @@ class TaskProcessing(TaskAttributes):
                                 chunk = partial_resp[:match_end] # split at correct index
                                 self.last_checked = ''           # reset for next iteration
                                 self.already_chunked += chunk    # add chunk to already chunked
-                                self.apply_extensions(chunk)     # trigger TTS response / possibly other extension behavior
+                                apply_extensions(chunk)     # trigger TTS response / possibly other extension behavior
 
                                 return chunk
 
@@ -1783,6 +1774,14 @@ class TaskProcessing(TaskAttributes):
             # Easier to manage this as a class
             stream_replies = StreamReplies(self)
 
+            def apply_extensions(chunk_text:str):
+                vis_resp_chunk:str = extensions_module.apply_extensions('output', chunk_text, state=self.llm_payload['state'], is_chat=True)
+                if 'audio src=' in vis_resp_chunk:
+                    audio_format_match = patterns.audio_src.search(vis_resp_chunk)
+                    if audio_format_match:
+                        stream_replies.streamed_tts = True
+                        setattr(self.params, 'streamed_tts', True)
+                        self.tts_resp.append(audio_format_match.group(1))
 
             # Sends LLM Payload and processes the generated text
             async def process_responses():
@@ -1832,13 +1831,13 @@ class TaskProcessing(TaskAttributes):
                     last_chunk = base_resp[len(stream_replies.already_chunked):].strip()
                     if last_chunk:
                         # trigger TTS response / possibly other extension behavior
-                        stream_replies.apply_extensions(last_chunk)
+                        apply_extensions(last_chunk)
                         yield last_chunk
 
                 # look for unprocessed tts response after all text generated
                 if not stream_replies.streamed_tts:
                     # trigger TTS response / possibly other extension behavior
-                    stream_replies.apply_extensions(resp['visible'][-1][1])
+                    apply_extensions(resp['visible'][-1][1])
 
                 # Save the complete response
                 self.last_resp = i_resp
