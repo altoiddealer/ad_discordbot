@@ -226,6 +226,9 @@ class SD:
         try:
             log.info("Checking if SD Client is SwarmUI.")
             r = await self.api(endpoint='/API/GetNewSession', method='post')
+            if r is None:
+                return False  # Early return if the response is None or the API call failed
+
             self.session_id = r.get('session_id', None)
             if self.session_id:
                 self.client = 'SwarmUI'
