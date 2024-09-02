@@ -1681,7 +1681,7 @@ class TaskProcessing(TaskAttributes):
                     # TTS streaming
                     cant_stream_tts = ['edge_tts']
                     self.stream_tts:bool         = tts.enabled and self.can_chunk and config.textgenwebui['tts_settings'].get('tts_streaming', True)
-                    if self.stream_tts and tts.client not in cant_stream_tts:
+                    if self.stream_tts and tts.client in cant_stream_tts:
                         self.stream_tts = False
                         log.error(f"TTS Streaming is confirmed non-functional for {tts.client} (for now), so this is being disabled.")
                     self.streamed_tts:bool       = False
