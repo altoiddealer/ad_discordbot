@@ -3871,13 +3871,13 @@ class Task(Tasks):
         # The original input text
         self.text: str               = self.text if self.text else ""
         # TGWUI specific attributes
-        self.llm_prompt: str         = self.llm_prompt if self.llm_prompt else None
+        self.llm_prompt: str         = self.llm_prompt if self.llm_prompt else ''
         self.llm_payload: dict       = self.llm_payload if self.llm_payload else {}
         # Misc parameters
         self.params: Params          = self.params if self.params else Params()
         self.tags: Tags              = self.tags if self.tags else Tags(self.ictx)
         # Image specific attributes
-        self.img_prompt: str         = self.img_prompt if self.img_prompt else None
+        self.img_prompt: str         = self.img_prompt if self.img_prompt else ''
         self.img_payload: dict       = self.img_payload if self.img_payload else {}
         # Bot response attributes
         self.last_resp: str          = self.last_resp if self.last_resp else ''
