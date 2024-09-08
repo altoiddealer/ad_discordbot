@@ -1804,13 +1804,13 @@ class TaskProcessing(TaskAttributes):
             # Easier to manage this as a class
             stream_replies = StreamReplies(self)
 
-            def apply_extensions(chunk_text:str):
+            def apply_extensions(chunk_text:str, was_streamed=True):
                 vis_resp_chunk:str = extensions_module.apply_extensions('output', chunk_text, state=self.llm_payload['state'], is_chat=True)
                 if 'audio src=' in vis_resp_chunk:
                     audio_format_match = patterns.audio_src.search(vis_resp_chunk)
                     if audio_format_match:
-                        stream_replies.streamed_tts = True
-                        setattr(self.params, 'streamed_tts', True)
+                        stream_replies.streamed_tts = was_streamed
+                        setattr(self.params, 'streamed_tts', was_streamed)
                         self.tts_resp.append(audio_format_match.group(1))
 
             # Sends LLM Payload and processes the generated text
@@ -1867,7 +1867,7 @@ class TaskProcessing(TaskAttributes):
                 # look for unprocessed tts response after all text generated
                 if not stream_replies.streamed_tts:
                     # trigger TTS response / possibly other extension behavior
-                    apply_extensions(resp['visible'][-1][1])
+                    apply_extensions(resp['visible'][-1][1], was_streamed=False)
 
                 # Save the complete response
                 self.last_resp = i_resp
@@ -3901,13 +3901,13 @@ class Task(Tasks):
         # The original input text
         self.text: str               = self.text if self.text else ""
         # TGWUI specific attributes
-        self.llm_prompt: str         = self.llm_prompt if self.llm_prompt else None
+        self.llm_prompt: str         = self.llm_prompt if self.llm_prompt else ''
         self.llm_payload: dict       = self.llm_payload if self.llm_payload else {}
         # Misc parameters
         self.params: Params          = self.params if self.params else Params()
         self.tags: Tags              = self.tags if self.tags else Tags(self.ictx)
         # Image specific attributes
-        self.img_prompt: str         = self.img_prompt if self.img_prompt else None
+        self.img_prompt: str         = self.img_prompt if self.img_prompt else ''
         self.img_payload: dict       = self.img_payload if self.img_payload else {}
         # Bot response attributes
         self.last_resp: str          = self.last_resp if self.last_resp else ''
