@@ -1774,13 +1774,13 @@ class TaskProcessing(TaskAttributes):
             # Easier to manage this as a class
             stream_replies = StreamReplies(self)
 
-            def apply_extensions(chunk_text:str):
+            def apply_extensions(chunk_text:str, was_streamed=True):
                 vis_resp_chunk:str = extensions_module.apply_extensions('output', chunk_text, state=self.llm_payload['state'], is_chat=True)
                 if 'audio src=' in vis_resp_chunk:
                     audio_format_match = patterns.audio_src.search(vis_resp_chunk)
                     if audio_format_match:
-                        stream_replies.streamed_tts = True
-                        setattr(self.params, 'streamed_tts', True)
+                        stream_replies.streamed_tts = was_streamed
+                        setattr(self.params, 'streamed_tts', was_streamed)
                         self.tts_resp.append(audio_format_match.group(1))
 
             # Sends LLM Payload and processes the generated text
@@ -1837,7 +1837,7 @@ class TaskProcessing(TaskAttributes):
                 # look for unprocessed tts response after all text generated
                 if not stream_replies.streamed_tts:
                     # trigger TTS response / possibly other extension behavior
-                    apply_extensions(resp['visible'][-1][1])
+                    apply_extensions(resp['visible'][-1][1], was_streamed=False)
 
                 # Save the complete response
                 self.last_resp = i_resp
