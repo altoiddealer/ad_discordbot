@@ -6008,9 +6008,7 @@ class SpontaneousMessaging():
         except Exception as e:
             log.error(f"Error while processing a Spontaneous Message: {e}")
 
-    async def init_task(self, ictx:CtxInteraction, task:asyncio.Task, tally:int):
-        # get settings instance
-        settings:Settings = get_settings(ictx)
+    async def init_task(self, settings:"Settings", ictx:CtxInteraction, task:asyncio.Task, tally:int):
         # Randomly select wait duration from start/end range 
         wait = random.uniform(settings.behavior.spontaneous_msg_min_wait, settings.behavior.spontaneous_msg_max_wait)
         wait_secs = round(wait*60)
@@ -6042,7 +6040,7 @@ class SpontaneousMessaging():
                 if task is None or settings.behavior.spontaneous_msg_max_consecutive == -1 \
                     or tally + 1 < settings.behavior.spontaneous_msg_max_consecutive:
                     # Initialize the spontaneous message task
-                    await self.init_task(ictx, task, tally)
+                    await self.init_task(settings, ictx, task, tally)
 
 spontaneous_messaging = SpontaneousMessaging()
 
