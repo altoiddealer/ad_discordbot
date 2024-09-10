@@ -57,23 +57,26 @@ fi
 
 # Read command flags from CMD_FLAGS.txt
 CMD_FLAGS_FILE="$WORKING_DIR/ad_discordbot/CMD_FLAGS.txt"
+CMD_FLAGS=""  # Initialize CMD_FLAGS as an empty string
+
 if [ ! -f "$CMD_FLAGS_FILE" ]; then
     echo "CMD_FLAGS.txt is not found."
 else
     # Read each line from CMD_FLAGS.txt, skipping comments
-    CMD_FLAGS=$(grep -v '^#' "$CMD_FLAGS_FILE")
+    CMD_FLAGS=$(grep -v '^#' "$CMD_FLAGS_FILE" | xargs)  # xargs trims any extra whitespace
     if [ -z "$CMD_FLAGS" ]; then
-        echo "CMD_FLAGS.txt is empty."
+        echo "CMD_FLAGS.txt is empty or only contains comments."
     fi
 fi
 
-# Launch ad_discordbot with flags from CMD_FLAGS.txt
+# Launch ad_discordbot with flags from CMD_FLAGS.txt (even if CMD_FLAGS is empty)
 BOT_SCRIPT="$WORKING_DIR/ad_discordbot/bot.py"
 if [ ! -f "$BOT_SCRIPT" ]; then
     echo "bot.py not found in the ad_discordbot directory."
     exit 1
 fi
 
+# Run bot.py with or without CMD_FLAGS (if CMD_FLAGS is empty, it won't pass any extra arguments)
 python "$BOT_SCRIPT" $CMD_FLAGS
 if [ $? -ne 0 ]; then
     echo "bot.py execution failed"
