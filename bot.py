@@ -6042,7 +6042,7 @@ class SpontaneousMessaging():
                 if task is None or settings.behavior.spontaneous_msg_max_consecutive == -1 \
                     or tally + 1 < settings.behavior.spontaneous_msg_max_consecutive:
                     # Initialize the spontaneous message task
-                    await self.init_task(settings, ictx, task, tally)
+                    await self.init_task(ictx, task, tally)
 
 spontaneous_messaging = SpontaneousMessaging()
 
