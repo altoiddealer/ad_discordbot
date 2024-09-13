@@ -3717,7 +3717,7 @@ class IsTyping:
 ################## MESSAGE (INSTANCE IN TASK) ###################
 #################################################################
 class Message:
-    def __init__(self, settings:"Settings", num:int, received_time:float, response_delay:float, read_text_delay:float, **kwargs):
+    def __init__(self, settings:"Settings", num:int, received_time:float, response_delay:float, read_text_delay:float=0.0, **kwargs):
         # Values set initially
         self.parent_settings = settings
         self.num = num
@@ -3746,7 +3746,7 @@ class Message:
         self.num_chunks += 1
         num = self.num + (self.num_chunks/1000)
         last_tokens = int(count_tokens(chunk_str))
-        chunk_message = Message(num, self.received_time, response_delay, read_text_delay, last_tokens=last_tokens)
+        chunk_message = Message(self.parent_settings, num, self.received_time, response_delay, read_text_delay, last_tokens=last_tokens)
         return chunk_message
 
     def scale_delays(self):
