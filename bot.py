@@ -3747,7 +3747,7 @@ class IsTyping:
 ################## MESSAGE (INSTANCE IN TASK) ###################
 #################################################################
 class Message:
-    def __init__(self, settings:"Settings", num:int, received_time:float, response_delay:float, read_text_delay:float, **kwargs):
+    def __init__(self, settings:"Settings", num:int, received_time:float, response_delay:float, read_text_delay:float=0.0, **kwargs):
         # Values set initially
         self.parent_settings = settings
         self.num = num
@@ -3776,7 +3776,7 @@ class Message:
         self.num_chunks += 1
         num = self.num + (self.num_chunks/1000)
         last_tokens = int(count_tokens(chunk_str))
-        chunk_message = Message(num, self.received_time, response_delay, read_text_delay, last_tokens=last_tokens)
+        chunk_message = Message(self.parent_settings, num, self.received_time, response_delay, read_text_delay, last_tokens=last_tokens)
         return chunk_message
 
     def scale_delays(self):
@@ -3954,6 +3954,10 @@ class Task(Tasks):
                 start_time = self.message.istyping_time
             self.istyping.start(start_time=start_time, end_time=end_time)
 
+    def stop_typing(self):
+        if self.istyping is not None:
+            self.istyping.stop()
+
     def clone(self, name:str='', ictx:CtxInteraction|None=None, ignore_list:list|None=None, init_now:Optional[bool]=False, keep_typing:Optional[bool]=False) -> "Task":
         '''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
         Returns a new Task() with all of the same attributes.
@@ -4090,6 +4094,7 @@ class TaskManager(Tasks):
                         await message_manager.queue_delayed_message(task)
                     # Finished tasks are deleted
                     else:
+                        task.stop_typing()
                         del task
                         await bot_status.schedule_go_idle()
 
@@ -5650,6 +5655,11 @@ async def fetch_speak_options():
             from extensions.edge_tts.script import edge_tts # type: ignore
             voices = await edge_tts.list_voices()
             all_voices = [voice['ShortName'] for voice in voices if 'ShortName' in voice and voice['ShortName'].startswith('en-')]
+        elif tts.client == 'vits_api_tts':
+            lang_list = ['English']
+            log.info("Collecting voices for the '/speak' command. This will only work if you are running 'vits_api_tts' on default URL 'http://localhost:23456/'.")
+            from extensions.vits_api_tts.script import refresh_voices # type: ignore
+            all_voices = refresh_voices()
         all_voices.sort() # Sort alphabetically
         return lang_list, all_voices
     except Exception as e:
@@ -5933,9 +5943,7 @@ class MessageManager():
                 await task.message_post_llm_task()
         except Exception as e:
             log.error('An error occurred while sending a delayed message:', e)
-        # Stop typing
-        if hasattr(task, 'istyping') and task.istyping is not None:
-            task.istyping.stop()
+        task.stop_typing()                      # stop typing
         del task                                # delete task object
         self.last_send_time = time.time()       # log time
         self.send_msg_event.clear()
@@ -6038,9 +6046,7 @@ class SpontaneousMessaging():
         except Exception as e:
             log.error(f"Error while processing a Spontaneous Message: {e}")
 
-    async def init_task(self, ictx:CtxInteraction, task:asyncio.Task, tally:int):
-        # get settings instance
-        settings:Settings = get_settings(ictx)
+    async def init_task(self, settings:"Settings", ictx:CtxInteraction, task:asyncio.Task, tally:int):
         # Randomly select wait duration from start/end range 
         wait = random.uniform(settings.behavior.spontaneous_msg_min_wait, settings.behavior.spontaneous_msg_max_wait)
         wait_secs = round(wait*60)
