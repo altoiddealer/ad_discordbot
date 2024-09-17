@@ -5620,6 +5620,11 @@ async def fetch_speak_options():
             from extensions.edge_tts.script import edge_tts # type: ignore
             voices = await edge_tts.list_voices()
             all_voices = [voice['ShortName'] for voice in voices if 'ShortName' in voice and voice['ShortName'].startswith('en-')]
+        elif tts.client == 'vits_api_tts':
+            lang_list = ['English']
+            log.info("Collecting voices for the '/speak' command. This will only work if you are running 'vits_api_tts' on default URL 'http://localhost:23456/'.")
+            from extensions.vits_api_tts.script import refresh_voices # type: ignore
+            all_voices = refresh_voices()
         all_voices.sort() # Sort alphabetically
         return lang_list, all_voices
     except Exception as e:

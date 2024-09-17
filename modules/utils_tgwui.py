@@ -30,7 +30,7 @@ class TTS:
     def __init__(self):
         self.enabled:bool = False
         self.settings:dict = config.textgenwebui['tts_settings']
-        self.supported_clients = ['alltalk_tts', 'coqui_tts', 'silero_tts', 'elevenlabs_tts', 'edge_tts']
+        self.supported_clients = ['alltalk_tts', 'coqui_tts', 'silero_tts', 'elevenlabs_tts', 'edge_tts', 'vits_api_tts']
         self.client:str = self.settings.get('extension', '')
         self.api_key:str = ''
         self.voice_key:str = ''
@@ -65,7 +65,7 @@ class TTS:
             elif self.client == 'coqui_tts':
                 self.voice_key = 'voice'
                 self.lang_key = 'language'
-            elif self.client == 'elevenlabs_tts':
+            elif self.client in ['vits_api_tts', 'elevenlabs_tts']:
                 self.voice_key = 'selected_voice'
                 self.lang_key = ''
             elif self.client in ['silero_tts', 'edge_tts']:
