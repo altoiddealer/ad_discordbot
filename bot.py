@@ -3924,6 +3924,10 @@ class Task(Tasks):
                 start_time = self.message.istyping_time
             self.istyping.start(start_time=start_time, end_time=end_time)
 
+    def stop_typing(self):
+        if self.istyping is not None:
+            self.istyping.stop()
+
     def clone(self, name:str='', ictx:CtxInteraction|None=None, ignore_list:list|None=None, init_now:Optional[bool]=False, keep_typing:Optional[bool]=False) -> "Task":
         '''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
         Returns a new Task() with all of the same attributes.
@@ -4060,6 +4064,7 @@ class TaskManager(Tasks):
                         await message_manager.queue_delayed_message(task)
                     # Finished tasks are deleted
                     else:
+                        task.stop_typing()
                         del task
                         await bot_status.schedule_go_idle()
 
@@ -5903,9 +5908,7 @@ class MessageManager():
                 await task.message_post_llm_task()
         except Exception as e:
             log.error('An error occurred while sending a delayed message:', e)
-        # Stop typing
-        if hasattr(task, 'istyping') and task.istyping is not None:
-            task.istyping.stop()
+        task.stop_typing()                      # stop typing
         del task                                # delete task object
         self.last_send_time = time.time()       # log time
         self.send_msg_event.clear()
