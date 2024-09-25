@@ -3634,7 +3634,7 @@ class Tasks(TaskProcessing):
             if imgmodel_params:
                 # Add checkpoint to image payload (change_imgmodel_task() will change it anyway)
                 sd_model_checkpoint = imgmodel_params.get('sd_model_checkpoint', '')
-                override_settings = self.img_payload.setdefault('override_settings', {})
+                override_settings = self.img_payload['override_settings']
                 override_settings['sd_model_checkpoint'] = sd_model_checkpoint
                 # collect params for event of model swapping
                 swap_params: Params = Params()
@@ -5298,11 +5298,25 @@ async def change_imgmodel(selected_imgmodel_params:dict, ictx:CtxInteraction=Non
                     imgmodel_tags = matched_preset.pop('tags', None)
                     imgmodel_settings['payload'] = matched_preset.get('payload', {})
 
-            # Merge the selected imgmodel data with base imgmodel data
+            # Merge the selected imgmodel data with base imgmodel data (backup/update override settings separately)
+            override_settings:dict = imgmodel_settings['payload'].setdefault('override_settings', {})
+            override_settings_copy = copy.deepcopy(override_settings)
             updated_imgmodel_params = merge_base(imgmodel_settings, 'imgmodel')
+            override_settings = updated_imgmodel_params['payload']['override_settings']
+            override_settings.update(override_settings_copy)
+
             if config.is_per_server_imgmodels():
-                override_settings = updated_imgmodel_params['payload'].setdefault('override_settings', {})
                 override_settings['sd_model_checkpoint'] = selected_imgmodel_params['sd_model_checkpoint']
+
+            # Forge manages VAE / Text Encoders using "forge_additional_modules" during change model request.
+            if sd.client == 'SD WebUI Forge' and not override_settings.get('forge_additional_modules'):
+                forge_additional_modules = []
+                if override_settings.get('sd_vae') and override_settings['sd_vae'] != "Automatic":
+                    vae = override_settings['sd_vae']
+                    forge_additional_modules.append(vae)
+                    log.info(f'[Change Imgmodel] VAE "{vae}" was added to Forge options "forge_additional_modules".')
+                override_settings['forge_additional_modules'] = forge_additional_modules
+
             # Unpack any tag presets
             imgmodel_tags = base_tags.update_tags(imgmodel_tags)
             return updated_imgmodel_params, imgmodel_tags
@@ -5311,7 +5325,7 @@ async def change_imgmodel(selected_imgmodel_params:dict, ictx:CtxInteraction=Non
             return {}, []
 
     # Save new Img model data
-    async def save_new_imgmodel_settings(load_new_model, updated_imgmodel_params, imgmodel_tags):
+    async def save_new_imgmodel_settings(load_new_model:dict, updated_imgmodel_params:dict, imgmodel_tags):
         try:
             settings:Settings = bot_settings
             if config.is_per_server_imgmodels():
@@ -5321,22 +5335,24 @@ async def change_imgmodel(selected_imgmodel_params:dict, ictx:CtxInteraction=Non
             settings.imgmodel.update(updated_imgmodel_params)
             # Update tags
             settings.imgmodel.tags = imgmodel_tags
-            # Remove settings we do not want to retain
+
+            # Update model loading payload
+            override_settings = settings.imgmodel.payload['override_settings']
+            load_new_model.update(override_settings)
+
+            # Remove options we do not want to retain in Settings
             if not config.is_per_server_imgmodels():
-                override_settings = settings.imgmodel.payload.get('override_settings', {})
-                popped = []
-                popped_value = override_settings.pop('sd_model_checkpoint', None)
-                if popped_value is not None:
-                    popped.append(popped_value)
-                popped_value = override_settings.pop('sd_vae', None)
-                if popped_value is not None:
-                    popped.append(popped_value)
-                if popped:
-                    log.warning(f'[Change Imgmodel] These settings were applied, but are not being retained/applied automatically for next bot startup: {popped}')
+                imgmodel_options = list(override_settings.keys())  # list all options
+                # Replace override_settings with an empty dict
+                settings.imgmodel.payload['override_settings'] = {}
+                if imgmodel_options:
+                    log.warning(f'[Change Imgmodel] The following options were applied for this model change, but are not being retained in bot Settings: {imgmodel_options}')
+
             # Fix any invalid settings
             settings.fix_settings()
             # Save file
             settings.save()
+
             # load the model
             if not config.is_per_server_imgmodels():
                 await sd.api(endpoint='/sdapi/v1/options', method='post', json=load_new_model, retry=True)
@@ -5356,8 +5372,10 @@ async def change_imgmodel(selected_imgmodel_params:dict, ictx:CtxInteraction=Non
     bot_settings.set_last_setting_for("last_imgmodel_checkpoint", selected_imgmodel_params['sd_model_checkpoint'], ictx, save_now=True)
     # Retain the model checkpoint
     load_new_model = {'sd_model_checkpoint': selected_imgmodel_params['sd_model_checkpoint']}
+
     # Guess model params, merge with basesettings
     updated_imgmodel_params, imgmodel_tags = await merge_new_imgmodel_data(selected_imgmodel_params)
+
     # Save settings
     await save_new_imgmodel_settings(load_new_model, updated_imgmodel_params, imgmodel_tags)
     # Restart auto-change imgmodel task if triggered by a user interaction
@@ -6244,8 +6262,7 @@ class Behavior(SettingsBase):
 class ImgModel(SettingsBase):
     def __init__(self):
         self.tags = []
-        self.override_settings = {}
-        self.payload = {'alwayson_scripts': {}}
+        self.payload = {'alwayson_scripts': {}, 'override_settings': {}}
 
     def refresh_enabled_extensions(self, print=False):
         self.init_sd_extensions()
