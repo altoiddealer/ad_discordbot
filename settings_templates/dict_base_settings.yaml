@@ -39,6 +39,10 @@ behavior:
 
 imgmodel:
   payload:
+    override_settings:
+      CLIP_stop_at_last_layers: 1
+      sd_vae: Automatic
+      #forge_inference_memory: 4096 # Relavent to UI value "GPU Weights". Adjust this in the UI, and use the value printed in the cmd window for "(**value** MB) to do matrix computation"
     restore_faces: False
     sampler_name: "DPM++ 2M"
     scheduler: karras
