@@ -3417,7 +3417,6 @@ class Tasks(TaskProcessing):
             loop = asyncio.get_event_loop()
             vis_resp_chunk:str = await loop.run_in_executor(None, extensions_module.apply_extensions, 'output', self.text, self.llm_payload['state'], True)
 
-            #vis_resp_chunk:str = extensions_module.apply_extensions('output', self.text, state=self.llm_payload['state'], is_chat=True)
             if 'audio src=' in vis_resp_chunk:
                 audio_format_match = patterns.audio_src.search(vis_resp_chunk)
                 if audio_format_match:
