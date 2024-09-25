@@ -3403,8 +3403,7 @@ class Tasks(TaskProcessing):
                 return
             await self.embeds.send('system', f'{self.user_name} requested tts ... ', '')
             await self.init_llm_payload()
-            self.llm_payload['_continue'] = True
-            self.llm_payload['state']['max_new_tokens'] = 1
+
             self.llm_payload['state']['history'] = {'internal': [[self.text, self.text]], 'visible': [[self.text, self.text]]}
             self.params.save_to_history = False
             tts_args = self.params.tts_args
@@ -3412,12 +3411,18 @@ class Tasks(TaskProcessing):
 
             # Check to apply Server Mode
             self.apply_server_mode()
-            # Update names in stopping strings
-            self.extra_stopping_strings()
             # Get history for interaction channel
             await self.create_user_hmessage()
-            # generate text with text-generation-webui
-            await self.llm_gen()
+
+            loop = asyncio.get_event_loop()
+            vis_resp_chunk:str = await loop.run_in_executor(None, extensions_module.apply_extensions, 'output', self.text, self.llm_payload['state'], True)
+
+            #vis_resp_chunk:str = extensions_module.apply_extensions('output', self.text, state=self.llm_payload['state'], is_chat=True)
+            if 'audio src=' in vis_resp_chunk:
+                audio_format_match = patterns.audio_src.search(vis_resp_chunk)
+                if audio_format_match:
+                    self.tts_resp.append(audio_format_match.group(1))
+
             # Process responses
             await self.create_bot_hmessage()
             await self.embeds.delete('system') # delete embed
