@@ -5279,13 +5279,15 @@ async def fetch_imgmodels() -> list:
 # Check filesize/filters with selected imgmodel to assume resolution / tags
 async def guess_model_data(selected_imgmodel:dict, presets:list[dict]) -> dict|None:
     try:
-        filename = selected_imgmodel.get('filename', None)
-        if not filename:
-            return ''
-        # Check filesize of selected imgmodel to assume resolution and tags
-        file_size_bytes = os.path.getsize(filename)
-        file_size_gb = file_size_bytes / (1024 ** 3)  # 1 GB = 1024^3 bytes
+        file_size_gb = 0
+        # Checks filesize of selected imgmodel
+        filename:str = selected_imgmodel.pop('filename', '')
+        if filename:
+            file_size_bytes = os.path.getsize(filename)
+            file_size_gb = file_size_bytes / (1024 ** 3)  # 1 GB = 1024^3 bytes
+
         match_counts = []
+
         for preset in presets:
             # no guessing needed for exact match
             exact_match = preset.pop('exact_match', '')
@@ -5333,11 +5335,8 @@ async def change_imgmodel(selected_imgmodel_params:dict, ictx:CtxInteraction=Non
                     imgmodel_settings['payload'] = matched_preset.get('payload', {})
 
             # Merge the selected imgmodel data with base imgmodel data (backup/update override settings separately)
-            override_settings:dict = imgmodel_settings['payload'].setdefault('override_settings', {})
-            override_settings_copy = copy.deepcopy(override_settings)
-            updated_imgmodel_params = merge_base(imgmodel_settings, 'imgmodel')
-            override_settings = updated_imgmodel_params['payload']['override_settings']
-            override_settings.update(override_settings_copy)
+            updated_imgmodel_params:dict = merge_base(imgmodel_settings, 'imgmodel')
+            override_settings:dict = updated_imgmodel_params['payload'].setdefault('override_settings', {})
 
             if config.is_per_server_imgmodels():
                 override_settings['sd_model_checkpoint'] = selected_imgmodel_params['sd_model_checkpoint']
@@ -5380,7 +5379,7 @@ async def change_imgmodel(selected_imgmodel_params:dict, ictx:CtxInteraction=Non
                 # Replace override_settings with an empty dict
                 settings.imgmodel.payload['override_settings'] = {}
                 if imgmodel_options:
-                    log.warning(f'[Change Imgmodel] The following options were applied for this model change, but are not being retained in bot Settings: {imgmodel_options}')
+                    log.info(f"[Change Imgmodel] Applying Options which won't be retained for next bot startup: {imgmodel_options}")
 
             # Fix any invalid settings
             settings.fix_settings()
