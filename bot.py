@@ -5249,15 +5249,23 @@ async def fetch_imgmodels() -> list:
 # Check filesize/filters with selected imgmodel to assume resolution / tags
 async def guess_model_data(selected_imgmodel:dict, presets:list[dict]) -> dict|None:
     try:
-        file_size_gb = 0
+        filename:Optional[str] = selected_imgmodel.pop('filename', '')
+        if filename is None:
+            return {}
+
         # Checks filesize of selected imgmodel
-        filename:str = selected_imgmodel.pop('filename', '')
-        if filename:
+        file_size_gb = 0
+        try:
             file_size_bytes = os.path.getsize(filename)
             file_size_gb = file_size_bytes / (1024 ** 3)  # 1 GB = 1024^3 bytes
+        except Exception as e:
+            if not bot_database.was_warned('imgmodel_filename'):
+                bot_database.update_was_warned('imgmodel_filename')
+                log.warning("[Change Imgmodels] Failed to read the filesize of the selected image model (may be on remote system?).")
+                log.warning("[Change Imgmodels] Filesize will not be factored when evaluating presets in 'dict_imgmodels.yaml'.")
+                log.warning(f"[Change Imgmodels] File not found: {e}")
 
         match_counts = []
-
         for preset in presets:
             # no guessing needed for exact match
             exact_match = preset.pop('exact_match', '')
@@ -5287,13 +5295,14 @@ async def guess_model_data(selected_imgmodel:dict, presets:list[dict]) -> dict|N
         return matched_preset
     except Exception as e:
         log.error(f"Error guessing selected imgmodel data: {e}")
+        return {}
 
 async def change_imgmodel(selected_imgmodel_params:dict, ictx:CtxInteraction=None):
 
     # Merge selected imgmodel/tag data with base settings
     async def merge_new_imgmodel_data(selected_imgmodel_params:dict):
         try:
-            # Get tags if defined
+            # Get extra model information
             imgmodel_tags = None
             imgmodel_settings = {}
             imgmodels_data = load_file(shared_path.img_models, {})
@@ -5304,26 +5313,34 @@ async def change_imgmodel(selected_imgmodel_params:dict, ictx:CtxInteraction=Non
                     imgmodel_tags = matched_preset.pop('tags', None)
                     imgmodel_settings['payload'] = matched_preset.get('payload', {})
 
-            # Merge the selected imgmodel data with base imgmodel data (backup/update override settings separately)
+            # Merge the selected imgmodel data with base imgmodel data
             updated_imgmodel_params:dict = merge_base(imgmodel_settings, 'imgmodel')
-            override_settings:dict = updated_imgmodel_params['payload'].setdefault('override_settings', {})
 
+            # Set defaults
+            payload:dict = updated_imgmodel_params.setdefault('payload', {})
+            override_settings:dict = payload.setdefault('override_settings', {})
+
+            # Configure override settings
+            # For per-server imgmodels, only the image request payload will drive model changes (won't change now via API)
             if config.is_per_server_imgmodels():
                 override_settings['sd_model_checkpoint'] = selected_imgmodel_params['sd_model_checkpoint']
-
             # Forge manages VAE / Text Encoders using "forge_additional_modules" during change model request.
             if sd.client != 'SD WebUI Forge':
+                # Remove invalid setting
                 override_settings.pop('forge_inference_memory', None)
-            if sd.client == 'SD WebUI Forge' and not override_settings.get('forge_additional_modules'):
-                forge_additional_modules = []
-                if override_settings.get('sd_vae') and override_settings['sd_vae'] != "Automatic":
-                    vae = override_settings['sd_vae']
-                    forge_additional_modules.append(vae)
-                    log.info(f'[Change Imgmodel] VAE "{vae}" was added to Forge options "forge_additional_modules".')
-                override_settings['forge_additional_modules'] = forge_additional_modules
+            else:
+                if not override_settings.get('forge_additional_modules'):
+                    # Add required setting
+                    forge_additional_modules = []
+                    if override_settings.get('sd_vae') and override_settings['sd_vae'] != "Automatic":
+                        vae = override_settings['sd_vae']
+                        forge_additional_modules.append(vae)
+                        log.info(f'[Change Imgmodel] VAE "{vae}" was added to Forge options "forge_additional_modules".')
+                    override_settings['forge_additional_modules'] = forge_additional_modules
 
             # Unpack any tag presets
             imgmodel_tags = base_tags.update_tags(imgmodel_tags)
+
             return updated_imgmodel_params, imgmodel_tags
         except Exception as e:
             log.error(f"Error merging selected imgmodel data with base imgmodel data: {e}")
