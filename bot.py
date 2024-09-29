@@ -200,10 +200,10 @@ class SD:
 
     def determine_client_type(self, r):
         ui_settings_file = r.get("ui_settings_file", "").lower()
-        if "webui-forge" in ui_settings_file:
-            self.client = 'SD WebUI Forge'
-        elif "webui-reforge" in ui_settings_file:
+        if "reforge" in ui_settings_file:
             self.client = 'SD WebUI ReForge'
+        elif "forge" in ui_settings_file:
+            self.client = 'SD WebUI Forge'
         elif "webui" in ui_settings_file:
             self.client = 'A1111 SD WebUI'
         else:
