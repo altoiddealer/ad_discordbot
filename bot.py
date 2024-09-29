@@ -202,10 +202,10 @@ class SD:
                 raise Exception(f'Failed to connect to SD api, make sure to start it or disable the api in your "{shared_path.config}"')
 
             ui_settings_file = r.get("ui_settings_file", "")
-            if "webui-forge" in ui_settings_file.lower():
-                self.client = 'SD WebUI Forge'
-            elif "webui-reforge" in ui_settings_file.lower():
+            if "reforge" in ui_settings_file.lower():
                 self.client = 'SD WebUI ReForge'
+            elif "forge" in ui_settings_file.lower():
+                self.client = 'SD WebUI Forge'
             elif "webui" in ui_settings_file.lower():
                 self.client = 'A1111 SD WebUI'
             else:
