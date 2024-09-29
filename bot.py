@@ -129,11 +129,12 @@ class SD:
         self.enabled:bool = config.sd.get('enabled', True)
         self.url:str = config.sd.get('SD_URL', 'http://127.0.0.1:7860')
         self.client:str = None
+        self.session_id:str = None
         self.last_img_payload = {}
 
         if self.enabled:
             if asyncio.run(self.online()):
-                asyncio.run(self.get_sysinfo())
+                asyncio.run(self.init_sdclient())
 
     async def online(self, ictx:CtxInteraction|None=None):
         channel = ictx.channel if ictx else None
@@ -164,18 +165,20 @@ class SD:
                 return False
 
     async def api(self, endpoint:str, method='get', json=None, retry=True) -> dict:
+        headers = {'Content-Type': 'application/json'}
         try:
             async with aiohttp.ClientSession() as session:
-                async with session.request(method.lower(), url=f'{self.url}{endpoint}', json=json) as response:
+                async with session.request(method.lower(), url=f'{self.url}{endpoint}', json=json or {}, headers=headers) as response:
                     response_text = await response.text()
                     if response.status == 200:
                         r = await response.json()
-                        if self.client is None and endpoint != '/sdapi/v1/cmd-flags':
-                            await self.get_sysinfo()
-                            bot_settings.imgmodel.refresh_enabled_extensions(print=True)
-                            for settings in guild_settings.values():
-                                settings:Settings
-                                settings.imgmodel.refresh_enabled_extensions()
+                        if self.client is None and endpoint not in ['/sdapi/v1/cmd-flags', '/API/GetNewSession']:
+                            await self.init_sdclient()
+                            if self.client and not self.client == 'SwarmUI':
+                                bot_settings.imgmodel.refresh_enabled_extensions(print=True)
+                                for settings in guild_settings.values():
+                                    settings:Settings
+                                    settings.imgmodel.refresh_enabled_extensions()
                         return r
                     else:
                         log.error(f'{self.url}{endpoint} response: {response.status} "{response.reason}"')
@@ -195,24 +198,51 @@ class SD:
                 log.error(f'Error getting data from "{self.url}{endpoint}": {e}')
                 traceback.print_exc()
 
-    async def get_sysinfo(self):
-        try:
-            r = await self.api(endpoint='/sdapi/v1/cmd-flags', method='get', json=None, retry=False)
-            if not r:
-                raise Exception(f'Failed to connect to SD api, make sure to start it or disable the api in your "{shared_path.config}"')
+    def determine_client_type(self, r):
+        ui_settings_file = r.get("ui_settings_file", "").lower()
+        if "reforge" in ui_settings_file:
+            self.client = 'SD WebUI ReForge'
+        elif "forge" in ui_settings_file:
+            self.client = 'SD WebUI Forge'
+        elif "webui" in ui_settings_file:
+            self.client = 'A1111 SD WebUI'
+        else:
+            self.client = 'SD WebUI'
 
-            ui_settings_file = r.get("ui_settings_file", "")
-            if "reforge" in ui_settings_file.lower():
-                self.client = 'SD WebUI ReForge'
-            elif "forge" in ui_settings_file.lower():
-                self.client = 'SD WebUI Forge'
-            elif "webui" in ui_settings_file.lower():
-                self.client = 'A1111 SD WebUI'
-            else:
-                self.client = 'SD WebUI'
+    async def try_sdwebuis(self):
+        try:
+            log.info("Checking if SD Client is A1111, Forge, ReForge, or other.")
+            r = await self.api(endpoint='/sdapi/v1/cmd-flags')
+            if not r:
+                raise ConnectionError(f'Failed to connect to SD API, ensure it is running or disable the API in your config.')
+            self.determine_client_type(r)
+        except ConnectionError as e:
+            log.error(f"Connection error: {e}")
         except Exception as e:
-            log.error(f"Error getting SD sysinfo API: {e}")
-            self.client = None
+            log.error(f"Unexpected error when checking SD WebUI clients: {e}")
+            traceback.print_exc()
+
+    async def try_swarmui(self):
+        try:
+            log.info("Checking if SD Client is SwarmUI.")
+            r = await self.api(endpoint='/API/GetNewSession', method='post')
+            if r is None:
+                return False  # Early return if the response is None or the API call failed
+
+            self.session_id = r.get('session_id', None)
+            if self.session_id:
+                self.client = 'SwarmUI'
+                return True
+        except aiohttp.ClientError as e:
+            log.error(f"Error getting SwarmUI session: {e}")
+        return False
+
+    async def init_sdclient(self):
+        if await self.try_swarmui():
+            return
+
+        if not self.session_id:
+            await self.try_sdwebuis()
 
 sd = SD()
 
