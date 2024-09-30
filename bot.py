@@ -3436,7 +3436,9 @@ class Tasks(TaskProcessing):
                 await tts.apply_toggle_tts(self.settings, toggle='on', tts_sw=True)
                 tts.enabled = True
                 message = 'enabled'
-            await voice_clients.toggle_voice_client(self.ictx.guild.id, message)
+            vc_guild_ids = [self.ictx.guild.id] if config.per_server_settings else [guild.id for guild in client.guilds]
+            for vc_guild_id in vc_guild_ids:
+                await voice_clients.toggle_voice_client(vc_guild_id, message)
             if self.embeds.enabled('change'):
                 # Send change embed to interaction channel
                 await self.embeds.send('change', f"{self.user_name} {message} TTS.", 'Note: Does not load/unload the TTS model.', channel=self.channel)
