@@ -1704,6 +1704,25 @@ class TaskProcessing(TaskAttributes):
                     else:
                         await self.send_response_chunk(chunk_text)
 
+            async def check_censored(search_text):
+                print("search_text:", search_text)
+                for tag in self.tags.censor_tags:
+                    trigger_keys = [key for key in tag if key.startswith('trigger')]
+                    trigger_match = None
+                    for key in trigger_keys:
+                        triggers = [t.strip() for t in tag[key].split(',')]
+                        for trigger in triggers:
+                            trigger_regex = r'\b{}\b'.format(re.escape(trigger))
+                            trigger_match = re.search(trigger_regex, search_text, flags=re.IGNORECASE)
+                            if trigger_match:
+                                censor_text = str(trigger)
+                                censor_message = f' (text match: {censor_text})'
+                                log.info(f"[TAGS] Censoring: LLM response was blocked{censor_message if censor_text else ''}")
+                                self.embeds.create('censor', "LLM response was flagged as inappropriate", "Further task processing has been cancelled.")
+                                await self.embeds.send('censor', delete_after=5)
+                                raise TaskCensored
+
+
             class StreamReplies:
                 def __init__(self, task:"Task"):
                     # Only try chunking responses if sending to channel, configured to chunk, and not '/speak' command
@@ -1743,7 +1762,7 @@ class TaskProcessing(TaskAttributes):
                     log.info(f"• Report any Issues (https://github.com/altoiddealer/ad_discordbot/issues)")
                     bot_database.update_was_warned('stream_tts')
 
-                def try_chunking(self, resp:str):
+                async def try_chunking(self, resp:str):
                     # Strip previously sent string
                     partial_resp = resp[len(self.already_chunked):]
                     # Strip last checked string
@@ -1804,6 +1823,7 @@ class TaskProcessing(TaskAttributes):
                             # Roll random probability and return message chunk if successful
                             if check_probability(chance_to_chunk):
                                 chunk = partial_resp[:match_end] # split at correct index
+                                await check_censored(chunk)      # check for censored text
                                 self.last_checked = ''           # reset for next iteration
                                 self.already_chunked += chunk    # add chunk to already chunked
                                 apply_extensions(chunk)     # trigger TTS response / possibly other extension behavior
@@ -1859,10 +1879,10 @@ class TaskProcessing(TaskAttributes):
                         if continue_condition and (len(base_resp) > len(continued_from)):
                             base_resp = base_resp[len(continued_from):]
                         # Check current iteration to see if it meets criteria
-                        chunk = stream_replies.try_chunking(base_resp)
+                        chunk = await stream_replies.try_chunking(base_resp)
                         # process message chunk
                         if chunk:                          
-                            yield chunk
+                            yield chunk                   
 
                 # Check for an unsent chunk
                 if stream_replies.already_chunked:
@@ -1871,9 +1891,14 @@ class TaskProcessing(TaskAttributes):
                     # Handle last chunk
                     last_chunk = base_resp[len(stream_replies.already_chunked):].strip()
                     if last_chunk:
+                        # Check last reply chunk for censored text
+                        await check_censored(last_chunk)
                         # trigger TTS response / possibly other extension behavior
                         apply_extensions(last_chunk)
                         yield last_chunk
+                # Check complete response for censored text
+                else:
+                    await check_censored(i_resp)
 
                 # look for unprocessed tts response after all text generated
                 if not stream_replies.streamed_tts:
@@ -1897,6 +1922,8 @@ class TaskProcessing(TaskAttributes):
             if self.last_resp:
                 self.update_llm_gen_statistics() # Update statistics
 
+        except TaskCensored:
+            raise
         except Exception as e:
             log.error(f'An error occurred in llm_gen(): {e}')
             traceback.print_exc()
@@ -3162,6 +3189,8 @@ class Tasks(TaskProcessing):
             # if self.tts_resp:
             #     await voice_clients.process_tts_resp(self.ictx, self.tts_resp, updated_bot_hmessage)
 
+        except TaskCensored:
+            raise
         except Exception as e:
             e_msg = 'An error occurred while processing "Continue"'
             log.error(f'{e_msg}: {e}')

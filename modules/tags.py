@@ -96,9 +96,10 @@ class Tags():
         self.ictx = ictx
         self.user = get_user_ctx_inter(self.ictx) if self.ictx else None # Union[discord.User, discord.Member]
         self.tags_initialized = False
-        self.matches:list = []
+        self.matches: TAG_LIST = []
         self.unmatched = {'user': [], 'llm': [], 'userllm': []}
         self.tag_trumps:set = set([])
+        self.censor_tags: TAG_LIST = []
         '''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
         Instances of Tags() are initialized with empty defaults.
 
@@ -169,6 +170,8 @@ class Tags():
                     break # Skip this tag
                 if not self.pass_discord_check(key, value):
                     break # Skip this tag
+                if key == 'llm_censoring' and tag['llm_censoring'] == True:
+                    self.censor_tags.append(tag)
             # sort tags that passed condition for further processing
             else:
                 search_mode = tag.get('search_mode', 'userllm')  # Default to 'userllm' if 'search_mode' is not present
