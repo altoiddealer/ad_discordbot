@@ -164,7 +164,7 @@ class SD:
                 await bot_embeds.send('system', e_title, e_description, channel=channel, delete_after=10)
                 return False
 
-    async def api(self, endpoint:str, method='get', json=None, retry=True) -> dict:
+    async def api(self, endpoint:str, method='get', json=None, retry=True, warn=True) -> dict:
         headers = {'Content-Type': 'application/json'}
         try:
             async with aiohttp.ClientSession() as session:
@@ -181,8 +181,9 @@ class SD:
                                     settings.imgmodel.refresh_enabled_extensions()
                         return r
                     else:
-                        log.error(f'{self.url}{endpoint} response: {response.status} "{response.reason}"')
-                        log.error(f'Response content: {response_text}')
+                        if warn:
+                            log.error(f'{self.url}{endpoint} response: {response.status} "{response.reason}"')
+                            log.error(f'Response content: {response_text}')
                         if retry and response.status in [408, 500]:
                             log.info("Retrying the request in 3 seconds...")
                             await asyncio.sleep(3)
@@ -225,7 +226,7 @@ class SD:
     async def try_swarmui(self):
         try:
             log.info("Checking if SD Client is SwarmUI.")
-            r = await self.api(endpoint='/API/GetNewSession', method='post')
+            r = await self.api(endpoint='/API/GetNewSession', method='post', warn=False)
             if r is None:
                 return False  # Early return if the response is None or the API call failed
 
@@ -1400,12 +1401,20 @@ class TaskProcessing(TaskAttributes):
         except Exception as e:
             log.error(f"Error processing LLM tags: {e}")
 
-    def collect_llm_tag_values(self:Union["Task","Tasks"]) -> tuple[dict, dict]:
+    async def collect_llm_tag_values(self:Union["Task","Tasks"]) -> tuple[dict, dict]:
         llm_payload_mods = {}
         formatting = {}
         try:
             for tag in self.tags.matches:
                 tag:dict
+                # Check if censored
+                if 'llm_censoring' in tag and tag['llm_censoring'] == True:
+                    censor_text = tag.get('matched_trigger', '')
+                    censor_message = f' (text match: {censor_text})'
+                    log.info(f"[TAGS] Censoring: LLM generation was blocked{censor_message if censor_text else ''}")
+                    self.embeds.create('censor', "Text prompt was flagged as inappropriate", "Text generation task has been cancelled.")
+                    await self.embeds.send('censor', delete_after=5)
+                    raise TaskCensored
                 # Values that will only apply from the first tag matches
                 if 'begin_reply_with' in tag and not llm_payload_mods.get('begin_reply_with'):
                     llm_payload_mods['begin_reply_with'] = tag.pop('begin_reply_with')
@@ -1469,6 +1478,8 @@ class TaskProcessing(TaskAttributes):
                         llm_payload_mods['state'].update(state) # Allow multiple to accumulate.
                     except Exception:
                         log.warning("Error processing a matched 'state' tag; ensure it is a dictionary.")
+        except TaskCensored:
+            raise
         except Exception as e:
             log.error(f"Error collecting LLM tag values: {e}")
         return llm_payload_mods, formatting
@@ -1549,7 +1560,7 @@ class TaskProcessing(TaskAttributes):
         # apply previously matched tags to prompt
         self.tags.process_tag_insertions(self.llm_prompt)
         # collect matched tag values
-        llm_payload_mods, formatting = self.collect_llm_tag_values()
+        llm_payload_mods, formatting = await self.collect_llm_tag_values()
         # apply tags relevant to LLM payload
         await self.process_llm_payload_tags(llm_payload_mods)
         # apply formatting tags to LLM prompt
@@ -2746,7 +2757,7 @@ class TaskProcessing(TaskAttributes):
                 log.error(f"Error collecting ReActor tag values: {e}")
         return mods
 
-    def collect_img_tag_values(self:Union["Task","Tasks"]):
+    async def collect_img_tag_values(self:Union["Task","Tasks"]):
         img_payload_mods = {}
         payload_order_hack = {}
         controlnet_args = {}
@@ -2761,13 +2772,18 @@ class TaskProcessing(TaskAttributes):
                 if isinstance(tag, tuple):
                     tag = tag[0]
                 for key, value in tag.items():
-                    # Accept only the first occurance
-                    if key in accept_only_first and not img_payload_mods.get(key):
-                        img_payload_mods[key] = value
-                    elif key == 'img_censoring' and not img_payload_mods.get('img_censoring'):
+                    # Check censoring
+                    if key == 'img_censoring' and value != 0:
                         img_payload_mods['img_censoring'] = int(value)
-                        if value != 0:
-                            log.info(f"[TAGS] Censoring: {'Image Blurred' if value == 1 else 'Generation Blocked'}")
+                        censor_text = tag.get('matched_trigger', '')
+                        censor_message = f' (text match: {censor_text})'
+                        log.info(f"[TAGS] Censoring: {'Image will be blurred' if value == 1 else 'Image generation blocked'}{censor_message if censor_text else ''}")
+                        if value == 2:
+                            await self.embeds.send('img_send', "Image prompt was flagged as inappropriate.", "Image generation task has been cancelled.", delete_after=5)
+                            raise TaskCensored
+                    # Accept only the first occurance
+                    elif key in accept_only_first and not img_payload_mods.get(key):
+                        img_payload_mods[key] = value
                     # Accept only first 'change' or 'swap'
                     elif (key == 'change_imgmodel' and not is_direct_message(self.ictx)) or key == 'swap_imgmodel' and not (img_payload_mods.get('change_imgmodel') or img_payload_mods.get('swap_imgmodel')):
                         img_payload_mods[key] = str(value)
@@ -2846,6 +2862,8 @@ class TaskProcessing(TaskAttributes):
                 img_payload_mods['reactor'].update(reactor_args)
 
             img_payload_mods = self.collect_img_extension_mods(img_payload_mods)
+        except TaskCensored:
+            raise
         except Exception as e:
             log.error(f"Error collecting Img tag values: {e}")
         return img_payload_mods
@@ -2874,6 +2892,9 @@ class TaskProcessing(TaskAttributes):
 #################################################################
 ############################ TASKS ##############################
 #################################################################
+class TaskCensored(Exception):
+    """Custom exception to abort censored text generation tasks"""
+    pass
 
 class Tasks(TaskProcessing):
     '''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
@@ -2911,6 +2932,10 @@ class Tasks(TaskProcessing):
                     # generate text with TGWUI
                     await self.message_llm_gen()
 
+        except TaskCensored:
+            await self.embeds.delete('img_gen')
+            await self.embeds.delete('change')
+            raise
         except Exception as e:
             print(traceback.format_exc())
             log.error(f'An error occurred while processing "{self.name}" request: {e}')
@@ -3638,19 +3663,14 @@ class Tasks(TaskProcessing):
         try:
             if not self.tags:
                 self.tags = Tags(self.ictx)
-                await self.tags.init(phase='img')
-                self.tags.match_img_tags(self.img_prompt, self.settings)
+                await self.tags.match_img_tags(self.img_prompt, self.settings.get_vars())
                 self.params.update_bot_should_do(self.tags)
             # Initialize img_payload
             self.init_img_payload()
             # collect matched tag values
-            img_payload_mods = self.collect_img_tag_values()
+            img_payload_mods = await self.collect_img_tag_values()
             # Apply tags relevant to Img gen
             await self.process_img_payload_tags(img_payload_mods)
-            # Check censoring
-            if self.params.img_censoring == 2:
-                await self.embeds.send('img_send', "Image prompt was flagged as inappropriate.", "")
-                return
             # Process loractl
             if config.sd['extensions'].get('lrctl', {}).get('enabled', False):
                 self.apply_loractl()
@@ -3690,12 +3710,15 @@ class Tasks(TaskProcessing):
                 swap_params.imgmodel['verb'] = 'Swapping back to'
                 # RUN A CHANGE IMGMODEL SUBTASK
                 await self.run_subtask('change_imgmodel')
+        except TaskCensored:
+            raise
         except Exception as e:
             log.error(f"An error occurred in img_gen_task(): {e}")
             traceback.print_exc()
 
     # Task created from /image command
     async def image_cmd_task(self:"Task"):
+        self.tags = None
         await self.img_gen_task()
 
 #################################################################
@@ -4015,6 +4038,8 @@ class Task(Tasks):
                 return await method()
             else:
                 logging.error(f"No such method: {method_name}")
+        except TaskCensored:
+            pass
         except Exception as e:
             logging.error(f"An error occurred while processing task {self.name}: {e}")
             traceback.print_exc()
@@ -4128,6 +4153,8 @@ class TaskManager(Tasks):
             # flows queue is populated in process_llm_payload_tags()
             if flows_queue.qsize() > 0:
                 await flows.run_flow_if_any(task.text, task.ictx)
+        except TaskCensored:
+            pass
         except Exception as e:
             logging.error(f"An error occurred while processing task {task.name}: {e}")
             traceback.print_exc()
