@@ -3436,7 +3436,7 @@ class Tasks(TaskProcessing):
                 await tts.apply_toggle_tts(self.settings, toggle='on', tts_sw=True)
                 tts.enabled = True
                 message = 'enabled'
-            vc_guild_ids = [self.ictx.guild.id] if config.per_server_settings else [guild.id for guild in client.guilds]
+            vc_guild_ids = [self.ictx.guild.id] if config.is_per_server() else [guild.id for guild in client.guilds]
             for vc_guild_id in vc_guild_ids:
                 await voice_clients.toggle_voice_client(vc_guild_id, message)
             if self.embeds.enabled('change'):
