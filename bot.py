@@ -1705,7 +1705,6 @@ class TaskProcessing(TaskAttributes):
                         await self.send_response_chunk(chunk_text)
 
             async def check_censored(search_text):
-                print("search_text:", search_text)
                 for tag in self.tags.censor_tags:
                     trigger_keys = [key for key in tag if key.startswith('trigger')]
                     trigger_match = None
@@ -1721,7 +1720,6 @@ class TaskProcessing(TaskAttributes):
                                 self.embeds.create('censor', "LLM response was flagged as inappropriate", "Further task processing has been cancelled.")
                                 await self.embeds.send('censor', delete_after=5)
                                 raise TaskCensored
-
 
             class StreamReplies:
                 def __init__(self, task:"Task"):
