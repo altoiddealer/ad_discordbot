@@ -99,7 +99,7 @@ class Tags():
         self.matches: TAG_LIST = []
         self.unmatched = {'user': [], 'llm': [], 'userllm': []}
         self.tag_trumps:set = set([])
-        self.censor_tags: TAG_LIST = []
+        self.llm_censor_tags: TAG_LIST = []
         '''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
         Instances of Tags() are initialized with empty defaults.
 
@@ -170,11 +170,11 @@ class Tags():
                     break # Skip this tag
                 if not self.pass_discord_check(key, value):
                     break # Skip this tag
-                if key == 'llm_censoring' and tag['llm_censoring'] == True:
-                    self.censor_tags.append(tag)
             # sort tags that passed condition for further processing
             else:
                 search_mode = tag.get('search_mode', 'userllm')  # Default to 'userllm' if 'search_mode' is not present
+                if key == 'llm_censoring' and search_mode != 'user' and tag['llm_censoring'] == True:
+                    self.llm_censor_tags.append(tag)
                 if search_mode in self.unmatched:
                     self.unmatched[search_mode].append({k: v for k, v in tag.items() if k != 'search_mode'})
                 else:

@@ -1705,7 +1705,7 @@ class TaskProcessing(TaskAttributes):
                         await self.send_response_chunk(chunk_text)
 
             async def check_censored(search_text):
-                for tag in self.tags.censor_tags:
+                for tag in self.tags.llm_censor_tags:
                     trigger_keys = [key for key in tag if key.startswith('trigger')]
                     trigger_match = None
                     for key in trigger_keys:
