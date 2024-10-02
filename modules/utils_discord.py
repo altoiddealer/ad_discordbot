@@ -5,6 +5,7 @@ from typing import Optional, Union
 from modules.typing import CtxInteraction
 from typing import TYPE_CHECKING
 import asyncio
+from contextlib import asynccontextmanager
 
 from modules.logs import import_track, get_logger; import_track(__file__, fp=True); log = get_logger(__name__)  # noqa: E702
 logging = log
@@ -580,3 +581,26 @@ class Embeds:
             "color": self.color
         }
         return discord.Embed().from_dict(system_json)
+    
+    
+@asynccontextmanager
+async def muffled_send(channel: discord.TextChannel):
+    '''
+    Returns channel to send 
+    '''
+    try:
+        yield channel
+        
+    except discord.errors.Forbidden:
+        log.warning(f"403: Forbidden, Tried to send a message to [{channel}] without permission.")
+        
+    except AttributeError:
+        if channel is None:
+            log.warning("Cannot send to channel of NoneType")
+            
+    # except Exception as e:
+    #     raise e
+    
+    finally:
+        pass # No closing action needed
+    

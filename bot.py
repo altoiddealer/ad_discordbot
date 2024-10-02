@@ -42,7 +42,7 @@ from modules.utils_shared import shared_path, bg_task_queue, task_processing, fl
 from modules.database import StarBoard, Statistics, BaseFileMemory
 from modules.utils_misc import check_probability, fix_dict, update_dict, sum_update_dict, update_dict_matched_keys, random_value_from_range, convert_lists_to_tuples, get_time, format_time, format_time_difference, get_normalized_weights  # noqa: F401
 from modules.utils_discord import Embeds, guild_only, guild_or_owner_only, configurable_for_dm_if, is_direct_message, ireply, sleep_delete_message, send_long_message, \
-    EditMessageModal, SelectedListItem, SelectOptionsView, get_user_ctx_inter, get_message_ctx_inter, apply_reactions_to_messages, replace_msg_in_history_and_discord, MAX_MESSAGE_LENGTH  # noqa: F401
+    EditMessageModal, SelectedListItem, SelectOptionsView, get_user_ctx_inter, get_message_ctx_inter, apply_reactions_to_messages, replace_msg_in_history_and_discord, MAX_MESSAGE_LENGTH, muffled_send  # noqa: F401
 from modules.utils_aspect_ratios import dims_from_ar, avg_from_dims, get_aspect_ratio_parts, calculate_aspect_ratio_sizes  # noqa: F401
 from modules.history import HistoryManager, History, HMessage, cnf
 from modules.typing import AlertUserError
@@ -484,14 +484,17 @@ async def first_run():
                 # If 'general' channel is not found, use the first text channel
                 if default_channel is None:
                     default_channel = guild.text_channels[0]
-                await default_channel.send(embed = bot_embeds.helpmenu())
+                
+                async with muffled_send(default_channel):
+                    await default_channel.send(embed = bot_embeds.helpmenu())
+                    
                 break  # Exit the loop after sending the message to the first guild
+            
         log.info('Welcome to ad_discordbot! Use "/helpmenu" to see main commands. (https://github.com/altoiddealer/ad_discordbot) for more info.')
-    except Exception as e:
-        if str(e).startswith("403"):
-            log.warning("The bot tried to send a welcome message, but probably does not have access/permissions to your default channel (probably #General)")
-        else:
-            log.error(f"An error occurred while welcoming user to the bot: {e}")
+        
+    except Exception as e: # muffled send will not catch all errors, only specific ones we can ignore.
+        log.error(f"An error occurred while welcoming user to the bot: {e}")
+        
     finally:
         bot_database.set('first_run', False)
 
