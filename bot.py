@@ -503,29 +503,37 @@ async def on_ready():
     if bot_database.first_run:
         await first_run()
 
-    # Create background task processing queue
-    client.loop.create_task(process_tasks_in_background())
-    # Start the Task Manager
-    client.loop.create_task(task_manager.process_tasks())
+        # The following functions don't have to be in first_run() to be ran on first init.
+        
+        # Create background task processing queue
+        client.loop.create_task(process_tasks_in_background()) # uses while loop
+        # Start the Task Manager
+        client.loop.create_task(task_manager.process_tasks()) # uses while loop
 
-    # Run guild startup tasks
-    await init_guilds()
+        # Run guild startup tasks
+        await init_guilds() # As it can post to a discord channel, run only once
 
-    # Load character(s)
-    if tgwui.enabled:
-        await init_characters()
-    # Schedule bot to go idle, if configured
-    await bot_status.schedule_go_idle()
+        # Load character(s)
+        if tgwui.enabled:
+            await init_characters()
 
+        # Start background task to to change image models automatically
+        await init_auto_change_imgmodels() # uses while loop
+        
+        log.info("----------------------------------------------")
+        log.info("                Bot is ready")
+        log.info("    Use Ctrl+C to shutdown the bot cleanly")
+        log.info("----------------------------------------------")
+    
+    
+    ######################
+    # Run every on_ready()
+    
     # Start background task to sync the discord client tree
     await bg_task_queue.put(client.tree.sync())
-    # Start background task to to change image models automatically
-    await init_auto_change_imgmodels()
     
-    log.info("----------------------------------------------")
-    log.info("                Bot is ready")
-    log.info("    Use Ctrl+C to shutdown the bot cleanly")
-    log.info("----------------------------------------------")
+    # Schedule bot to go idle, if configured
+    await bot_status.schedule_go_idle()
 
 #################################################################
 ################### DISCORD EVENTS/FEATURES #####################
