@@ -42,7 +42,7 @@ from modules.utils_shared import shared_path, bg_task_queue, task_processing, fl
 from modules.database import StarBoard, Statistics, BaseFileMemory
 from modules.utils_misc import check_probability, fix_dict, update_dict, sum_update_dict, update_dict_matched_keys, random_value_from_range, convert_lists_to_tuples, get_time, format_time, format_time_difference, get_normalized_weights  # noqa: F401
 from modules.utils_discord import Embeds, guild_only, guild_or_owner_only, configurable_for_dm_if, is_direct_message, ireply, sleep_delete_message, send_long_message, \
-    EditMessageModal, SelectedListItem, SelectOptionsView, get_user_ctx_inter, get_message_ctx_inter, apply_reactions_to_messages, replace_msg_in_history_and_discord, MAX_MESSAGE_LENGTH  # noqa: F401
+    EditMessageModal, SelectedListItem, SelectOptionsView, get_user_ctx_inter, get_message_ctx_inter, apply_reactions_to_messages, replace_msg_in_history_and_discord, MAX_MESSAGE_LENGTH, muffled_send  # noqa: F401
 from modules.utils_aspect_ratios import dims_from_ar, avg_from_dims, get_aspect_ratio_parts, calculate_aspect_ratio_sizes  # noqa: F401
 from modules.history import HistoryManager, History, HMessage, cnf
 from modules.typing import AlertUserError
@@ -120,6 +120,7 @@ warnings.filterwarnings("ignore", category=UserWarning, message="You have modifi
 intents = discord.Intents.default()
 intents.message_content = True
 client = commands.Bot(command_prefix=".", intents=intents)
+client.is_first_on_ready = True # type: ignore
 
 #################################################################
 ################### Stable Diffusion Startup ####################
@@ -483,14 +484,17 @@ async def first_run():
                 # If 'general' channel is not found, use the first text channel
                 if default_channel is None:
                     default_channel = guild.text_channels[0]
-                await default_channel.send(embed = bot_embeds.helpmenu())
+                
+                async with muffled_send(default_channel):
+                    await default_channel.send(embed = bot_embeds.helpmenu())
+                    
                 break  # Exit the loop after sending the message to the first guild
+            
         log.info('Welcome to ad_discordbot! Use "/helpmenu" to see main commands. (https://github.com/altoiddealer/ad_discordbot) for more info.')
-    except Exception as e:
-        if str(e).startswith("403"):
-            log.warning("The bot tried to send a welcome message, but probably does not have access/permissions to your default channel (probably #General)")
-        else:
-            log.error(f"An error occurred while welcoming user to the bot: {e}")
+        
+    except Exception as e: # muffled send will not catch all errors, only specific ones we can ignore.
+        log.error(f"An error occurred while welcoming user to the bot: {e}")
+        
     finally:
         bot_database.set('first_run', False)
 
@@ -503,29 +507,39 @@ async def on_ready():
     if bot_database.first_run:
         await first_run()
 
-    # Create background task processing queue
-    client.loop.create_task(process_tasks_in_background())
-    # Start the Task Manager
-    client.loop.create_task(task_manager.process_tasks())
+    if client.is_first_on_ready: # type: ignore
+        client.is_first_on_ready = False # type: ignore
+        # The following functions don't have to be in first_run() to be ran on first init.
+        
+        # Create background task processing queue
+        client.loop.create_task(process_tasks_in_background()) # uses while loop
+        # Start the Task Manager
+        client.loop.create_task(task_manager.process_tasks()) # uses while loop
 
-    # Run guild startup tasks
-    await init_guilds()
+        # Run guild startup tasks
+        await init_guilds() # As it can post to a discord channel, run only once
 
-    # Load character(s)
-    if tgwui.enabled:
-        await init_characters()
-    # Schedule bot to go idle, if configured
-    await bot_status.schedule_go_idle()
+        # Load character(s)
+        if tgwui.enabled:
+            await init_characters()
 
+        # Start background task to to change image models automatically
+        await init_auto_change_imgmodels() # uses while loop
+        
+        log.info("----------------------------------------------")
+        log.info("                Bot is ready")
+        log.info("    Use Ctrl+C to shutdown the bot cleanly")
+        log.info("----------------------------------------------")
+    
+    
+    ######################
+    # Run every on_ready()
+    
     # Start background task to sync the discord client tree
     await bg_task_queue.put(client.tree.sync())
-    # Start background task to to change image models automatically
-    await init_auto_change_imgmodels()
     
-    log.info("----------------------------------------------")
-    log.info("                Bot is ready")
-    log.info("    Use Ctrl+C to shutdown the bot cleanly")
-    log.info("----------------------------------------------")
+    # Schedule bot to go idle, if configured
+    await bot_status.schedule_go_idle()
 
 #################################################################
 ################### DISCORD EVENTS/FEATURES #####################
