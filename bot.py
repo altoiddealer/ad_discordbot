@@ -120,6 +120,7 @@ warnings.filterwarnings("ignore", category=UserWarning, message="You have modifi
 intents = discord.Intents.default()
 intents.message_content = True
 client = commands.Bot(command_prefix=".", intents=intents)
+client.is_first_on_ready = True # type: ignore
 
 #################################################################
 ################### Stable Diffusion Startup ####################
@@ -503,6 +504,8 @@ async def on_ready():
     if bot_database.first_run:
         await first_run()
 
+    if client.is_first_on_ready: # type: ignore
+        client.is_first_on_ready = False # type: ignore
         # The following functions don't have to be in first_run() to be ran on first init.
         
         # Create background task processing queue
