@@ -506,25 +506,25 @@ async def on_ready():
     # If first time running bot
     if bot_database.first_run:
         await first_run()
-
+    
+    # Ensure startup tasks do not re-execute if bot's discord connection status fluctuates
     if client.is_first_on_ready: # type: ignore
         client.is_first_on_ready = False # type: ignore
-        # The following functions don't have to be in first_run() to be ran on first init.
-        
+
         # Create background task processing queue
-        client.loop.create_task(process_tasks_in_background()) # uses while loop
+        client.loop.create_task(process_tasks_in_background())
         # Start the Task Manager
-        client.loop.create_task(task_manager.process_tasks()) # uses while loop
+        client.loop.create_task(task_manager.process_tasks())
 
         # Run guild startup tasks
-        await init_guilds() # As it can post to a discord channel, run only once
+        await init_guilds()
 
         # Load character(s)
         if tgwui.enabled:
             await init_characters()
 
         # Start background task to to change image models automatically
-        await init_auto_change_imgmodels() # uses while loop
+        await init_auto_change_imgmodels()
         
         log.info("----------------------------------------------")
         log.info("                Bot is ready")
