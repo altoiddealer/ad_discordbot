@@ -63,7 +63,7 @@ bot_statistics = Statistics()
 #################################################################
 #################### DISCORD / BOT STARTUP ######################
 #################################################################
-bot_embeds = Embeds(config)
+bot_embeds = Embeds()
 
 # Intercept custom bot arguments
 def parse_bot_args():
@@ -3967,7 +3967,7 @@ class Task(Tasks):
         self.channel: discord.TextChannel = self.ictx.channel if self.ictx else None
         self.user: Union[discord.User, discord.Member] = get_user_ctx_inter(self.ictx) if self.ictx else None
         self.user_name: str          = self.user.display_name if self.user else ""
-        self.embeds: Embeds          = self.embeds if self.embeds else Embeds(config, self.ictx)
+        self.embeds: Embeds          = self.embeds if self.embeds else Embeds(self.ictx)
         # The original input text
         self.text: str               = self.text if self.text else ""
         # TGWUI specific attributes
