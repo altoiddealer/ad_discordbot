@@ -4034,7 +4034,7 @@ class Task(Tasks):
         Can optionally clone a running 'istyping'
         '''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
         ignore_list = ignore_list if ignore_list is not None else []
-        always_ignore = ['name', 'ictx', 'message']
+        always_ignore = ['name', 'ictx', 'message', 'embeds']
         ignore_list = ignore_list + always_ignore
 
         deepcopy_list = ['llm_payload', 'img_payload']
@@ -4053,7 +4053,7 @@ class Task(Tasks):
             else:
                 current_attributes[key] = value
             
-        new_task = Task(name=name, ictx=ictx, **current_attributes)
+        new_task = Task(name=name, ictx=ictx, embeds=Embeds(ictx), **current_attributes)
         
         if init_now:
             new_task.init_self_values()
