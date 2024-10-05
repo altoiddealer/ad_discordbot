@@ -530,6 +530,9 @@ async def on_ready():
         log.info("                Bot is ready")
         log.info("    Use Ctrl+C to shutdown the bot cleanly")
         log.info("----------------------------------------------")
+    # Run only on discord reconnections
+    else:
+        await voice_clients.restore_state()
     
     
     ######################
@@ -769,21 +772,43 @@ if config.discord['post_active_settings'].get('enabled', True):
 class VoiceClients:
     def __init__(self):
         self.guild_vcs:dict = {}
+        self.expected_state:dict = {}
         self.queued_tts:list = []
+
+    def is_connected(self, guild_id):
+        if self.guild_vcs.get(guild_id):
+            return self.guild_vcs[guild_id].is_connected()
+        return False
+    
+    def should_be_connected(self, guild_id):
+        return self.expected_state.get(guild_id, False)
+
+    # Try loading character data regardless of mode (chat/instruct)
+    async def restore_state(self):
+        for guild_id, should_be_connected in self.expected_state.items():
+            try:
+                if should_be_connected and not self.is_connected(guild_id):
+                    voice_channel = client.get_channel(bot_database.voice_channels[guild_id])
+                    self.guild_vcs[guild_id] = await voice_channel.connect()
+                elif not should_be_connected and self.is_connected(guild_id):
+                    await self.guild_vcs[guild_id].disconnect()
+            except Exception as e:
+                log.error(f'[Voice Clients] An error occurred while restoring voice channel state for guild ID "{guild_id}": {e}')
 
     async def toggle_voice_client(self, guild_id, toggle:str=None):
         try:
-            if toggle == 'enabled' and not self.guild_vcs.get(guild_id):
+            if toggle == 'enabled' and not self.is_connected(guild_id):
                 if bot_database.voice_channels.get(guild_id):
                     voice_channel = client.get_channel(bot_database.voice_channels[guild_id])
                     self.guild_vcs[guild_id] = await voice_channel.connect()
+                    self.expected_state[guild_id] = True
                 else:
                     log.warning(f'[Voice Clients] "{tts.client}" enabled, but a valid voice channel is not set for this server.')
                     log.info('[Voice Clients] Use "/set_server_voice_channel" to select a voice channel for this server.')
             if toggle == 'disabled':
-                if self.guild_vcs.get(guild_id) and self.guild_vcs[guild_id].is_connected():
+                if self.is_connected(guild_id):
                     await self.guild_vcs[guild_id].disconnect()
-                    self.guild_vcs.pop(guild_id)
+                    self.expected_state[guild_id] = False
         except Exception as e:
             log.error(f'[Voice Clients] An error occurred while toggling voice channel for guild ID "{guild_id}": {e}')
 
