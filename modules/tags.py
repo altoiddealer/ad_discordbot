@@ -468,7 +468,7 @@ class Tags():
                             repeat -= 1                      # decrement repeat
                             log.info("[TAGS] Persistent tag was automatically applied.")
                             if repeat != 0:
-                                log.info(f"[TAGS] Remaining persistency: {repeat if repeat == 0 else 'Forever'}")
+                                log.info(f"[TAGS] Remaining persistency: {repeat if repeat >= 0 else 'Forever'}")
                                 updated_ptags.append( (repeat, ptag) ) # continue persisting the tag
                             return True
                         return False
