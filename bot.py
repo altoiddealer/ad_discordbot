@@ -47,7 +47,7 @@ from modules.utils_aspect_ratios import dims_from_ar, avg_from_dims, get_aspect_
 from modules.history import HistoryManager, History, HMessage, cnf
 from modules.typing import AlertUserError
 from modules.utils_asyncio import generate_in_executor
-from modules.tags import base_tags, Tags
+from modules.tags import base_tags, persistent_tags, Tags
 
 from discord.ext.commands.errors import HybridCommandError, CommandError
 from discord.errors import DiscordException
@@ -1517,6 +1517,12 @@ class TaskProcessing(TaskAttributes):
                         llm_payload_mods['state'].update(state) # Allow multiple to accumulate.
                     except Exception:
                         log.warning("Error processing a matched 'state' tag; ensure it is a dictionary.")
+                if 'persist' in tag:
+                    persist = int(tag.pop('persist'))
+                    log.info(f'[TAGS] A persistent tag was matched, which will be auto-applied for the next ({persist}) tag matching phases (pre-LLM).')
+                    channel_ptags = persistent_tags.llm_ptags.setdefault(self.channel.id, [])
+                    channel_ptags.append( (persist, tag) )
+
         except TaskCensored:
             raise
         except Exception as e:
@@ -2907,6 +2913,10 @@ class TaskProcessing(TaskAttributes):
                         user_image = discord.File(user_image_args)
                         self.params.send_user_image.append(user_image)
                         log.info('[TAGS] Sending user image.')
+                    elif key == 'persist':
+                        log.info(f'[TAGS] A persistent tag was matched, which will be auto-applied for the next ({value}) tag matching phases (pre-Image Gen).')
+                        channel_ptags = persistent_tags.img_ptags.setdefault(self.channel.id, [])
+                        channel_ptags.append( (value, tag) )
             # Add the collected SD WebUI extension args to the img_payload_mods dict
             if controlnet_args:
                 img_payload_mods.setdefault('controlnet', [])
