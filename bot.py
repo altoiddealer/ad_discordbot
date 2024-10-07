@@ -47,7 +47,7 @@ from modules.utils_aspect_ratios import dims_from_ar, avg_from_dims, get_aspect_
 from modules.history import HistoryManager, History, HMessage, cnf
 from modules.typing import AlertUserError
 from modules.utils_asyncio import generate_in_executor
-from modules.tags import base_tags, Tags
+from modules.tags import base_tags, persistent_tags, Tags
 
 from discord.ext.commands.errors import HybridCommandError, CommandError
 from discord.errors import DiscordException
@@ -1456,67 +1456,72 @@ class TaskProcessing(TaskAttributes):
                     raise TaskCensored
                 # Values that will only apply from the first tag matches
                 if 'begin_reply_with' in tag and not llm_payload_mods.get('begin_reply_with'):
-                    llm_payload_mods['begin_reply_with'] = tag.pop('begin_reply_with')
+                    llm_payload_mods['begin_reply_with'] = tag.get('begin_reply_with')
                 if 'flow' in tag and not llm_payload_mods.get('flow'):
-                    llm_payload_mods['flow'] = tag.pop('flow')
+                    llm_payload_mods['flow'] = tag.get('flow')
                 if 'save_history' in tag and not llm_payload_mods.get('save_history'):
-                    llm_payload_mods['save_history'] = bool(tag.pop('save_history'))
+                    llm_payload_mods['save_history'] = bool(tag.get('save_history'))
                 if 'load_history' in tag and not llm_payload_mods.get('load_history'):
-                    llm_payload_mods['load_history'] = int(tag.pop('load_history'))
+                    llm_payload_mods['load_history'] = int(tag.get('load_history'))
                 if 'include_hidden_history' in tag and not llm_payload_mods.get('include_hidden_history'):
-                    llm_payload_mods['include_hidden_history'] = bool(tag.pop('include_hidden_history'))
+                    llm_payload_mods['include_hidden_history'] = bool(tag.get('include_hidden_history'))
                     
                 # change_character is higher priority, if added ignore swap_character
                 if 'change_character' in tag and not is_direct_message(self.ictx) and not (llm_payload_mods.get('change_character') or llm_payload_mods.get('swap_character')):
-                    llm_payload_mods['change_character'] = str(tag.pop('change_character'))
+                    llm_payload_mods['change_character'] = str(tag.get('change_character'))
                 if 'swap_character' in tag and not (llm_payload_mods.get('change_character') or llm_payload_mods.get('swap_character')):
-                    llm_payload_mods['swap_character'] = str(tag.pop('swap_character'))
+                    llm_payload_mods['swap_character'] = str(tag.get('swap_character'))
                     
                 # change_llmmodel is higher priority, if added ignore swap_llmmodel
                 if 'change_llmmodel' in tag and not is_direct_message(self.ictx) and not (llm_payload_mods.get('change_llmmodel') or llm_payload_mods.get('swap_llmmodel')):
-                    llm_payload_mods['change_llmmodel'] = str(tag.pop('change_llmmodel'))
+                    llm_payload_mods['change_llmmodel'] = str(tag.get('change_llmmodel'))
                 if 'swap_llmmodel' in tag and not (llm_payload_mods.get('change_llmmodel') or llm_payload_mods.get('swap_llmmodel')):
-                    llm_payload_mods['swap_llmmodel'] = str(tag.pop('swap_llmmodel'))
+                    llm_payload_mods['swap_llmmodel'] = str(tag.get('swap_llmmodel'))
                     
                 # Values that may apply repeatedly
                 if 'filter_history_for' in tag:
                     llm_payload_mods.setdefault('filter_history_for', [])
-                    llm_payload_mods['filter_history_for'].append(tag.pop('filter_history_for'))
+                    llm_payload_mods['filter_history_for'].append(tag.get('filter_history_for'))
                 if 'prefix_context' in tag:
                     llm_payload_mods.setdefault('prefix_context', [])
-                    llm_payload_mods['prefix_context'].append(tag.pop('prefix_context'))
+                    llm_payload_mods['prefix_context'].append(tag.get('prefix_context'))
                 if 'suffix_context' in tag:
                     llm_payload_mods.setdefault('suffix_context', [])
-                    llm_payload_mods['suffix_context'].append(tag.pop('suffix_context'))
+                    llm_payload_mods['suffix_context'].append(tag.get('suffix_context'))
                 if 'send_user_image' in tag:
-                    user_image_file = tag.pop('send_user_image')
+                    user_image_file = tag.get('send_user_image')
                     user_image_args = self.get_image_tag_args('User image', str(user_image_file), key=None, set_dir=None)
                     user_image = discord.File(user_image_args)
                     self.params.send_user_image.append(user_image)
                     log.info('[TAGS] Sending user image.')
                 if 'format_prompt' in tag:
                     formatting.setdefault('format_prompt', [])
-                    formatting['format_prompt'].append(str(tag.pop('format_prompt')))
+                    formatting['format_prompt'].append(str(tag.get('format_prompt')))
                 if 'time_offset' in tag:
-                    formatting['time_offset'] = float(tag.pop('time_offset'))
+                    formatting['time_offset'] = float(tag.get('time_offset'))
                 if 'time_format' in tag:
-                    formatting['time_format'] = str(tag.pop('time_format'))
+                    formatting['time_format'] = str(tag.get('time_format'))
                 if 'date_format' in tag:
-                    formatting['date_format'] = str(tag.pop('date_format'))
+                    formatting['date_format'] = str(tag.get('date_format'))
                 if 'llm_param_variances' in tag:
-                    llm_param_variances = dict(tag.pop('llm_param_variances'))
+                    llm_param_variances = dict(tag.get('llm_param_variances'))
                     llm_payload_mods.setdefault('llm_param_variances', {})
                     try:
                         llm_payload_mods['param_variances'].update(llm_param_variances) # Allow multiple to accumulate.
                     except Exception:
                         log.warning("Error processing a matched 'llm_param_variances' tag; ensure it is a dictionary.")
                 if 'state' in tag:
-                    state = dict(tag.pop('state'))
+                    state = dict(tag.get('state'))
                     llm_payload_mods.setdefault('state', {})
                     try:
                         llm_payload_mods['state'].update(state) # Allow multiple to accumulate.
                     except Exception:
                         log.warning("Error processing a matched 'state' tag; ensure it is a dictionary.")
+                if 'persist' in tag:
+                    persist = int(tag.get('persist'))
+                    log.info(f'[TAGS] A persistent tag was matched, which will be auto-applied for the next ({persist}) tag matching phases (pre-LLM).')
+                    persistent_tags.append_tag_to('llm', self.channel.id, persist, tag)
+
         except TaskCensored:
             raise
         except Exception as e:
@@ -2907,6 +2912,10 @@ class TaskProcessing(TaskAttributes):
                         user_image = discord.File(user_image_args)
                         self.params.send_user_image.append(user_image)
                         log.info('[TAGS] Sending user image.')
+                    elif key == 'persist':
+                        log.info(f'[TAGS] A persistent tag was matched, which will be auto-applied for the next ({value}) tag matching phases (pre-Image Gen).')
+                        persistent_tags.append_tag_to('img', self.channel.id, value, tag)
+
             # Add the collected SD WebUI extension args to the img_payload_mods dict
             if controlnet_args:
                 img_payload_mods.setdefault('controlnet', [])

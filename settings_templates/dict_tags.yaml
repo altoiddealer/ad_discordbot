@@ -199,6 +199,8 @@ tag_presets:
 #                                     These can be either one id, example: int / or a comma separated list, example: [int, int, int]
 #   for_guild_ids_only: int           Value is a 'server_id' number. Get this by right-clicking a Server and selecting "Copy Server ID".
 #   for_channel_ids_only: int         Value is a 'channel_id' number. Get this by right-clicking a channel (or DM) and selecting "Copy Channel ID"
+#   persist: int                      Tags matched with 'persist' will automatically re-apply for that many future requests, in the same channel, during the same 'match phase'... before the tag is checked normally again.
+#                                     Ignores 'triggers', **but NOT 'random'**. 'persist: -1' will make triggered tag persist forever.
 
 # Relevant to both text/img generation:
 #   send_user_image: 'string'         Sends a local image to the channel. Value values: Image in 'user_images' (png/jpg/txt in base64) -OR- Directory name in '/user_images/'
