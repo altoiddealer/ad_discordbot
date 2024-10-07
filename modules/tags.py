@@ -25,8 +25,8 @@ class PersistentTags():
         ptag_tags:list = []
         # get and return applicable persistent tags
         phase_ptags:dict = getattr(self, f'{match_phase}_ptags', {})
-        tupled_ptags:list[tuple[int, str, TAG]] = phase_ptags.get(ictx.channel.id, []) if ictx else []
-        if tupled_ptags:
+        tupled_ptags = phase_ptags.get(ictx.channel.id) if ictx else None
+        if isinstance(tupled_ptags, list):
             for tupled_ptag in tupled_ptags:
                 repeat, ptag = tupled_ptag
                 ptag_repeats.append(repeat)
@@ -566,8 +566,9 @@ class Tags():
             self.unmatched = updated_unmatched
 
             # Update persistent tags list for current phase/channel
-            if channel_ptags:
-                channel_ptags = updated_ptags
+            if isinstance(channel_ptags, list):
+                channel_ptags.clear()
+                channel_ptags.extend(updated_ptags)
 
         except Exception as e:
             log.error(f"Error matching tags: {e}")
