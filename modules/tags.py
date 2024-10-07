@@ -32,6 +32,17 @@ class PersistentTags():
                 ptag_repeats.append(repeat)
                 ptag_tags.append(ptag)
         return tupled_ptags, ptag_repeats, ptag_tags
+    
+    def append_tag_to(self, match_phase:str, channel_id:int, repeat:int, tag:TAG):
+        # strip out anything added to the original tag
+        clean_tag = {}
+        tag_copy = copy.copy(tag)
+        for key, value in tag_copy.items(): # Iterate over a copy of the tag
+            if key not in ["phase", "matched_trigger", "imgtag_matched_early", "imgtag_uninserted"]:
+                clean_tag[key] = value
+        phase_ptags:dict = getattr(self, f'{match_phase}_ptags', {})
+        channel_ptags:list = phase_ptags.setdefault(channel_id, [])
+        channel_ptags.append( (repeat, clean_tag) )
 
 persistent_tags = PersistentTags()
 
@@ -342,13 +353,13 @@ class Tags():
                 tag, start, end = item # unpack tuple
                 phase = tag.get('phase', 'user')
                 if phase == 'llm':
-                    insert_text = tag.pop('insert_text', None)
-                    insert_method = tag.pop('insert_text_method', 'after')  # Default to 'after'
-                    join = tag.pop('text_joining', ' ')
+                    insert_text = tag.get('insert_text', None)
+                    insert_method = tag.get('insert_text_method', 'after')  # Default to 'after'
+                    join = tag.get('text_joining', ' ')
                 else:
                     insert_text = tag.get('positive_prompt', None)
-                    insert_method = tag.pop('positive_prompt_method', 'after')  # Default to 'after'
-                    join = tag.pop('img_text_joining', ' ')
+                    insert_method = tag.get('positive_prompt_method', 'after')  # Default to 'after'
+                    join = tag.get('img_text_joining', ' ')
                 if insert_text is None:
                     log.error(f"Error processing matched tag {item}. Skipping this tag.")
                 else:
@@ -370,12 +381,12 @@ class Tags():
                     tag = item
                 phase = tag.get('phase', 'user')
                 if phase == 'llm':
-                    tag.pop('insert_text', None)
-                    tag.pop('insert_text_method', None)
-                    tag.pop('text_joining', None)
+                    tag.get('insert_text', None)
+                    tag.get('insert_text_method', None)
+                    tag.get('text_joining', None)
                 else:
-                    tag.pop('img_text_joining', None)
-                    tag.pop('positive_prompt_method', None)
+                    tag.get('img_text_joining', None)
+                    tag.get('positive_prompt_method', None)
                 updated_matches.append(tag)
             self.matches = updated_matches
             return prompt
@@ -440,7 +451,7 @@ class Tags():
             # Gather any applicable "persistent tags"
             updated_ptags = []
             channel_ptags, ptag_repeats, ptag_tags = persistent_tags.get_ptags_for(phase, self.ictx)
-            
+
             # Iterate over copies of tags lists and apply tag matching logic
             updated_matches:TAG_LIST = list(copy.deepcopy(self.matches)) # type: ignore
             updated_unmatched:TAG_LIST_DICT = dict(copy.deepcopy(self.unmatched)) # type: ignore
@@ -449,30 +460,36 @@ class Tags():
 
                 for tag in unmatched_list:
 
-                    def match_tag():
-                        updated_unmatched[list_name].remove(tag)
-                        tag['phase'] = phase
-                        updated_matches.append(tag)
-
-                    def check_ptags():
+                    def is_persistent():
                         if tag in ptag_tags:
                             tag_index = ptag_tags.index(tag) # get the index
                             repeat = ptag_repeats[tag_index] # identity the corresponding repeat value
                             ptag = ptag_tags[tag_index]      # identity the corresponding ptag
                             repeat -= 1                      # decrement repeat
+                            log.info("[TAGS] Persistent tag was automatically applied.")
                             if repeat != 0:
+                                log.info(f"[TAGS] Remaining persistency: {repeat}")
                                 updated_ptags.append( (repeat, ptag) ) # continue persisting the tag
                             return True
                         return False
 
                     # Collect list of all key pairs in tag dict that begin with 'trigger'
                     trigger_keys = [key for key in tag if key.startswith('trigger')]
-                    # Check if tag was previously triggered with persistency
-                    is_persistent = check_ptags()
 
-                    # Instantly match persistent tags, or ones without trigger keys
-                    if is_persistent or not trigger_keys:
-                        match_tag()
+                    # Match tags without trigger keys
+                    if not trigger_keys:
+                        updated_unmatched[list_name].remove(tag)
+                        tag['phase'] = phase
+                        updated_matches.append(tag)
+                        continue
+
+                    # Match tags previously triggered with persistency
+                    if is_persistent():
+                        tag_copy = copy.deepcopy(tag)
+                        tag_copy.pop('persist') # don't re-trigger persistency
+                        updated_unmatched[list_name].remove(tag)
+                        tag_copy['phase'] = phase
+                        updated_matches.append(tag_copy)
                         continue
 
                     case_sensitive = tag.get('case_sensitive', False)
