@@ -8,7 +8,7 @@ import traceback
 from typing import Any, Optional
 from modules.database import BaseFileMemory
 from modules.utils_discord import get_user_ctx_inter, is_direct_message
-from modules.typing import TAG_LIST, TAG_LIST_DICT, CtxInteraction, Union
+from modules.typing import TAG, TAG_LIST, TAG_LIST_DICT, CtxInteraction, Union
 from modules.utils_shared import shared_path, flows_queue, patterns
 
 from modules.logs import import_track, get_logger; import_track(__file__, fp=True); log = get_logger(__name__)  # noqa: E702
@@ -21,6 +21,7 @@ class BaseTags(BaseFileMemory):
         self.tag_presets: list
         super().__init__(shared_path.tags, version=1, missing_okay=True)
         self.tags = self.update_tags(self.tags)
+        self.persistent_tags: dict[int, list[tuple[int, TAG]]] = {} # {discord.channel.id: [(match count, {Tag}), (match count, {Tag})], discord.channel.id: ...}
 
     def load_defaults(self, data: dict):
         self.global_tag_keys = data.pop('global_tag_keys', {})
@@ -96,7 +97,7 @@ class Tags():
         self.ictx = ictx
         self.user = get_user_ctx_inter(self.ictx) if self.ictx else None # Union[discord.User, discord.Member]
         self.tags_initialized = False
-        self.matches: TAG_LIST = []
+        self.matches:list = []
         self.unmatched = {'user': [], 'llm': [], 'userllm': []}
         self.tag_trumps:set = set([])
         self.llm_censor_tags: TAG_LIST = []
@@ -416,20 +417,56 @@ class Tags():
             if phase == 'llm':
                 llm_tags = self.unmatched.pop('llm', []) if 'user' in self.unmatched else [] # type: ignore
 
+            # Define "persistent tags"
+            persistent_tags:list[tuple[int, TAG]] = base_tags.persistent_tags.get(self.ictx.channel.id, []) if self.ictx else []
+            if persistent_tags:
+                repeats:list = []
+                ptags:list = []
+                for ptuple in persistent_tags:
+                    repeat, ptag = ptuple
+                    repeats.append(repeat)
+                    ptags.append(ptag)
+            
+            # Iterate over copies of tags lists and apply tag matching logic
             updated_matches:TAG_LIST = list(copy.deepcopy(self.matches)) # type: ignore
             updated_unmatched:TAG_LIST_DICT = dict(copy.deepcopy(self.unmatched)) # type: ignore
             for list_name, unmatched_list in self.unmatched.items(): # type: ignore
                 unmatched_list: TAG_LIST
 
                 for tag in unmatched_list:
+
+                    def match():
+                        updated_unmatched[list_name].remove(tag)
+                        tag['phase'] = phase
+                        updated_matches.append(tag)
+
                     # Collect list of all key pairs in tag dict that begin with 'trigger'
                     trigger_keys = [key for key in tag if key.startswith('trigger')]
 
                     # Consider tag as matched if no trigger keys
                     if not trigger_keys:
-                        updated_unmatched[list_name].remove(tag)
-                        tag['phase'] = phase
-                        updated_matches.append(tag)
+                        match()
+                        continue
+
+                    # Check if tag is was previously triggered with persistency
+                    if persistent_tags and tag in ptags:
+                        # Find the index of the matching tag in ptags
+                        tag_index = ptags.index(tag)
+                        repeat = repeats[tag_index]
+
+                        # Check repeat value
+                        if repeat > 0:
+                            # Decrement repeat and match the tag
+                            repeats[tag_index] -= 1
+                            match()
+                            # Remove the tag from persistent_tags if repeat hits zero
+                            if repeats[tag_index] == 0:
+                                persistent_tags.pop(tag_index)
+                                repeats.pop(tag_index)  # Make sure to remove repeat counter too
+
+                        elif repeat < 0:
+                            # Negative repeat always matches
+                            match()
                         continue
 
                     case_sensitive = tag.get('case_sensitive', False)
