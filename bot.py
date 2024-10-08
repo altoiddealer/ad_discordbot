@@ -1437,6 +1437,8 @@ class TaskProcessing(TaskAttributes):
                     else:
                         log.info(f'[TAGS] {verb} LLM Model: {model_change}')
                         self.params.llmmodel = {'llmmodel_name': model_change, 'mode': mode, 'verb': verb}
+        except TaskCensored:
+            raise
         except Exception as e:
             log.error(f"Error processing LLM tags: {e}")
 
@@ -1755,7 +1757,7 @@ class TaskProcessing(TaskAttributes):
                     for key in trigger_keys:
                         triggers = [t.strip() for t in tag[key].split(',')]
                         for trigger in triggers:
-                            trigger_regex = r'\b{}\b'.format(re.escape(trigger))
+                            trigger_regex = r'\b[^\w]*{}\b'.format(re.escape(trigger))
                             trigger_match = re.search(trigger_regex, search_text, flags=re.IGNORECASE)
                             if trigger_match:
                                 censor_text = str(trigger)
@@ -2106,6 +2108,8 @@ class TaskProcessing(TaskAttributes):
                 self.embeds.enabled_embeds = {'system': False}
                 self.params.tts_args = self.settings.llmcontext.extensions
                 await self.run_subtask('speak')
+        except TaskCensored:
+            raise
         except Exception as e:
             print(traceback.format_exc())
             log.error(f'An error occurred while sending greeting or history for "{char_name}": {e}')
@@ -3070,6 +3074,10 @@ class Tasks(TaskProcessing):
 
             return self.user_hmessage, self.bot_hmessage
 
+        except TaskCensored:
+            await self.embeds.delete('img_gen')
+            await self.embeds.delete('change')
+            raise
         except Exception as e:
             print(traceback.format_exc())
             log.error(f'An error occurred while processing "{self.name}" request: {e}')
@@ -3359,6 +3367,9 @@ class Tasks(TaskProcessing):
 
             await self.embeds.delete('regenerate')
 
+        except TaskCensored:
+            await self.embeds.delete('regenerate')
+            raise
         except Exception as e:
             print(traceback.format_exc())
             e_msg = 'An error occurred while processing "Regenerate"'
@@ -4141,11 +4152,14 @@ class Task(Tasks):
         Can also be called from the current main Task() instance while providing subtask name.
         Runs a method of Tasks()
         '''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
-        task_manager.current_subtask = subtask if subtask is not None else self.name
-        output = await self.run(subtask)
-        task_manager.current_subtask = None
-        return output
-    
+        try:
+            task_manager.current_subtask = subtask if subtask is not None else self.name
+            output = await self.run(subtask)
+            task_manager.current_subtask = None
+            return output
+        except TaskCensored:
+            raise
+
     # Ensures typing tasks are cleaned up while deleting Task() instance
     def __del__(self):
         if self.istyping is not None:
@@ -4366,7 +4380,8 @@ class Flows(TaskProcessing):
 
             descript = descript.replace("**Processing", ":white_check_mark: **")
             await bot_embeds.edit('flow', f"Flow completed for {self.user_name}", descript)
-
+        except TaskCensored:
+            raise
         except Exception as e:
             log.error(f"An error occurred while processing a Flow: {e}")
             await bot_embeds.edit_or_send('flow', "An error occurred while processing a Flow", e, channel=self.channel)

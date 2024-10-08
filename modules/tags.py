@@ -205,7 +205,7 @@ class Tags():
             # sort tags that passed condition for further processing
             else:
                 search_mode = tag.get('search_mode', 'userllm')  # Default to 'userllm' if 'search_mode' is not present
-                if key == 'llm_censoring' and search_mode != 'user' and tag['llm_censoring'] == True:
+                if 'llm_censoring' in tag and search_mode != 'user' and tag['llm_censoring'] == True:
                     self.llm_censor_tags.append(tag)
                 if search_mode in self.unmatched:
                     self.unmatched[search_mode].append({k: v for k, v in tag.items() if k != 'search_mode'})
@@ -502,7 +502,7 @@ class Tags():
                         triggers = [t.strip() for t in tag[key].split(',')]
 
                         for index, trigger in enumerate(triggers):
-                            trigger_regex = r'\b{}\b'.format(re.escape(trigger))
+                            trigger_regex = r'\b[^\w]*{}\b'.format(re.escape(trigger))
                             if case_sensitive:
                                 trigger_match = re.search(trigger_regex, search_text)
                             else:
