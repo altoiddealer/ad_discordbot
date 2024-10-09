@@ -218,6 +218,8 @@ llmstate:
     turn_template: ''
     typical_p: 1
     user_bio: ''
+    xtc_threshold: 0.1
+    xtc_probability: 0
     chat_template_str: >-
       {%- for message in messages %}
           {%- if message['role'] == 'system' -%}
