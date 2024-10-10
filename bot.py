@@ -2138,12 +2138,15 @@ class TaskProcessing(TaskAttributes):
 
     async def check_sd_progress(self:Union["Task","Tasks"], session):
         try:
-            await self.embeds.send('img_gen', f'Waiting for {sd.client} ...', ' ')
+            eta_message = 'Not yet available'
+            await self.embeds.send('img_gen', f'Waiting for {sd.client} ...', f'{self.progress_bar(0)}\n**ETA**: {eta_message}')
             await asyncio.sleep(1)
+
+            # Try getting progress data
             retry_count = 0
             while retry_count < 5:
                 progress_data = await self.fetch_progress(session)
-                if progress_data and progress_data['progress'] != 0:
+                if progress_data and progress_data['progress'] > 0:
                     break
                 log.warning(f'Waiting for progress response from {sd.client}, retrying in 1 second (attempt {retry_count + 1}/5)')
                 await asyncio.sleep(1)
@@ -2151,28 +2154,56 @@ class TaskProcessing(TaskAttributes):
             else:
                 await self.sd_progress_warning()
                 return
+
+            # Variables for interpreting the progress data
             retry_count = 0
-            while progress_data['state']['job_count'] > 0:
+            progress = progress_data['progress']
+            last_progress = 0
+            stall_count = 0
+            percent_complete = progress * 100
+            # Interpret the progress data
+            while percent_complete < 100 and retry_count < 5:
                 progress_data = await self.fetch_progress(session)
+                # Yes progress data
                 if progress_data:
-                    if retry_count < 5:
-                        progress = progress_data['progress'] * 100
-                        eta = progress_data['eta_relative']
-                        if eta != 0:
-                            title = f'Generating image: {progress:.0f}%'
-                            description = f"{self.progress_bar(progress_data['progress'])}"
-                        else:
-                            title = 'Generating image: 100%'
-                            description = f'{self.progress_bar(1)}'
-                        await self.embeds.edit('img_gen', title, description)
-                        await asyncio.sleep(1)
+                    # Sort out progress data
+                    progress = progress_data['progress']
+                    percent_complete = progress * 100
+                    eta = progress_data['eta_relative']
+                    # Assert nice print values when ETA complete
+                    if eta == 0:
+                        progress = 1.0
+                        percent_complete = 100
+                    # Waiting for substantial progress
+                    if progress <= 0.01:
+                        title = f'Preparing to generate image ...'
+                    # Progress is underway
                     else:
-                        log.warning(f'Connection closed with {sd.client}, retrying in 1 second (attempt {retry_count + 1}/5)')
-                        await asyncio.sleep(1)
-                        retry_count += 1
+                        eta_message = f'{round(eta, 2)} seconds'
+                        # Check if stalled
+                        comment = ''
+                        if progress == last_progress:
+                            stall_count += 1
+                            if stall_count > 2:
+                                comment = ' (Stalled)'
+                        else:
+                            stall_count = 0
+                        # Update main progress message
+                        title = f'Generating image: {percent_complete:.0f}%{comment}'
+
+                    # Update ETA message
+                    description = f"{self.progress_bar(progress)}\n**ETA**: {eta_message}"
+                    # Update embed
+                    await self.embeds.edit('img_gen', title, description)
+
+                    last_progress = progress
+                    await asyncio.sleep(1)
+
+                # No progress data
                 else:
-                    await self.sd_progress_warning()
-                    return
+                    log.warning(f'Connection closed with {sd.client}, retrying in 1 second (attempt {retry_count + 1}/5)')
+                    await asyncio.sleep(1)
+                    retry_count += 1
             await self.embeds.delete('img_gen')
         except Exception as e:
             log.error(f'Error tracking {sd.client} image generation progress: {e}')
@@ -2259,7 +2290,7 @@ class TaskProcessing(TaskAttributes):
             reactor_args = self.img_payload.get('alwayson_scripts', {}).get('reactor', {}).get('args', [])
             last_item = reactor_args[-1] if reactor_args else None
             reactor_mask = reactor_args.pop() if isinstance(last_item, dict) else None
-            #Start progress task and generation task concurrently
+            # Start progress task and generation task concurrently
             images_task = asyncio.create_task(self.save_images_and_return(temp_dir))
             progress_task = asyncio.create_task(self.track_progress())
             # Wait for both tasks to complete
