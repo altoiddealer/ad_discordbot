@@ -6,6 +6,15 @@ settings:
   filter: ['']
   # Exclude - Omit models which include matching text.
   exclude: ['inpaint', 'refiner', 'base']
+  # You may define another layer of filters for specific server (guild) IDs. Intended for use in tandem with 'per_server_imgmodels' (setting in config.yaml)
+  # **Per-Server Filters DO NOT apply to Auto-Change Imgmodels feature**
+  per_server_filters:
+    - guild_id: 1111111111111111111111
+      filter: []
+      exclude: ['pony', 'nsfw']
+    # - guild_id: 2222222222222222222222
+    #   filter: []
+    #   exclude: []
   # Feature to periodically switch Img models. Can be toggled in discord via '/toggle_auto_change_imgmodels' command.
   auto_change_imgmodels:
     enabled: false

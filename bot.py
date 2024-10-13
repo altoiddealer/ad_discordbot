@@ -2709,7 +2709,7 @@ class TaskProcessing(TaskAttributes):
                 # Imgmodel handling
                 new_imgmodel = change_imgmodel or swap_imgmodel or None
                 if new_imgmodel:
-                    self.params.imgmodel = await get_selected_imgmodel_params(new_imgmodel) # {sd_model_checkpoint, imgmodel_name, filename}
+                    self.params.imgmodel = await get_selected_imgmodel_params(new_imgmodel, self.ictx) # {sd_model_checkpoint, imgmodel_name, filename}
                     current_imgmodel_name = bot_settings.get_last_setting_for("last_imgmodel_name", self.ictx)
                     new_imgmodel_name = self.params.imgmodel.get('imgmodel_name', '')
                     # Check if new model same as current model
@@ -5391,36 +5391,49 @@ if tgwui.enabled:
 ####################### /IMGMODEL COMMAND #######################
 #################################################################
 # Apply user defined filters to imgmodel list
-async def filter_imgmodels(imgmodels:list) -> list:
+async def filter_imgmodels(all_imgmodels:list, ictx:CtxInteraction=None) -> list:
+
+    def apply_filters(imgmodels:list, filter_list:list, exclude_list:list) -> list:
+        if filter_list or exclude_list:
+            return [imgmodel for imgmodel in imgmodels
+                    if (
+                        (not filter_list or any(re.search(re.escape(filter_text), imgmodel.get('imgmodel_name', '') + imgmodel.get('sd_model_checkpoint', ''), re.IGNORECASE) for filter_text in filter_list))
+                        and (not exclude_list or not any(re.search(re.escape(exclude_text), imgmodel.get('imgmodel_name', '') + imgmodel.get('sd_model_checkpoint', ''), re.IGNORECASE) for exclude_text in exclude_list))
+                    )]
+
     try:
         imgmodels_data = load_file(shared_path.img_models, {})
-        filter_list = imgmodels_data.get('settings', {}).get('filter', None)
-        exclude_list = imgmodels_data.get('settings', {}).get('exclude', None)
-        if filter_list or exclude_list:
-            imgmodels = [
-                imgmodel for imgmodel in imgmodels
-                if (
-                    (not filter_list or any(re.search(re.escape(filter_text), imgmodel.get('imgmodel_name', '') + imgmodel.get('sd_model_checkpoint', ''), re.IGNORECASE) for filter_text in filter_list))
-                    and (not exclude_list or not any(re.search(re.escape(exclude_text), imgmodel.get('imgmodel_name', '') + imgmodel.get('sd_model_checkpoint', ''), re.IGNORECASE) for exclude_text in exclude_list))
-                )
-            ]
-        return imgmodels
+        # Apply global filters
+        global_filters = imgmodels_data.get('settings', {}).get('filter', [])
+        global_excludes = imgmodels_data.get('settings', {}).get('exclude', [])
+        filtered_imgmodels = apply_filters(all_imgmodels, global_filters, global_excludes)
+        # Apply per-server filters
+        per_server_filters = imgmodels_data.get('settings', {}).get('per_server_filters', [])
+        if ictx is not None and hasattr(ictx, 'guild'):
+            for preset in per_server_filters:
+                preset:dict
+                if ictx.guild.id == preset.get('guild_id'):
+                    filtered_imgmodels = apply_filters(filtered_imgmodels, preset.get('filter', []), preset.get('exclude', []))
+                    break
+
+        return filtered_imgmodels
 
     except Exception as e:
         log.error(f"Error filtering image model list: {e}")
 
+
 # Get current list of imgmodels from API
-async def fetch_imgmodels() -> list:
+async def fetch_imgmodels(ictx:CtxInteraction=None) -> list:
     try:
-        imgmodels = await sd.api(endpoint='/sdapi/v1/sd-models', method='get', json=None, retry=False)
+        all_imgmodels = await sd.api(endpoint='/sdapi/v1/sd-models', method='get', json=None, retry=False)
         # Replace key names for easier management
-        for imgmodel in imgmodels:
+        for imgmodel in all_imgmodels:
             if 'title' in imgmodel:
                 imgmodel['sd_model_checkpoint'] = imgmodel.pop('title')
             if 'model_name' in imgmodel:
                 imgmodel['imgmodel_name'] = imgmodel.pop('model_name')
-        imgmodels = await filter_imgmodels(imgmodels)
-        return imgmodels
+        filtered_imgmodels = await filter_imgmodels(all_imgmodels, ictx)
+        return filtered_imgmodels
 
     except Exception as e:
         log.error(f"Error fetching image models: {e}")
@@ -5587,11 +5600,11 @@ async def change_imgmodel(selected_imgmodel_params:dict, ictx:CtxInteraction=Non
             imgmodel_update_task.cancel()
             await bg_task_queue.put(start_auto_change_imgmodels('restarted'))
 
-async def get_selected_imgmodel_params(selected_imgmodel_value:str) -> dict:
+async def get_selected_imgmodel_params(selected_imgmodel_value:str, ictx:CtxInteraction=None) -> dict:
     try:
         selected_imgmodel_params = {}
 
-        all_imgmodels = await fetch_imgmodels()
+        all_imgmodels = await fetch_imgmodels(ictx)
         for imgmodel in all_imgmodels:
             # check that the value matches a valid checkpoint
             if selected_imgmodel_value == (imgmodel.get('imgmodel_name') or imgmodel.get('sd_model_checkpoint')):
@@ -5630,7 +5643,7 @@ if sd.enabled:
     @client.hybrid_command(description="Choose an Img Model")
     @guild_or_owner_only()
     async def imgmodel(ctx: commands.Context):
-        all_imgmodels = await fetch_imgmodels()
+        all_imgmodels = await fetch_imgmodels(ctx)
         if all_imgmodels:
             items_for_img_model = [i["imgmodel_name"] for i in all_imgmodels]
             warned_too_many_img_model = False # TODO use the warned_once feature?
