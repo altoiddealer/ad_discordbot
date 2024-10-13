@@ -80,8 +80,8 @@ presets:
       # EXAMPLE USAGE FOR SETTING MODULES IF USING FORGE
       # override_settings:
       #   forge_additional_modules:
-      #     - D:\0_AI\stable-diffusion-webui-forge\models\text_encoder\ae.safetensors
-      #     - D:\0_AI\stable-diffusion-webui-forge\models\text_encoder\clip_l.safetensors
-      #     - D:\0_AI\stable-diffusion-webui-forge\models\text_encoder\t5xxl_fp8_e4m3fn.safetensors
+      #     - ae.safetensors
+      #     - clip_l.safetensors
+      #     - t5xxl_fp8_e4m3fn.safetensors
     tags:
       - tag_preset_name: Flux Payload
