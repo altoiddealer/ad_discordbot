@@ -171,7 +171,6 @@ class SD:
             async with aiohttp.ClientSession() as session:
                 async with session.request(method.lower(), url=f'{self.url}{endpoint}', json=json or {}, headers=headers) as response:
                     response_text = await response.text()
-                    print("response.status:", response.status)
                     if response.status == 200:
                         r = await response.json()
                         if self.client is None and endpoint not in ['/sdapi/v1/cmd-flags', '/API/GetNewSession']:
@@ -185,7 +184,6 @@ class SD:
                     # Try resolving certain issues and retrying
                     elif response.status in [422, 500]:
                         error_json = await response.json()
-                        print("error_json:", error_json)
                         try_resolve = False
                         # Check if it's related to an invalid override script
                         if 'Script' in error_json.get('detail', ''):
@@ -212,7 +210,7 @@ class SD:
                         error_json = await response.json()
                         # Check if it's related to the KeyError
                         if 'KeyError' in error_json.get('error', '') and "'forge_inference_memory'" in error_json.get('errors', ''):
-                            print("Removing problematic key: 'forge_inference_memory'")
+                            log.info("Removing problematic key: 'forge_inference_memory'")
                             # Remove 'forge_inference_memory' from the payload if it exists
                             if json and 'forge_inference_memory' in json:
                                 json.pop('forge_inference_memory', None)
