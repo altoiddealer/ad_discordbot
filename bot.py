@@ -2425,11 +2425,11 @@ class TaskProcessing(TaskAttributes):
                                 del alwayson_scripts['controlnet']['args'][index]
                                 continue
                             resize_mode = cnet_module.get('resize_mode')
-                            if resize_mode and isinstance(resize_mode, int):
+                            if resize_mode is not None and isinstance(resize_mode, int):
                                 resize_mode_string = 'Just Resize' if resize_mode == 0 else 'Crop and Resize' if resize_mode == 1 else 'Resize and Fill'
                                 alwayson_scripts['controlnet']['args'][index]['resize_mode'] = resize_mode_string
                             control_mode = cnet_module.get('control_mode')
-                            if control_mode and isinstance(control_mode, int):
+                            if control_mode is not None and isinstance(control_mode, int):
                                 cnet_mode_str = 'Balanced' if control_mode == 0 else 'My prompt is more important' if control_mode == 1 else 'ControlNet is more important'
                                 alwayson_scripts['controlnet']['args'][index]['control_mode'] = cnet_mode_str
             # Clean Forge Couple
