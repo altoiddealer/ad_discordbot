@@ -4534,7 +4534,7 @@ if sd.enabled:
 
     async def get_cnet_data() -> dict:
 
-        async def check_cnet_online(endpoint):
+        async def check_cnet_online():
             if config.sd['extensions'].get('controlnet_enabled', False):
                 try:
                     online = await sd.api(endpoint='/controlnet/model_list', method='get', json=None, retry=False)
