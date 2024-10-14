@@ -5519,8 +5519,9 @@ async def change_imgmodel(selected_imgmodel_params:dict, ictx:CtxInteraction=Non
                 override_settings['sd_model_checkpoint'] = selected_imgmodel_params['sd_model_checkpoint']
             # Forge manages VAE / Text Encoders using "forge_additional_modules" during change model request.
             if sd.client != 'SD WebUI Forge':
-                # Remove invalid setting
+                # Remove invalid settings
                 override_settings.pop('forge_inference_memory', None)
+                override_settings.pop('forge_additional_modules', None)
             else:
                 if not override_settings.get('forge_additional_modules'):
                     # Add required setting
