@@ -171,6 +171,7 @@ class SD:
             async with aiohttp.ClientSession() as session:
                 async with session.request(method.lower(), url=f'{self.url}{endpoint}', json=json or {}, headers=headers) as response:
                     response_text = await response.text()
+                    print("response.status:", response.status)
                     if response.status == 200:
                         r = await response.json()
                         if self.client is None and endpoint not in ['/sdapi/v1/cmd-flags', '/API/GetNewSession']:
@@ -181,9 +182,11 @@ class SD:
                                     settings:Settings
                                     settings.imgmodel.refresh_enabled_extensions()
                         return r
-                    # Handle unprocessable entity (status 422)
-                    elif response.status == 422:
+                    # Try resolving certain issues and retrying
+                    elif response.status in [422, 500]:
                         error_json = await response.json()
+                        print("error_json:", error_json)
+                        try_resolve = False
                         # Check if it's related to an invalid override script
                         if 'Script' in error_json.get('detail', ''):
                             script_name = error_json['detail'].split("'")[1]  # Extract the script name
@@ -192,17 +195,41 @@ class SD:
                                 if script_name in json['alwayson_scripts']:
                                     log.info(f"Removing invalid script: {script_name}")
                                     json['alwayson_scripts'].pop(script_name, None)
-                                
-                                # Retry the request with the modified payload
-                                return await self.api(endpoint, method, json, retry=False, warn=warn)
-                    else:
-                        if warn:
-                            log.error(f'{self.url}{endpoint} response: {response.status} "{response.reason}"')
-                            log.error(f'Response content: {response_text}')
-                        if retry and response.status in [408, 500]:
-                            log.info("Retrying the request in 3 seconds...")
-                            await asyncio.sleep(3)
-                            return await self.api(endpoint, method, json, retry=False)
+                                    try_resolve = True
+                        elif 'KeyError' in error_json.get('error', ''):
+                            # Extract the key name from the error message
+                            key_error_msg = error_json.get('errors', '')
+                            key_name = key_error_msg.split("'")[1]  # Extract the key inside single quotes
+                            log.info(f"Removing invalid key: {key_name}")
+                            # Remove the problematic key from the payload
+                            if json and key_name in json:
+                                json.pop(key_name, None)
+                                try_resolve = True
+                        if try_resolve:
+                            return await self.api(endpoint, method, json, retry=False, warn=warn)
+                    # Handle internal server error (status 500)
+                    elif response.status == 500:
+                        error_json = await response.json()
+                        # Check if it's related to the KeyError
+                        if 'KeyError' in error_json.get('error', '') and "'forge_inference_memory'" in error_json.get('errors', ''):
+                            print("Removing problematic key: 'forge_inference_memory'")
+                            # Remove 'forge_inference_memory' from the payload if it exists
+                            if json and 'forge_inference_memory' in json:
+                                json.pop('forge_inference_memory', None)
+                            
+                            # Retry the request with the modified payload
+                            return await self.api(endpoint, method, json, retry=False, warn=warn)
+
+                    # Log the error if the request failed
+                    if warn:
+                        log.error(f'{self.url}{endpoint} response: {response.status} "{response.reason}"')
+                        log.error(f'Response content: {response_text}')
+                    
+                    # Retry on specific status codes (408, 500)
+                    if retry and response.status in [408, 500]:
+                        log.info("Retrying the request in 3 seconds...")
+                        await asyncio.sleep(3)
+                        return await self.api(endpoint, method, json, retry=False)
 
         except aiohttp.client.ClientConnectionError:
             log.warning(f'Failed to connect to: "{self.url}{endpoint}", offline?')
