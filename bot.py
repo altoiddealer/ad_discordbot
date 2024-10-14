@@ -181,6 +181,20 @@ class SD:
                                     settings:Settings
                                     settings.imgmodel.refresh_enabled_extensions()
                         return r
+                    # Handle unprocessable entity (status 422)
+                    elif response.status == 422:
+                        error_json = await response.json()
+                        # Check if it's related to an invalid override script
+                        if 'Script' in error_json.get('detail', ''):
+                            script_name = error_json['detail'].split("'")[1]  # Extract the script name
+                            if json and 'alwayson_scripts' in json:
+                                # Remove the problematic script
+                                if script_name in json['alwayson_scripts']:
+                                    log.info(f"Removing invalid script: {script_name}")
+                                    json['alwayson_scripts'].pop(script_name, None)
+                                
+                                # Retry the request with the modified payload
+                                return await self.api(endpoint, method, json, retry=False, warn=warn)
                     else:
                         if warn:
                             log.error(f'{self.url}{endpoint} response: {response.status} "{response.reason}"')
