@@ -76,7 +76,9 @@ def cls_get_none(x):
 
 
 def cls_get_id(x):
-    return x.uuid if x else None
+    if x and isinstance(x, HMessage):
+        return x.uuid
+    return None
 
 # config
 def cnf(default=None, default_list:Optional[tuple]=None, check_bool=True, encoder=None, decoder=None, name=None, dont_save=False, decode_pass=True, exclude=None):
