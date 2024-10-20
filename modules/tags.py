@@ -362,13 +362,13 @@ class Tags():
                 tag, start, end = item # unpack tuple
                 phase = tag.get('phase', 'user')
                 if phase == 'llm':
-                    insert_text = tag.get('insert_text', None)
-                    insert_method = tag.get('insert_text_method', 'after')  # Default to 'after'
-                    join = tag.get('text_joining', ' ')
+                    insert_text = tag.pop('insert_text', None)
+                    insert_method = tag.pop('insert_text_method', 'after')  # Default to 'after'
+                    join = tag.pop('text_joining', ' ')
                 else:
                     insert_text = tag.get('positive_prompt', None)
-                    insert_method = tag.get('positive_prompt_method', 'after')  # Default to 'after'
-                    join = tag.get('img_text_joining', ' ')
+                    insert_method = tag.pop('positive_prompt_method', 'after')  # Default to 'after'
+                    join = tag.pop('img_text_joining', ' ')
                 if insert_text is None:
                     log.error(f"Error processing matched tag {item}. Skipping this tag.")
                 else:
@@ -390,12 +390,12 @@ class Tags():
                     tag = item
                 phase = tag.get('phase', 'user')
                 if phase == 'llm':
-                    tag.get('insert_text', None)
-                    tag.get('insert_text_method', None)
-                    tag.get('text_joining', None)
+                    tag.pop('insert_text', None)
+                    tag.pop('insert_text_method', None)
+                    tag.pop('text_joining', None)
                 else:
-                    tag.get('img_text_joining', None)
-                    tag.get('positive_prompt_method', None)
+                    tag.pop('img_text_joining', None)
+                    tag.pop('positive_prompt_method', None)
                 updated_matches.append(tag)
             self.matches = updated_matches
             return prompt
