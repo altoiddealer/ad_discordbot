@@ -45,7 +45,7 @@ from modules.utils_discord import Embeds, guild_only, guild_or_owner_only, confi
     EditMessageModal, SelectedListItem, SelectOptionsView, get_user_ctx_inter, get_message_ctx_inter, apply_reactions_to_messages, replace_msg_in_history_and_discord, MAX_MESSAGE_LENGTH, muffled_send  # noqa: F401
 from modules.utils_aspect_ratios import dims_from_ar, avg_from_dims, get_aspect_ratio_parts, calculate_aspect_ratio_sizes  # noqa: F401
 from modules.history import HistoryManager, History, HMessage, cnf
-from modules.typing import AlertUserError
+from modules.typing import AlertUserError, TAG
 from modules.utils_asyncio import generate_in_executor
 from modules.tags import base_tags, persistent_tags, Tags
 
@@ -1486,9 +1486,10 @@ class TaskProcessing(TaskAttributes):
         formatting = {}
         try:
             for tag in self.tags.matches:
-                tag:dict
+                tag:TAG
+                tag_name, tag_print = self.tags.get_name_print_for(tag)
                 # Check if censored
-                if 'llm_censoring' in tag and tag['llm_censoring'] == True:
+                if 'llm_censoring' in tag and bool(tag['llm_censoring']) == True:
                     censor_text = tag.get('matched_trigger', '')
                     censor_message = f' (text match: {censor_text})'
                     log.info(f"[TAGS] Censoring: LLM generation was blocked{censor_message if censor_text else ''}")
@@ -1497,71 +1498,74 @@ class TaskProcessing(TaskAttributes):
                     raise TaskCensored
                 # Values that will only apply from the first tag matches
                 if 'begin_reply_with' in tag and not llm_payload_mods.get('begin_reply_with'):
-                    llm_payload_mods['begin_reply_with'] = tag.get('begin_reply_with')
+                    llm_payload_mods['begin_reply_with'] = str(tag.pop('begin_reply_with'))
                 if 'flow' in tag and not llm_payload_mods.get('flow'):
-                    llm_payload_mods['flow'] = tag.get('flow')
+                    llm_payload_mods['flow'] = dict(tag.pop('flow'))
                 if 'save_history' in tag and not llm_payload_mods.get('save_history'):
-                    llm_payload_mods['save_history'] = bool(tag.get('save_history'))
+                    llm_payload_mods['save_history'] = bool(tag.pop('save_history'))
                 if 'load_history' in tag and not llm_payload_mods.get('load_history'):
-                    llm_payload_mods['load_history'] = int(tag.get('load_history'))
+                    llm_payload_mods['load_history'] = int(tag.pop('load_history'))
                 if 'include_hidden_history' in tag and not llm_payload_mods.get('include_hidden_history'):
-                    llm_payload_mods['include_hidden_history'] = bool(tag.get('include_hidden_history'))
+                    llm_payload_mods['include_hidden_history'] = bool(tag.pop('include_hidden_history'))
                     
                 # change_character is higher priority, if added ignore swap_character
                 if 'change_character' in tag and not is_direct_message(self.ictx) and not (llm_payload_mods.get('change_character') or llm_payload_mods.get('swap_character')):
-                    llm_payload_mods['change_character'] = str(tag.get('change_character'))
+                    llm_payload_mods['change_character'] = str(tag.pop('change_character'))
                 if 'swap_character' in tag and not (llm_payload_mods.get('change_character') or llm_payload_mods.get('swap_character')):
-                    llm_payload_mods['swap_character'] = str(tag.get('swap_character'))
+                    llm_payload_mods['swap_character'] = str(tag.pop('swap_character'))
                     
                 # change_llmmodel is higher priority, if added ignore swap_llmmodel
                 if 'change_llmmodel' in tag and not is_direct_message(self.ictx) and not (llm_payload_mods.get('change_llmmodel') or llm_payload_mods.get('swap_llmmodel')):
-                    llm_payload_mods['change_llmmodel'] = str(tag.get('change_llmmodel'))
+                    llm_payload_mods['change_llmmodel'] = str(tag.pop('change_llmmodel'))
                 if 'swap_llmmodel' in tag and not (llm_payload_mods.get('change_llmmodel') or llm_payload_mods.get('swap_llmmodel')):
-                    llm_payload_mods['swap_llmmodel'] = str(tag.get('swap_llmmodel'))
+                    llm_payload_mods['swap_llmmodel'] = str(tag.pop('swap_llmmodel'))
                     
                 # Values that may apply repeatedly
                 if 'filter_history_for' in tag:
                     llm_payload_mods.setdefault('filter_history_for', [])
-                    llm_payload_mods['filter_history_for'].append(tag.get('filter_history_for'))
+                    llm_payload_mods['filter_history_for'].append(str(tag.pop('filter_history_for')))
                 if 'prefix_context' in tag:
                     llm_payload_mods.setdefault('prefix_context', [])
-                    llm_payload_mods['prefix_context'].append(tag.get('prefix_context'))
+                    llm_payload_mods['prefix_context'].append(str(tag.pop('prefix_context')))
                 if 'suffix_context' in tag:
                     llm_payload_mods.setdefault('suffix_context', [])
-                    llm_payload_mods['suffix_context'].append(tag.get('suffix_context'))
+                    llm_payload_mods['suffix_context'].append(str(tag.pop('suffix_context')))
                 if 'send_user_image' in tag:
-                    user_image_file = tag.get('send_user_image')
-                    user_image_args = self.get_image_tag_args('User image', str(user_image_file), key=None, set_dir=None)
+                    user_image_file = str(tag.pop('send_user_image'))
+                    user_image_args = self.get_image_tag_args('User image', user_image_file, key=None, set_dir=None)
                     user_image = discord.File(user_image_args)
                     self.params.send_user_image.append(user_image)
                     log.info('[TAGS] Sending user image.')
                 if 'format_prompt' in tag:
                     formatting.setdefault('format_prompt', [])
-                    formatting['format_prompt'].append(str(tag.get('format_prompt')))
+                    formatting['format_prompt'].append(str(tag.pop('format_prompt')))
                 if 'time_offset' in tag:
-                    formatting['time_offset'] = float(tag.get('time_offset'))
+                    formatting['time_offset'] = float(tag.pop('time_offset'))
                 if 'time_format' in tag:
-                    formatting['time_format'] = str(tag.get('time_format'))
+                    formatting['time_format'] = str(tag.pop('time_format'))
                 if 'date_format' in tag:
-                    formatting['date_format'] = str(tag.get('date_format'))
+                    formatting['date_format'] = str(tag.pop('date_format'))
                 if 'llm_param_variances' in tag:
-                    llm_param_variances = dict(tag.get('llm_param_variances'))
+                    llm_param_variances = dict(tag.pop('llm_param_variances'))
                     llm_payload_mods.setdefault('llm_param_variances', {})
                     try:
                         llm_payload_mods['param_variances'].update(llm_param_variances) # Allow multiple to accumulate.
                     except Exception:
-                        log.warning("Error processing a matched 'llm_param_variances' tag; ensure it is a dictionary.")
+                        log.warning(f"[TAGS] Error processing a matched 'llm_param_variances' {tag_print}; ensure it is a dictionary.")
                 if 'state' in tag:
-                    state = dict(tag.get('state'))
+                    state = dict(tag.pop('state'))
                     llm_payload_mods.setdefault('state', {})
                     try:
                         llm_payload_mods['state'].update(state) # Allow multiple to accumulate.
                     except Exception:
-                        log.warning("Error processing a matched 'state' tag; ensure it is a dictionary.")
+                        log.warning(f"[TAGS] Error processing a matched 'state' {tag_print}; ensure it is a dictionary.")
                 if 'persist' in tag:
-                    persist = int(tag.get('persist'))
-                    log.info(f'[TAGS] A persistent tag was matched, which will be auto-applied for the next ({persist}) tag matching phases (pre-LLM).')
-                    persistent_tags.append_tag_to('llm', self.channel.id, persist, tag)
+                    if not tag_name:
+                        log.warning(f"[TAGS] A persistent {tag_print} was matched, but it is missing a required 'name' parameter. Cannot make tag persistent.")
+                    else:
+                        persist = int(tag.pop('persist'))
+                        log.info(f'[TAGS] A persistent {tag_print} was matched, which will be auto-applied for the next ({persist}) tag matching phases (pre-LLM).')
+                        persistent_tags.append_tag_name_to('llm', self.channel.id, persist, tag_name)
 
         except TaskCensored:
             raise
@@ -2748,13 +2752,14 @@ class TaskProcessing(TaskAttributes):
                 # Imgmodel handling
                 new_imgmodel = change_imgmodel or swap_imgmodel or None
                 if new_imgmodel:
-                    self.params.imgmodel = await get_selected_imgmodel_params(new_imgmodel, self.ictx) # {sd_model_checkpoint, imgmodel_name, filename}
+                    imgmodel_params = await get_selected_imgmodel_params(new_imgmodel, self.ictx) # {sd_model_checkpoint, imgmodel_name, filename}
                     current_imgmodel_name = bot_settings.get_last_setting_for("last_imgmodel_name", self.ictx)
-                    new_imgmodel_name = self.params.imgmodel.get('imgmodel_name', '')
+                    new_imgmodel_name = imgmodel_params.get('imgmodel_name', '')
                     # Check if new model same as current model
                     if current_imgmodel_name == new_imgmodel_name:
                         log.info(f'[TAGS] Img model was triggered to change, but it is the same as current ("{current_imgmodel_name}").')
                     else:
+                        self.params.imgmodel = imgmodel_params
                         mode = 'change' if new_imgmodel == change_imgmodel else 'swap'
                         verb = 'Changing' if mode == 'change' else 'Swapping'
                         self.params.imgmodel['current_imgmodel_name'] = current_imgmodel_name
@@ -2824,7 +2829,7 @@ class TaskProcessing(TaskAttributes):
                 if img2img_mask:
                     self.img_payload['mask'] = str(img2img_mask)
         except Exception as e:
-            log.error(f"Error processing Img tags: {e}")
+            log.error(f"[TAGS] Error processing Img tags: {e}")
             traceback.print_exc()
 
     # The methods of this function allow multiple extensions with an identical "select image from random folder" value to share the first selected folder.
@@ -2849,7 +2854,7 @@ class TaskProcessing(TaskAttributes):
                             if set_dir is None:
                                 set_dir = img2img_mask_args.get('selected_folder', None)
             except Exception as e:
-                log.error(f"Error collecting img2img tag values: {e}")
+                log.error(f"[TAGS] Error collecting img2img tag values: {e}")
         if controlnet:
             try:
                 for idx, controlnet_item in enumerate(controlnet):
@@ -2880,7 +2885,7 @@ class TaskProcessing(TaskAttributes):
                                         set_dir = cnet_mask_args.get('selected_folder', None)
                 mods['controlnet'] = controlnet
             except Exception as e:
-                log.error(f"Error collecting ControlNet tag values: {e}")
+                log.error(f"[TAGS] Error collecting ControlNet tag values: {e}")
         if reactor:
             try:
                 image = reactor.get('image', None)
@@ -2897,7 +2902,7 @@ class TaskProcessing(TaskAttributes):
                             if reactor_mask_args and set_dir is None:
                                 set_dir = reactor_mask_args.get('selected_folder', None)
             except Exception as e:
-                log.error(f"Error collecting ReActor tag values: {e}")
+                log.error(f"[TAGS] Error collecting ReActor tag values: {e}")
         return mods
 
     async def collect_img_tag_values(self:Union["Task","Tasks"]):
@@ -2914,6 +2919,8 @@ class TaskProcessing(TaskAttributes):
                 # Filter out any prompt insertion indexes
                 if isinstance(tag, tuple):
                     tag = tag[0]
+                tag:TAG
+                tag_name, tag_print = self.tags.get_name_print_for(tag)
                 for key, value in tag.items():
                     # Check censoring
                     if key == 'img_censoring' and value != 0:
@@ -2940,13 +2947,13 @@ class TaskProcessing(TaskAttributes):
                             else:
                                 img_payload_mods['payload'] = dict(value)
                         except Exception:
-                            log.warning("Error processing a matched 'payload' tag; ensure it is a dictionary.")
+                            log.warning(f"[TAGS] Error processing a matched 'payload' {tag_print}; ensure it is a dictionary.")
                     elif key == 'img_param_variances':
                         img_payload_mods.setdefault('param_variances', {})
                         try:
                             update_dict(img_payload_mods['param_variances'], dict(value))
                         except Exception:
-                            log.warning("Error processing a matched 'img_param_variances' tag; ensure it is a dictionary.")
+                            log.warning(f"[TAGS] Error processing a matched 'img_param_variances' {tag_print}; ensure it is a dictionary.")
                     # get any ControlNet extension params
                     elif key.startswith('controlnet') and extensions.get('controlnet_enabled'):
                         index = int(key[len('controlnet'):]) if key != 'controlnet' else 0  # Determine the index (cnet unit) for main controlnet args
@@ -2985,10 +2992,13 @@ class TaskProcessing(TaskAttributes):
                         user_image_args = self.get_image_tag_args('User image', str(value), key=None, set_dir=None)
                         user_image = discord.File(user_image_args)
                         self.params.send_user_image.append(user_image)
-                        log.info('[TAGS] Sending user image.')
+                        log.info(f'[TAGS] Sending user image for matched {tag_print}')
                     elif key == 'persist':
-                        log.info(f'[TAGS] A persistent tag was matched, which will be auto-applied for the next ({value}) tag matching phases (pre-Image Gen).')
-                        persistent_tags.append_tag_to('img', self.channel.id, value, tag)
+                        if not tag_name:
+                            log.warning("[TAGS] A persistent tag was matched, but it is missing a required 'name' parameter. Cannot make tag persistent.")
+                        else:
+                            log.info(f'[TAGS] A persistent tag "{tag_name}" was matched, which will be auto-applied for the next ({value}) tag matching phases (pre-Image Gen).')
+                            persistent_tags.append_tag_name_to('img', self.channel.id, value, tag_name)
 
             # Add the collected SD WebUI extension args to the img_payload_mods dict
             if controlnet_args:

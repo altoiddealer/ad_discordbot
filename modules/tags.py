@@ -16,33 +16,27 @@ logging = log
 
 class PersistentTags():
     def __init__(self) -> None:
-        # {discord.channel.id: [(repeat, {Tag}), (repeat, {Tag})], discord.channel.id: ...}
-        self.llm_ptags: dict[int, list[tuple[int, TAG]]] = {}
-        self.img_ptags: dict[int, list[tuple[int, TAG]]] = {}
+        # {discord.channel.id: [(repeat, 'tag name'), (repeat, 'tag name')], discord.channel.id: ...}
+        self.llm_ptags: dict[int, list[tuple[int, str]]] = {}
+        self.img_ptags: dict[int, list[tuple[int, str]]] = {}
 
     def get_ptags_for(self, match_phase:str, ictx:CtxInteraction|None=None):
         ptag_repeats:list = []
-        ptag_tags:list = []
+        ptag_names:list = []
         # get and return applicable persistent tags
         phase_ptags:dict = getattr(self, f'{match_phase}_ptags', {})
         tupled_ptags = phase_ptags.get(ictx.channel.id) if ictx else None
-        if isinstance(tupled_ptags, list):
+        if tupled_ptags:
             for tupled_ptag in tupled_ptags:
-                repeat, ptag = tupled_ptag
+                repeat, ptag_name = tupled_ptag
                 ptag_repeats.append(repeat)
-                ptag_tags.append(ptag)
-        return tupled_ptags, ptag_repeats, ptag_tags
+                ptag_names.append(ptag_name)
+        return tupled_ptags, ptag_repeats, ptag_names
     
-    def append_tag_to(self, match_phase:str, channel_id:int, repeat:int, tag:TAG):
-        # strip out anything added to the original tag
-        clean_tag = {}
-        tag_copy = copy.copy(tag)
-        for key, value in tag_copy.items(): # Iterate over a copy of the tag
-            if key not in ["phase", "matched_trigger", "imgtag_matched_early", "imgtag_uninserted"]:
-                clean_tag[key] = value
+    def append_tag_name_to(self, match_phase:str, channel_id:int, repeat:int, tag_name:str):
         phase_ptags:dict = getattr(self, f'{match_phase}_ptags', {})
         channel_ptags:list = phase_ptags.setdefault(channel_id, [])
-        channel_ptags.append( (repeat, clean_tag) )
+        channel_ptags.append( (repeat, tag_name) )
 
 persistent_tags = PersistentTags()
 
@@ -129,6 +123,7 @@ class Tags():
         self.user = get_user_ctx_inter(self.ictx) if self.ictx else None # Union[discord.User, discord.Member]
         self.tags_initialized = False
         self.matches:list = []
+        self.matches_names:list = []
         self.unmatched = {'user': [], 'llm': [], 'userllm': []}
         self.tag_trumps:set = set([])
         self.llm_censor_tags: TAG_LIST = []
@@ -155,6 +150,20 @@ class Tags():
             self.sort_tags(all_tags) # sort tags into phases (user / llm / userllm)
         except Exception as e:
             log.error(f"Error getting tags: {e}")
+    
+    def get_name_for(self, tag:TAG) -> str:
+        return tag.get('name', '')
+    
+    def get_print_for(self, str_or_tag:str|TAG) -> str:
+        tag_name = str_or_tag if isinstance(str_or_tag, str) else self.get_name_for(str_or_tag)
+        return f'tag "{tag_name}"' if tag_name else 'tag'
+
+    def get_name_print_for(self, tag:TAG) -> tuple[str, str]:
+        """ if tag has name: returns 'name', 'tag "name"' ; else: returns '', 'tag' """
+        tag_name = self.get_name_for(tag)
+        tag_print = self.get_print_for(tag_name)
+        return tag_name, tag_print
+    
 
     # Check for discord conditions
     def pass_discord_check(self, key, value) -> bool:
@@ -411,6 +420,7 @@ class Tags():
             # Iterate over all tags in 'matches' and remove 'trumped' tags
             untrumped_matches = []
             for tag in matches:
+                tag:TAG
                 if isinstance(tag, tuple):
                     tag_dict = tag[0]  # get tag value if tuple
                 else:
@@ -450,7 +460,7 @@ class Tags():
 
             # Gather any applicable "persistent tags"
             updated_ptags = []
-            channel_ptags, ptag_repeats, ptag_tags = persistent_tags.get_ptags_for(phase, self.ictx)
+            channel_ptags, ptag_repeats, ptag_names = persistent_tags.get_ptags_for(phase, self.ictx)
 
             # Iterate over copies of tags lists and apply tag matching logic
             updated_matches:TAG_LIST = list(copy.deepcopy(self.matches)) # type: ignore
@@ -460,16 +470,32 @@ class Tags():
 
                 for tag in unmatched_list:
 
+                    # Collect any 'name' parameter in tag
+                    tag_name, tag_print = self.get_name_print_for(tag)
+
+                    def match(tag_copy:dict|None=None):
+                        # Remove tag from unmatched list
+                        updated_unmatched[list_name].remove(tag)
+                        # Collect any name
+                        if tag_name:
+                            self.matches_names.append(tag_name)
+                        # Capture match phase and add to matches list
+                        if tag_copy is None:
+                            tag['phase'] = phase
+                            updated_matches.append(tag)
+                        else:
+                            tag_copy['phase'] = phase
+                            updated_matches.append(tag_copy)
+
                     def is_persistent():
-                        if tag in ptag_tags:
-                            tag_index = ptag_tags.index(tag) # get the index
+                        if tag_name in ptag_names:
+                            tag_index = ptag_names.index(tag_name) # get the index
                             repeat = ptag_repeats[tag_index] # identity the corresponding repeat value
-                            ptag = ptag_tags[tag_index]      # identity the corresponding ptag
                             repeat -= 1                      # decrement repeat
-                            log.info("[TAGS] Persistent tag was automatically applied.")
+                            log.info(f"[TAGS] Persistent {tag_print} was automatically applied.")
                             if repeat != 0:
                                 log.info(f"[TAGS] Remaining persistency: {repeat if repeat >= 0 else 'Forever'}")
-                                updated_ptags.append( (repeat, ptag) ) # continue persisting the tag
+                                updated_ptags.append( (repeat, tag_name) ) # continue persisting the tag
                             return True
                         return False
 
@@ -478,18 +504,14 @@ class Tags():
 
                     # Match tags without trigger keys
                     if not trigger_keys:
-                        updated_unmatched[list_name].remove(tag)
-                        tag['phase'] = phase
-                        updated_matches.append(tag)
+                        match()
                         continue
 
                     # Match tags previously triggered with persistency
                     if is_persistent():
                         tag_copy = copy.deepcopy(tag)
                         tag_copy.pop('persist') # don't re-trigger persistency
-                        updated_unmatched[list_name].remove(tag)
-                        tag_copy['phase'] = phase
-                        updated_matches.append(tag_copy)
+                        match(tag_copy)
                         continue
 
                     case_sensitive = tag.get('case_sensitive', False)
