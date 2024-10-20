@@ -150,6 +150,11 @@ class Tags():
             self.sort_tags(all_tags) # sort tags into phases (user / llm / userllm)
         except Exception as e:
             log.error(f"Error getting tags: {e}")
+
+    def untuple(self, tag_value:tuple|TAG) -> TAG:
+        if isinstance(tag_value, tuple):
+            return tag_value[0]
+        return tag_value
     
     def get_name_for(self, tag:TAG) -> str:
         return tag.get('name', '')
@@ -383,20 +388,17 @@ class Tags():
                         prompt = prompt[:start] + insert_text + join + prompt[start:]
             # clean up the original matches list
             updated_matches = []
-            for item in self.matches:
-                if isinstance(item, tuple):
-                    tag, start, end = item # TODO Use a class
-                elif isinstance(item, dict): # fixes pylance
-                    tag = item
-                phase = tag.get('phase', 'user')
+            for tag in self.matches:
+                tag_dict:TAG = self.untuple(tag)
+                phase = tag_dict.get('phase', 'user')
                 if phase == 'llm':
-                    tag.pop('insert_text', None)
-                    tag.pop('insert_text_method', None)
-                    tag.pop('text_joining', None)
+                    tag_dict.pop('insert_text', None)
+                    tag_dict.pop('insert_text_method', None)
+                    tag_dict.pop('text_joining', None)
                 else:
-                    tag.pop('img_text_joining', None)
-                    tag.pop('positive_prompt_method', None)
-                updated_matches.append(tag)
+                    tag_dict.pop('img_text_joining', None)
+                    tag_dict.pop('positive_prompt_method', None)
+                updated_matches.append(tag_dict)
             self.matches = updated_matches
             return prompt
         except Exception as e:
@@ -407,41 +409,34 @@ class Tags():
         try:
             # Collect all 'trump' parameters for all matched tags
             for tag in matches:
-                if isinstance(tag, tuple):
-                    tag_dict = tag[0]  # get tag value if tuple
-                else:
-                    tag_dict = tag
+                tag_dict:TAG = self.untuple(tag)
                 if 'trumps' in tag_dict:
                     for param in tag_dict['trumps'].split(','):
                         stripped_param = param.strip().lower()
                         self.tag_trumps.update([stripped_param])
-                    del tag_dict['trumps']
 
             # Iterate over all tags in 'matches' and remove 'trumped' tags
             untrumped_matches = []
             for tag in matches:
-                tag:TAG
-                if isinstance(tag, tuple):
-                    tag_dict = tag[0]  # get tag value if tuple
-                else:
-                    tag_dict = tag
-
+                tag_dict:TAG = self.untuple(tag)
+                tag_name, tag_print = self.get_name_print_for(tag_dict)
                 # Collect all trigger phrases from all trigger keys
                 all_triggers = []
                 for key in tag_dict:
                     if key.startswith('trigger'):
                         triggers = [trigger.strip().lower() for trigger in tag_dict[key].split(',')]
                         all_triggers.extend(triggers)
-
                 # Check if any trigger is in the trump parameters set
                 trumped_trigger = None
                 for trigger in all_triggers:
                     if trigger in self.tag_trumps:
                         trumped_trigger = trigger
                         break
-
                 if trumped_trigger:
-                    log.info(f'''[TAGS] A Tag was trumped by another tag for phrase: "{trumped_trigger}".''')
+                    log.info(f'''[TAGS] A {tag_print} was trumped by another tag for phrase: "{trumped_trigger}".''')
+                    # remove tag name from matched names list
+                    if tag_name and tag_name in self.matches_names:
+                        self.matches_names.remove(tag_name)
                 else:
                     untrumped_matches.append(tag)
 
@@ -449,6 +444,14 @@ class Tags():
         except Exception as e:
             log.error(f"Error processing matched tags: {e}")
             return matches
+
+    # def process_tag_names(self, matches:list) -> TAG_LIST:
+    #     for match in matches:
+    #         tag_dict:TAG = self.untuple(match)
+    #         tag_name, tag_print = self.get_name_print_for(tag_dict)
+    #         # remove tag name from matched names list
+    #         if tag_name and tag_name in self.matches_names:
+    #             self.matches_names.remove(tag_name)
 
     async def match_tags(self, search_text:str, settings:dict, phase:str='llm'):
         if not self.tags_initialized:
@@ -476,7 +479,7 @@ class Tags():
                     def match(tag_copy:dict|None=None):
                         # Remove tag from unmatched list
                         updated_unmatched[list_name].remove(tag)
-                        # Collect any name
+                        # Collect name
                         if tag_name:
                             self.matches_names.append(tag_name)
                         # Capture match phase and add to matches list

@@ -1221,12 +1221,9 @@ class Params:
             # iterate through matched tags and update
             matches = getattr(tags, 'matches')
             if matches and isinstance(matches, list):
-                for item in matches:
-                    if isinstance(item, tuple):
-                        tag, _, _ = item
-                    else:
-                        tag = item
-                    for key, value in tag.items():
+                for tag in matches:
+                    tag_dict:TAG = tags.untuple(tag)
+                    for key, value in tag_dict.items():
                         if key in actions:
                             setattr(self, key, value)
             # Disable things as set by config
@@ -2916,16 +2913,13 @@ class TaskProcessing(TaskAttributes):
         accept_only_first = ['flow', 'aspect_ratio', 'img2img', 'img2img_mask', 'sd_output_dir', 'last_img_payload']
         try:
             for tag in self.tags.matches:
-                # Filter out any prompt insertion indexes
-                if isinstance(tag, tuple):
-                    tag = tag[0]
-                tag:TAG
-                tag_name, tag_print = self.tags.get_name_print_for(tag)
-                for key, value in tag.items():
+                tag_dict:TAG = self.tags.untuple(tag)
+                tag_name, tag_print = self.tags.get_name_print_for(tag_dict)
+                for key, value in tag_dict.items():
                     # Check censoring
                     if key == 'img_censoring' and value != 0:
                         img_payload_mods['img_censoring'] = int(value)
-                        censor_text = tag.get('matched_trigger', '')
+                        censor_text = tag_dict.get('matched_trigger', '')
                         censor_message = f' (text match: {censor_text})'
                         log.info(f"[TAGS] Censoring: {'Image will be blurred' if value == 1 else 'Image generation blocked'}{censor_message if censor_text else ''}")
                         if value == 2:
