@@ -405,19 +405,43 @@ class Tags():
             log.error(f"Error processing LLM prompt tags: {e}")
             return prompt
 
+    def check_only_with_tags_for(self, tag_dict:TAG) -> bool:
+        tag_name, _ = self.get_name_print_for(tag_dict)
+        only_with_tags = tag_dict.get('only_with_tags', [])
+        # check condition for 'only_with_tags'
+        if only_with_tags:
+            if isinstance(only_with_tags, str):
+                only_with_tags = [only_with_tags]
+            if not any(trigger_tag in self.matches_names for trigger_tag in only_with_tags):
+                # remove this tag name from matched names list
+                if tag_name and tag_name in self.matches_names:
+                    self.matches_names.remove(tag_name)
+                return False
+
+        return True
+
     def process_tag_trumps(self, matches:list) -> TAG_LIST:
         try:
-            # Collect all 'trump' parameters for all matched tags
+            passed_only_with_tags_check = []
+            passed_trumps_check = []
+            passed_all_checks = []
+
+            # collect 'trump' values while applying logic for any 'only_with_tags'
             for tag in matches:
                 tag_dict:TAG = self.untuple(tag)
+                only_with_tags_pass = self.check_only_with_tags_for(tag_dict)
+                if not only_with_tags_pass:
+                    continue
+                # Collect all 'trump' parameters
                 if 'trumps' in tag_dict:
                     for param in tag_dict['trumps'].split(','):
                         stripped_param = param.strip().lower()
                         self.tag_trumps.update([stripped_param])
 
-            # Iterate over all tags in 'matches' and remove 'trumped' tags
-            untrumped_matches = []
-            for tag in matches:
+                passed_only_with_tags_check.append(tag)
+
+            # Iterate over all tags that passed trigger tags check, and remove 'trumped' tags
+            for tag in passed_only_with_tags_check:
                 tag_dict:TAG = self.untuple(tag)
                 tag_name, tag_print = self.get_name_print_for(tag_dict)
                 # Collect all trigger phrases from all trigger keys
@@ -437,21 +461,22 @@ class Tags():
                     # remove tag name from matched names list
                     if tag_name and tag_name in self.matches_names:
                         self.matches_names.remove(tag_name)
-                else:
-                    untrumped_matches.append(tag)
+                    continue
+                passed_trumps_check.append(tag)
 
-            return untrumped_matches
+            # Finally, confirm no 'only_with_tags' were trumped
+            for tag in passed_trumps_check:
+                tag_dict:TAG = self.untuple(tag)
+                only_with_tags_pass = self.check_only_with_tags_for(tag_dict)
+                if not only_with_tags_pass:
+                    continue
+                passed_all_checks.append(tag)
+
+            return passed_all_checks
+
         except Exception as e:
             log.error(f"Error processing matched tags: {e}")
             return matches
-
-    # def process_tag_names(self, matches:list) -> TAG_LIST:
-    #     for match in matches:
-    #         tag_dict:TAG = self.untuple(match)
-    #         tag_name, tag_print = self.get_name_print_for(tag_dict)
-    #         # remove tag name from matched names list
-    #         if tag_name and tag_name in self.matches_names:
-    #             self.matches_names.remove(tag_name)
 
     async def match_tags(self, search_text:str, settings:dict, phase:str='llm'):
         if not self.tags_initialized:
@@ -569,11 +594,15 @@ class Tags():
                         updated_unmatched[list_name].remove(tag)
                         tag['matched_trigger'] = matched_trigger
                         tag['phase'] = phase
-
+                        # Collect name
+                        if tag_name:
+                            self.matches_names.append(tag_name)
+                        # Append as a tuple with start/end indexes for any subsequent text insertions
                         if (('insert_text' in tag and phase == 'llm') or ('positive_prompt' in tag and phase == 'img')):
-                            updated_matches.append((tag, trigger_match.start(), trigger_match.end()))  # Add as a tuple with start/end indexes if inserting text later
+                            updated_matches.append((tag, trigger_match.start(), trigger_match.end()))
                             break
 
+                        # Retries finding a text insertion index during the Img phase
                         if phase == 'llm' and 'positive_prompt' in tag:
                             tag['imgtag_matched_early'] = True
                         updated_matches.append(tag)

@@ -88,7 +88,8 @@ base_tags:
         should_send_text: true                  # finally, send the reply to channel
 
   # Tag to trigger M1nty to make a more elaborate prompt from user's prompt
-  - trigger: 'draw,generate'
+  - name: 'img gen M1nty SDXL'
+    trigger: 'draw,generate'
     insert_text: ''               # Replace the matched phrase with an empty string
     insert_text_method: replace   # Other methods are 'before' and 'after', but 'replace' is correct for this...
     search_mode: user             # Only search user's prompt (will not trigger from LLM reply)
@@ -97,6 +98,10 @@ base_tags:
     swap_character: M1nty-SDXL    # Swap to character finetuned for writing more elaborate image prompts from simple prompts
     load_history: -1              # 0 = default (all history included) / -1 = prompt excludes chat history / > 1 = llm only sees this many recent exchanges.
     save_history: false           # Do not write this interaction to the main chat history
+
+  - name: Example using only_with_tags
+    only_with_tags: ['img gen M1nty SDXL', 'another tag name'] # Condition that is True if any of the listed tag names are matched
+    # Does nothing. Just for example usage of the parameter.
 
   # Some tags to trigger/enhance image responses using the current character including chat history
   - trigger: 'take a photo,take {a|another} picture'
@@ -192,6 +197,7 @@ tag_presets:
 #   search_mode: userllm              Search method for trigger matching. 'user' = user prompt only / 'llm' = bot reply only / 'userllm' = search both for matches
 #   trigger: 'trigger,another one'    Recommended for most tags (except 'global_tag_keys' and 'tag_preset_name').
 #     Additional triggers (trigger1, trigger2, etc) - if using multiple trigger keys, a trigger phrase must match the search text from each one
+#   only_with_tags: [list of strings] A list of tag names (see 'name' param). This condition will be True if any named tag was matched. (ex, only_with_tags: ['imgmodel', ''])
 #   random: 0.5                       Chance for tag to process. 0.0 = 0% chance and 1.0 = 100% chance.
 #   case_sensitive: (true/false)      If the triggers are case sensitive
 #   on_prefix_only: (true/false)      If triggers must be matched at beginning of the searched text
