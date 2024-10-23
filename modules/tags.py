@@ -600,7 +600,7 @@ class Tags():
                         # Append as a tuple with start/end indexes for any subsequent text insertions
                         if (('insert_text' in tag and phase == 'llm') or ('positive_prompt' in tag and phase == 'img')):
                             updated_matches.append((tag, trigger_match.start(), trigger_match.end()))
-                            break
+                            continue
 
                         # Retries finding a text insertion index during the Img phase
                         if phase == 'llm' and 'positive_prompt' in tag:
