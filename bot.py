@@ -3871,6 +3871,7 @@ class Tasks(TaskProcessing):
                 swap_params.imgmodel['mode'] = 'swap_back'
                 swap_params.imgmodel['verb'] = 'Swapping back to'
                 # RUN A CHANGE IMGMODEL SUBTASK
+                self.params.imgmodel = swap_params.imgmodel
                 await self.run_subtask('change_imgmodel')
         except TaskCensored:
             raise
