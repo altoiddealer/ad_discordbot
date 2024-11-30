@@ -2498,16 +2498,19 @@ class TaskProcessing(TaskAttributes):
             log.error(f"An error occurred when cleaning img_payload: {e}")
 
     def apply_loractl(self:Union["Task","Tasks"]):
+        matched_tags: list = self.tags.matches
         try:
-            matched_tags: list = self.tags.matches
-            if sd.client != 'A1111 SD WebUI':
+            if sd.client not in ['A1111 SD WebUI', 'SD WebUI ReForge']:
                 if not bot_database.was_warned('loractl'):
                     bot_database.update_was_warned('loractl')
                     log.warning(f'loractl is not known to be compatible with "{sd.client}". Not applying loractl...')
                 return
+            if sd.client == 'SD WebUI ReForge':
+                self.img_payload['alwayson_scripts'].setdefault('dynamic lora weights (reforge)', {}).setdefault('args', []).append({'Enable Dynamic Lora Weights': True})
             scaling_settings = [v for k, v in config.sd['extensions'].get('lrctl', {}).items() if 'scaling' in k]
             scaling_settings = scaling_settings if scaling_settings else ['']
             # Flatten the matches dictionary values to get a list of all tags (including those within tuples)
+            matched_tags.sort(key=lambda x: (isinstance(x, tuple), x[1] if isinstance(x, tuple) else float('inf')))
             all_matched_tags = [tag if isinstance(tag, dict) else tag[0] for tag in matched_tags]
             # Filter the matched tags to include only those with certain patterns in their text fields
             lora_tags = [tag for tag in all_matched_tags if any(patterns.sd_lora.findall(text) for text in (tag.get('positive_prompt', ''), tag.get('positive_prompt_prefix', ''), tag.get('positive_prompt_suffix', '')))]
@@ -2536,10 +2539,8 @@ class TaskProcessing(TaskAttributes):
                                         # Update the appropriate key in the tag dictionary
                                         tag[used_key] = new_positive_prompt
                                         log.info(f'''[TAGS] loractl applied: "{lora_match}" > "{updated_lora_match}"''')
-            self.tags.matches = matched_tags
         except Exception as e:
             log.error(f"Error processing lrctl: {e}")
-            self.tags.matches = matched_tags
 
     def apply_imgcmd_params(self:Union["Task","Tasks"]):
         try:

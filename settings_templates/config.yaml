@@ -89,7 +89,7 @@ sd:
     # 'sd-loractl' extension enhances LORA processing by allowing adjustable weights during image generation.
     # This bot can automatically calculate and apply weight scaling as defined below.
     lrctl:                              # Requires: sd-webui-loractl (https://github.com/cheald/sd-webui-loractl)
-      enabled: false                    # **Only works for A1111, not Forge**
+      enabled: false                    # **Only works for A1111 and ReForge, not Forge**
       min_loras: 2                      # Minimum number of loras in the prompt to trigger the following weight scaling definitions.
       # format is (% of existing lora weight)@(step percent),(more step definitions). These are not static weights- these are multiplied by the existing LORA weight. '1.0@0' = begin generation with existing LORA weight.
       # You can define as many steps as you want. ex1: '0.5@0' would just cut the LORA weight in half. ex2: '0.0@0,1.0@0.5,0.0@1.0' would look like a pyramid on the graph.
