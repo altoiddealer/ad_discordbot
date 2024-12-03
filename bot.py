@@ -43,7 +43,7 @@ from modules.database import StarBoard, Statistics, BaseFileMemory
 from modules.utils_misc import check_probability, fix_dict, update_dict, sum_update_dict, update_dict_matched_keys, random_value_from_range, convert_lists_to_tuples, get_time, format_time, format_time_difference, get_normalized_weights  # noqa: F401
 from modules.utils_discord import Embeds, guild_only, guild_or_owner_only, configurable_for_dm_if, is_direct_message, ireply, sleep_delete_message, send_long_message, \
     EditMessageModal, SelectedListItem, SelectOptionsView, get_user_ctx_inter, get_message_ctx_inter, apply_reactions_to_messages, replace_msg_in_history_and_discord, MAX_MESSAGE_LENGTH, muffled_send  # noqa: F401
-from modules.utils_aspect_ratios import dims_from_ar, avg_from_dims, get_aspect_ratio_parts, calculate_aspect_ratio_sizes  # noqa: F401
+from modules.utils_aspect_ratios import ar_parts_from_dims, dims_from_ar, avg_from_dims, get_aspect_ratio_parts, calculate_aspect_ratio_sizes  # noqa: F401
 from modules.history import HistoryManager, History, HMessage, cnf
 from modules.typing import AlertUserError, TAG
 from modules.utils_asyncio import generate_in_executor
@@ -2790,7 +2790,17 @@ class TaskProcessing(TaskAttributes):
                 if aspect_ratio:
                     try:
                         current_avg = bot_settings.get_last_setting_for("last_imgmodel_res", self.ictx)
-                        n, d = get_aspect_ratio_parts(aspect_ratio)
+                        # Use AR from input image, while adhering to current model res
+                        if img2img and aspect_ratio.lower() in ['use img2img', 'from img2img']:
+                            from io import BytesIO
+                            base64_string = str(img2img)
+                            image_data = base64.b64decode(base64_string)
+                            image_bytes = BytesIO(image_data)
+                            with Image.open(image_bytes) as img:
+                                img_w, img_h = img.size
+                            n, d = ar_parts_from_dims(img_w, img_h)
+                        else:
+                            n, d = get_aspect_ratio_parts(aspect_ratio)
                         w, h = dims_from_ar(current_avg, n, d)
                         self.img_payload['width'], self.img_payload['height'] = w, h
                         log.info(f'[TAGS] Applied aspect ratio "{aspect_ratio}" (Width: "{w}", Height: "{h}").')

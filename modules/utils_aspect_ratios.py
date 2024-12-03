@@ -1,4 +1,4 @@
-from math import sqrt
+from math import sqrt, gcd
 
 from modules.utils_files import load_file
 from modules.utils_shared import shared_path
@@ -38,6 +38,12 @@ def init_avg_from_dims():
     w = base_settings.get('imgmodel', {}).get('payload', {}).get('width', 512)
     h = base_settings.get('imgmodel', {}).get('payload', {}).get('height', 512)
     return avg_from_dims(w, h)
+
+def ar_parts_from_dims(w, h):
+    divisor = gcd(w, h)
+    simp_w = w // divisor
+    simp_h = h // divisor
+    return simp_w, simp_h
 
 def get_aspect_ratio_parts(ratio):
     try:

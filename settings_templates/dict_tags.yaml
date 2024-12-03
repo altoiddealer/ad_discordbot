@@ -258,7 +258,7 @@ tag_presets:
 #   img_text_joining: ', '            Relevant to all insertion methods except "replace"
 #   last_img_payload: (true, [list])  If value is 'true' (boolean), the last image payload will be applied. If a ['list', 'of', 'key_names'], it will use apply only those key values from the last img payload. Note: This Tag is applied before other payload related tags.
 #   payload: {dictionary}             Replacements for Stable Diffusion payload. Must be formatted as a dictionary.
-#   aspect_ratio: 'string'            This a shortcut to dynamically set the payload width/height dimensions based on the current average dimensions. Valid values examples: '4:3', '16:9', '2:3', etc
+#   aspect_ratio: 'string'            This a shortcut to dynamically set the payload width/height dimensions based on the current average dimensions. Valid values examples: '4:3', '16:9', '2:3', etc. A special value 'from img2img' may be used, requiring a valid 'img2img' tag param to be triggered in tandem.
 #   img_param_variances: {dictionary} Randomization ranges for Stable Diffusion payload parameters. Must be formatted as a dictionary.
 #   img2img: 'string'                 Uses a local image as img2img input. Value values: Image in 'user_images' (png/jpg/txt in base64) -OR- Directory name in '/user_images/' (Picks a random image or random image from random subdirectory)
 #   img2img_mask: 'string'            AKA Inpainting. Won't have any effect without img2img also triggered. Should be a greyscale image. Value values: Image in 'user_images' (png/jpg/txt in base64) -OR- Directory name in '/user_images/' (Picks a random image or random image from random subdirectory)
