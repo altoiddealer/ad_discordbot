@@ -205,6 +205,7 @@ llmstate:
     sampler_priority: []
     seed: -1.0
     skip_special_tokens: true
+    static_cache: false
     stop_at_newline: false
     stopping_strings: ''
     stream: true

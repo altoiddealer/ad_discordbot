@@ -6649,6 +6649,7 @@ class LLMState(SettingsBase):
             'sampler_priority': [],
             'seed': -1.0,
             'skip_special_tokens': True,
+            'static_cache': False,
             'stop_at_newline': False,
             'stopping_strings': '',
             'stream': True,
