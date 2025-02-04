@@ -1921,12 +1921,11 @@ class TaskProcessing(TaskAttributes):
 
             def apply_extensions(chunk_text:str, was_streamed=True):
                 vis_resp_chunk:str = extensions_module.apply_extensions('output', chunk_text, state=self.llm_payload['state'], is_chat=True)
-                if 'audio src=' in vis_resp_chunk:
-                    audio_format_match = patterns.audio_src.search(vis_resp_chunk)
-                    if audio_format_match:
-                        stream_replies.streamed_tts = was_streamed
-                        setattr(self.params, 'streamed_tts', was_streamed)
-                        self.tts_resp.append(audio_format_match.group(1))
+                audio_format_match = patterns.audio_src.search(vis_resp_chunk)
+                if audio_format_match:
+                    stream_replies.streamed_tts = was_streamed
+                    setattr(self.params, 'streamed_tts', was_streamed)
+                    self.tts_resp.append(audio_format_match.group(1))
 
             # Sends LLM Payload and processes the generated text
             async def process_responses():
@@ -3645,10 +3644,9 @@ class Tasks(TaskProcessing):
             loop = asyncio.get_event_loop()
             vis_resp_chunk:str = await loop.run_in_executor(None, extensions_module.apply_extensions, 'output', self.text, self.llm_payload['state'], True)
 
-            if 'audio src=' in vis_resp_chunk:
-                audio_format_match = patterns.audio_src.search(vis_resp_chunk)
-                if audio_format_match:
-                    self.tts_resp.append(audio_format_match.group(1))
+            audio_format_match = patterns.audio_src.search(vis_resp_chunk)
+            if audio_format_match:
+                self.tts_resp.append(audio_format_match.group(1))
 
             # Process responses
             await self.create_bot_hmessage()

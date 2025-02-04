@@ -116,7 +116,7 @@ config = Config()
 class SharedRegex: # Search for [ (]r['"] in vscode
     braces = re.compile(r'{{([^{}]+?)}}(?=[^\w$:]|$$|$)') # {{this syntax|separate items can be divided|another item}}
     wildcard = re.compile(r'##[\w-]+(?=[^\w-]|$)') # ##this-syntax represents a wildcard .txt file
-    audio_src = re.compile(r'audio src="file/(.*?\.(wav|mp3))"', flags=re.IGNORECASE)
+    audio_src = re.compile(r'src="file/([^"]+\.(wav|mp3))\b', flags=re.IGNORECASE)
 
     sd_lora = re.compile(r'<lora:[^:]+:[^>]+>')
     sd_lora_weight = re.compile(r'(?<=:)\d+(\.\d+)?')
