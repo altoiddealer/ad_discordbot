@@ -3872,12 +3872,12 @@ class Tasks(TaskProcessing):
             # Send images, user's prompt, and any params from "/image" cmd
             imgcmd_task = getattr(self, 'imgcmd_task', False)
             if imgcmd_task or (self.params.should_send_text and not self.params.should_gen_text):
-                prompt = self.params.imgcmd.get('message')
                 imgcmd_message = self.params.imgcmd.get('message')
+                original_prompt = f'-# {self.text}'[:2000]
                 if imgcmd_message:
-                    await self.embeds.send('img_send', f"{self.user_name} requested an image:", '', footer=imgcmd_message, nonembed_text=self.text[:2000])
+                    await self.embeds.send('img_send', f"{self.user_name} requested an image:", '', footer=imgcmd_message, nonembed_text=original_prompt)
                 else:
-                    await self.channel.send((self.text)[:2000])
+                    await self.channel.send(original_prompt)
             send_user_image = self.params.send_user_image
             if send_user_image:
                 await self.channel.send(file=send_user_image) if len(send_user_image) == 1 else await self.channel.send(files=send_user_image)
@@ -4522,7 +4522,8 @@ if sd.enabled:
             style_choices = [app_commands.Choice(name=option['name'], value=option['name'])
                              for option in style_options]
             use_llm_choices = [app_commands.Choice(name="No, just img gen from my prompt", value="No"),
-                               app_commands.Choice(name="Yes, send my prompt to the LLM", value="Yes")]
+                               app_commands.Choice(name="Yes, send my prompt to the LLM", value="Yes"),
+                               app_commands.Choice(name="Yes, auto-prefixed: 'Provide a detailed image prompt description for: '", value="YesWithPrefix")]
             return size_choices, style_choices, use_llm_choices
 
         except Exception as e:
@@ -4683,7 +4684,7 @@ if sd.enabled:
         try:
             pos_prompt = await dynamic_prompting(prompt)
             log_msg = ""
-            if use_llm:
+            if use_llm and use_llm != 'No':
                 log_msg += "\nUse LLM: True (image was generated from LLM reply)"
             if size:
                 selected_size = next((option for option in size_options if option['name'] == size), None)
@@ -4950,6 +4951,9 @@ if sd.enabled:
                     log.error(f"An error occurred while configuring ControlNet for /image command: {e}")
 
             image_cmd_task.img_prompt = pos_prompt
+
+            if use_llm and use_llm == 'YesWithPrefix':
+                pos_prompt = 'Provide a detailed image prompt description (without any preamble or additional text) for: ' + pos_prompt
             image_cmd_task.text = pos_prompt
 
             # UPDATE TASK WITH PARAMS
@@ -4968,7 +4972,7 @@ if sd.enabled:
 
             # QUEUE TASK
             log.info(f'{ctx.author.display_name} used "/image": "{pos_prompt}"')
-            if use_llm:
+            if use_llm and use_llm != 'No':
                 # Set more parameters
                 params: Params = image_cmd_task.params
                 params.should_gen_text = True
