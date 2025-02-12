@@ -537,13 +537,14 @@ class Embeds:
     async def send(self, name:str, title:str|None=None, description:str|None=None, **kwargs) -> None|discord.Message:
         send_channel = kwargs.get('channel') or self.channel or None
         delete_after = kwargs.get('delete_after', None)
+        nonembed_text = kwargs.get('nonembed_text', None)
 
         # Return if not configured
         if not self.enabled(name) or send_channel is None:
             return
         # Retain the message while sending Embed
         updated_embed = self.update(name, title, description, **kwargs)
-        self.sent_msg_embeds[name] = await send_channel.send(embed=updated_embed, delete_after=delete_after)
+        self.sent_msg_embeds[name] = await send_channel.send(content=nonembed_text, embed=updated_embed, delete_after=delete_after)
         return self.sent_msg_embeds[name]
 
     async def edit_or_send(self, name:str, title:str|None=None, description:str|None=None, **kwargs) -> None|discord.Embed|discord.Message:

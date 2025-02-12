@@ -3867,11 +3867,17 @@ class Tasks(TaskProcessing):
                 swap_params.imgmodel['sd_model_checkpoint'] = bot_settings.get_last_setting_for("last_imgmodel_checkpoint", self.ictx)
                 # RUN A CHANGE IMGMODEL SUBTASK
                 should_swap = await self.run_subtask('change_imgmodel')
-            # Generate and send images
+            # Generate images
             await self.process_image_gen()
+            # Send images, user's prompt, and any params from "/image" cmd
             imgcmd_task = getattr(self, 'imgcmd_task', False)
             if imgcmd_task or (self.params.should_send_text and not self.params.should_gen_text):
-                await self.embeds.send('img_send', f"{self.user_name} requested an image:", '', footer=self.params.imgcmd.get('message', self.img_prompt)[:2000])
+                prompt = self.params.imgcmd.get('message')
+                imgcmd_message = self.params.imgcmd.get('message')
+                if imgcmd_message:
+                    await self.embeds.send('img_send', f"{self.user_name} requested an image:", '', footer=imgcmd_message, nonembed_text=self.text[:2000])
+                else:
+                    await self.channel.send((self.text)[:2000])
             send_user_image = self.params.send_user_image
             if send_user_image:
                 await self.channel.send(file=send_user_image) if len(send_user_image) == 1 else await self.channel.send(files=send_user_image)
@@ -4675,8 +4681,8 @@ if sd.enabled:
         img2img_dict = {}
         cnet_dict = {}
         try:
-            prompt = await dynamic_prompting(prompt)
-            log_msg = f"{ctx.author.name}'s prompt: {prompt}"
+            pos_prompt = await dynamic_prompting(prompt)
+            log_msg = ""
             if use_llm:
                 log_msg += "\nUse LLM: True (image was generated from LLM reply)"
             if size:
@@ -4943,8 +4949,8 @@ if sd.enabled:
                 except Exception as e:
                     log.error(f"An error occurred while configuring ControlNet for /image command: {e}")
 
-            image_cmd_task.img_prompt = prompt
-            image_cmd_task.text = prompt
+            image_cmd_task.img_prompt = pos_prompt
+            image_cmd_task.text = pos_prompt
 
             # UPDATE TASK WITH PARAMS
             imgcmd_params = {}
@@ -4961,7 +4967,7 @@ if sd.enabled:
             await ireply(ctx, 'image') # send a response msg to the user
 
             # QUEUE TASK
-            log.info(f'{ctx.author.display_name} used "/image": "{prompt}"')
+            log.info(f'{ctx.author.display_name} used "/image": "{pos_prompt}"')
             if use_llm:
                 # Set more parameters
                 params: Params = image_cmd_task.params
