@@ -1590,6 +1590,11 @@ class TaskProcessing(TaskAttributes):
         save_to_history = getattr(self.params, 'prompt_save_to_history', None)
         if save_to_history is not None:
             self.params.save_to_history = save_to_history
+        response_type = getattr(self.params, 'prompt_response_type', None)
+        if response_type is not None:
+            self.params.should_send_text = True if 'text' in response_type else False
+            if 'image' in response_type:
+                self.params.should_gen_image = True
 
     async def init_llm_payload(self:Union["Task","Tasks"]):
         self.llm_payload = copy.deepcopy(vars(self.settings.llmstate))
@@ -6026,6 +6031,7 @@ async def process_prompt(ctx: commands.Context, selections:dict):
     mode = selections.get('mode', None)
     system_message = selections.get('system_message', None)
     save_to_history = selections.get('save_to_history', None)
+    response_type = selections.get('response_type', None)
 
     if not prompt:
         await ctx.reply("A prompt is required for '/prompt' command", ephemeral=True, delete_after=5)
@@ -6045,6 +6051,8 @@ async def process_prompt(ctx: commands.Context, selections:dict):
             setattr(prompt_params, 'system_message', system_message)
         if save_to_history:
             setattr(prompt_params, 'prompt_save_to_history', True if save_to_history == "yes" else False)
+        if response_type:
+            setattr(prompt_params, 'prompt_response_type', response_type)
         prompt_task = Task('message', ctx, text=prompt, params=prompt_params)
         await task_manager.task_queue.put(prompt_task)
 
@@ -6061,10 +6069,14 @@ if tgwui.enabled:
     @app_commands.describe(system_message='A non-user instruction to the LLM. May not have any effect in "chat" mode (model dependent).')
     @app_commands.describe(save_to_history='Whether the LLM should remember this message exchange.')
     @app_commands.choices(save_to_history=[app_commands.Choice(name="Yes", value="yes"), app_commands.Choice(name="No", value="no")])
+    @app_commands.describe(response_type="The type of response you want from the LLM. Use '/image' cmd for advanced image requests.")
+    @app_commands.choices(response_type=[app_commands.Choice(name="Text response only", value="text"),
+                                     app_commands.Choice(name="Image response only", value="image"),
+                                     app_commands.Choice(name="Text and Image response", value="textimage")])
     async def prompt(ctx: commands.Context, prompt: str, begin_reply_with: typing.Optional[str], mode: typing.Optional[app_commands.Choice[str]], 
-                     system_message: typing.Optional[str], save_to_history: typing.Optional[app_commands.Choice[str]]):
+                     system_message: typing.Optional[str], save_to_history: typing.Optional[app_commands.Choice[str]], response_type: typing.Optional[app_commands.Choice[str]]):
         user_selections = {"prompt": prompt, "begin_reply_with": begin_reply_with if begin_reply_with else None, "mode": mode.value if mode else None, 
-                           "system_message": system_message if system_message else None, "save_to_history": save_to_history.value if save_to_history else None}
+                           "system_message": system_message if system_message else None, "save_to_history": save_to_history.value if save_to_history else None, "response_type": response_type.value if response_type else None}
         await process_prompt(ctx, user_selections)
 
 #################################################################
