@@ -1580,13 +1580,17 @@ class TaskProcessing(TaskAttributes):
             setattr(self.params, "include_continued_text", True)
 
     def apply_prompt_params(self:Union["Task","Tasks"]):
-        self.apply_begin_reply_with()
         mode = getattr(self.params, 'mode', None)
         if mode:
             self.llm_payload['state']['mode'] = mode
         system_message = getattr(self.params, 'system_message', None)
         if system_message:
             self.llm_payload['state']['system_message'] = system_message
+        load_history = getattr(self.params, 'prompt_load_history', None)
+        if load_history is not None:
+            i_list, v_list = load_history
+            self.llm_payload['state']['history']['internal'] = i_list
+            self.llm_payload['state']['history']['visible'] = v_list
         save_to_history = getattr(self.params, 'prompt_save_to_history', None)
         if save_to_history is not None:
             self.params.save_to_history = save_to_history
@@ -1595,6 +1599,7 @@ class TaskProcessing(TaskAttributes):
             self.params.should_send_text = True if 'text' in response_type else False
             if 'image' in response_type:
                 self.params.should_gen_image = True
+        self.apply_begin_reply_with()
 
     async def init_llm_payload(self:Union["Task","Tasks"]):
         self.llm_payload = copy.deepcopy(vars(self.settings.llmstate))
@@ -6030,6 +6035,7 @@ async def process_prompt(ctx: commands.Context, selections:dict):
     begin_reply_with = selections.get('begin_reply_with', None)
     mode = selections.get('mode', None)
     system_message = selections.get('system_message', None)
+    load_history = selections.get('load_history', None)
     save_to_history = selections.get('save_to_history', None)
     response_type = selections.get('response_type', None)
 
@@ -6047,8 +6053,20 @@ async def process_prompt(ctx: commands.Context, selections:dict):
             setattr(prompt_params, 'begin_reply_with', begin_reply_with)
         if mode:
             setattr(prompt_params, 'mode', mode)
-        if system_message:
+        if system_message is not None:
             setattr(prompt_params, 'system_message', system_message)
+        if load_history is not None and load_history != 'all':
+            load_history = int(load_history)
+            # Get channel history
+            history_char, history_mode = get_char_mode_for_history(ctx)
+            local_history = bot_history.get_history_for(ctx.channel.id, history_char, history_mode)
+            i_list, v_list = local_history.render_to_tgwui_tuple()
+            if load_history <= 0:
+                i_list, v_list = [], []
+            else:
+                num_to_retain = min(load_history, len(i_list))
+                i_list, v_list = i_list[-num_to_retain:], v_list[-num_to_retain:]
+            setattr(prompt_params, 'prompt_load_history', (i_list, v_list))
         if save_to_history:
             setattr(prompt_params, 'prompt_save_to_history', True if save_to_history == "yes" else False)
         if response_type:
@@ -6067,16 +6085,23 @@ if tgwui.enabled:
     @app_commands.describe(mode='"instruct" will omit character context and draw more attention to your prompt.')
     @app_commands.choices(mode=[app_commands.Choice(name="chat", value="chat"), app_commands.Choice(name="instruct", value="instruct")])
     @app_commands.describe(system_message='A non-user instruction to the LLM. May not have any effect in "chat" mode (model dependent).')
+    @app_commands.describe(load_history='The number of recent chat history exchanges the LLM sees for this interaction.')
+    @app_commands.choices(load_history=[app_commands.Choice(name="All", value="all"),
+                                        app_commands.Choice(name="None", value="0"),
+                                        *[app_commands.Choice(name=str(i), value=str(i)) for i in range(1, 11)]])
     @app_commands.describe(save_to_history='Whether the LLM should remember this message exchange.')
     @app_commands.choices(save_to_history=[app_commands.Choice(name="Yes", value="yes"), app_commands.Choice(name="No", value="no")])
     @app_commands.describe(response_type="The type of response you want from the LLM. Use '/image' cmd for advanced image requests.")
     @app_commands.choices(response_type=[app_commands.Choice(name="Text response only", value="text"),
                                      app_commands.Choice(name="Image response only", value="image"),
                                      app_commands.Choice(name="Text and Image response", value="textimage")])
+    @configurable_for_dm_if(lambda ctx: 'prompt' in config.discord_dm_setting('allowed_commands', []))
     async def prompt(ctx: commands.Context, prompt: str, begin_reply_with: typing.Optional[str], mode: typing.Optional[app_commands.Choice[str]], 
-                     system_message: typing.Optional[str], save_to_history: typing.Optional[app_commands.Choice[str]], response_type: typing.Optional[app_commands.Choice[str]]):
+                     system_message: typing.Optional[str], load_history: typing.Optional[app_commands.Choice[str]],
+                     save_to_history: typing.Optional[app_commands.Choice[str]], response_type: typing.Optional[app_commands.Choice[str]]):
         user_selections = {"prompt": prompt, "begin_reply_with": begin_reply_with if begin_reply_with else None, "mode": mode.value if mode else None, 
-                           "system_message": system_message if system_message else None, "save_to_history": save_to_history.value if save_to_history else None, "response_type": response_type.value if response_type else None}
+                           "system_message": system_message if system_message else None, "load_history": load_history.value if load_history else None,
+                           "save_to_history": save_to_history.value if save_to_history else None, "response_type": response_type.value if response_type else None}
         await process_prompt(ctx, user_selections)
 
 #################################################################
