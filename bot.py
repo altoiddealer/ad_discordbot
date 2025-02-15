@@ -1596,8 +1596,8 @@ class TaskProcessing(TaskAttributes):
             self.params.save_to_history = save_to_history
         response_type = getattr(self.params, 'prompt_response_type', None)
         if response_type is not None:
-            self.params.should_send_text = True if 'text' in response_type else False
-            if 'image' in response_type:
+            self.params.should_send_text = True if 'Text' in response_type else False
+            if 'Image' in response_type:
                 self.params.should_gen_image = True
         self.apply_begin_reply_with()
 
@@ -6031,13 +6031,13 @@ if tgwui.enabled and tts.client and tts.client in tts.supported_clients:
 #################################################################
 async def process_prompt(ctx: commands.Context, selections:dict):
     # User inputs from /image command
-    prompt = selections.get('prompt', '')
-    begin_reply_with = selections.get('begin_reply_with', None)
-    mode = selections.get('mode', None)
-    system_message = selections.get('system_message', None)
-    load_history = selections.get('load_history', None)
-    save_to_history = selections.get('save_to_history', None)
-    response_type = selections.get('response_type', None)
+    prompt:str = selections.get('prompt', '')
+    begin_reply_with:Optional[str] = selections.get('begin_reply_with', None)
+    mode:Optional[str] = selections.get('mode', None)
+    system_message:Optional[str] = selections.get('system_message', None)
+    load_history:Optional[str] = selections.get('load_history', None)
+    save_to_history:Optional[str] = selections.get('save_to_history', None)
+    response_type:Optional[str] = selections.get('response_type', None)
 
     if not prompt:
         await ctx.reply("A prompt is required for '/prompt' command", ephemeral=True, delete_after=5)
@@ -6046,15 +6046,18 @@ async def process_prompt(ctx: commands.Context, selections:dict):
     try:
         await ireply(ctx, 'prompt') # send a response msg to the user
 
-        log.info(f'{ctx.author.display_name} used "/prompt": "{prompt}"')
-        # offload to TaskManager() queue
-        prompt_params = Params()
+        prompt_params = Params() # Set the tasks params
+
+        log_msg = "\n"
         if begin_reply_with:
             setattr(prompt_params, 'begin_reply_with', begin_reply_with)
+            log_msg += f"\n> __Reply continued from__: {begin_reply_with}"
         if mode:
             setattr(prompt_params, 'mode', mode)
+            log_msg += f"\n> __Mode__: {mode.title()}"
         if system_message is not None:
             setattr(prompt_params, 'system_message', system_message)
+            log_msg += f"\n> __System Message__: {system_message}"
         if load_history is not None and load_history != 'all':
             load_history = int(load_history)
             # Get channel history
@@ -6067,10 +6070,23 @@ async def process_prompt(ctx: commands.Context, selections:dict):
                 num_to_retain = min(load_history, len(i_list))
                 i_list, v_list = i_list[-num_to_retain:], v_list[-num_to_retain:]
             setattr(prompt_params, 'prompt_load_history', (i_list, v_list))
-        if save_to_history:
+            log_msg += f"\n> __Load History__: Limited to {len(i_list)} recent exchanges"
+        if save_to_history is not None:
             setattr(prompt_params, 'prompt_save_to_history', True if save_to_history == "yes" else False)
+            log_msg += "\n> __Save History__: Interaction will not be saved" if save_to_history == "no" else ""
         if response_type:
             setattr(prompt_params, 'prompt_response_type', response_type)
+            log_msg += f"\n> __Response Type__: {response_type}"
+
+        setattr(prompt_params, 'prompt_message', log_msg)
+
+        # Send an embed to channel with user's prompt and params
+        title = f"{ctx.author.display_name} used '/prompt':"
+        description = f"**{ctx.author.display_name}**: {prompt}{log_msg}"
+        await bot_embeds.send('system', title, description, channel=ctx.channel)
+
+        log.info(f'{title} "{prompt}"')
+        # offload to TaskManager() queue
         prompt_task = Task('message', ctx, text=prompt, params=prompt_params)
         await task_manager.task_queue.put(prompt_task)
 
@@ -6092,9 +6108,9 @@ if tgwui.enabled:
     @app_commands.describe(save_to_history='Whether the LLM should remember this message exchange.')
     @app_commands.choices(save_to_history=[app_commands.Choice(name="Yes", value="yes"), app_commands.Choice(name="No", value="no")])
     @app_commands.describe(response_type="The type of response you want from the LLM. Use '/image' cmd for advanced image requests.")
-    @app_commands.choices(response_type=[app_commands.Choice(name="Text response only", value="text"),
-                                     app_commands.Choice(name="Image response only", value="image"),
-                                     app_commands.Choice(name="Text and Image response", value="textimage")])
+    @app_commands.choices(response_type=[app_commands.Choice(name="Text response only", value="Text"),
+                                     app_commands.Choice(name="Image response only", value="Image"),
+                                     app_commands.Choice(name="Text and Image response", value="TextImage")])
     @configurable_for_dm_if(lambda ctx: 'prompt' in config.discord_dm_setting('allowed_commands', []))
     async def prompt(ctx: commands.Context, prompt: str, begin_reply_with: typing.Optional[str], mode: typing.Optional[app_commands.Choice[str]], 
                      system_message: typing.Optional[str], load_history: typing.Optional[app_commands.Choice[str]],
