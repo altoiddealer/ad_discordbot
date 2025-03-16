@@ -38,7 +38,7 @@ from functools import partial
 sys.path.append("ad_discordbot")
 
 from modules.utils_files import load_file, merge_base, save_yaml_file  # noqa: F401
-from modules.utils_shared import shared_path, bg_task_queue, task_processing, flows_queue, flows_event, patterns, bot_emojis, config, bot_database
+from modules.utils_shared import shared_path, bg_task_queue, task_event, flows_queue, flows_event, patterns, bot_emojis, config, bot_database
 from modules.database import StarBoard, Statistics, BaseFileMemory
 from modules.utils_misc import check_probability, fix_dict, update_dict, sum_update_dict, update_dict_matched_keys, random_value_from_range, convert_lists_to_tuples, get_time, format_time, format_time_difference, get_normalized_weights  # noqa: F401
 from modules.utils_discord import Embeds, guild_only, guild_or_owner_only, configurable_for_dm_if, is_direct_message, ireply, sleep_delete_message, send_long_message, \
@@ -4298,8 +4298,8 @@ class TaskManager(Tasks):
                     task, queue_name = await self.get_next_task()
                     task: Task
 
-                    # Flag processing a task. Check with 'if task_processing.is_set():'
-                    task_processing.set() 
+                    # Flag processing a task. Check with 'if task_event.is_set():'
+                    task_event.set() 
 
                     # Typing will begin immediately or at 'response_time' if set by MessageManager() 
                     typing = ['flows', 'regenerate', 'msg_image_cmd', 'speak', 'continue']
@@ -4320,7 +4320,7 @@ class TaskManager(Tasks):
 
                     # Queue cleanup
                     self.reset_current()        # Reset TaskManager() attributes
-                    task_processing.clear()     # Flag no longer processing task
+                    task_event.clear()     # Flag no longer processing task
                     current_queue = getattr(self, queue_name)
                     current_queue: asyncio.Queue|asyncio.PriorityQueue
                     current_queue.task_done()   # Accept next task
@@ -4328,7 +4328,7 @@ class TaskManager(Tasks):
         except Exception as e:
             logging.error(f"An error occurred while processing a main task: {e}")
             traceback.print_exc()
-            task_processing.clear()
+            task_event.clear()
             client.loop.create_task(task_manager.process_tasks())
 
     def reset_current(self):

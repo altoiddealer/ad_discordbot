@@ -8,7 +8,7 @@ from modules.utils_misc import fix_dict
 from modules.logs import import_track, get_logger; import_track(__file__, fp=True); log = get_logger(__name__)  # noqa: E702
 logging = log
 
-task_processing = asyncio.Event()
+task_event = asyncio.Event()
 bg_task_queue = asyncio.Queue()
 flows_queue = asyncio.Queue()
 flows_event = asyncio.Event()
