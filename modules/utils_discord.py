@@ -1,4 +1,4 @@
-from modules.utils_shared import bg_task_queue, task_processing, bot_emojis, config
+from modules.utils_shared import bg_task_queue, task_event, bot_emojis, config
 import discord
 from discord.ext import commands
 from typing import Optional, Union
@@ -146,7 +146,7 @@ async def sleep_delete_message(message: discord.Message, wait:int=5):
 # Send message response to user's interaction command
 async def ireply(ictx: 'CtxInteraction', process):
     try:
-        if task_processing.is_set():
+        if task_event.is_set():
             message = f'Your {process} request was added to the task queue'
         else:
             message = f'Processing your {process} request'
