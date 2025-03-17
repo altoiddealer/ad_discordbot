@@ -2,6 +2,9 @@ discord.py
 colorama
 dataclasses-json
 pynacl
+pyyaml
+Pillow>=9.5.0
+requests
 pydub
 
 pywin32; platform_system == "Windows"
