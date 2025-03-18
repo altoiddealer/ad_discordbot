@@ -1190,6 +1190,7 @@ class Params:
         self.should_send_text: bool     = kwargs.get('should_send_text', True)
         self.should_gen_image: bool     = kwargs.get('should_gen_image', False)
         self.should_send_image: bool    = kwargs.get('should_send_image', True)
+        self.should_tts: bool           = kwargs.get('should_tts', True)
 
         # Image command params
         self.imgcmd: dict = kwargs.get('imgcmd', {
@@ -1396,6 +1397,7 @@ class TaskProcessing(TaskAttributes):
             change_llmmodel: str         = mods.get('change_llmmodel', None)
             swap_llmmodel: str           = mods.get('swap_llmmodel', None)
             toggle_vc_playback: str      = mods.get('toggle_vc_playback', None)
+            should_tts: bool             = mods.get('should_tts', None)
 
             # Begin reply with handling
             if begin_reply_with is not None:
@@ -1410,7 +1412,8 @@ class TaskProcessing(TaskAttributes):
             # TTS Adjustments
             if toggle_vc_playback is not None and not is_direct_message(self.ictx):
                 await voice_clients.toggle_playback_in_voice_channel(self.ictx.guild.id, toggle_vc_playback)
-
+            if should_tts is not None:
+                self.params.should_tts = should_tts
             # History handling
             if save_history is not None:
                 self.params.save_to_history = save_history # save_to_history
@@ -1522,6 +1525,8 @@ class TaskProcessing(TaskAttributes):
                     llm_payload_mods['load_history'] = int(tag.pop('load_history'))
                 if 'toggle_vc_playback' in tag and not llm_payload_mods.get('toggle_vc_playback'):
                     llm_payload_mods['toggle_vc_playback'] = str(tag.pop('toggle_vc_playback'))
+                if 'should_tts' in tag and not llm_payload_mods.get('should_tts'):
+                    llm_payload_mods['should_tts'] = bool(tag.pop('should_tts'))
                 if 'include_hidden_history' in tag and not llm_payload_mods.get('include_hidden_history'):
                     llm_payload_mods['include_hidden_history'] = bool(tag.pop('include_hidden_history'))
                     
@@ -1642,6 +1647,20 @@ class TaskProcessing(TaskAttributes):
             img_gen_task = self.clone('img_gen', self.ictx, ignore_list=['llm_payload'])
             await task_manager.task_queue.put(img_gen_task)
 
+    async def check_tts_before_llm_gen(self:Union["Task","Tasks"]) -> bool:
+        # Toggle TTS off if not sending text
+        if not self.params.should_send_text:
+            return await tts.apply_toggle_tts(self.settings, toggle='off')
+        # Conditions which are only valid for guild interactions
+        if hasattr(self.ictx, 'guild') and getattr(self.ictx.guild, 'voice_client', None):
+            # Toggle TTS off if interaction server is not connected to Voice Channel
+            if not voice_clients.guild_vcs.get(self.ictx.guild.id) and int(tts.settings.get('play_mode', 0)) == 0:
+                return await tts.apply_toggle_tts(self.settings, toggle='off')
+            # Toggle TTS if triggered by Tags and is connected to VC
+            if self.params.should_tts == False and voice_clients.guild_vcs.get(self.ictx.guild.id):
+                return await tts.apply_toggle_tts(self.settings, toggle='off')
+        return False
+
     async def message_llm_gen(self:Union["Task","Tasks"]):
         # if no LLM model is loaded, notify that no text will be generated
         if shared.model_name == 'None':
@@ -1650,12 +1669,8 @@ class TaskProcessing(TaskAttributes):
                 await self.channel.send('(Cannot process text request: No LLM model is currently loaded. Use "/llmmodel" to load a model.)', delete_after=10)
                 log.warning(f'Bot tried to generate text for {self.user_name}, but no LLM model was loaded')
         ## Finalize payload, generate text via TGWUI, and process responses
-        # Toggle TTS off, if interaction server is not connected to Voice Channel
-        tts_sw = False
-        if (not self.params.should_send_text) \
-            or (hasattr(self.ictx, 'guild') and getattr(self.ictx.guild, 'voice_client', None) \
-            and not voice_clients.guild_vcs.get(self.ictx.guild.id) and int(tts.settings.get('play_mode', 0)) == 0):
-            tts_sw = await tts.apply_toggle_tts(self.settings, toggle='off')
+        # Toggle TTS if necessary
+        tts_sw = self.check_tts_before_llm_gen()
         # Check to apply Server Mode
         self.apply_server_mode()
         # Update names in stopping strings

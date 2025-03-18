@@ -220,6 +220,7 @@ tag_presets:
 # Relevant to text generation (LLM):
 #   should_gen_text: (true/false)     If LLM should generate text. If False and 'should_gen_image' is True, passes the user's text as prompt for image gen.
 #   should_send_text: (true/false)    If LLM should send generated text to channel. Mainly used for 'flows' tag.
+#   should_tts: (true/false)          false = prevents TTS from generating for the current interaction
 #   llm_censoring: (true/false)       true = blocks text from being generated
 #   begin_reply_with: 'string'        The LLM will continue their reply from this.
 #   change_llmmodel: 'string'         For (change/swap)_llmmodel: 'change' will trigger a persistent change. 'swap' will only change the LLM model for the current interaction.
