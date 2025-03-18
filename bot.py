@@ -900,6 +900,19 @@ class VoiceClients:
             source = discord.FFmpegPCMAudio(file)
             self.guild_vcs[guild_id].play(source, after=lambda e: self.after_playback(guild_id, file, e))
 
+    async def toggle_playback_in_voice_channel(self, guild_id, action='stop'):
+        if self.guild_vcs.get(guild_id):          
+            guild_vc:discord.VoiceClient = self.guild_vcs[guild_id]
+            if action == 'stop' and guild_vc.is_playing():
+                guild_vc.stop()
+                log.info(f"TTS playback was stopped for guild {guild_id}")
+            elif (action == 'pause' or action == 'toggle') and guild_vc.is_playing():
+                guild_vc.pause()
+                log.info(f"TTS playback was paused in guild {guild_id}")
+            elif (action == 'resume' or action == 'toggle') and guild_vc.is_paused():
+                guild_vc.resume()
+                log.info(f"TTS playback resumed in guild {guild_id}")
+
     def detect_format(self, file_path):
         try:
             audio = AudioSegment.from_wav(file_path)
@@ -1382,6 +1395,7 @@ class TaskProcessing(TaskAttributes):
             swap_character: str          = mods.get('swap_character', None)
             change_llmmodel: str         = mods.get('change_llmmodel', None)
             swap_llmmodel: str           = mods.get('swap_llmmodel', None)
+            toggle_vc_playback: str      = mods.get('toggle_vc_playback', None)
 
             # Begin reply with handling
             if begin_reply_with is not None:
@@ -1392,6 +1406,10 @@ class TaskProcessing(TaskAttributes):
             # Flow handling
             if flow is not None and not flows.event.is_set():
                 await flows.build_queue(flow)
+
+            # TTS Adjustments
+            if toggle_vc_playback is not None and not is_direct_message(self.ictx):
+                await voice_clients.toggle_playback_in_voice_channel(self.ictx.guild.id, toggle_vc_playback)
 
             # History handling
             if save_history is not None:
@@ -1502,6 +1520,8 @@ class TaskProcessing(TaskAttributes):
                     llm_payload_mods['save_history'] = bool(tag.pop('save_history'))
                 if 'load_history' in tag and not llm_payload_mods.get('load_history'):
                     llm_payload_mods['load_history'] = int(tag.pop('load_history'))
+                if 'toggle_vc_playback' in tag and not llm_payload_mods.get('toggle_vc_playback'):
+                    llm_payload_mods['toggle_vc_playback'] = str(tag.pop('toggle_vc_playback'))
                 if 'include_hidden_history' in tag and not llm_payload_mods.get('include_hidden_history'):
                     llm_payload_mods['include_hidden_history'] = bool(tag.pop('include_hidden_history'))
                     
@@ -2738,6 +2758,7 @@ class TaskProcessing(TaskAttributes):
         try:
             flow: dict            = mods.pop('flow', None)
             change_imgmodel: str  = mods.pop('change_imgmodel', None)
+            toggle_vc_playback: str = mods.pop('toggle_vc_playback', None)
             swap_imgmodel: str    = mods.pop('swap_imgmodel', None)
             last_img_payload: bool|list = mods.pop('last_img_payload', None)
             payload: dict         = mods.pop('payload', None)
@@ -2751,100 +2772,102 @@ class TaskProcessing(TaskAttributes):
             img2img_mask: str     = mods.pop('img2img_mask', '')
             self.params.sd_output_dir = (mods.pop('sd_output_dir', self.params.sd_output_dir)).lstrip('/')  # Remove leading slash if it exists
             self.params.img_censoring = mods.pop('img_censoring', self.params.img_censoring)
-            # Process the tag matches
-            if flow or change_imgmodel or swap_imgmodel or payload or aspect_ratio or param_variances or controlnet or forge_couple or layerdiffuse or reactor or img2img or img2img_mask or last_img_payload:
-                # Flow handling
-                if flow is not None and not flows.event.is_set():
-                    await flows.build_queue(flow)
-                # Imgmodel handling
-                new_imgmodel = change_imgmodel or swap_imgmodel or None
-                if new_imgmodel:
-                    imgmodel_params = await get_selected_imgmodel_params(new_imgmodel, self.ictx) # {sd_model_checkpoint, imgmodel_name, filename}
-                    current_imgmodel_name = bot_settings.get_last_setting_for("last_imgmodel_name", self.ictx)
-                    new_imgmodel_name = imgmodel_params.get('imgmodel_name', '')
-                    # Check if new model same as current model
-                    if current_imgmodel_name == new_imgmodel_name:
-                        log.info(f'[TAGS] Img model was triggered to change, but it is the same as current ("{current_imgmodel_name}").')
-                    else:
-                        self.params.imgmodel = imgmodel_params
-                        mode = 'change' if new_imgmodel == change_imgmodel else 'swap'
-                        verb = 'Changing' if mode == 'change' else 'Swapping'
-                        self.params.imgmodel['current_imgmodel_name'] = current_imgmodel_name
-                        self.params.imgmodel['mode'] = mode
-                        self.params.imgmodel['verb'] = verb
-                        log.info(f'[TAGS] {verb} Img model: "{new_imgmodel_name}"')
-                # Payload handling
-                if last_img_payload:
-                    if isinstance(last_img_payload, bool):
-                        last_img_payload_dict = copy.deepcopy(sd.last_img_payload)
-                        setattr(self, 'stashed_prompt', last_img_payload_dict.pop('prompt', '')) # Retains the prompt to re-apply later
+
+            # Flow handling
+            if flow is not None and not flows.event.is_set():
+                await flows.build_queue(flow)
+            # TTS Adjustments
+            if toggle_vc_playback is not None and not is_direct_message(self.ictx):
+                await voice_clients.toggle_playback_in_voice_channel(self.ictx.guild.id, toggle_vc_playback)
+            # Imgmodel handling
+            new_imgmodel = change_imgmodel or swap_imgmodel or None
+            if new_imgmodel:
+                imgmodel_params = await get_selected_imgmodel_params(new_imgmodel, self.ictx) # {sd_model_checkpoint, imgmodel_name, filename}
+                current_imgmodel_name = bot_settings.get_last_setting_for("last_imgmodel_name", self.ictx)
+                new_imgmodel_name = imgmodel_params.get('imgmodel_name', '')
+                # Check if new model same as current model
+                if current_imgmodel_name == new_imgmodel_name:
+                    log.info(f'[TAGS] Img model was triggered to change, but it is the same as current ("{current_imgmodel_name}").')
+                else:
+                    self.params.imgmodel = imgmodel_params
+                    mode = 'change' if new_imgmodel == change_imgmodel else 'swap'
+                    verb = 'Changing' if mode == 'change' else 'Swapping'
+                    self.params.imgmodel['current_imgmodel_name'] = current_imgmodel_name
+                    self.params.imgmodel['mode'] = mode
+                    self.params.imgmodel['verb'] = verb
+                    log.info(f'[TAGS] {verb} Img model: "{new_imgmodel_name}"')
+            # Payload handling
+            if last_img_payload:
+                if isinstance(last_img_payload, bool):
+                    last_img_payload_dict = copy.deepcopy(sd.last_img_payload)
+                    setattr(self, 'stashed_prompt', last_img_payload_dict.pop('prompt', '')) # Retains the prompt to re-apply later
+                    update_dict(self.img_payload, last_img_payload_dict)
+                    log.info("[TAGS] Applying the previous image payload as the starting point (may be modified by other tags). Note: The previous 'prompt' will be identical.")
+                elif isinstance(last_img_payload, list):
+                    # Filter sd.last_img_payload based on keys in last_img_payload
+                    last_img_payload_dict = {key: sd.last_img_payload[key] for key in last_img_payload if key in sd.last_img_payload}
+                    if last_img_payload_dict:
+                        log.info("[TAGS] Applying the following settings from the previous image payload (may be modified by other tags):")
+                        log.info(f"{', '.join(last_img_payload_dict.keys())}")
                         update_dict(self.img_payload, last_img_payload_dict)
-                        log.info("[TAGS] Applying the previous image payload as the starting point (may be modified by other tags). Note: The previous 'prompt' will be identical.")
-                    elif isinstance(last_img_payload, list):
-                        # Filter sd.last_img_payload based on keys in last_img_payload
-                        last_img_payload_dict = {key: sd.last_img_payload[key] for key in last_img_payload if key in sd.last_img_payload}
-                        if last_img_payload_dict:
-                            log.info("[TAGS] Applying the following settings from the previous image payload (may be modified by other tags):")
-                            log.info(f"{', '.join(last_img_payload_dict.keys())}")
-                            update_dict(self.img_payload, last_img_payload_dict)
+                else:
+                    log.error("[TAGS] A tag was matched with invalid 'last_img_payload'; must be boolean ('true') or a ['list', 'of', 'key_names'].")
+            if payload:
+                if isinstance(payload, dict):
+                    log.info(f"[TAGS] Updated payload: '{payload}'")
+                    update_dict(self.img_payload, payload)
+                else:
+                    log.warning("[TAGS] A tag was matched with invalid 'payload'; must be a dictionary.")
+            # Aspect Ratio
+            if aspect_ratio:
+                try:
+                    current_avg = bot_settings.get_last_setting_for("last_imgmodel_res", self.ictx)
+                    # Use AR from input image, while adhering to current model res
+                    if img2img and aspect_ratio.lower() in ['use img2img', 'from img2img']:
+                        from io import BytesIO
+                        base64_string = str(img2img)
+                        image_data = base64.b64decode(base64_string)
+                        image_bytes = BytesIO(image_data)
+                        with Image.open(image_bytes) as img:
+                            img_w, img_h = img.size
+                        n, d = ar_parts_from_dims(img_w, img_h)
                     else:
-                        log.error("[TAGS] A tag was matched with invalid 'last_img_payload'; must be boolean ('true') or a ['list', 'of', 'key_names'].")
-                if payload:
-                    if isinstance(payload, dict):
-                        log.info(f"[TAGS] Updated payload: '{payload}'")
-                        update_dict(self.img_payload, payload)
-                    else:
-                        log.warning("[TAGS] A tag was matched with invalid 'payload'; must be a dictionary.")
-                # Aspect Ratio
-                if aspect_ratio:
-                    try:
-                        current_avg = bot_settings.get_last_setting_for("last_imgmodel_res", self.ictx)
-                        # Use AR from input image, while adhering to current model res
-                        if img2img and aspect_ratio.lower() in ['use img2img', 'from img2img']:
-                            from io import BytesIO
-                            base64_string = str(img2img)
-                            image_data = base64.b64decode(base64_string)
-                            image_bytes = BytesIO(image_data)
-                            with Image.open(image_bytes) as img:
-                                img_w, img_h = img.size
-                            n, d = ar_parts_from_dims(img_w, img_h)
-                        else:
-                            n, d = get_aspect_ratio_parts(aspect_ratio)
-                        w, h = dims_from_ar(current_avg, n, d)
-                        self.img_payload['width'], self.img_payload['height'] = w, h
-                        log.info(f'[TAGS] Applied aspect ratio "{aspect_ratio}" (Width: "{w}", Height: "{h}").')
-                    except Exception as e:
-                        log.error(f"[TAGS] Error applying aspect ratio: {e}")
-                # Param variances handling
-                if param_variances:
-                    processed_params = self.process_param_variances(param_variances)
-                    log.info(f"[TAGS] Applied Param Variances: '{processed_params}'")
-                    sum_update_dict(self.img_payload, processed_params)
-                # Controlnet handling
-                if controlnet and config.sd['extensions'].get('controlnet_enabled', False):
-                    self.img_payload['alwayson_scripts']['controlnet']['args'] = controlnet
-                # forge_couple handling
-                if forge_couple and config.sd['extensions'].get('forgecouple_enabled', False):
-                    self.img_payload['alwayson_scripts']['forge_couple']['args'].update(forge_couple)
-                    self.img_payload['alwayson_scripts']['forge_couple']['args']['enable'] = True
-                    log.info(f"[TAGS] Enabled forge_couple: {forge_couple}")
-                # layerdiffuse handling
-                if layerdiffuse and config.sd['extensions'].get('layerdiffuse_enabled', False):
-                    self.img_payload['alwayson_scripts']['layerdiffuse']['args'].update(layerdiffuse)
-                    self.img_payload['alwayson_scripts']['layerdiffuse']['args']['enabled'] = True
-                    log.info(f"[TAGS] Enabled layerdiffuse: {layerdiffuse}")
-                # ReActor face swap handling
-                if reactor and config.sd['extensions'].get('reactor_enabled', False):
-                    self.img_payload['alwayson_scripts']['reactor']['args'].update(reactor)
-                    if reactor.get('mask'):
-                        self.img_payload['alwayson_scripts']['reactor']['args']['save_original'] = True
-                # Img2Img handling
-                if img2img:
-                    self.img_payload['init_images'] = [str(img2img)]
-                    self.params.endpoint = '/sdapi/v1/img2img'
-                # Inpaint Mask handling
-                if img2img_mask:
-                    self.img_payload['mask'] = str(img2img_mask)
+                        n, d = get_aspect_ratio_parts(aspect_ratio)
+                    w, h = dims_from_ar(current_avg, n, d)
+                    self.img_payload['width'], self.img_payload['height'] = w, h
+                    log.info(f'[TAGS] Applied aspect ratio "{aspect_ratio}" (Width: "{w}", Height: "{h}").')
+                except Exception as e:
+                    log.error(f"[TAGS] Error applying aspect ratio: {e}")
+            # Param variances handling
+            if param_variances:
+                processed_params = self.process_param_variances(param_variances)
+                log.info(f"[TAGS] Applied Param Variances: '{processed_params}'")
+                sum_update_dict(self.img_payload, processed_params)
+            # Controlnet handling
+            if controlnet and config.sd['extensions'].get('controlnet_enabled', False):
+                self.img_payload['alwayson_scripts']['controlnet']['args'] = controlnet
+            # forge_couple handling
+            if forge_couple and config.sd['extensions'].get('forgecouple_enabled', False):
+                self.img_payload['alwayson_scripts']['forge_couple']['args'].update(forge_couple)
+                self.img_payload['alwayson_scripts']['forge_couple']['args']['enable'] = True
+                log.info(f"[TAGS] Enabled forge_couple: {forge_couple}")
+            # layerdiffuse handling
+            if layerdiffuse and config.sd['extensions'].get('layerdiffuse_enabled', False):
+                self.img_payload['alwayson_scripts']['layerdiffuse']['args'].update(layerdiffuse)
+                self.img_payload['alwayson_scripts']['layerdiffuse']['args']['enabled'] = True
+                log.info(f"[TAGS] Enabled layerdiffuse: {layerdiffuse}")
+            # ReActor face swap handling
+            if reactor and config.sd['extensions'].get('reactor_enabled', False):
+                self.img_payload['alwayson_scripts']['reactor']['args'].update(reactor)
+                if reactor.get('mask'):
+                    self.img_payload['alwayson_scripts']['reactor']['args']['save_original'] = True
+            # Img2Img handling
+            if img2img:
+                self.img_payload['init_images'] = [str(img2img)]
+                self.params.endpoint = '/sdapi/v1/img2img'
+            # Inpaint Mask handling
+            if img2img_mask:
+                self.img_payload['mask'] = str(img2img_mask)
         except Exception as e:
             log.error(f"[TAGS] Error processing Img tags: {e}")
             traceback.print_exc()
@@ -2930,7 +2953,7 @@ class TaskProcessing(TaskAttributes):
         layerdiffuse_args = {}
         reactor_args = {}
         extensions = config.sd.get('extensions', {})
-        accept_only_first = ['flow', 'aspect_ratio', 'img2img', 'img2img_mask', 'sd_output_dir', 'last_img_payload']
+        accept_only_first = ['flow', 'aspect_ratio', 'img2img', 'img2img_mask', 'sd_output_dir', 'last_img_payload', 'toggle_vc_playback']
         try:
             for tag in self.tags.matches:
                 tag_dict:TAG = self.tags.untuple(tag)
