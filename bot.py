@@ -1869,7 +1869,7 @@ class TaskProcessing(TaskAttributes):
                     self.last_checked:str        = ''
                     # TTS streaming
                     cant_stream_tts = ['edge_tts']
-                    self.stream_tts:bool         = tts.enabled and self.can_chunk and config.textgenwebui['tts_settings'].get('tts_streaming', True)
+                    self.stream_tts:bool         = tts.enabled and self.can_chunk and config.textgenwebui['tts_settings'].get('tts_streaming', True) and task.params.should_tts
                     if self.stream_tts and tts.client in cant_stream_tts:
                         self.stream_tts = False
                         log.error(f"TTS Streaming is confirmed non-functional for {tts.client} (for now), so this is being disabled.")
@@ -1966,11 +1966,12 @@ class TaskProcessing(TaskAttributes):
 
             def apply_extensions(chunk_text:str, was_streamed=True):
                 vis_resp_chunk:str = extensions_module.apply_extensions('output', chunk_text, state=self.llm_payload['state'], is_chat=True)
-                audio_format_match = patterns.audio_src.search(vis_resp_chunk)
-                if audio_format_match:
-                    stream_replies.streamed_tts = was_streamed
-                    setattr(self.params, 'streamed_tts', was_streamed)
-                    self.tts_resp.append(audio_format_match.group(1))
+                if vis_resp_chunk:
+                    audio_format_match = patterns.audio_src.search(vis_resp_chunk)
+                    if audio_format_match:
+                        stream_replies.streamed_tts = was_streamed
+                        setattr(self.params, 'streamed_tts', was_streamed)
+                        self.tts_resp.append(audio_format_match.group(1))
 
             # Sends LLM Payload and processes the generated text
             async def process_responses():
