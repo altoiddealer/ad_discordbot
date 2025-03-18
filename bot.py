@@ -1648,16 +1648,13 @@ class TaskProcessing(TaskAttributes):
             await task_manager.task_queue.put(img_gen_task)
 
     async def check_tts_before_llm_gen(self:Union["Task","Tasks"]) -> bool:
-        # Toggle TTS off if not sending text
-        if not self.params.should_send_text:
+        # Toggle TTS off if not sending text, or if triggered by Tags
+        if (not self.params.should_send_text) or (self.params.should_tts == False and tts.enabled):
             return await tts.apply_toggle_tts(self.settings, toggle='off')
         # Conditions which are only valid for guild interactions
         if hasattr(self.ictx, 'guild') and getattr(self.ictx.guild, 'voice_client', None):
             # Toggle TTS off if interaction server is not connected to Voice Channel
             if not voice_clients.guild_vcs.get(self.ictx.guild.id) and int(tts.settings.get('play_mode', 0)) == 0:
-                return await tts.apply_toggle_tts(self.settings, toggle='off')
-            # Toggle TTS if triggered by Tags
-            if self.params.should_tts == False and tts.enabled:
                 return await tts.apply_toggle_tts(self.settings, toggle='off')
         return False
 
