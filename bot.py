@@ -1670,7 +1670,7 @@ class TaskProcessing(TaskAttributes):
                 log.warning(f'Bot tried to generate text for {self.user_name}, but no LLM model was loaded')
         ## Finalize payload, generate text via TGWUI, and process responses
         # Toggle TTS if necessary
-        tts_sw = self.check_tts_before_llm_gen()
+        tts_sw = await self.check_tts_before_llm_gen()
         # Check to apply Server Mode
         self.apply_server_mode()
         # Update names in stopping strings
