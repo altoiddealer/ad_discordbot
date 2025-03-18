@@ -1656,8 +1656,8 @@ class TaskProcessing(TaskAttributes):
             # Toggle TTS off if interaction server is not connected to Voice Channel
             if not voice_clients.guild_vcs.get(self.ictx.guild.id) and int(tts.settings.get('play_mode', 0)) == 0:
                 return await tts.apply_toggle_tts(self.settings, toggle='off')
-            # Toggle TTS if triggered by Tags and is connected to VC
-            if self.params.should_tts == False and voice_clients.guild_vcs.get(self.ictx.guild.id):
+            # Toggle TTS if triggered by Tags
+            if self.params.should_tts == False and tts.enabled:
                 return await tts.apply_toggle_tts(self.settings, toggle='off')
         return False
 
