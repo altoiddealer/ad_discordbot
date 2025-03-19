@@ -108,10 +108,10 @@ def run_cmd(cmd, assert_success=False, environment=False, capture_output=False, 
     # Use the conda environment
     if environment:
         if is_windows():
-            conda_bat_path = os.path.join(script_dir, "installer_files", "conda", "condabin", "conda.bat")
+            conda_bat_path = os.path.join(install_path, "conda", "condabin", "conda.bat")
             cmd = f'"{conda_bat_path}" activate "{conda_env_path}" >nul && {cmd}'
         else:
-            conda_sh_path = os.path.join(script_dir, "installer_files", "conda", "etc", "profile.d", "conda.sh")
+            conda_sh_path = os.path.join(install_path, "conda", "etc", "profile.d", "conda.sh")
             cmd = f'. "{conda_sh_path}" && conda activate "{conda_env_path}" && {cmd}'
 
     # Set executable to None for Windows, bash for everything else
