@@ -7,11 +7,11 @@ import site
 import subprocess
 import sys
 
-# Environment(s)
+# Default environment
 script_dir = os.getcwd()
-parent_dir = os.path.dirname(script_dir)
-conda_env_path = os.path.join(script_dir, "installer_files", "env")
-parent_conda_env_path = os.path.join(parent_dir, "installer_files", "env")
+install_path = os.path.join(script_dir, "installer_files")
+conda_path = os.path.join(install_path, "conda")
+conda_env_path = os.path.join(install_path, "env")
 is_tgwui_integrated = False
 
 # Command-line flags
@@ -55,15 +55,6 @@ def is_installed():
         if "site-packages" in sitedir and conda_env_path in sitedir:
             site_packages_path = sitedir
             break
-    # check if installed as TGWUI integration
-    if site_packages_path is None:
-        for sitedir in site.getsitepackages():
-            if "site-packages" in sitedir and parent_conda_env_path in sitedir:
-                site_packages_path = sitedir
-                global is_tgwui_integrated
-                is_tgwui_integrated = True
-                print("ALREADY DISCORD TGWUI INSTALLED")
-                break
 
     if site_packages_path:
         return os.path.isfile(os.path.join(site_packages_path, 'discord', '__init__.py'))
@@ -253,12 +244,15 @@ def launch_bot():
 
 
 if __name__ == "__main__":
-    # Verifies we are in a conda environment
-    check_env()
-
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument('--update-wizard', action='store_true', help='Launch a menu with update options.')
+    parser.add_argument("--conda-env-path", type=str, help="Path to the Conda environment")
     args, _ = parser.parse_known_args()
+    conda_env_path = os.path.abspath(args.conda_env_path) if args.conda_env_path else ""
+    install_path = os.path.dirname(conda_env_path) if conda_env_path.endswith(os.sep + "env") else conda_env_path
+
+    # Verifies we are in a conda environment
+    check_env()
 
     if args.update_wizard:
         options_dict = {'A': 'Update the bot',

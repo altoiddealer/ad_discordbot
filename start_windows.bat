@@ -73,7 +73,6 @@ if exist %CONDA_PARENT%\condabin\conda.bat (
     set USER_CHOICE=!USER_CHOICE:~0,1!
 
     if /I "!USER_CHOICE!"=="A" (
-        echo %CONDA_PARENT% > "%ENV_FLAG%"
         set "CONDA_ROOT_PREFIX=%CONDA_PARENT%"
         set "INSTALL_ENV_DIR=%ENV_PARENT%"
         goto activate_conda
@@ -171,7 +170,8 @@ if %errorlevel% neq 0 (
 )
 
 echo Conda activated successfully.
-call python %HOME_DIR%\one_click.py %*
+echo %CONDA_ROOT_PREFIX% > "%ENV_FLAG%"
+call python "%HOME_DIR%\one_click.py" --conda-env-path "%INSTALL_ENV_DIR%" %*
 
 @rem below are functions for the script   next line skips these during normal execution
 goto end
