@@ -68,6 +68,7 @@ bot_embeds = Embeds()
 # Intercept custom bot arguments
 def parse_bot_args():
     bot_arg_list = ["--limit-history", "--token"]
+    #bot_arg_list = ["--is-tgwui-integrated", "--limit-history", "--token"]
     bot_argv = []
     for arg in bot_arg_list:
         try:
@@ -83,6 +84,7 @@ def parse_bot_args():
     parser = argparse.ArgumentParser(formatter_class=lambda prog: argparse.HelpFormatter(prog, max_help_position=54))
     parser.add_argument("--token", type=str, help="Discord bot token to use their API.")
     parser.add_argument("--limit-history", type=int, help="When the history gets too large, performance issues can occur. Limit the history to improve performance.")
+    #parser.add_argument("--is-tgwui-integrated", action="store_true", help="Indicates integration with TGWUI.")
     bot_args = parser.parse_args(bot_argv)
     return bot_args
 

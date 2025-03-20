@@ -2,16 +2,20 @@ import argparse
 import hashlib
 import os
 import platform
+#import requests TODO Guarantee we have this
 import signal
 import site
 import subprocess
 import sys
 
-# Default environment
 script_dir = os.getcwd()
+# Default environment
 install_path = os.path.join(script_dir, "installer_files")
 conda_path = os.path.join(install_path, "conda")
 conda_env_path = os.path.join(install_path, "env")
+env_flag = os.path.join(install_path, "user_env.txt")
+project_url = "https://github.com/altoiddealer/ad_discordbot"
+supported_project_urls = ["https://github.com/altoiddealer/ad_discordbot", "https://github.com/oobabooga/text-generation-webui"]
 is_tgwui_integrated = False
 
 # Command-line flags
@@ -50,7 +54,7 @@ def is_x86_64():
 
 def is_installed():
     site_packages_path = None
-    # check if installed as standalone
+    # look for discord
     for sitedir in site.getsitepackages():
         if "site-packages" in sitedir and conda_env_path in sitedir:
             site_packages_path = sitedir
@@ -78,6 +82,19 @@ def check_env():
 def get_current_commit():
     result = run_cmd("git rev-parse HEAD", capture_output=True, environment=True)
     return result.stdout.decode('utf-8').strip()
+
+
+def get_git_remote_url(project_path):
+    try:
+        result = subprocess.run(
+            ["git", "-C", project_path, "config", "--get", "remote.origin.url"],
+            capture_output=True,
+            text=True,
+            check=True
+        )
+        return result.stdout.strip()  # Remove any trailing whitespace
+    except subprocess.CalledProcessError:
+        return None  # Return None if the command fails (not a git repo, etc.)
 
 
 def clear_cache():
@@ -156,20 +173,117 @@ def get_user_choice(question, options_dict):
     return choice
 
 
-def choose_env():
-    options_dict = {'A': 'Yes, integrate with TGWUI (Recommended)',
-                    'B': 'No, use own environment (can still use TGWUI via API)',
-                    'N': 'Nothing (exit)'}
-    while True:
-        choice = get_user_choice("Would you like to integrate the bot with an existing text-generation-webui environment?", options_dict)
-        if choice == 'N':
-            sys.exit()
-        if choice in ['A', 'B']:
-            if choice == 'A':
-                global script_dir
-                script_dir = parent_dir
-            update_requirements(initial_installation=True, pull=False)
+def convert_to_standalone():
+    # Miniconda download details
+    miniconda_url = "https://repo.anaconda.com/miniconda/Miniconda3-py310_23.3.1-0-Windows-x86_64.exe"
+    miniconda_checksum = "307194e1f12bbeb52b083634e89cc67db4f7980bd542254b43d3309eaf7cb358"
+    miniconda_installer = os.path.join(install_path, "miniconda_installer.exe")
 
+    def set_home_values():
+        global is_tgwui_integrated, project_url, flags
+        is_tgwui_integrated = False
+        project_url = "https://github.com/altoiddealer/ad_discordbot"
+        flags -= " --is-tgwui-integrated"
+
+    def download_file(url, dest_path):
+        print(f"Downloading Miniconda from {url}...")
+        os.makedirs(os.path.dirname(dest_path), exist_ok=True)
+
+        response = requests.get(url, stream=True)
+        with open(dest_path, "wb") as file:
+            for chunk in response.iter_content(1024):
+                file.write(chunk)
+
+        print("Download complete.")
+
+    def verify_checksum(file_path, expected_checksum):
+        print("Verifying checksum...")
+        sha256 = hashlib.sha256()
+        with open(file_path, "rb") as f:
+            for chunk in iter(lambda: f.read(4096), b""):
+                sha256.update(chunk)
+
+        computed_checksum = sha256.hexdigest()
+        if computed_checksum.lower() != expected_checksum.lower():
+            print("Miniconda checksum verification failed.")
+            os.remove(file_path)
+            sys.exit(1)
+
+        print("Checksum verification successful.")
+
+    def install_miniconda():
+        """Install Miniconda silently."""
+        print("Installing Miniconda...")
+        cmd = [
+            miniconda_installer,
+            "/InstallationType=JustMe",
+            "/NoShortcuts=1",
+            "/AddToPath=0",
+            "/RegisterPython=0",
+            "/NoRegistry=1",
+            "/S",
+            f"/D={conda_path}"
+        ]
+        subprocess.run(cmd, shell=True, check=True)
+
+        conda_bat = os.path.join(conda_path, "condabin", "conda.bat")
+        if not os.path.exists(conda_bat):
+            print("Miniconda installation failed.")
+            sys.exit(1)
+
+        print("Miniconda installed successfully.")
+
+    def create_conda_env():
+        """Create the Conda environment with Python 3.11."""
+        print("Creating Conda environment...")
+        conda_bat = os.path.join(conda_path, "condabin", "conda.bat")
+        cmd = [conda_bat, "create", "--no-shortcuts", "-y", "-k", "--prefix", conda_env_path, "python=3.11"]
+        subprocess.run(cmd, shell=True, check=True)
+
+        if not os.path.exists(os.path.join(conda_env_path, "python.exe")):
+            print("Conda environment creation failed.")
+            sys.exit(1)
+
+        print("Conda environment created successfully.")
+        with open(env_flag, "w") as f:
+            f.write(conda_path + " ")
+
+    def activate_conda_env():
+        """Activate the newly created Conda environment."""
+        conda_bat = os.path.join(conda_path, "condabin", "conda.bat")
+        
+        if not os.path.exists(conda_bat):
+            print("Conda activation script not found! Please check your environment and try running the script again.")
+            os.remove(env_flag)
+            sys.exit(1)
+
+        print(f"Trying to activate Conda from: {conda_bat}")
+        cmd = f'call "{conda_bat}" activate "{conda_env_path}"'
+        result = subprocess.run(cmd, shell=True)
+
+        if result.returncode != 0:
+            print("Failed to activate the Conda environment. Exiting...")
+            sys.exit(1)
+
+        print("Conda activated successfully.")
+
+    def restore_default_values():
+        global install_path, conda_path, conda_env_path
+        install_path = os.path.join(script_dir, "installer_files")
+        conda_path = os.path.join(install_path, "conda")
+        conda_env_path = os.path.join(install_path, "env")
+
+    # Main execution to switch from TGWUI integration to Standalone
+    if not os.path.exists(miniconda_installer):
+        download_file(miniconda_url, miniconda_installer)
+    
+    verify_checksum(miniconda_installer, miniconda_checksum)
+    install_miniconda()
+    create_conda_env()
+    activate_conda_env()
+    restore_default_values()
+    set_home_values()
+    sys.exit()
 
 
 def install_bot():
@@ -246,25 +360,63 @@ def launch_bot():
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument('--update-wizard', action='store_true', help='Launch a menu with update options.')
-    parser.add_argument("--conda-env-path", type=str, help="Path to the Conda environment")
+    parser.add_argument("--conda-env-path", type=str, help="Path to the active Conda environment")
     args, _ = parser.parse_known_args()
-    conda_env_path = os.path.abspath(args.conda_env_path) if args.conda_env_path else ""
-    install_path = os.path.dirname(conda_env_path) if conda_env_path.endswith(os.sep + "env") else conda_env_path
+    # Update paths
+    conda_env_path = os.path.abspath(args.conda_env_path)
+    install_path = os.path.dirname(conda_env_path)
+    # Check if bot is nested in TGWUI directory
+    parent_path = os.path.dirname(script_dir)
+    parent_git_url = get_git_remote_url(parent_path)
+    parent_is_tgwui = True if parent_git_url == "https://github.com/oobabooga/text-generation-webui" else False
+    # Check if bot is running in a supported project
+    project_path = os.path.dirname(install_path)
+    project_url = get_git_remote_url(project_path)
+    if project_url not in supported_project_urls:
+        print_big_message(f"Bot is unexpectedly running in the environment of '{project_url}'.")
+        print_big_message(f"Please refer to 'https://github.com/altoiddealer/ad_discordbot/wiki/installation'")
+        print_big_message(f"Only attempt installing with 'text-generation-webui integration' if ad_discordbot is in it's directory.")
+        sys.exit(1)
+    # Check if bot is running as text-generation-webui integration. Add bot argument if so.
+    if project_url == "https://github.com/oobabooga/text-generation-webui":
+        is_tgwui_integrated = True
+        flags += " --is-tgwui-integrated"
 
     # Verifies we are in a conda environment
     check_env()
 
     if args.update_wizard:
-        options_dict = {'A': 'Update the bot',
-                        'B': 'Revert local changes to repository files with \"git reset --hard\"',
-                        'N': 'Nothing (exit)'}
+        print_big_message(f"Currently installed {'with text-generation-webui integration' if is_tgwui_integrated else 'as Standalone'}")
+        options_dict = {}
+        # Options based on current install status and environment
+        if is_tgwui_integrated:
+            options_dict['S'] = 'Switch to standalone environment (remove TGWUI integration)'
+        elif parent_is_tgwui:
+            options_dict['S'] = 'Switch to TGWUI integration'
+        # Always-present options
+        options_dict.update({
+            'U': 'Update the bot',
+            'R': 'Revert local changes to repository files with \"git reset --hard\"',
+            'N': 'Nothing (exit)'
+        })
+
         while True:
             choice = get_user_choice("What would you like to do?", options_dict)
 
-            if choice == 'A':
+            if choice == 'S':
+                # Switch to standalone environment (remove TGWUI integration)
+                if is_tgwui_integrated:
+                    print("Removing TGWUI integration...")
+                    convert_to_standalone()
+                # Switch to TGWUI integration
+                elif parent_is_tgwui:
+                    # Code to enable TGWUI integration
+                    print("Switching to text-generation-webui integration...")
+                    # TODO: Implement the integration logic
+            elif choice == 'U':
                 update_requirements()
-            elif choice == 'B':
-                run_cmd("git reset --hard", assert_success=True, environment=True)
+            elif choice == 'R':
+                run_cmd(f'git -C "{script_dir}" reset --hard', assert_success=True, environment=True)
             elif choice == 'N':
                 sys.exit()
     else:

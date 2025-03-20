@@ -171,7 +171,7 @@ if %errorlevel% neq 0 (
 
 echo Conda activated successfully.
 echo %CONDA_ROOT_PREFIX% > "%ENV_FLAG%"
-call python "%HOME_DIR%\one_click.py" --conda-env-path "%INSTALL_ENV_DIR%" %*
+call python "%HOME_DIR%\one_click.py" --conda-env-path "%INSTALL_ENV_DIR%" --update-wizard %*
 
 @rem below are functions for the script   next line skips these during normal execution
 goto end
