@@ -1383,7 +1383,6 @@ class TaskProcessing(TaskAttributes):
         try:
             char_params: dict            = {}
             begin_reply_with: str        = mods.get('begin_reply_with', None)
-            flow: dict                   = mods.get('flow', None)
             save_history: bool           = mods.get('save_history', None)
             filter_history_for: list     = mods.get('filter_history_for', None)
             load_history: bool           = mods.get('load_history', None)
@@ -1396,7 +1395,6 @@ class TaskProcessing(TaskAttributes):
             swap_character: str          = mods.get('swap_character', None)
             change_llmmodel: str         = mods.get('change_llmmodel', None)
             swap_llmmodel: str           = mods.get('swap_llmmodel', None)
-            toggle_vc_playback: str      = mods.get('toggle_vc_playback', None)
             should_tts: bool             = mods.get('should_tts', None)
 
             # Begin reply with handling
@@ -1405,13 +1403,7 @@ class TaskProcessing(TaskAttributes):
                 self.apply_begin_reply_with()
                 log.info(f"[TAGS] Reply is being continued from: '{begin_reply_with}'")
 
-            # Flow handling
-            if flow is not None and not flows.event.is_set():
-                await flows.build_queue(flow)
-
             # TTS Adjustments
-            if toggle_vc_playback is not None and not is_direct_message(self.ictx):
-                await voice_clients.toggle_playback_in_voice_channel(self.ictx.guild.id, toggle_vc_playback)
             if should_tts is not None:
                 self.params.should_tts = should_tts
             # History handling
@@ -1506,25 +1498,14 @@ class TaskProcessing(TaskAttributes):
             for tag in self.tags.matches:
                 tag:TAG
                 tag_name, tag_print = self.tags.get_name_print_for(tag)
-                # Check if censored
-                if 'llm_censoring' in tag and bool(tag['llm_censoring']) == True:
-                    censor_text = tag.get('matched_trigger', '')
-                    censor_message = f' (text match: {censor_text})'
-                    log.info(f"[TAGS] Censoring: LLM generation was blocked{censor_message if censor_text else ''}")
-                    self.embeds.create('censor', "Text prompt was flagged as inappropriate", "Text generation task has been cancelled.")
-                    await self.embeds.send('censor', delete_after=5)
-                    raise TaskCensored
+
                 # Values that will only apply from the first tag matches
                 if 'begin_reply_with' in tag and not llm_payload_mods.get('begin_reply_with'):
                     llm_payload_mods['begin_reply_with'] = str(tag.pop('begin_reply_with'))
-                if 'flow' in tag and not llm_payload_mods.get('flow'):
-                    llm_payload_mods['flow'] = dict(tag.pop('flow'))
                 if 'save_history' in tag and not llm_payload_mods.get('save_history'):
                     llm_payload_mods['save_history'] = bool(tag.pop('save_history'))
                 if 'load_history' in tag and not llm_payload_mods.get('load_history'):
                     llm_payload_mods['load_history'] = int(tag.pop('load_history'))
-                if 'toggle_vc_playback' in tag and not llm_payload_mods.get('toggle_vc_playback'):
-                    llm_payload_mods['toggle_vc_playback'] = str(tag.pop('toggle_vc_playback'))
                 if 'should_tts' in tag and not llm_payload_mods.get('should_tts'):
                     llm_payload_mods['should_tts'] = bool(tag.pop('should_tts'))
                 if 'include_hidden_history' in tag and not llm_payload_mods.get('include_hidden_history'):
@@ -1552,12 +1533,6 @@ class TaskProcessing(TaskAttributes):
                 if 'suffix_context' in tag:
                     llm_payload_mods.setdefault('suffix_context', [])
                     llm_payload_mods['suffix_context'].append(str(tag.pop('suffix_context')))
-                if 'send_user_image' in tag:
-                    user_image_file = str(tag.pop('send_user_image'))
-                    user_image_args = self.get_image_tag_args('User image', user_image_file, key=None, set_dir=None)
-                    user_image = discord.File(user_image_args)
-                    self.params.send_user_image.append(user_image)
-                    log.info('[TAGS] Sending user image.')
                 if 'format_prompt' in tag:
                     formatting.setdefault('format_prompt', [])
                     formatting['format_prompt'].append(str(tag.pop('format_prompt')))
@@ -1581,19 +1556,54 @@ class TaskProcessing(TaskAttributes):
                         llm_payload_mods['state'].update(state) # Allow multiple to accumulate.
                     except Exception:
                         log.warning(f"[TAGS] Error processing a matched 'state' {tag_print}; ensure it is a dictionary.")
-                if 'persist' in tag:
-                    if not tag_name:
-                        log.warning(f"[TAGS] A persistent {tag_print} was matched, but it is missing a required 'name' parameter. Cannot make tag persistent.")
-                    else:
-                        persist = int(tag.pop('persist'))
-                        log.info(f'[TAGS] A persistent {tag_print} was matched, which will be auto-applied for the next ({persist}) tag matching phases (pre-LLM).')
-                        persistent_tags.append_tag_name_to('llm', self.channel.id, persist, tag_name)
 
         except TaskCensored:
             raise
         except Exception as e:
             log.error(f"Error collecting LLM tag values: {e}")
         return llm_payload_mods, formatting
+    
+    async def apply_generic_tag_matches(self, phase='llm'):
+        prevent_multiple = []
+        try:
+            for tag in self.tags.matches:
+                tag:TAG
+                tag_name, tag_print = self.tags.get_name_print_for(tag)
+                # Check if censored
+                if phase == 'llm' and 'llm_censoring' in tag and bool(tag['llm_censoring']) == True:
+                    censor_text = tag.get('matched_trigger', '')
+                    censor_message = f' (text match: {censor_text})'
+                    log.info(f"[TAGS] Censoring: LLM generation was blocked{censor_message if censor_text else ''}")
+                    self.embeds.create('censor', "Text prompt was flagged as inappropriate", "Text generation task has been cancelled.")
+                    await self.embeds.send('censor', delete_after=5)
+                    raise TaskCensored
+                if 'flow' in tag and not 'flow' in prevent_multiple:
+                    prevent_multiple.append('flow')
+                    if not flows.event.is_set():
+                        await flows.build_queue(dict(tag.pop('flow')))
+                if 'toggle_vc_playback' in tag and not 'toggle_vc_playback' in prevent_multiple:
+                    prevent_multiple.append('toggle_vc_playback')
+                    if not is_direct_message(self.ictx):
+                        await voice_clients.toggle_playback_in_voice_channel(self.ictx.guild.id, str(tag.pop('toggle_vc_playback')))
+                if 'send_user_image' in tag:
+                    user_image_file = str(tag.pop('send_user_image'))
+                    user_image_args = self.get_image_tag_args('User image', user_image_file, key=None, set_dir=None)
+                    user_image = discord.File(user_image_args)
+                    self.params.send_user_image.append(user_image)
+                    log.info(f'[TAGS] Sending user image for matched {tag_print}')
+                if 'persist' in tag:
+                    if not tag_name:
+                        log.warning(f"[TAGS] A persistent {tag_print} was matched, but it is missing a required 'name' parameter. Cannot make tag persistent.")
+                    else:
+                        persist = int(tag.pop('persist'))
+                        log.info(f'[TAGS] A persistent {tag_print} was matched, which will be auto-applied for the next ({persist}) tag matching phases (pre-{phase.upper()} gen).')
+                        persistent_tags.append_tag_name_to(phase, self.channel.id, persist, tag_name)
+
+        except TaskCensored:
+            raise
+        except Exception as e:
+            log.error(f"Error processing generic tag matches: {e}")
+
 
     def apply_begin_reply_with(self:Union["Task","Tasks"]):
         # Continue from value of 'begin_reply_with'
@@ -1639,6 +1649,7 @@ class TaskProcessing(TaskAttributes):
 
     async def message_img_gen(self:Union["Task","TaskProcessing"]):
         await self.tags.match_img_tags(self.img_prompt, self.settings.get_vars())
+        await self.apply_generic_tag_matches(phase='img')
         self.params.update_bot_should_do(self.tags) # check for updates from tags
         if self.params.should_gen_image and await sd.online(self.ictx):
             # CLONE CURRENT TASK AND QUEUE IT
@@ -2770,9 +2781,7 @@ class TaskProcessing(TaskAttributes):
 
     async def process_img_payload_tags(self, mods:dict):
         try:
-            flow: dict            = mods.pop('flow', None)
             change_imgmodel: str  = mods.pop('change_imgmodel', None)
-            toggle_vc_playback: str = mods.pop('toggle_vc_playback', None)
             swap_imgmodel: str    = mods.pop('swap_imgmodel', None)
             last_img_payload: bool|list = mods.pop('last_img_payload', None)
             payload: dict         = mods.pop('payload', None)
@@ -2787,12 +2796,6 @@ class TaskProcessing(TaskAttributes):
             self.params.sd_output_dir = (mods.pop('sd_output_dir', self.params.sd_output_dir)).lstrip('/')  # Remove leading slash if it exists
             self.params.img_censoring = mods.pop('img_censoring', self.params.img_censoring)
 
-            # Flow handling
-            if flow is not None and not flows.event.is_set():
-                await flows.build_queue(flow)
-            # TTS Adjustments
-            if toggle_vc_playback is not None and not is_direct_message(self.ictx):
-                await voice_clients.toggle_playback_in_voice_channel(self.ictx.guild.id, toggle_vc_playback)
             # Imgmodel handling
             new_imgmodel = change_imgmodel or swap_imgmodel or None
             if new_imgmodel:
@@ -2967,7 +2970,7 @@ class TaskProcessing(TaskAttributes):
         layerdiffuse_args = {}
         reactor_args = {}
         extensions = config.sd.get('extensions', {})
-        accept_only_first = ['flow', 'aspect_ratio', 'img2img', 'img2img_mask', 'sd_output_dir', 'last_img_payload', 'toggle_vc_playback']
+        accept_only_first = ['aspect_ratio', 'img2img', 'img2img_mask', 'sd_output_dir', 'last_img_payload']
         try:
             for tag in self.tags.matches:
                 tag_dict:TAG = self.tags.untuple(tag)
@@ -3038,18 +3041,6 @@ class TaskProcessing(TaskAttributes):
                             forge_couple_args[forge_couple_key] = list(value)
                         else:
                             forge_couple_args[forge_couple_key] = str(value)
-                    # get any user image(s)
-                    elif key == 'send_user_image':
-                        user_image_args = self.get_image_tag_args('User image', str(value), key=None, set_dir=None)
-                        user_image = discord.File(user_image_args)
-                        self.params.send_user_image.append(user_image)
-                        log.info(f'[TAGS] Sending user image for matched {tag_print}')
-                    elif key == 'persist':
-                        if not tag_name:
-                            log.warning("[TAGS] A persistent tag was matched, but it is missing a required 'name' parameter. Cannot make tag persistent.")
-                        else:
-                            log.info(f'[TAGS] A persistent tag "{tag_name}" was matched, which will be auto-applied for the next ({value}) tag matching phases (pre-Image Gen).')
-                            persistent_tags.append_tag_name_to('img', self.channel.id, value, tag_name)
 
             # Add the collected SD WebUI extension args to the img_payload_mods dict
             if controlnet_args:
@@ -3121,6 +3112,7 @@ class Tasks(TaskProcessing):
             await spontaneous_messaging.reset_for_channel(self.ictx) # Stop any pending spontaneous message task for current channel
 
             await self.tags.match_tags(self.text, self.settings.get_vars(), phase='llm') # match tags labeled for user / userllm.
+            await self.apply_generic_tag_matches(phase='llm')
             self.params.update_bot_should_do(self.tags)  # check what bot should do
 
             # Bot should generate text...
@@ -3882,6 +3874,7 @@ class Tasks(TaskProcessing):
             if not self.tags:
                 self.tags = Tags(self.ictx)
                 await self.tags.match_img_tags(self.img_prompt, self.settings.get_vars())
+                await self.apply_generic_tag_matches(phase='img')
                 self.params.update_bot_should_do(self.tags)
             # Initialize img_payload
             self.init_img_payload()
