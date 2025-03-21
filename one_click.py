@@ -15,7 +15,7 @@ conda_path = os.path.join(install_path, "conda")
 conda_env_path = os.path.join(install_path, "env")
 env_flag = os.path.join(install_path, "user_env.txt")
 project_url = "https://github.com/altoiddealer/ad_discordbot"
-supported_project_urls = ["https://github.com/altoiddealer/ad_discordbot", "https://github.com/oobabooga/text-generation-webui"]
+parent_is_tgwui = False
 is_tgwui_integrated = False
 
 # Command-line flags
@@ -84,6 +84,26 @@ def get_current_commit():
     return result.stdout.decode('utf-8').strip()
 
 
+def is_fork_of(project_path, original_repo_url):
+    try:
+        # Get the upstream remote URL
+        upstream_result = subprocess.run(
+            ["git", "-C", project_path, "config", "--get", "remote.upstream.url"],
+            capture_output=True,
+            text=True,
+            check=True
+        )
+        upstream_url = upstream_result.stdout.strip()
+
+        # If upstream exists and matches the original repo URL, it's a fork
+        if upstream_url and upstream_url.rstrip(".git") == original_repo_url.rstrip(".git"):
+            return True
+
+        return False
+    except subprocess.CalledProcessError:
+        return False  # If there's an error (e.g., not a git repo or no upstream), return False
+
+
 def get_git_remote_url(project_path):
     try:
         result = subprocess.run(
@@ -95,6 +115,38 @@ def get_git_remote_url(project_path):
         return result.stdout.strip()  # Remove any trailing whitespace
     except subprocess.CalledProcessError:
         return None  # Return None if the command fails (not a git repo, etc.)
+
+def check_project(parent_path):
+    parent_is_tgwui = False
+    is_tgwui_integrated = False
+
+    bot_url = "https://github.com/altoiddealer/ad_discordbot"
+    bot_git_url = "https://github.com/altoiddealer/ad_discordbot.git"
+    tgwui_url = "https://github.com/oobabooga/text-generation-webui"
+    tgwui_git_url = "https://github.com/oobabooga/text-generation-webui.git"
+    supported_project_urls = [bot_url, bot_git_url, tgwui_url, tgwui_git_url]
+
+    # Check if bot is running in a supported project
+    project_path = os.path.dirname(install_path)
+    project_url = get_git_remote_url(project_path)
+    project_is_bot_fork = is_fork_of(project_path, bot_git_url)
+    project_is_tgwui_fork = is_fork_of(project_path, tgwui_git_url)
+
+    if not project_is_bot_fork and not project_is_tgwui_fork and project_url not in supported_project_urls:
+        print_big_message(f"Bot is unexpectedly running in the environment of '{project_url}'.")
+        print_big_message(f"Please refer to 'https://github.com/altoiddealer/ad_discordbot/wiki/installation'")
+        print_big_message(f"Only attempt installing with 'text-generation-webui integration' if ad_discordbot is in it's directory.")
+        sys.exit(1)
+
+    # Check if bot is running as text-generation-webui integration.
+    parent_url = get_git_remote_url(parent_path)
+    parent_is_tgwui_fork = is_fork_of(parent_path, tgwui_git_url)
+    if parent_is_tgwui_fork or parent_url in [tgwui_url, tgwui_git_url]:
+        parent_is_tgwui = True
+        if parent_url == project_url:
+            is_tgwui_integrated = True
+    
+    return parent_is_tgwui, is_tgwui_integrated
 
 
 def clear_cache():
@@ -171,6 +223,19 @@ def get_user_choice(question, options_dict):
         choice = input("Input> ").upper()
 
     return choice
+
+
+def restart_in_conda_env(env_path):
+    """Restart the script in the specified Conda environment."""
+    conda_python = os.path.join(env_path, "python.exe") if os.name == "nt" else os.path.join(env_path, "bin", "python")
+
+    if not os.path.exists(conda_python):
+        print(f"Error: Conda environment at {env_path} not found!")
+        sys.exit(1)
+
+    print(f"Restarting script in Conda environment: {env_path}")
+    subprocess.run([conda_python] + sys.argv)
+    sys.exit()
 
 
 def convert_to_standalone():
@@ -280,10 +345,11 @@ def convert_to_standalone():
     verify_checksum(miniconda_installer, miniconda_checksum)
     install_miniconda()
     create_conda_env()
-    activate_conda_env()
-    restore_default_values()
-    set_home_values()
-    sys.exit()
+    # activate_conda_env()
+    # restore_default_values()
+    # set_home_values()
+    # Example usage
+    restart_in_conda_env(conda_env_path)
 
 
 def install_bot():
@@ -367,19 +433,9 @@ if __name__ == "__main__":
     install_path = os.path.dirname(conda_env_path)
     # Check if bot is nested in TGWUI directory
     parent_path = os.path.dirname(script_dir)
-    parent_git_url = get_git_remote_url(parent_path)
-    parent_is_tgwui = True if parent_git_url == "https://github.com/oobabooga/text-generation-webui" else False
-    # Check if bot is running in a supported project
-    project_path = os.path.dirname(install_path)
-    project_url = get_git_remote_url(project_path)
-    if project_url not in supported_project_urls:
-        print_big_message(f"Bot is unexpectedly running in the environment of '{project_url}'.")
-        print_big_message(f"Please refer to 'https://github.com/altoiddealer/ad_discordbot/wiki/installation'")
-        print_big_message(f"Only attempt installing with 'text-generation-webui integration' if ad_discordbot is in it's directory.")
-        sys.exit(1)
-    # Check if bot is running as text-generation-webui integration. Add bot argument if so.
-    if project_url == "https://github.com/oobabooga/text-generation-webui":
-        is_tgwui_integrated = True
+    parent_is_tgwui, is_tgwui_integrated = check_project(parent_path)
+    # Add bot argument if bot is running as text-generation-webui integration.
+    if is_tgwui_integrated:
         flags += " --is-tgwui-integrated"
 
     # Verifies we are in a conda environment
