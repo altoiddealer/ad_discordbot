@@ -6,6 +6,7 @@ import os
 import re
 import sys
 import yaml
+import aiohttp
 from pathlib import Path
 from threading import Lock
 from modules.typing import CtxInteraction
@@ -29,10 +30,14 @@ logging = log
 class TTS:
     def __init__(self):
         self.enabled:bool = False
+        self.api_mode:bool = False
         self.settings:dict = config.textgenwebui['tts_settings']
         self.supported_clients = ['alltalk_tts', 'coqui_tts', 'silero_tts', 'elevenlabs_tts', 'edge_tts', 'vits_api_tts']
         self.client:str = self.settings.get('extension', '')
         self.api_key:str = ''
+        self.api_url:str = ''
+        self.api_get_voices_endpoint:str = ''
+        self.api_generate_endpoint:str = ''
         self.voice_key:str = ''
         self.lang_key:str = ''
     
@@ -58,8 +63,11 @@ class TTS:
             if self.client not in self.supported_clients:
                 log.warning(f'The "/speak" command will not be registered for "{self.client}".')
             self.enabled = True
-            self.api_key = self.settings.get('api_key', None)
-            if self.client == 'alltalk_tts':
+            self.api_url = self.settings.get('api_url', None)
+            self.api_get_voices_endpoint = self.settings.get('api_get_voices_endpoint', None)
+            self.api_generate_endpoint = self.settings.get('api_generate_endpoint', None)
+            if 'alltalk' in self.client:
+                log.warning('If using AllTalk v2, extension params may fail to apply (changing voices, etc). Full support is coming soon.')
                 self.voice_key = 'voice'
                 self.lang_key = 'language'
             elif self.client == 'coqui_tts':
@@ -92,6 +100,22 @@ class TTS:
         except Exception as e:
             log.error(f'An error occurred while toggling the TTS on/off: {e}')
         return False
+
+    async def api(self, endpoint, method='get', data=None, retry=True, headers=None, warn=True) -> dict:
+        headers = headers if headers else {'Content-Type': 'application/json'}
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.request(method.lower(), url=f'{self.api_url}{endpoint}', data=data or {}, headers=headers) as response:
+                    response_text = await response.text()
+                    if response.status == 200:
+                        r = await response.json()
+                        return r
+
+        except aiohttp.client.ClientConnectionError:
+            log.warning(f'Failed to connect to: "{self.api_url}{endpoint}", offline?')
+
+        except Exception as e:
+            log.error(f'Error getting data from "{self.api_url}{endpoint}": {e}')
 
 tts = TTS()
 
@@ -257,6 +281,8 @@ class TGWUI():
             log.error(f"An error occurred while loading LLM Model: {e}")
 
     async def update_extensions(self, params):
+        if tts.api_mode == False:
+            return
         try:
             if self.last_extension_params or params:
                 if self.last_extension_params == params:

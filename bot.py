@@ -3663,7 +3663,7 @@ class Tasks(TaskProcessing):
     #################################################################
     async def speak_task(self:"Task"):
         try:
-            if shared.model_name == 'None':
+            if tts.api_mode == False and shared.model_name == 'None':
                 await self.channel.send('Cannot process "/speak" request: No LLM model is currently loaded. Use "/llmmodel" to load a model.)', delete_after=5)
                 log.warning(f'Bot tried to generate tts for {self.user_name}, but no LLM model was loaded')
                 return
@@ -3681,11 +3681,22 @@ class Tasks(TaskProcessing):
             await self.create_user_hmessage()
 
             loop = asyncio.get_event_loop()
-            vis_resp_chunk:str = await loop.run_in_executor(None, extensions_module.apply_extensions, 'output', self.text, self.llm_payload['state'], True)
-
-            audio_format_match = patterns.audio_src.search(vis_resp_chunk)
-            if audio_format_match:
-                self.tts_resp.append(audio_format_match.group(1))
+            if tts.api_mode == True:
+                request = {'text_input': self.text}
+                client_args:dict = tts_args[tts.client]
+                if client_args.get(tts.lang_key):
+                    request['language'] = tts_args[tts.client][tts.lang_key]
+                if client_args.get(tts.voice_key):
+                    request['character_voice_gen'] = tts_args[tts.client][tts.voice_key]
+                response = await tts.api(endpoint=tts.api_generate_endpoint, method='post', data=request, headers={'Content-Type': 'application/x-www-form-urlencoded'})
+                audio_fp = response.get('output_file_path')
+                if audio_fp:
+                    self.tts_resp.append(audio_fp)
+            else:
+                vis_resp_chunk:str = await loop.run_in_executor(None, extensions_module.apply_extensions, 'output', self.text, self.llm_payload['state'], True)
+                audio_format_match = patterns.audio_src.search(vis_resp_chunk)
+                if audio_format_match:
+                    self.tts_resp.append(audio_format_match.group(1))
 
             # Process responses
             await self.create_bot_hmessage()
@@ -5939,34 +5950,66 @@ async def process_speak(ctx: commands.Context, input_text, selected_voice=None, 
 async def fetch_speak_options():
     try:
         lang_list = []
-        if tts.client == 'coqui_tts' or tts.client == 'alltalk_tts':
+        all_voices = []
+        if tts.api_get_voices_endpoint:
+            try:
+                all_voices = await tts.api(endpoint=tts.api_get_voices_endpoint, method='get')
+                if isinstance(all_voices, dict):
+                    all_voices = all_voices.get('voices', [])
+                tts.api_mode = True
+            except Exception:
+                pass
+        if tts.client == 'coqui_tts' or 'alltalk' in tts.client:
             lang_list = ['Arabic', 'Chinese', 'Czech', 'Dutch', 'English', 'French', 'German', 'Hungarian', 'Italian', 'Japanese', 'Korean', 'Polish', 'Portuguese', 'Russian', 'Spanish', 'Turkish']
-            if tts.client == 'coqui_tts':
-                from extensions.coqui_tts.script import get_available_voices
-            elif tts.client == 'alltalk_tts':
-                from extensions.alltalk_tts.script import get_available_voices
-            all_voices = get_available_voices()
+            if not all_voices:
+                try:
+                    if tts.client == 'coqui_tts':
+                        from extensions.coqui_tts.script import get_available_voices
+                        all_voices = get_available_voices()
+                    else:
+                        from extensions.alltalk_tts.script import get_available_voices
+                        all_voices = get_available_voices()
+                except Exception:
+                    pass
         elif tts.client == 'silero_tts':
             lang_list = ['English', 'Spanish', 'French', 'German', 'Russian', 'Tatar', 'Ukranian', 'Uzbek', 'English (India)', 'Avar', 'Bashkir', 'Bulgarian', 'Chechen', 'Chuvash', 'Kalmyk', 'Karachay-Balkar', 'Kazakh', 'Khakas', 'Komi-Ziryan', 'Mari', 'Nogai', 'Ossetic', 'Tuvinian', 'Udmurt', 'Yakut']
             log.warning('''There's too many Voice/language permutations to make them all selectable in "/speak" command. Loading a bunch of English options. Non-English languages will automatically play using respective default speaker.''')
-            all_voices = [f"en_{index}" for index in range(1, 76)] # will just include English voices in select menus. Other languages will use defaults.
+            if not all_voices:
+                try:
+                    all_voices = [f"en_{index}" for index in range(1, 76)] # will just include English voices in select menus. Other languages will use defaults.
+                except Exception:
+                    pass
         elif tts.client == 'elevenlabs_tts':
             lang_list = ['English', 'German', 'Polish', 'Spanish', 'Italian', 'French', 'Portuegese', 'Hindi', 'Arabic']
-            log.info('''Getting list of available voices for elevenlabs_tts for "/speak" command...''')
-            from extensions.elevenlabs_tts.script import refresh_voices, update_api_key # type: ignore
-            if tts.api_key:
-                update_api_key(tts.api_key)
-            all_voices = refresh_voices()
+            if not all_voices:
+                try:
+                    log.info('''Getting list of available voices for elevenlabs_tts for "/speak" command...''')
+                    from extensions.elevenlabs_tts.script import refresh_voices, update_api_key # type: ignore
+                    if tts.api_key:
+                        update_api_key(tts.api_key)
+                    all_voices = refresh_voices()
+                except Exception:
+                    pass
         elif tts.client == 'edge_tts':
             lang_list = ['English']
-            from extensions.edge_tts.script import edge_tts # type: ignore
-            voices = await edge_tts.list_voices()
-            all_voices = [voice['ShortName'] for voice in voices if 'ShortName' in voice and voice['ShortName'].startswith('en-')]
+            if not all_voices:
+                try:
+                    from extensions.edge_tts.script import edge_tts # type: ignore
+                    voices = await edge_tts.list_voices()
+                    all_voices = [voice['ShortName'] for voice in voices if 'ShortName' in voice and voice['ShortName'].startswith('en-')]
+                except Exception:
+                    pass
+            else:
+                all_voices = [voice['ShortName'] for voice in voices if 'ShortName' in voice and voice['ShortName'].startswith('en-')]
         elif tts.client == 'vits_api_tts':
             lang_list = ['English']
-            log.info("Collecting voices for the '/speak' command. This will only work if you are running 'vits_api_tts' on default URL 'http://localhost:23456/'.")
-            from extensions.vits_api_tts.script import refresh_voices # type: ignore
-            all_voices = refresh_voices()
+            if not all_voices:
+                try:
+                    log.info("Collecting voices for the '/speak' command. If this fails, ensure 'vits_api_tts' is running on default URL 'http://localhost:23456/'.")
+                    from extensions.vits_api_tts.script import refresh_voices # type: ignore
+                    all_voices = refresh_voices()
+                except Exception:
+                    pass
         all_voices.sort() # Sort alphabetically
         return lang_list, all_voices
     except Exception as e:
@@ -5975,86 +6018,87 @@ async def fetch_speak_options():
 
 if tgwui.enabled and tts.client and tts.client in tts.supported_clients:
     lang_list, all_voices = asyncio.run(fetch_speak_options())
+    if all_voices:
 
-    _voice_hash_dict = {str(hash(voice_name)):voice_name for voice_name in all_voices}
+        _voice_hash_dict = {str(hash(voice_name)):voice_name for voice_name in all_voices}
 
-    voice_options = [app_commands.Choice(name=voice_name.replace('_', ' ').title(), value=str(hash(voice_name))) for voice_name in all_voices[:25]]
-    voice_options_label = f'{voice_options[0].name[0]}-{voice_options[-1].name[0]}'.lower()
-    if len(all_voices) > 25:
-        voice_options1 = [app_commands.Choice(name=voice_name.replace('_', ' ').title(), value=str(hash(voice_name))) for voice_name in all_voices[25:50]]
-        voice_options1_label = f'{voice_options1[0].name[0]}-{voice_options1[-1].name[0]}'.lower()
-        if voice_options1_label == voice_options_label:
-            voice_options1_label = f'{voice_options1_label}_1'
-        if len(all_voices) > 50:
-            voice_options2 = [app_commands.Choice(name=voice_name.replace('_', ' ').title(), value=str(hash(voice_name))) for voice_name in all_voices[50:75]]
-            voice_options2_label = f'{voice_options2[0].name[0]}-{voice_options2[-1].name[0]}'.lower()
-            if voice_options2_label == voice_options_label or voice_options2_label == voice_options1_label:
-                voice_options2_label = f'{voice_options2_label}_2'
-            if len(all_voices) > 75:
-                all_voices = all_voices[:75]
-                log.warning("'/speak' command only allows up to 75 voices. Some voices were omitted.")
-    if lang_list: 
-        lang_options = [app_commands.Choice(name=lang, value=lang) for lang in lang_list]
-    else: 
-        lang_options = [app_commands.Choice(name='English', value='English')] # Default to English
+        voice_options = [app_commands.Choice(name=voice_name.replace('_', ' ').title(), value=str(hash(voice_name))) for voice_name in all_voices[:25]]
+        voice_options_label = f'{voice_options[0].name[0]}-{voice_options[-1].name[0]}'.lower()
+        if len(all_voices) > 25:
+            voice_options1 = [app_commands.Choice(name=voice_name.replace('_', ' ').title(), value=str(hash(voice_name))) for voice_name in all_voices[25:50]]
+            voice_options1_label = f'{voice_options1[0].name[0]}-{voice_options1[-1].name[0]}'.lower()
+            if voice_options1_label == voice_options_label:
+                voice_options1_label = f'{voice_options1_label}_1'
+            if len(all_voices) > 50:
+                voice_options2 = [app_commands.Choice(name=voice_name.replace('_', ' ').title(), value=str(hash(voice_name))) for voice_name in all_voices[50:75]]
+                voice_options2_label = f'{voice_options2[0].name[0]}-{voice_options2[-1].name[0]}'.lower()
+                if voice_options2_label == voice_options_label or voice_options2_label == voice_options1_label:
+                    voice_options2_label = f'{voice_options2_label}_2'
+                if len(all_voices) > 75:
+                    all_voices = all_voices[:75]
+                    log.warning("'/speak' command only allows up to 75 voices. Some voices were omitted.")
+        if lang_list: 
+            lang_options = [app_commands.Choice(name=lang, value=lang) for lang in lang_list]
+        else: 
+            lang_options = [app_commands.Choice(name='English', value='English')] # Default to English
 
-    if len(all_voices) <= 25:
-        @client.hybrid_command(name="speak", description='AI will speak your text using a selected voice')
-        @app_commands.rename(voice=f'voices_{voice_options_label}')
-        @app_commands.describe(voice=f'Voices {voice_options_label.upper()}')
-        @app_commands.choices(voice=voice_options)
-        @app_commands.choices(lang=lang_options)
-        @configurable_for_dm_if(lambda ctx: 'speak' in config.discord_dm_setting('allowed_commands', []))
-        async def speak(ctx: commands.Context, input_text: str, voice: typing.Optional[app_commands.Choice[str]], lang: typing.Optional[app_commands.Choice[str]], voice_input: typing.Optional[discord.Attachment]):
-            selected_voice = voice.value if voice is not None else ''
-            if selected_voice:
-                selected_voice = _voice_hash_dict[selected_voice]
-            voice_input = voice_input if voice_input is not None else ''
-            lang = lang.value if lang is not None else ''
-            await process_speak(ctx, input_text, selected_voice, lang, voice_input)
+        if len(all_voices) <= 25:
+            @client.hybrid_command(name="speak", description='AI will speak your text using a selected voice')
+            @app_commands.rename(voice=f'voices_{voice_options_label}')
+            @app_commands.describe(voice=f'Voices {voice_options_label.upper()}')
+            @app_commands.choices(voice=voice_options)
+            @app_commands.choices(lang=lang_options)
+            @configurable_for_dm_if(lambda ctx: 'speak' in config.discord_dm_setting('allowed_commands', []))
+            async def speak(ctx: commands.Context, input_text: str, voice: typing.Optional[app_commands.Choice[str]], lang: typing.Optional[app_commands.Choice[str]], voice_input: typing.Optional[discord.Attachment]):
+                selected_voice = voice.value if voice is not None else ''
+                if selected_voice:
+                    selected_voice = _voice_hash_dict[selected_voice]
+                voice_input = voice_input if voice_input is not None else ''
+                lang = lang.value if lang is not None else ''
+                await process_speak(ctx, input_text, selected_voice, lang, voice_input)
 
-    elif 25 < len(all_voices) <= 50:
-        @client.hybrid_command(name="speak", description='AI will speak your text using a selected voice (pick only one)')
-        @app_commands.rename(voice_1=f'voices_{voice_options_label}')
-        @app_commands.describe(voice_1=f'Voices {voice_options_label.upper()}')
-        @app_commands.choices(voice_1=voice_options)
-        @app_commands.rename(voice_2=f'voices_{voice_options1_label}')
-        @app_commands.describe(voice_2=f'Voices {voice_options1_label.upper()}')
-        @app_commands.choices(voice_2=voice_options1)
-        @app_commands.choices(lang=lang_options)
-        @configurable_for_dm_if(lambda ctx: 'speak' in config.discord_dm_setting('allowed_commands', []))
-        async def speak(ctx: commands.Context, input_text: str, voice_1: typing.Optional[app_commands.Choice[str]], voice_2: typing.Optional[app_commands.Choice[str]], lang: typing.Optional[app_commands.Choice[str]], voice_input: typing.Optional[discord.Attachment]):
-            if voice_1 and voice_2:
-                await ctx.send("A voice was picked from two separate menus. Using the first selection.", ephemeral=True)
-            selected_voice = ((voice_1 or voice_2) and (voice_1 or voice_2).value) or ''
-            if selected_voice:
-                selected_voice = _voice_hash_dict[selected_voice]
-            voice_input = voice_input if voice_input is not None else ''
-            lang = lang.value if lang is not None else ''
-            await process_speak(ctx, input_text, selected_voice, lang, voice_input)
+        elif 25 < len(all_voices) <= 50:
+            @client.hybrid_command(name="speak", description='AI will speak your text using a selected voice (pick only one)')
+            @app_commands.rename(voice_1=f'voices_{voice_options_label}')
+            @app_commands.describe(voice_1=f'Voices {voice_options_label.upper()}')
+            @app_commands.choices(voice_1=voice_options)
+            @app_commands.rename(voice_2=f'voices_{voice_options1_label}')
+            @app_commands.describe(voice_2=f'Voices {voice_options1_label.upper()}')
+            @app_commands.choices(voice_2=voice_options1)
+            @app_commands.choices(lang=lang_options)
+            @configurable_for_dm_if(lambda ctx: 'speak' in config.discord_dm_setting('allowed_commands', []))
+            async def speak(ctx: commands.Context, input_text: str, voice_1: typing.Optional[app_commands.Choice[str]], voice_2: typing.Optional[app_commands.Choice[str]], lang: typing.Optional[app_commands.Choice[str]], voice_input: typing.Optional[discord.Attachment]):
+                if voice_1 and voice_2:
+                    await ctx.send("A voice was picked from two separate menus. Using the first selection.", ephemeral=True)
+                selected_voice = ((voice_1 or voice_2) and (voice_1 or voice_2).value) or ''
+                if selected_voice:
+                    selected_voice = _voice_hash_dict[selected_voice]
+                voice_input = voice_input if voice_input is not None else ''
+                lang = lang.value if lang is not None else ''
+                await process_speak(ctx, input_text, selected_voice, lang, voice_input)
 
-    elif 50 < len(all_voices) <= 75:
-        @client.hybrid_command(name="speak", description='AI will speak your text using a selected voice (pick only one)')
-        @app_commands.rename(voice_1=f'voices_{voice_options_label}')
-        @app_commands.describe(voice_1=f'Voices {voice_options_label.upper()}')
-        @app_commands.choices(voice_1=voice_options)
-        @app_commands.rename(voice_2=f'voices_{voice_options1_label}')
-        @app_commands.describe(voice_2=f'Voices {voice_options1_label.upper()}')
-        @app_commands.choices(voice_2=voice_options1)
-        @app_commands.rename(voice_3=f'voices_{voice_options2_label}')
-        @app_commands.describe(voice_3=f'Voices {voice_options2_label.upper()}')
-        @app_commands.choices(voice_3=voice_options2)
-        @app_commands.choices(lang=lang_options)
-        @configurable_for_dm_if(lambda ctx: 'speak' in config.discord_dm_setting('allowed_commands', []))
-        async def speak(ctx: commands.Context, input_text: str, voice_1: typing.Optional[app_commands.Choice[str]], voice_2: typing.Optional[app_commands.Choice[str]], voice_3: typing.Optional[app_commands.Choice[str]], lang: typing.Optional[app_commands.Choice[str]], voice_input: typing.Optional[discord.Attachment]):
-            if sum(1 for v in (voice_1, voice_2, voice_3) if v) > 1:
-                await ctx.send("A voice was picked from two separate menus. Using the first selection.", ephemeral=True)
-            selected_voice = ((voice_1 or voice_2 or voice_3) and (voice_1 or voice_2 or voice_3).value) or ''
-            if selected_voice:
-                selected_voice = _voice_hash_dict[selected_voice]
-            voice_input = voice_input if voice_input is not None else ''
-            lang = lang.value if lang is not None else ''
-            await process_speak(ctx, input_text, selected_voice, lang, voice_input)
+        elif 50 < len(all_voices) <= 75:
+            @client.hybrid_command(name="speak", description='AI will speak your text using a selected voice (pick only one)')
+            @app_commands.rename(voice_1=f'voices_{voice_options_label}')
+            @app_commands.describe(voice_1=f'Voices {voice_options_label.upper()}')
+            @app_commands.choices(voice_1=voice_options)
+            @app_commands.rename(voice_2=f'voices_{voice_options1_label}')
+            @app_commands.describe(voice_2=f'Voices {voice_options1_label.upper()}')
+            @app_commands.choices(voice_2=voice_options1)
+            @app_commands.rename(voice_3=f'voices_{voice_options2_label}')
+            @app_commands.describe(voice_3=f'Voices {voice_options2_label.upper()}')
+            @app_commands.choices(voice_3=voice_options2)
+            @app_commands.choices(lang=lang_options)
+            @configurable_for_dm_if(lambda ctx: 'speak' in config.discord_dm_setting('allowed_commands', []))
+            async def speak(ctx: commands.Context, input_text: str, voice_1: typing.Optional[app_commands.Choice[str]], voice_2: typing.Optional[app_commands.Choice[str]], voice_3: typing.Optional[app_commands.Choice[str]], lang: typing.Optional[app_commands.Choice[str]], voice_input: typing.Optional[discord.Attachment]):
+                if sum(1 for v in (voice_1, voice_2, voice_3) if v) > 1:
+                    await ctx.send("A voice was picked from two separate menus. Using the first selection.", ephemeral=True)
+                selected_voice = ((voice_1 or voice_2 or voice_3) and (voice_1 or voice_2 or voice_3).value) or ''
+                if selected_voice:
+                    selected_voice = _voice_hash_dict[selected_voice]
+                voice_input = voice_input if voice_input is not None else ''
+                lang = lang.value if lang is not None else ''
+                await process_speak(ctx, input_text, selected_voice, lang, voice_input)
 
 #################################################################
 ######################## /PROMPT COMMAND ########################
