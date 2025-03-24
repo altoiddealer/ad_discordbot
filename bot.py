@@ -6642,7 +6642,7 @@ class Behavior(SettingsBase):
         if message.author == client.user and not check_probability(self.reply_to_itself):
             return False
         # Whether to reply to other bots
-        if message.author.bot and last_character.lower() in text.lower() and main_condition:
+        if message.author.bot and re.search(rf'\b{re.escape(last_character.lower())}\b', text, re.IGNORECASE) and main_condition:
             if 'bye' in text.lower(): # don't reply if another bot is saying goodbye
                 return False
             return check_probability(self.reply_to_bots_when_addressed)
