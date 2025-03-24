@@ -3685,6 +3685,10 @@ class Tasks(TaskProcessing):
                 request = {'text_input': self.text}
                 client_args:dict = tts_args[tts.client]
                 if client_args.get(tts.lang_key):
+                    selected_language = tts_args[tts.client][tts.lang_key]
+                    # TODO: Improve language handling
+                    if len(selected_language) > 2:
+                        selected_language = 'en'
                     request['language'] = tts_args[tts.client][tts.lang_key]
                 if client_args.get(tts.voice_key):
                     request['character_voice_gen'] = tts_args[tts.client][tts.voice_key]
