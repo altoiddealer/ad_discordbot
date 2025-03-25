@@ -129,10 +129,9 @@ def check_project(parent_path):
     # Check if bot is running in a supported project
     project_path = os.path.dirname(install_path)
     project_url = get_git_remote_url(project_path)
-    project_is_bot_fork = is_fork_of(project_path, bot_git_url)
     project_is_tgwui_fork = is_fork_of(project_path, tgwui_git_url)
 
-    if not project_is_bot_fork and not project_is_tgwui_fork and project_url not in supported_project_urls:
+    if (project_path == parent_path) and (project_url not in supported_project_urls) and (not project_is_tgwui_fork):
         print_big_message(f"Bot is unexpectedly running in the environment of '{project_url}'.")
         print_big_message(f"Please refer to 'https://github.com/altoiddealer/ad_discordbot/wiki/installation'")
         print_big_message(f"Only attempt installing with 'text-generation-webui integration' if ad_discordbot is in it's directory.")
@@ -445,21 +444,22 @@ if __name__ == "__main__":
         print_big_message(f"Currently installed {'with text-generation-webui integration' if is_tgwui_integrated else 'as Standalone'}")
         options_dict = {}
         # Options based on current install status and environment
-        if is_tgwui_integrated:
-            options_dict['S'] = 'Switch to standalone environment (remove TGWUI integration)'
-        elif parent_is_tgwui:
-            options_dict['S'] = 'Switch to TGWUI integration'
+        if is_tgwui_integrated or parent_is_tgwui:
+            if is_tgwui_integrated:
+                options_dict['(S)'] = 'Switch to standalone environment (remove TGWUI integration)'
+            elif parent_is_tgwui:
+                options_dict['(S)'] = 'Switch to TGWUI integration'
         # Always-present options
         options_dict.update({
-            'U': 'Update the bot',
-            'R': 'Revert local changes to repository files with \"git reset --hard\"',
-            'N': 'Nothing (exit)'
+            '(U)': 'Update the bot',
+            '(R)': 'Revert local changes to repository files with \"git reset --hard\"',
+            '(N)': 'Nothing (exit)'
         })
 
         while True:
             choice = get_user_choice("What would you like to do?", options_dict)
 
-            if choice == 'S':
+            if str(choice).lower() == 's':
                 # Switch to standalone environment (remove TGWUI integration)
                 if is_tgwui_integrated:
                     print("Removing TGWUI integration...")
@@ -469,11 +469,11 @@ if __name__ == "__main__":
                     # Code to enable TGWUI integration
                     print("Switching to text-generation-webui integration...")
                     # TODO: Implement the integration logic
-            elif choice == 'U':
+            elif str(choice).lower() == 'u':
                 update_requirements()
-            elif choice == 'R':
+            elif str(choice).lower() == 'r':
                 run_cmd(f'git -C "{script_dir}" reset --hard', assert_success=True, environment=True)
-            elif choice == 'N':
+            elif str(choice).lower() == 'n':
                 sys.exit()
     else:
         if not is_installed():
