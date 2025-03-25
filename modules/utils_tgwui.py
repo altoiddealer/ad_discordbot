@@ -47,6 +47,9 @@ class TTS:
         fallback_client = None
         for extension in shared.args.extensions:
             extension:str
+            # Allow any TTS extension with "alltalk" in the name
+            if 'alltalk' in extension and extension not in self.supported_clients:
+                self.supported_clients.append(extension)
             if extension in self.supported_clients:
                 self.client = extension
                 break
