@@ -2,7 +2,6 @@ import argparse
 import hashlib
 import os
 import platform
-#import requests TODO Guarantee we have this
 import signal
 import site
 import subprocess
@@ -233,7 +232,7 @@ def restart_in_conda_env(env_path):
         sys.exit(1)
 
     print(f"Restarting script in Conda environment: {env_path}")
-    subprocess.run([conda_python] + sys.argv)
+    subprocess.run(conda_python + f'--conda-env-path {env_path}')
     sys.exit()
 
 
@@ -247,9 +246,10 @@ def convert_to_standalone():
         global is_tgwui_integrated, project_url, flags
         is_tgwui_integrated = False
         project_url = "https://github.com/altoiddealer/ad_discordbot"
-        flags -= " --is-tgwui-integrated"
+        flags = flags.replace(" --is-tgwui-integrated", "")
 
     def download_file(url, dest_path):
+        import requests
         print(f"Downloading Miniconda from {url}...")
         os.makedirs(os.path.dirname(dest_path), exist_ok=True)
 
@@ -338,6 +338,7 @@ def convert_to_standalone():
         conda_env_path = os.path.join(install_path, "env")
 
     # Main execution to switch from TGWUI integration to Standalone
+    #restore_default_values()
     if not os.path.exists(miniconda_installer):
         download_file(miniconda_url, miniconda_installer)
     
@@ -345,7 +346,6 @@ def convert_to_standalone():
     install_miniconda()
     create_conda_env()
     # activate_conda_env()
-    # restore_default_values()
     # set_home_values()
     # Example usage
     restart_in_conda_env(conda_env_path)
@@ -426,7 +426,9 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument('--update-wizard', action='store_true', help='Launch a menu with update options.')
     parser.add_argument("--conda-env-path", type=str, help="Path to the active Conda environment")
-    args, _ = parser.parse_known_args()
+    args, unknown_args = parser.parse_known_args()
+    # Check for any argument that starts with '--update-wizard-'
+    update_wizard_flag = any(arg.startswith("--update-wizard-") for arg in unknown_args)
     # Update paths
     conda_env_path = os.path.abspath(args.conda_env_path)
     install_path = os.path.dirname(conda_env_path)
@@ -445,35 +447,40 @@ if __name__ == "__main__":
         options_dict = {}
         # Options based on current install status and environment
         if is_tgwui_integrated or parent_is_tgwui:
-            if is_tgwui_integrated:
-                options_dict['(S)'] = 'Switch to standalone environment (remove TGWUI integration)'
-            elif parent_is_tgwui:
-                options_dict['(S)'] = 'Switch to TGWUI integration'
+            options_dict['S'] = 'Switch install method (Add/Remove TGWUI integration)'
+            # if is_tgwui_integrated:
+            #     options_dict['S'] = 'Switch to standalone environment (remove TGWUI integration)'
+            # elif parent_is_tgwui:
+            #     options_dict['S'] = 'Switch to TGWUI integration'
         # Always-present options
         options_dict.update({
-            '(U)': 'Update the bot',
-            '(R)': 'Revert local changes to repository files with \"git reset --hard\"',
-            '(N)': 'Nothing (exit)'
+            'U': 'Update the bot',
+            'R': 'Revert local changes to repository files with \"git reset --hard\"',
+            'N': 'Nothing (exit)'
         })
 
         while True:
             choice = get_user_choice("What would you like to do?", options_dict)
 
-            if str(choice).lower() == 's':
+            if choice == 'S':
+                launcher_script = os.path.join(script_dir, "switch_env.bat")
+                print(f"Executing {switch_script} to switch environments...")
+                os.system(f'start "" "{switch_script}"')  # Non-blocking execution
+                sys.exit()  # Exit script after triggering the batch file
                 # Switch to standalone environment (remove TGWUI integration)
-                if is_tgwui_integrated:
-                    print("Removing TGWUI integration...")
-                    convert_to_standalone()
-                # Switch to TGWUI integration
-                elif parent_is_tgwui:
-                    # Code to enable TGWUI integration
-                    print("Switching to text-generation-webui integration...")
-                    # TODO: Implement the integration logic
-            elif str(choice).lower() == 'u':
+                # if is_tgwui_integrated:
+                #     print("Removing TGWUI integration...")
+                #     convert_to_standalone()
+                # # Switch to TGWUI integration
+                # elif parent_is_tgwui:
+                #     # Code to enable TGWUI integration
+                #     print("Switching to text-generation-webui integration...")
+                #     # TODO: Implement the integration logic
+            elif choice == 'U':
                 update_requirements()
-            elif str(choice).lower() == 'r':
+            elif choice == 'R':
                 run_cmd(f'git -C "{script_dir}" reset --hard', assert_success=True, environment=True)
-            elif str(choice).lower() == 'n':
+            elif choice == 'N':
                 sys.exit()
     else:
         if not is_installed():
