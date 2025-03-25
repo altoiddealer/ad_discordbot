@@ -215,10 +215,12 @@ tag_presets:
 #   flow: {dict}                      A dict of 'flow_steps'. When a 'flow' tag is triggered, it creates a message loop for each defined 'loop_step'
 #   flow_step: [list]                 The tags you want to apply in each flow step.  Without a trigger, they will auto-apply.  'format_prompt' is very useful in each flow_step
 #   flow_step_loops: int              The number of times you want to loop a particular flow_step.
+#   toggle_vc_playback: str           Changes playback in guild's voice channel where tag is triggered. Use with 'for_guild_ids_only' condition for selective control. Valid values: 'stop', 'pause', 'resume', 'toggle' (pauses or resumes)
 
 # Relevant to text generation (LLM):
 #   should_gen_text: (true/false)     If LLM should generate text. If False and 'should_gen_image' is True, passes the user's text as prompt for image gen.
 #   should_send_text: (true/false)    If LLM should send generated text to channel. Mainly used for 'flows' tag.
+#   should_tts: (true/false)          false = prevents TTS from generating for the current interaction
 #   llm_censoring: (true/false)       true = blocks text from being generated
 #   begin_reply_with: 'string'        The LLM will continue their reply from this.
 #   change_llmmodel: 'string'         For (change/swap)_llmmodel: 'change' will trigger a persistent change. 'swap' will only change the LLM model for the current interaction.

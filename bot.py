@@ -902,6 +902,19 @@ class VoiceClients:
             source = discord.FFmpegPCMAudio(file)
             self.guild_vcs[guild_id].play(source, after=lambda e: self.after_playback(guild_id, file, e))
 
+    async def toggle_playback_in_voice_channel(self, guild_id, action='stop'):
+        if self.guild_vcs.get(guild_id):          
+            guild_vc:discord.VoiceClient = self.guild_vcs[guild_id]
+            if action == 'stop' and guild_vc.is_playing():
+                guild_vc.stop()
+                log.info(f"TTS playback was stopped for guild {guild_id}")
+            elif (action == 'pause' or action == 'toggle') and guild_vc.is_playing():
+                guild_vc.pause()
+                log.info(f"TTS playback was paused in guild {guild_id}")
+            elif (action == 'resume' or action == 'toggle') and guild_vc.is_paused():
+                guild_vc.resume()
+                log.info(f"TTS playback resumed in guild {guild_id}")
+
     def detect_format(self, file_path):
         try:
             audio = AudioSegment.from_wav(file_path)
@@ -1179,6 +1192,7 @@ class Params:
         self.should_send_text: bool     = kwargs.get('should_send_text', True)
         self.should_gen_image: bool     = kwargs.get('should_gen_image', False)
         self.should_send_image: bool    = kwargs.get('should_send_image', True)
+        self.should_tts: bool           = kwargs.get('should_tts', True)
 
         # Image command params
         self.imgcmd: dict = kwargs.get('imgcmd', {
@@ -1371,7 +1385,6 @@ class TaskProcessing(TaskAttributes):
         try:
             char_params: dict            = {}
             begin_reply_with: str        = mods.get('begin_reply_with', None)
-            flow: dict                   = mods.get('flow', None)
             save_history: bool           = mods.get('save_history', None)
             filter_history_for: list     = mods.get('filter_history_for', None)
             load_history: bool           = mods.get('load_history', None)
@@ -1384,6 +1397,7 @@ class TaskProcessing(TaskAttributes):
             swap_character: str          = mods.get('swap_character', None)
             change_llmmodel: str         = mods.get('change_llmmodel', None)
             swap_llmmodel: str           = mods.get('swap_llmmodel', None)
+            should_tts: bool             = mods.get('should_tts', None)
 
             # Begin reply with handling
             if begin_reply_with is not None:
@@ -1391,10 +1405,9 @@ class TaskProcessing(TaskAttributes):
                 self.apply_begin_reply_with()
                 log.info(f"[TAGS] Reply is being continued from: '{begin_reply_with}'")
 
-            # Flow handling
-            if flow is not None and not flows.event.is_set():
-                await flows.build_queue(flow)
-
+            # TTS Adjustments
+            if should_tts is not None:
+                self.params.should_tts = should_tts
             # History handling
             if save_history is not None:
                 self.params.save_to_history = save_history # save_to_history
@@ -1487,23 +1500,16 @@ class TaskProcessing(TaskAttributes):
             for tag in self.tags.matches:
                 tag:TAG
                 tag_name, tag_print = self.tags.get_name_print_for(tag)
-                # Check if censored
-                if 'llm_censoring' in tag and bool(tag['llm_censoring']) == True:
-                    censor_text = tag.get('matched_trigger', '')
-                    censor_message = f' (text match: {censor_text})'
-                    log.info(f"[TAGS] Censoring: LLM generation was blocked{censor_message if censor_text else ''}")
-                    self.embeds.create('censor', "Text prompt was flagged as inappropriate", "Text generation task has been cancelled.")
-                    await self.embeds.send('censor', delete_after=5)
-                    raise TaskCensored
+
                 # Values that will only apply from the first tag matches
                 if 'begin_reply_with' in tag and not llm_payload_mods.get('begin_reply_with'):
                     llm_payload_mods['begin_reply_with'] = str(tag.pop('begin_reply_with'))
-                if 'flow' in tag and not llm_payload_mods.get('flow'):
-                    llm_payload_mods['flow'] = dict(tag.pop('flow'))
                 if 'save_history' in tag and not llm_payload_mods.get('save_history'):
                     llm_payload_mods['save_history'] = bool(tag.pop('save_history'))
                 if 'load_history' in tag and not llm_payload_mods.get('load_history'):
                     llm_payload_mods['load_history'] = int(tag.pop('load_history'))
+                if 'should_tts' in tag and not llm_payload_mods.get('should_tts'):
+                    llm_payload_mods['should_tts'] = bool(tag.pop('should_tts'))
                 if 'include_hidden_history' in tag and not llm_payload_mods.get('include_hidden_history'):
                     llm_payload_mods['include_hidden_history'] = bool(tag.pop('include_hidden_history'))
                     
@@ -1529,12 +1535,6 @@ class TaskProcessing(TaskAttributes):
                 if 'suffix_context' in tag:
                     llm_payload_mods.setdefault('suffix_context', [])
                     llm_payload_mods['suffix_context'].append(str(tag.pop('suffix_context')))
-                if 'send_user_image' in tag:
-                    user_image_file = str(tag.pop('send_user_image'))
-                    user_image_args = self.get_image_tag_args('User image', user_image_file, key=None, set_dir=None)
-                    user_image = discord.File(user_image_args)
-                    self.params.send_user_image.append(user_image)
-                    log.info('[TAGS] Sending user image.')
                 if 'format_prompt' in tag:
                     formatting.setdefault('format_prompt', [])
                     formatting['format_prompt'].append(str(tag.pop('format_prompt')))
@@ -1558,19 +1558,54 @@ class TaskProcessing(TaskAttributes):
                         llm_payload_mods['state'].update(state) # Allow multiple to accumulate.
                     except Exception:
                         log.warning(f"[TAGS] Error processing a matched 'state' {tag_print}; ensure it is a dictionary.")
-                if 'persist' in tag:
-                    if not tag_name:
-                        log.warning(f"[TAGS] A persistent {tag_print} was matched, but it is missing a required 'name' parameter. Cannot make tag persistent.")
-                    else:
-                        persist = int(tag.pop('persist'))
-                        log.info(f'[TAGS] A persistent {tag_print} was matched, which will be auto-applied for the next ({persist}) tag matching phases (pre-LLM).')
-                        persistent_tags.append_tag_name_to('llm', self.channel.id, persist, tag_name)
 
         except TaskCensored:
             raise
         except Exception as e:
             log.error(f"Error collecting LLM tag values: {e}")
         return llm_payload_mods, formatting
+    
+    async def apply_generic_tag_matches(self, phase='llm'):
+        prevent_multiple = []
+        try:
+            for tag in self.tags.matches:
+                tag:TAG
+                tag_name, tag_print = self.tags.get_name_print_for(tag)
+                # Check if censored
+                if phase == 'llm' and 'llm_censoring' in tag and bool(tag['llm_censoring']) == True:
+                    censor_text = tag.get('matched_trigger', '')
+                    censor_message = f' (text match: {censor_text})'
+                    log.info(f"[TAGS] Censoring: LLM generation was blocked{censor_message if censor_text else ''}")
+                    self.embeds.create('censor', "Text prompt was flagged as inappropriate", "Text generation task has been cancelled.")
+                    await self.embeds.send('censor', delete_after=5)
+                    raise TaskCensored
+                if 'flow' in tag and not 'flow' in prevent_multiple:
+                    prevent_multiple.append('flow')
+                    if not flows.event.is_set():
+                        await flows.build_queue(dict(tag.pop('flow')))
+                if 'toggle_vc_playback' in tag and not 'toggle_vc_playback' in prevent_multiple:
+                    prevent_multiple.append('toggle_vc_playback')
+                    if not is_direct_message(self.ictx):
+                        await voice_clients.toggle_playback_in_voice_channel(self.ictx.guild.id, str(tag.pop('toggle_vc_playback')))
+                if 'send_user_image' in tag:
+                    user_image_file = str(tag.pop('send_user_image'))
+                    user_image_args = self.get_image_tag_args('User image', user_image_file, key=None, set_dir=None)
+                    user_image = discord.File(user_image_args)
+                    self.params.send_user_image.append(user_image)
+                    log.info(f'[TAGS] Sending user image for matched {tag_print}')
+                if 'persist' in tag:
+                    if not tag_name:
+                        log.warning(f"[TAGS] A persistent {tag_print} was matched, but it is missing a required 'name' parameter. Cannot make tag persistent.")
+                    else:
+                        persist = int(tag.pop('persist'))
+                        log.info(f'[TAGS] A persistent {tag_print} was matched, which will be auto-applied for the next ({persist}) tag matching phases (pre-{phase.upper()} gen).')
+                        persistent_tags.append_tag_name_to(phase, self.channel.id, persist, tag_name)
+
+        except TaskCensored:
+            raise
+        except Exception as e:
+            log.error(f"Error processing generic tag matches: {e}")
+
 
     def apply_begin_reply_with(self:Union["Task","Tasks"]):
         # Continue from value of 'begin_reply_with'
@@ -1616,6 +1651,7 @@ class TaskProcessing(TaskAttributes):
 
     async def message_img_gen(self:Union["Task","TaskProcessing"]):
         await self.tags.match_img_tags(self.img_prompt, self.settings.get_vars())
+        await self.apply_generic_tag_matches(phase='img')
         self.params.update_bot_should_do(self.tags) # check for updates from tags
         if self.params.should_gen_image and await sd.online(self.ictx):
             # CLONE CURRENT TASK AND QUEUE IT
@@ -1623,6 +1659,18 @@ class TaskProcessing(TaskAttributes):
             #await self.channel.send('()', delete_after=5)
             img_gen_task = self.clone('img_gen', self.ictx, ignore_list=['llm_payload'])
             await task_manager.task_queue.put(img_gen_task)
+
+    async def check_tts_before_llm_gen(self:Union["Task","Tasks"]) -> bool:
+        if tts.enabled:
+            # Toggle TTS off if not sending text, or if triggered by Tags
+            if (not self.params.should_send_text) or (self.params.should_tts == False):
+                return await tts.apply_toggle_tts(self.settings, toggle='off')
+            # Conditions which are only valid for guild interactions
+            if hasattr(self.ictx, 'guild') and getattr(self.ictx.guild, 'voice_client', None):
+                # Toggle TTS off if interaction server is not connected to Voice Channel
+                if not voice_clients.guild_vcs.get(self.ictx.guild.id) and int(tts.settings.get('play_mode', 0)) == 0:
+                    return await tts.apply_toggle_tts(self.settings, toggle='off')
+        return False
 
     async def message_llm_gen(self:Union["Task","Tasks"]):
         # if no LLM model is loaded, notify that no text will be generated
@@ -1632,12 +1680,8 @@ class TaskProcessing(TaskAttributes):
                 await self.channel.send('(Cannot process text request: No LLM model is currently loaded. Use "/llmmodel" to load a model.)', delete_after=10)
                 log.warning(f'Bot tried to generate text for {self.user_name}, but no LLM model was loaded')
         ## Finalize payload, generate text via TGWUI, and process responses
-        # Toggle TTS off, if interaction server is not connected to Voice Channel
-        tts_sw = False
-        if (not self.params.should_send_text) \
-            or (hasattr(self.ictx, 'guild') and getattr(self.ictx.guild, 'voice_client', None) \
-            and not voice_clients.guild_vcs.get(self.ictx.guild.id) and int(tts.settings.get('play_mode', 0)) == 0):
-            tts_sw = await tts.apply_toggle_tts(self.settings, toggle='off')
+        # Toggle TTS if necessary
+        tts_sw = await self.check_tts_before_llm_gen()
         # Check to apply Server Mode
         self.apply_server_mode()
         # Update names in stopping strings
@@ -1836,7 +1880,7 @@ class TaskProcessing(TaskAttributes):
                     self.last_checked:str        = ''
                     # TTS streaming
                     cant_stream_tts = ['edge_tts']
-                    self.stream_tts:bool         = tts.enabled and self.can_chunk and config.textgenwebui['tts_settings'].get('tts_streaming', True)
+                    self.stream_tts:bool         = tts.enabled and self.can_chunk and config.textgenwebui['tts_settings'].get('tts_streaming', True) and task.params.should_tts
                     if self.stream_tts and tts.client in cant_stream_tts:
                         self.stream_tts = False
                         log.error(f"TTS Streaming is confirmed non-functional for {tts.client} (for now), so this is being disabled.")
@@ -1933,11 +1977,12 @@ class TaskProcessing(TaskAttributes):
 
             def apply_extensions(chunk_text:str, was_streamed=True):
                 vis_resp_chunk:str = extensions_module.apply_extensions('output', chunk_text, state=self.llm_payload['state'], is_chat=True)
-                audio_format_match = patterns.audio_src.search(vis_resp_chunk)
-                if audio_format_match:
-                    stream_replies.streamed_tts = was_streamed
-                    setattr(self.params, 'streamed_tts', was_streamed)
-                    self.tts_resp.append(audio_format_match.group(1))
+                if vis_resp_chunk:
+                    audio_format_match = patterns.audio_src.search(vis_resp_chunk)
+                    if audio_format_match:
+                        stream_replies.streamed_tts = was_streamed
+                        setattr(self.params, 'streamed_tts', was_streamed)
+                        self.tts_resp.append(audio_format_match.group(1))
 
             # Sends LLM Payload and processes the generated text
             async def process_responses():
@@ -2738,7 +2783,6 @@ class TaskProcessing(TaskAttributes):
 
     async def process_img_payload_tags(self, mods:dict):
         try:
-            flow: dict            = mods.pop('flow', None)
             change_imgmodel: str  = mods.pop('change_imgmodel', None)
             swap_imgmodel: str    = mods.pop('swap_imgmodel', None)
             last_img_payload: bool|list = mods.pop('last_img_payload', None)
@@ -2753,100 +2797,96 @@ class TaskProcessing(TaskAttributes):
             img2img_mask: str     = mods.pop('img2img_mask', '')
             self.params.sd_output_dir = (mods.pop('sd_output_dir', self.params.sd_output_dir)).lstrip('/')  # Remove leading slash if it exists
             self.params.img_censoring = mods.pop('img_censoring', self.params.img_censoring)
-            # Process the tag matches
-            if flow or change_imgmodel or swap_imgmodel or payload or aspect_ratio or param_variances or controlnet or forge_couple or layerdiffuse or reactor or img2img or img2img_mask or last_img_payload:
-                # Flow handling
-                if flow is not None and not flows.event.is_set():
-                    await flows.build_queue(flow)
-                # Imgmodel handling
-                new_imgmodel = change_imgmodel or swap_imgmodel or None
-                if new_imgmodel:
-                    imgmodel_params = await get_selected_imgmodel_params(new_imgmodel, self.ictx) # {sd_model_checkpoint, imgmodel_name, filename}
-                    current_imgmodel_name = bot_settings.get_last_setting_for("last_imgmodel_name", self.ictx)
-                    new_imgmodel_name = imgmodel_params.get('imgmodel_name', '')
-                    # Check if new model same as current model
-                    if current_imgmodel_name == new_imgmodel_name:
-                        log.info(f'[TAGS] Img model was triggered to change, but it is the same as current ("{current_imgmodel_name}").')
-                    else:
-                        self.params.imgmodel = imgmodel_params
-                        mode = 'change' if new_imgmodel == change_imgmodel else 'swap'
-                        verb = 'Changing' if mode == 'change' else 'Swapping'
-                        self.params.imgmodel['current_imgmodel_name'] = current_imgmodel_name
-                        self.params.imgmodel['mode'] = mode
-                        self.params.imgmodel['verb'] = verb
-                        log.info(f'[TAGS] {verb} Img model: "{new_imgmodel_name}"')
-                # Payload handling
-                if last_img_payload:
-                    if isinstance(last_img_payload, bool):
-                        last_img_payload_dict = copy.deepcopy(sd.last_img_payload)
-                        setattr(self, 'stashed_prompt', last_img_payload_dict.pop('prompt', '')) # Retains the prompt to re-apply later
+
+            # Imgmodel handling
+            new_imgmodel = change_imgmodel or swap_imgmodel or None
+            if new_imgmodel:
+                imgmodel_params = await get_selected_imgmodel_params(new_imgmodel, self.ictx) # {sd_model_checkpoint, imgmodel_name, filename}
+                current_imgmodel_name = bot_settings.get_last_setting_for("last_imgmodel_name", self.ictx)
+                new_imgmodel_name = imgmodel_params.get('imgmodel_name', '')
+                # Check if new model same as current model
+                if current_imgmodel_name == new_imgmodel_name:
+                    log.info(f'[TAGS] Img model was triggered to change, but it is the same as current ("{current_imgmodel_name}").')
+                else:
+                    self.params.imgmodel = imgmodel_params
+                    mode = 'change' if new_imgmodel == change_imgmodel else 'swap'
+                    verb = 'Changing' if mode == 'change' else 'Swapping'
+                    self.params.imgmodel['current_imgmodel_name'] = current_imgmodel_name
+                    self.params.imgmodel['mode'] = mode
+                    self.params.imgmodel['verb'] = verb
+                    log.info(f'[TAGS] {verb} Img model: "{new_imgmodel_name}"')
+            # Payload handling
+            if last_img_payload:
+                if isinstance(last_img_payload, bool):
+                    last_img_payload_dict = copy.deepcopy(sd.last_img_payload)
+                    setattr(self, 'stashed_prompt', last_img_payload_dict.pop('prompt', '')) # Retains the prompt to re-apply later
+                    update_dict(self.img_payload, last_img_payload_dict)
+                    log.info("[TAGS] Applying the previous image payload as the starting point (may be modified by other tags). Note: The previous 'prompt' will be identical.")
+                elif isinstance(last_img_payload, list):
+                    # Filter sd.last_img_payload based on keys in last_img_payload
+                    last_img_payload_dict = {key: sd.last_img_payload[key] for key in last_img_payload if key in sd.last_img_payload}
+                    if last_img_payload_dict:
+                        log.info("[TAGS] Applying the following settings from the previous image payload (may be modified by other tags):")
+                        log.info(f"{', '.join(last_img_payload_dict.keys())}")
                         update_dict(self.img_payload, last_img_payload_dict)
-                        log.info("[TAGS] Applying the previous image payload as the starting point (may be modified by other tags). Note: The previous 'prompt' will be identical.")
-                    elif isinstance(last_img_payload, list):
-                        # Filter sd.last_img_payload based on keys in last_img_payload
-                        last_img_payload_dict = {key: sd.last_img_payload[key] for key in last_img_payload if key in sd.last_img_payload}
-                        if last_img_payload_dict:
-                            log.info("[TAGS] Applying the following settings from the previous image payload (may be modified by other tags):")
-                            log.info(f"{', '.join(last_img_payload_dict.keys())}")
-                            update_dict(self.img_payload, last_img_payload_dict)
+                else:
+                    log.error("[TAGS] A tag was matched with invalid 'last_img_payload'; must be boolean ('true') or a ['list', 'of', 'key_names'].")
+            if payload:
+                if isinstance(payload, dict):
+                    log.info(f"[TAGS] Updated payload: '{payload}'")
+                    update_dict(self.img_payload, payload)
+                else:
+                    log.warning("[TAGS] A tag was matched with invalid 'payload'; must be a dictionary.")
+            # Aspect Ratio
+            if aspect_ratio:
+                try:
+                    current_avg = bot_settings.get_last_setting_for("last_imgmodel_res", self.ictx)
+                    # Use AR from input image, while adhering to current model res
+                    if img2img and aspect_ratio.lower() in ['use img2img', 'from img2img']:
+                        from io import BytesIO
+                        base64_string = str(img2img)
+                        image_data = base64.b64decode(base64_string)
+                        image_bytes = BytesIO(image_data)
+                        with Image.open(image_bytes) as img:
+                            img_w, img_h = img.size
+                        n, d = ar_parts_from_dims(img_w, img_h)
                     else:
-                        log.error("[TAGS] A tag was matched with invalid 'last_img_payload'; must be boolean ('true') or a ['list', 'of', 'key_names'].")
-                if payload:
-                    if isinstance(payload, dict):
-                        log.info(f"[TAGS] Updated payload: '{payload}'")
-                        update_dict(self.img_payload, payload)
-                    else:
-                        log.warning("[TAGS] A tag was matched with invalid 'payload'; must be a dictionary.")
-                # Aspect Ratio
-                if aspect_ratio:
-                    try:
-                        current_avg = bot_settings.get_last_setting_for("last_imgmodel_res", self.ictx)
-                        # Use AR from input image, while adhering to current model res
-                        if img2img and aspect_ratio.lower() in ['use img2img', 'from img2img']:
-                            from io import BytesIO
-                            base64_string = str(img2img)
-                            image_data = base64.b64decode(base64_string)
-                            image_bytes = BytesIO(image_data)
-                            with Image.open(image_bytes) as img:
-                                img_w, img_h = img.size
-                            n, d = ar_parts_from_dims(img_w, img_h)
-                        else:
-                            n, d = get_aspect_ratio_parts(aspect_ratio)
-                        w, h = dims_from_ar(current_avg, n, d)
-                        self.img_payload['width'], self.img_payload['height'] = w, h
-                        log.info(f'[TAGS] Applied aspect ratio "{aspect_ratio}" (Width: "{w}", Height: "{h}").')
-                    except Exception as e:
-                        log.error(f"[TAGS] Error applying aspect ratio: {e}")
-                # Param variances handling
-                if param_variances:
-                    processed_params = self.process_param_variances(param_variances)
-                    log.info(f"[TAGS] Applied Param Variances: '{processed_params}'")
-                    sum_update_dict(self.img_payload, processed_params)
-                # Controlnet handling
-                if controlnet and config.sd['extensions'].get('controlnet_enabled', False):
-                    self.img_payload['alwayson_scripts']['controlnet']['args'] = controlnet
-                # forge_couple handling
-                if forge_couple and config.sd['extensions'].get('forgecouple_enabled', False):
-                    self.img_payload['alwayson_scripts']['forge_couple']['args'].update(forge_couple)
-                    self.img_payload['alwayson_scripts']['forge_couple']['args']['enable'] = True
-                    log.info(f"[TAGS] Enabled forge_couple: {forge_couple}")
-                # layerdiffuse handling
-                if layerdiffuse and config.sd['extensions'].get('layerdiffuse_enabled', False):
-                    self.img_payload['alwayson_scripts']['layerdiffuse']['args'].update(layerdiffuse)
-                    self.img_payload['alwayson_scripts']['layerdiffuse']['args']['enabled'] = True
-                    log.info(f"[TAGS] Enabled layerdiffuse: {layerdiffuse}")
-                # ReActor face swap handling
-                if reactor and config.sd['extensions'].get('reactor_enabled', False):
-                    self.img_payload['alwayson_scripts']['reactor']['args'].update(reactor)
-                    if reactor.get('mask'):
-                        self.img_payload['alwayson_scripts']['reactor']['args']['save_original'] = True
-                # Img2Img handling
-                if img2img:
-                    self.img_payload['init_images'] = [str(img2img)]
-                    self.params.endpoint = '/sdapi/v1/img2img'
-                # Inpaint Mask handling
-                if img2img_mask:
-                    self.img_payload['mask'] = str(img2img_mask)
+                        n, d = get_aspect_ratio_parts(aspect_ratio)
+                    w, h = dims_from_ar(current_avg, n, d)
+                    self.img_payload['width'], self.img_payload['height'] = w, h
+                    log.info(f'[TAGS] Applied aspect ratio "{aspect_ratio}" (Width: "{w}", Height: "{h}").')
+                except Exception as e:
+                    log.error(f"[TAGS] Error applying aspect ratio: {e}")
+            # Param variances handling
+            if param_variances:
+                processed_params = self.process_param_variances(param_variances)
+                log.info(f"[TAGS] Applied Param Variances: '{processed_params}'")
+                sum_update_dict(self.img_payload, processed_params)
+            # Controlnet handling
+            if controlnet and config.sd['extensions'].get('controlnet_enabled', False):
+                self.img_payload['alwayson_scripts']['controlnet']['args'] = controlnet
+            # forge_couple handling
+            if forge_couple and config.sd['extensions'].get('forgecouple_enabled', False):
+                self.img_payload['alwayson_scripts']['forge_couple']['args'].update(forge_couple)
+                self.img_payload['alwayson_scripts']['forge_couple']['args']['enable'] = True
+                log.info(f"[TAGS] Enabled forge_couple: {forge_couple}")
+            # layerdiffuse handling
+            if layerdiffuse and config.sd['extensions'].get('layerdiffuse_enabled', False):
+                self.img_payload['alwayson_scripts']['layerdiffuse']['args'].update(layerdiffuse)
+                self.img_payload['alwayson_scripts']['layerdiffuse']['args']['enabled'] = True
+                log.info(f"[TAGS] Enabled layerdiffuse: {layerdiffuse}")
+            # ReActor face swap handling
+            if reactor and config.sd['extensions'].get('reactor_enabled', False):
+                self.img_payload['alwayson_scripts']['reactor']['args'].update(reactor)
+                if reactor.get('mask'):
+                    self.img_payload['alwayson_scripts']['reactor']['args']['save_original'] = True
+            # Img2Img handling
+            if img2img:
+                self.img_payload['init_images'] = [str(img2img)]
+                self.params.endpoint = '/sdapi/v1/img2img'
+            # Inpaint Mask handling
+            if img2img_mask:
+                self.img_payload['mask'] = str(img2img_mask)
         except Exception as e:
             log.error(f"[TAGS] Error processing Img tags: {e}")
             traceback.print_exc()
@@ -2932,7 +2972,7 @@ class TaskProcessing(TaskAttributes):
         layerdiffuse_args = {}
         reactor_args = {}
         extensions = config.sd.get('extensions', {})
-        accept_only_first = ['flow', 'aspect_ratio', 'img2img', 'img2img_mask', 'sd_output_dir', 'last_img_payload']
+        accept_only_first = ['aspect_ratio', 'img2img', 'img2img_mask', 'sd_output_dir', 'last_img_payload']
         try:
             for tag in self.tags.matches:
                 tag_dict:TAG = self.tags.untuple(tag)
@@ -3003,18 +3043,6 @@ class TaskProcessing(TaskAttributes):
                             forge_couple_args[forge_couple_key] = list(value)
                         else:
                             forge_couple_args[forge_couple_key] = str(value)
-                    # get any user image(s)
-                    elif key == 'send_user_image':
-                        user_image_args = self.get_image_tag_args('User image', str(value), key=None, set_dir=None)
-                        user_image = discord.File(user_image_args)
-                        self.params.send_user_image.append(user_image)
-                        log.info(f'[TAGS] Sending user image for matched {tag_print}')
-                    elif key == 'persist':
-                        if not tag_name:
-                            log.warning("[TAGS] A persistent tag was matched, but it is missing a required 'name' parameter. Cannot make tag persistent.")
-                        else:
-                            log.info(f'[TAGS] A persistent tag "{tag_name}" was matched, which will be auto-applied for the next ({value}) tag matching phases (pre-Image Gen).')
-                            persistent_tags.append_tag_name_to('img', self.channel.id, value, tag_name)
 
             # Add the collected SD WebUI extension args to the img_payload_mods dict
             if controlnet_args:
@@ -3086,6 +3114,7 @@ class Tasks(TaskProcessing):
             await spontaneous_messaging.reset_for_channel(self.ictx) # Stop any pending spontaneous message task for current channel
 
             await self.tags.match_tags(self.text, self.settings.get_vars(), phase='llm') # match tags labeled for user / userllm.
+            await self.apply_generic_tag_matches(phase='llm')
             self.params.update_bot_should_do(self.tags)  # check what bot should do
 
             # Bot should generate text...
@@ -3636,7 +3665,7 @@ class Tasks(TaskProcessing):
     #################################################################
     async def speak_task(self:"Task"):
         try:
-            if shared.model_name == 'None':
+            if tts.api_mode == False and shared.model_name == 'None':
                 await self.channel.send('Cannot process "/speak" request: No LLM model is currently loaded. Use "/llmmodel" to load a model.)', delete_after=5)
                 log.warning(f'Bot tried to generate tts for {self.user_name}, but no LLM model was loaded')
                 return
@@ -3654,11 +3683,26 @@ class Tasks(TaskProcessing):
             await self.create_user_hmessage()
 
             loop = asyncio.get_event_loop()
-            vis_resp_chunk:str = await loop.run_in_executor(None, extensions_module.apply_extensions, 'output', self.text, self.llm_payload['state'], True)
-
-            audio_format_match = patterns.audio_src.search(vis_resp_chunk)
-            if audio_format_match:
-                self.tts_resp.append(audio_format_match.group(1))
+            if tts.api_mode == True:
+                request = {'text_input': self.text}
+                client_args:dict = tts_args[tts.client]
+                if client_args.get(tts.lang_key):
+                    selected_language = tts_args[tts.client][tts.lang_key]
+                    # TODO: Improve language handling
+                    if len(selected_language) > 2:
+                        selected_language = 'en'
+                    request['language'] = tts_args[tts.client][tts.lang_key]
+                if client_args.get(tts.voice_key):
+                    request['character_voice_gen'] = tts_args[tts.client][tts.voice_key]
+                response = await tts.api(endpoint=tts.api_generate_endpoint, method='post', data=request, headers={'Content-Type': 'application/x-www-form-urlencoded'})
+                audio_fp = response.get('output_file_path')
+                if audio_fp:
+                    self.tts_resp.append(audio_fp)
+            else:
+                vis_resp_chunk:str = await loop.run_in_executor(None, extensions_module.apply_extensions, 'output', self.text, self.llm_payload['state'], True)
+                audio_format_match = patterns.audio_src.search(vis_resp_chunk)
+                if audio_format_match:
+                    self.tts_resp.append(audio_format_match.group(1))
 
             # Process responses
             await self.create_bot_hmessage()
@@ -3847,6 +3891,7 @@ class Tasks(TaskProcessing):
             if not self.tags:
                 self.tags = Tags(self.ictx)
                 await self.tags.match_img_tags(self.img_prompt, self.settings.get_vars())
+                await self.apply_generic_tag_matches(phase='img')
                 self.params.update_bot_should_do(self.tags)
             # Initialize img_payload
             self.init_img_payload()
@@ -5911,34 +5956,66 @@ async def process_speak(ctx: commands.Context, input_text, selected_voice=None, 
 async def fetch_speak_options():
     try:
         lang_list = []
-        if tts.client == 'coqui_tts' or tts.client == 'alltalk_tts':
+        all_voices = []
+        if tts.api_get_voices_endpoint:
+            try:
+                all_voices = await tts.api(endpoint=tts.api_get_voices_endpoint, method='get')
+                if isinstance(all_voices, dict):
+                    all_voices = all_voices.get('voices', [])
+                tts.api_mode = True
+            except Exception:
+                pass
+        if tts.client == 'coqui_tts' or 'alltalk' in tts.client:
             lang_list = ['Arabic', 'Chinese', 'Czech', 'Dutch', 'English', 'French', 'German', 'Hungarian', 'Italian', 'Japanese', 'Korean', 'Polish', 'Portuguese', 'Russian', 'Spanish', 'Turkish']
-            if tts.client == 'coqui_tts':
-                from extensions.coqui_tts.script import get_available_voices
-            elif tts.client == 'alltalk_tts':
-                from extensions.alltalk_tts.script import get_available_voices
-            all_voices = get_available_voices()
+            if not all_voices:
+                try:
+                    if tts.client == 'coqui_tts':
+                        from extensions.coqui_tts.script import get_available_voices
+                        all_voices = get_available_voices()
+                    else:
+                        from extensions.alltalk_tts.script import get_available_voices
+                        all_voices = get_available_voices()
+                except Exception:
+                    pass
         elif tts.client == 'silero_tts':
             lang_list = ['English', 'Spanish', 'French', 'German', 'Russian', 'Tatar', 'Ukranian', 'Uzbek', 'English (India)', 'Avar', 'Bashkir', 'Bulgarian', 'Chechen', 'Chuvash', 'Kalmyk', 'Karachay-Balkar', 'Kazakh', 'Khakas', 'Komi-Ziryan', 'Mari', 'Nogai', 'Ossetic', 'Tuvinian', 'Udmurt', 'Yakut']
             log.warning('''There's too many Voice/language permutations to make them all selectable in "/speak" command. Loading a bunch of English options. Non-English languages will automatically play using respective default speaker.''')
-            all_voices = [f"en_{index}" for index in range(1, 76)] # will just include English voices in select menus. Other languages will use defaults.
+            if not all_voices:
+                try:
+                    all_voices = [f"en_{index}" for index in range(1, 76)] # will just include English voices in select menus. Other languages will use defaults.
+                except Exception:
+                    pass
         elif tts.client == 'elevenlabs_tts':
             lang_list = ['English', 'German', 'Polish', 'Spanish', 'Italian', 'French', 'Portuegese', 'Hindi', 'Arabic']
-            log.info('''Getting list of available voices for elevenlabs_tts for "/speak" command...''')
-            from extensions.elevenlabs_tts.script import refresh_voices, update_api_key # type: ignore
-            if tts.api_key:
-                update_api_key(tts.api_key)
-            all_voices = refresh_voices()
+            if not all_voices:
+                try:
+                    log.info('''Getting list of available voices for elevenlabs_tts for "/speak" command...''')
+                    from extensions.elevenlabs_tts.script import refresh_voices, update_api_key # type: ignore
+                    if tts.api_key:
+                        update_api_key(tts.api_key)
+                    all_voices = refresh_voices()
+                except Exception:
+                    pass
         elif tts.client == 'edge_tts':
             lang_list = ['English']
-            from extensions.edge_tts.script import edge_tts # type: ignore
-            voices = await edge_tts.list_voices()
-            all_voices = [voice['ShortName'] for voice in voices if 'ShortName' in voice and voice['ShortName'].startswith('en-')]
+            if not all_voices:
+                try:
+                    from extensions.edge_tts.script import edge_tts # type: ignore
+                    voices = await edge_tts.list_voices()
+                    all_voices = [voice['ShortName'] for voice in voices if 'ShortName' in voice and voice['ShortName'].startswith('en-')]
+                except Exception:
+                    pass
+            else:
+                all_voices = [voice['ShortName'] for voice in voices if 'ShortName' in voice and voice['ShortName'].startswith('en-')]
         elif tts.client == 'vits_api_tts':
             lang_list = ['English']
-            log.info("Collecting voices for the '/speak' command. This will only work if you are running 'vits_api_tts' on default URL 'http://localhost:23456/'.")
-            from extensions.vits_api_tts.script import refresh_voices # type: ignore
-            all_voices = refresh_voices()
+            if not all_voices:
+                try:
+                    log.info("Collecting voices for the '/speak' command. If this fails, ensure 'vits_api_tts' is running on default URL 'http://localhost:23456/'.")
+                    from extensions.vits_api_tts.script import refresh_voices # type: ignore
+                    all_voices = refresh_voices()
+                except Exception:
+                    pass
         all_voices.sort() # Sort alphabetically
         return lang_list, all_voices
     except Exception as e:
@@ -5947,86 +6024,87 @@ async def fetch_speak_options():
 
 if tgwui.enabled and tts.client and tts.client in tts.supported_clients:
     lang_list, all_voices = asyncio.run(fetch_speak_options())
+    if all_voices:
 
-    _voice_hash_dict = {str(hash(voice_name)):voice_name for voice_name in all_voices}
+        _voice_hash_dict = {str(hash(voice_name)):voice_name for voice_name in all_voices}
 
-    voice_options = [app_commands.Choice(name=voice_name.replace('_', ' ').title(), value=str(hash(voice_name))) for voice_name in all_voices[:25]]
-    voice_options_label = f'{voice_options[0].name[0]}-{voice_options[-1].name[0]}'.lower()
-    if len(all_voices) > 25:
-        voice_options1 = [app_commands.Choice(name=voice_name.replace('_', ' ').title(), value=str(hash(voice_name))) for voice_name in all_voices[25:50]]
-        voice_options1_label = f'{voice_options1[0].name[0]}-{voice_options1[-1].name[0]}'.lower()
-        if voice_options1_label == voice_options_label:
-            voice_options1_label = f'{voice_options1_label}_1'
-        if len(all_voices) > 50:
-            voice_options2 = [app_commands.Choice(name=voice_name.replace('_', ' ').title(), value=str(hash(voice_name))) for voice_name in all_voices[50:75]]
-            voice_options2_label = f'{voice_options2[0].name[0]}-{voice_options2[-1].name[0]}'.lower()
-            if voice_options2_label == voice_options_label or voice_options2_label == voice_options1_label:
-                voice_options2_label = f'{voice_options2_label}_2'
-            if len(all_voices) > 75:
-                all_voices = all_voices[:75]
-                log.warning("'/speak' command only allows up to 75 voices. Some voices were omitted.")
-    if lang_list: 
-        lang_options = [app_commands.Choice(name=lang, value=lang) for lang in lang_list]
-    else: 
-        lang_options = [app_commands.Choice(name='English', value='English')] # Default to English
+        voice_options = [app_commands.Choice(name=voice_name.replace('_', ' ').title(), value=str(hash(voice_name))) for voice_name in all_voices[:25]]
+        voice_options_label = f'{voice_options[0].name[0]}-{voice_options[-1].name[0]}'.lower()
+        if len(all_voices) > 25:
+            voice_options1 = [app_commands.Choice(name=voice_name.replace('_', ' ').title(), value=str(hash(voice_name))) for voice_name in all_voices[25:50]]
+            voice_options1_label = f'{voice_options1[0].name[0]}-{voice_options1[-1].name[0]}'.lower()
+            if voice_options1_label == voice_options_label:
+                voice_options1_label = f'{voice_options1_label}_1'
+            if len(all_voices) > 50:
+                voice_options2 = [app_commands.Choice(name=voice_name.replace('_', ' ').title(), value=str(hash(voice_name))) for voice_name in all_voices[50:75]]
+                voice_options2_label = f'{voice_options2[0].name[0]}-{voice_options2[-1].name[0]}'.lower()
+                if voice_options2_label == voice_options_label or voice_options2_label == voice_options1_label:
+                    voice_options2_label = f'{voice_options2_label}_2'
+                if len(all_voices) > 75:
+                    all_voices = all_voices[:75]
+                    log.warning("'/speak' command only allows up to 75 voices. Some voices were omitted.")
+        if lang_list: 
+            lang_options = [app_commands.Choice(name=lang, value=lang) for lang in lang_list]
+        else: 
+            lang_options = [app_commands.Choice(name='English', value='English')] # Default to English
 
-    if len(all_voices) <= 25:
-        @client.hybrid_command(name="speak", description='AI will speak your text using a selected voice')
-        @app_commands.rename(voice=f'voices_{voice_options_label}')
-        @app_commands.describe(voice=f'Voices {voice_options_label.upper()}')
-        @app_commands.choices(voice=voice_options)
-        @app_commands.choices(lang=lang_options)
-        @configurable_for_dm_if(lambda ctx: 'speak' in config.discord_dm_setting('allowed_commands', []))
-        async def speak(ctx: commands.Context, input_text: str, voice: typing.Optional[app_commands.Choice[str]], lang: typing.Optional[app_commands.Choice[str]], voice_input: typing.Optional[discord.Attachment]):
-            selected_voice = voice.value if voice is not None else ''
-            if selected_voice:
-                selected_voice = _voice_hash_dict[selected_voice]
-            voice_input = voice_input if voice_input is not None else ''
-            lang = lang.value if lang is not None else ''
-            await process_speak(ctx, input_text, selected_voice, lang, voice_input)
+        if len(all_voices) <= 25:
+            @client.hybrid_command(name="speak", description='AI will speak your text using a selected voice')
+            @app_commands.rename(voice=f'voices_{voice_options_label}')
+            @app_commands.describe(voice=f'Voices {voice_options_label.upper()}')
+            @app_commands.choices(voice=voice_options)
+            @app_commands.choices(lang=lang_options)
+            @configurable_for_dm_if(lambda ctx: 'speak' in config.discord_dm_setting('allowed_commands', []))
+            async def speak(ctx: commands.Context, input_text: str, voice: typing.Optional[app_commands.Choice[str]], lang: typing.Optional[app_commands.Choice[str]], voice_input: typing.Optional[discord.Attachment]):
+                selected_voice = voice.value if voice is not None else ''
+                if selected_voice:
+                    selected_voice = _voice_hash_dict[selected_voice]
+                voice_input = voice_input if voice_input is not None else ''
+                lang = lang.value if lang is not None else ''
+                await process_speak(ctx, input_text, selected_voice, lang, voice_input)
 
-    elif 25 < len(all_voices) <= 50:
-        @client.hybrid_command(name="speak", description='AI will speak your text using a selected voice (pick only one)')
-        @app_commands.rename(voice_1=f'voices_{voice_options_label}')
-        @app_commands.describe(voice_1=f'Voices {voice_options_label.upper()}')
-        @app_commands.choices(voice_1=voice_options)
-        @app_commands.rename(voice_2=f'voices_{voice_options1_label}')
-        @app_commands.describe(voice_2=f'Voices {voice_options1_label.upper()}')
-        @app_commands.choices(voice_2=voice_options1)
-        @app_commands.choices(lang=lang_options)
-        @configurable_for_dm_if(lambda ctx: 'speak' in config.discord_dm_setting('allowed_commands', []))
-        async def speak(ctx: commands.Context, input_text: str, voice_1: typing.Optional[app_commands.Choice[str]], voice_2: typing.Optional[app_commands.Choice[str]], lang: typing.Optional[app_commands.Choice[str]], voice_input: typing.Optional[discord.Attachment]):
-            if voice_1 and voice_2:
-                await ctx.send("A voice was picked from two separate menus. Using the first selection.", ephemeral=True)
-            selected_voice = ((voice_1 or voice_2) and (voice_1 or voice_2).value) or ''
-            if selected_voice:
-                selected_voice = _voice_hash_dict[selected_voice]
-            voice_input = voice_input if voice_input is not None else ''
-            lang = lang.value if lang is not None else ''
-            await process_speak(ctx, input_text, selected_voice, lang, voice_input)
+        elif 25 < len(all_voices) <= 50:
+            @client.hybrid_command(name="speak", description='AI will speak your text using a selected voice (pick only one)')
+            @app_commands.rename(voice_1=f'voices_{voice_options_label}')
+            @app_commands.describe(voice_1=f'Voices {voice_options_label.upper()}')
+            @app_commands.choices(voice_1=voice_options)
+            @app_commands.rename(voice_2=f'voices_{voice_options1_label}')
+            @app_commands.describe(voice_2=f'Voices {voice_options1_label.upper()}')
+            @app_commands.choices(voice_2=voice_options1)
+            @app_commands.choices(lang=lang_options)
+            @configurable_for_dm_if(lambda ctx: 'speak' in config.discord_dm_setting('allowed_commands', []))
+            async def speak(ctx: commands.Context, input_text: str, voice_1: typing.Optional[app_commands.Choice[str]], voice_2: typing.Optional[app_commands.Choice[str]], lang: typing.Optional[app_commands.Choice[str]], voice_input: typing.Optional[discord.Attachment]):
+                if voice_1 and voice_2:
+                    await ctx.send("A voice was picked from two separate menus. Using the first selection.", ephemeral=True)
+                selected_voice = ((voice_1 or voice_2) and (voice_1 or voice_2).value) or ''
+                if selected_voice:
+                    selected_voice = _voice_hash_dict[selected_voice]
+                voice_input = voice_input if voice_input is not None else ''
+                lang = lang.value if lang is not None else ''
+                await process_speak(ctx, input_text, selected_voice, lang, voice_input)
 
-    elif 50 < len(all_voices) <= 75:
-        @client.hybrid_command(name="speak", description='AI will speak your text using a selected voice (pick only one)')
-        @app_commands.rename(voice_1=f'voices_{voice_options_label}')
-        @app_commands.describe(voice_1=f'Voices {voice_options_label.upper()}')
-        @app_commands.choices(voice_1=voice_options)
-        @app_commands.rename(voice_2=f'voices_{voice_options1_label}')
-        @app_commands.describe(voice_2=f'Voices {voice_options1_label.upper()}')
-        @app_commands.choices(voice_2=voice_options1)
-        @app_commands.rename(voice_3=f'voices_{voice_options2_label}')
-        @app_commands.describe(voice_3=f'Voices {voice_options2_label.upper()}')
-        @app_commands.choices(voice_3=voice_options2)
-        @app_commands.choices(lang=lang_options)
-        @configurable_for_dm_if(lambda ctx: 'speak' in config.discord_dm_setting('allowed_commands', []))
-        async def speak(ctx: commands.Context, input_text: str, voice_1: typing.Optional[app_commands.Choice[str]], voice_2: typing.Optional[app_commands.Choice[str]], voice_3: typing.Optional[app_commands.Choice[str]], lang: typing.Optional[app_commands.Choice[str]], voice_input: typing.Optional[discord.Attachment]):
-            if sum(1 for v in (voice_1, voice_2, voice_3) if v) > 1:
-                await ctx.send("A voice was picked from two separate menus. Using the first selection.", ephemeral=True)
-            selected_voice = ((voice_1 or voice_2 or voice_3) and (voice_1 or voice_2 or voice_3).value) or ''
-            if selected_voice:
-                selected_voice = _voice_hash_dict[selected_voice]
-            voice_input = voice_input if voice_input is not None else ''
-            lang = lang.value if lang is not None else ''
-            await process_speak(ctx, input_text, selected_voice, lang, voice_input)
+        elif 50 < len(all_voices) <= 75:
+            @client.hybrid_command(name="speak", description='AI will speak your text using a selected voice (pick only one)')
+            @app_commands.rename(voice_1=f'voices_{voice_options_label}')
+            @app_commands.describe(voice_1=f'Voices {voice_options_label.upper()}')
+            @app_commands.choices(voice_1=voice_options)
+            @app_commands.rename(voice_2=f'voices_{voice_options1_label}')
+            @app_commands.describe(voice_2=f'Voices {voice_options1_label.upper()}')
+            @app_commands.choices(voice_2=voice_options1)
+            @app_commands.rename(voice_3=f'voices_{voice_options2_label}')
+            @app_commands.describe(voice_3=f'Voices {voice_options2_label.upper()}')
+            @app_commands.choices(voice_3=voice_options2)
+            @app_commands.choices(lang=lang_options)
+            @configurable_for_dm_if(lambda ctx: 'speak' in config.discord_dm_setting('allowed_commands', []))
+            async def speak(ctx: commands.Context, input_text: str, voice_1: typing.Optional[app_commands.Choice[str]], voice_2: typing.Optional[app_commands.Choice[str]], voice_3: typing.Optional[app_commands.Choice[str]], lang: typing.Optional[app_commands.Choice[str]], voice_input: typing.Optional[discord.Attachment]):
+                if sum(1 for v in (voice_1, voice_2, voice_3) if v) > 1:
+                    await ctx.send("A voice was picked from two separate menus. Using the first selection.", ephemeral=True)
+                selected_voice = ((voice_1 or voice_2 or voice_3) and (voice_1 or voice_2 or voice_3).value) or ''
+                if selected_voice:
+                    selected_voice = _voice_hash_dict[selected_voice]
+                voice_input = voice_input if voice_input is not None else ''
+                lang = lang.value if lang is not None else ''
+                await process_speak(ctx, input_text, selected_voice, lang, voice_input)
 
 #################################################################
 ######################## /PROMPT COMMAND ########################
@@ -6566,7 +6644,7 @@ class Behavior(SettingsBase):
         if message.author == client.user and not check_probability(self.reply_to_itself):
             return False
         # Whether to reply to other bots
-        if message.author.bot and last_character.lower() in text.lower() and main_condition:
+        if message.author.bot and re.search(rf'\b{re.escape(last_character.lower())}\b', text, re.IGNORECASE) and main_condition:
             if 'bye' in text.lower(): # don't reply if another bot is saying goodbye
                 return False
             return check_probability(self.reply_to_bots_when_addressed)
