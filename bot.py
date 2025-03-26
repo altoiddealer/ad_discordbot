@@ -5869,8 +5869,6 @@ async def process_speak_args(ctx: commands.Context, selected_voice=None, lang=No
             pass # Default to voice in last_extension_params
         elif f'{tts.client}-{tts.voice_key}' in shared.settings:
             pass # Default to voice in shared.settings
-        else:
-            await ctx.send("No voice was selected or provided, and a default voice was not found. Request will probably fail...", ephemeral=True)
         return tts_args
     except Exception as e:
         log.error(f"Error processing tts options: {e}")
