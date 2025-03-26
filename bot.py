@@ -3683,7 +3683,7 @@ class Tasks(TaskProcessing):
             loop = asyncio.get_event_loop()
             if tts.api_mode == True:
                 request = {'text_input': self.text}
-                client_args:dict = tts_args[tts.client]
+                client_args:dict = tts_args.get(tts.client, {})
                 if client_args.get(tts.lang_key):
                     selected_language = tts_args[tts.client][tts.lang_key]
                     # TODO: Improve language handling
