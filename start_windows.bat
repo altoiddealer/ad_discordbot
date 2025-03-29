@@ -26,37 +26,36 @@ REM Store the initial directory before any changes
 set "HOME_DIR=%cd%"
 set "PARENT_DIR=%HOME_DIR%\.."
 
-REM Set Conda paths
+REM Resolve %PARENT_DIR% to absolute path (strips '..\')
+for /f "delims=" %%i in ("%PARENT_DIR%") do set "PARENT_DIR=%%~fi"
+
+REM Set home paths and parent paths
 set "CONDA_HOME=%HOME_DIR%\installer_files\conda"
-set "CONDA_PARENT=%PARENT_DIR%\installer_files\conda"
 set "ENV_HOME=%HOME_DIR%\installer_files\env"
+set "CONDA_PARENT=%PARENT_DIR%\installer_files\conda"
 set "ENV_PARENT=%PARENT_DIR%\installer_files\env"
-set "ENV_FLAG=%HOME_DIR%\installer_files\user_env.txt"
 
-REM Check for existing environment flag
-if exist "%ENV_FLAG%" (
-    for /f "usebackq delims=" %%i in ("%ENV_FLAG%") do (
-    set "CONDA_ROOT_PREFIX=%%i"
-    set "CONDA_ROOT_PREFIX=!CONDA_ROOT_PREFIX:~0,-1!"
-    )
-    echo Running the bot from conda environment: "!CONDA_ROOT_PREFIX!"
 
-    REM Determine the correct INSTALL_ENV_DIR based on CONDA_ROOT_PREFIX
-    set "STRIPPED_CONDA_ROOT_PREFIX=%CONDA_ROOT_PREFIX:"=%"
-    set "STRIPPED_CONDA_HOME=%CONDA_HOME:"=%"
-    set "STRIPPED_CONDA_PARENT=%CONDA_PARENT:"=%"
+REM Read user_env.txt into ENV_FLAG
+set ENV_FLAG=""
+if exist "%HOME_DIR%\installer_files\user_env.txt" (
+    set /p ENV_FLAG=<"%HOME_DIR%\installer_files\user_env.txt"
+)
 
-    if "%STRIPPED_CONDA_ROOT_PREFIX%"=="%STRIPPED_CONDA_HOME%" (
-        set "INSTALL_ENV_DIR=%ENV_HOME%"
-    ) else if "%STRIPPED_CONDA_ROOT_PREFIX%"=="%STRIPPED_CONDA_PARENT%" (
-        set "INSTALL_ENV_DIR=%ENV_PARENT%"
-    ) else (
-        echo Warning: CONDA_ROOT_PREFIX does not match expected paths. Using default.
-        set "INSTALL_ENV_DIR=%CONDA_ROOT_PREFIX%\env"
-    )
+echo ENV_FLAG is currently %ENV_FLAG%
 
+REM If env flag exists, assign paths and activate
+if "%ENV_FLAG%"=="%ENV_HOME%" (
+    set "INSTALL_ENV_DIR=%ENV_HOME%"
+    set "CONDA_ROOT_PREFIX=%CONDA_HOME%"
+    goto activate_conda
+) 
+if "%ENV_FLAG%"=="%ENV_PARENT%" (
+    set "INSTALL_ENV_DIR=%ENV_PARENT%"
+    set "CONDA_ROOT_PREFIX=%CONDA_PARENT%"
     goto activate_conda
 )
+
 
 REM Welcome message for first run
 echo Welcome to ad_discordbot
@@ -67,7 +66,7 @@ REM Check if conda environment exists
 if exist %CONDA_PARENT%\condabin\conda.bat (
     echo The bot can be integrated with your existing text-generation-webui environment.
     echo [A] Integrate with TGWUI *Recommended*
-    echo [B] Use own environment
+    echo [B] Create and use own environment
     echo [N] Nothing, exit script
     set /p USER_CHOICE="Enter A, B, or N: "
     set USER_CHOICE=!USER_CHOICE:~0,1!
@@ -145,14 +144,19 @@ if not exist "%CONDA_ROOT_PREFIX%\condabin\conda.bat" (
 
 echo Creating conda environment...
 call "%CONDA_ROOT_PREFIX%\condabin\conda.bat" create --no-shortcuts -y -k --prefix "%INSTALL_ENV_DIR%" python=3.11
+
+echo checking if conda environment was created successfully
+echo install env dir is %INSTALL_ENV_DIR%
+
 if not exist "%INSTALL_ENV_DIR%\python.exe" (
     echo Conda environment creation failed.
     exit /b
 )
 
-echo %CONDA_ROOT_PREFIX% > "%ENV_FLAG%"
+echo Conda environment created!
 
 goto activate_conda
+
 
 REM Function to activate conda and run script
 :activate_conda
@@ -170,10 +174,11 @@ if %errorlevel% neq 0 (
 )
 
 echo Conda activated successfully.
-echo %CONDA_ROOT_PREFIX% > "%ENV_FLAG%"
+
 call python "%HOME_DIR%\one_click.py" --conda-env-path "%INSTALL_ENV_DIR%" --update-wizard-windows %*
 
-@rem below are functions for the script   next line skips these during normal execution
+
+REM below are functions for the script   next line skips these during normal execution
 goto end
 
 :PrintBigMessage
@@ -185,4 +190,3 @@ echo. && echo.
 exit /b
 
 :end
-pause
