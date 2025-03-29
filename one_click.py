@@ -338,26 +338,26 @@ if __name__ == "__main__":
     check_env()
 
     if scripts_os: # OS name extracted from wizard flag
-        print_big_message(f"Currently installed {'with text-generation-webui integration' if is_tgwui_integrated else 'as Standalone'}")
-        options_dict = {}
+        options_dict = {'A': 'Update the bot',
+                        'B': 'Revert local changes to repository files with \"git reset --hard\"'}
         # Options based on current install status and environment
         if is_tgwui_integrated or parent_is_tgwui:
+            print_big_message(f"Currently installed {'with text-generation-webui integration' if is_tgwui_integrated else 'as Standalone'}")
             # options_dict['S'] = 'Switch install method (Add/Remove TGWUI integration)'
             if is_tgwui_integrated:
-                options_dict['S'] = 'Switch to standalone environment (remove TGWUI integration)'
+                options_dict['C'] = 'Switch to standalone environment (remove TGWUI integration)'
             elif parent_is_tgwui:
-                options_dict['S'] = 'Switch to text-generation-webui integration'
-        # Always-present options
-        options_dict.update({
-            'U': 'Update the bot',
-            'R': 'Revert local changes to repository files with \"git reset --hard\"',
-            'N': 'Nothing (exit)'
-        })
+                options_dict['C'] = 'Switch to text-generation-webui integration'
+        options_dict['N'] = 'Nothing (exit)'
 
         while True:
             choice = get_user_choice("What would you like to do?", options_dict)
 
-            if choice == 'S':
+            if choice == 'A':
+                update_requirements()
+            elif choice == 'B':
+                run_cmd(f'git -C "{script_dir}" reset --hard', assert_success=True, environment=True)
+            elif choice == 'C':
                 # Switch to standalone environment (remove TGWUI integration)
                 if is_tgwui_integrated:
                     print("Removing TGWUI integration")
@@ -370,11 +370,6 @@ if __name__ == "__main__":
                 with open(env_flag, "w") as f:
                     f.write(new_conda_path)
                 switch_to_launcher()
-
-            elif choice == 'U':
-                update_requirements()
-            elif choice == 'R':
-                run_cmd(f'git -C "{script_dir}" reset --hard', assert_success=True, environment=True)
             elif choice == 'N':
                 sys.exit()
     else:

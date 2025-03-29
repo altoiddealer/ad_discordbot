@@ -22,46 +22,44 @@ set TEMP=%cd%\installer_files
 (call conda deactivate && call conda deactivate && call conda deactivate) 2>nul
 
 
-REM Store the initial directory before any changes
+@rem root directories
 set "HOME_DIR=%cd%"
 set "PARENT_DIR=%HOME_DIR%\.."
 
-REM Resolve %PARENT_DIR% to absolute path (strips '..\')
+@rem resolve %PARENT_DIR% to absolute path (strips '..\')
 for /f "delims=" %%i in ("%PARENT_DIR%") do set "PARENT_DIR=%%~fi"
 
-REM Set home paths and parent paths
+@rem configs
 set "CONDA_HOME=%HOME_DIR%\installer_files\conda"
 set "ENV_HOME=%HOME_DIR%\installer_files\env"
 set "CONDA_PARENT=%PARENT_DIR%\installer_files\conda"
 set "ENV_PARENT=%PARENT_DIR%\installer_files\env"
 
 
-REM Read user_env.txt into ENV_FLAG
+@rem Read user_env.txt into ENV_FLAG
 set ENV_FLAG=""
 if exist "%HOME_DIR%\installer_files\user_env.txt" (
     set /p ENV_FLAG=<"%HOME_DIR%\installer_files\user_env.txt"
 )
 
-echo ENV_FLAG is currently %ENV_FLAG%
-
-REM If env flag exists, assign paths and activate
+@rem If env flag exists, assign paths and activate
 if "%ENV_FLAG%"=="%ENV_HOME%" (
-    set "INSTALL_ENV_DIR=%ENV_HOME%"
     set "CONDA_ROOT_PREFIX=%CONDA_HOME%"
+    set "INSTALL_ENV_DIR=%ENV_HOME%"
     goto activate_conda
 ) 
 if "%ENV_FLAG%"=="%ENV_PARENT%" (
-    set "INSTALL_ENV_DIR=%ENV_PARENT%"
     set "CONDA_ROOT_PREFIX=%CONDA_PARENT%"
+    set "INSTALL_ENV_DIR=%ENV_PARENT%"
     goto activate_conda
 )
 
 
-REM Welcome message for first run
+@rem Welcome message for first run
 echo Welcome to ad_discordbot
 echo.
 
-REM Check if conda environment exists
+@rem Check if conda environment exists
 :check_conda
 if exist %CONDA_PARENT%\condabin\conda.bat (
     echo The bot can be integrated with your existing text-generation-webui environment.
@@ -113,7 +111,7 @@ if exist %CONDA_PARENT%\condabin\conda.bat (
 )
 
 
-REM Function to install conda and setup environment
+@rem Function to install conda and setup environment
 :setup_conda
 set "INSTALL_DIR=%HOME_DIR%\installer_files"
 set "CONDA_ROOT_PREFIX=%CONDA_HOME%"
@@ -158,7 +156,7 @@ echo Conda environment created!
 goto activate_conda
 
 
-REM Function to activate conda and run script
+@rem Function to activate conda and run script
 :activate_conda
 echo Trying to activate Conda from: "%CONDA_ROOT_PREFIX%\condabin\conda.bat"
 if not exist "%CONDA_ROOT_PREFIX%\condabin\conda.bat" (
@@ -175,10 +173,10 @@ if %errorlevel% neq 0 (
 
 echo Conda activated successfully.
 
-call python "%HOME_DIR%\one_click.py" --conda-env-path "%INSTALL_ENV_DIR%" --update-wizard-windows %*
+call python "%HOME_DIR%\one_click.py" --conda-env-path "%INSTALL_ENV_DIR%" %*
 
 
-REM below are functions for the script   next line skips these during normal execution
+@rem below are functions for the script   next line skips these during normal execution
 goto end
 
 :PrintBigMessage
