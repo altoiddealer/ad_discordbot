@@ -32,8 +32,8 @@ set "INSTALL_ENV_DIR=%ENV_HOME%"
 
 @rem Read user_env.txt into ENV_FLAG
 set ENV_FLAG=""
-if exist "%HOME_DIR%\installer_files\user_env.txt" (
-    set /p ENV_FLAG=<"%HOME_DIR%\installer_files\user_env.txt"
+if exist "%HOME_DIR%\internal\user_env.txt" (
+    set /p ENV_FLAG=<"%HOME_DIR%\internal\user_env.txt"
 )
 
 @rem if TGWUI integration flag, run from its env

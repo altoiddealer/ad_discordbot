@@ -21,8 +21,8 @@ INSTALL_ENV_DIR="$ENV_HOME"
 
 # Read user_env.txt into ENV_FLAG
 ENV_FLAG=""
-if [[ -f "$HOME_DIR/installer_files/user_env.txt" ]]; then
-    ENV_FLAG=$(<"$HOME_DIR/installer_files/user_env.txt")
+if [[ -f "$HOME_DIR/internal/user_env.txt" ]]; then
+    ENV_FLAG=$(<"$HOME_DIR/internal/user_env.txt")
 fi
 
 # if TGWUI integration flag, run from its env

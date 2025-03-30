@@ -544,8 +544,7 @@ async def on_ready():
         await init_guilds()
 
         # Load character(s)
-        if tgwui_enabled:
-            await init_characters()
+        await init_characters()
 
         # Start background task to to change image models automatically
         await init_auto_change_imgmodels()
@@ -5239,15 +5238,15 @@ if tgwui_enabled:
 
 
 async def load_character_data(char_name):
-    char_data = None
+    char_data = {}
     for ext in ['.yaml', '.yml', '.json']:
         character_file = os.path.join(shared_path.dir_tgwui, "characters", f"{char_name}{ext}")
         if os.path.exists(character_file):
-            char_data = load_file(character_file)
-            if char_data is None:
+            loaded_data = load_file(character_file)
+            if loaded_data is None:
                 continue
 
-            char_data = dict(char_data)
+            char_data = dict(loaded_data)
             break  # Break the loop if data is successfully loaded
 
     if char_data is None:
@@ -5258,12 +5257,14 @@ async def load_character_data(char_name):
 # Collect character information
 async def character_loader(char_name, settings:"Settings", guild_id:int|None=None):
     try:
-        # Get data using textgen-webui native character loading function
-        _, name, _, greeting, context = load_character(char_name, '', '')
-        missing_keys = [key for key, value in {'name': name, 'greeting': greeting, 'context': context}.items() if not value]
-        if any (missing_keys):
-            log.warning(f'Note that character "{char_name}" is missing the following info:"{missing_keys}".')
-        textgen_data = {'name': name, 'greeting': greeting, 'context': context}
+        textgen_data = {'name': char_name, 'greeting': '', 'context': ''}
+        if tgwui_enabled:
+            # Get data using textgen-webui native character loading function
+            _, name, _, greeting, context = load_character(char_name, '', '')
+            missing_keys = [key for key, value in {'name': name, 'greeting': greeting, 'context': context}.items() if not value]
+            if any (missing_keys):
+                log.warning(f'Note that character "{char_name}" is missing the following info:"{missing_keys}".')
+            textgen_data = {'name': name, 'greeting': greeting, 'context': context}
         # Check for extra bot data
         char_data = await load_character_data(char_name)
         char_instruct = char_data.get('instruction_template_str', None)

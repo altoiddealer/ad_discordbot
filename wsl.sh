@@ -36,8 +36,8 @@ conda_exists="F"
 
 # Read user_env.txt into ENV_FLAG
 ENV_FLAG=""
-if [ -f "$HOME_DIR/installer_files/user_env.txt" ]; then
-    ENV_FLAG=$(cat "$HOME_DIR/installer_files/user_env.txt")
+if [ -f "$HOME_DIR/internal/user_env.txt" ]; then
+    ENV_FLAG=$(cat "$HOME_DIR/internal/user_env.txt")
 fi
 
 # If env flag exists, assign paths and activate

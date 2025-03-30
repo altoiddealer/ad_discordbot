@@ -14,7 +14,7 @@ home_install_path = os.path.join(script_dir, "installer_files")
 home_conda_path = os.path.join(home_install_path, "conda")
 home_conda_env_path = os.path.join(home_install_path, "env")
 home_conda_bat = os.path.join(home_conda_path, "condabin", "conda.bat")
-env_flag_path = os.path.join(script_dir, "installer_files", "user_env.txt")
+env_flag_path = os.path.join(script_dir, "internal", "user_env.txt")
 
 # Default environment
 install_path = os.path.join(script_dir, "installer_files")
