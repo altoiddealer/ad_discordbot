@@ -67,17 +67,13 @@ class SharedPath:
         os.makedirs(path, exist_ok=True)
         return path
 
-    dir_tgwui = os.path.abspath('..')
-    log.debug(f'TGWUI dir: {dir_tgwui}')
-
-    # Gets this directory (modules folder)
+    # Get the parent directory (bot's root directory) relative to this directory (modules folder)
     utils_shared_file_dir = os.path.dirname(os.path.abspath(__file__))
-    # Get the parent directory (bot's root directory)
-    bot_root_dir_name = os.path.basename(os.path.dirname(utils_shared_file_dir))
-    # Use relative path if tgwui integrated (ex: 'ad_discord') else absolute path
-    print("is_tgwui_integrated:", is_tgwui_integrated)
-    dir_root = os.getcwd()
-    print("bot_root_dir_name:", bot_root_dir_name)
+    bot_root_dir = os.path.dirname(utils_shared_file_dir)
+
+    # Define root paths
+    dir_root = bot_root_dir if is_tgwui_integrated else os.getcwd()
+    dir_tgwui = os.getcwd() if is_tgwui_integrated else ''
 
     # Internal
     dir_internal = init_shared_paths(dir_root, 'internal', 'persistent settings not intended to be modified by users')

@@ -14,26 +14,54 @@ home_install_path = os.path.join(script_dir, "installer_files")
 home_conda_path = os.path.join(home_install_path, "conda")
 home_conda_env_path = os.path.join(home_install_path, "env")
 home_conda_bat = os.path.join(home_conda_path, "condabin", "conda.bat")
+env_flag_path = os.path.join(script_dir, "installer_files", "user_env.txt")
 
 # Default environment
 install_path = os.path.join(script_dir, "installer_files")
 conda_path = os.path.join(install_path, "conda")
 conda_env_path = os.path.join(install_path, "env")
-env_flag = os.path.join(install_path, "user_env.txt")
 project_url = "https://github.com/altoiddealer/ad_discordbot"
 scripts_os = None # linux/macos/windows/wsl
 parent_is_tgwui = False
 is_tgwui_integrated = False
 
-# Command-line flags
+def extract_launcher_args():
+    LAUNCHER_ARGS = {"--conda-env-path", "--update-wizard-linus", "--update-wizard-macos", "--update-wizard-windows", "--update-wizard-wsl", "--update"}
+    """Extracts launcher-only arguments and removes them from sys.argv."""
+    launcher_args = {}
+    remaining_args = []
+
+    i = 0
+    while i < len(sys.argv):
+        arg = sys.argv[i]
+
+        if arg in LAUNCHER_ARGS:
+            if i + 1 < len(sys.argv) and not sys.argv[i + 1].startswith("--"):
+                launcher_args[arg] = sys.argv[i + 1]
+                i += 1  # Skip value as well
+            else:
+                launcher_args[arg] = None  # Flag-only arguments
+        else:
+            remaining_args.append(arg)
+
+        i += 1
+
+    sys.argv = remaining_args
+    return launcher_args
+
+# Extract launcher-only args
+launcher_args = extract_launcher_args()
+
+# Read CMD_FLAGS from file
 cmd_flags_path = os.path.join(script_dir, "CMD_FLAGS.txt")
 if os.path.exists(cmd_flags_path):
     with open(cmd_flags_path, 'r') as f:
-        CMD_FLAGS = ' '.join(line.strip().rstrip('\\').strip() for line in f if line.strip().rstrip('\\').strip() and not line.strip().startswith('#'))
+        CMD_FLAGS = ' '.join(line.strip().rstrip('\\').strip() for line in f if line.strip() and not line.strip().startswith('#'))
 else:
     CMD_FLAGS = ''
 
-flags = f"{' '.join([flag for flag in sys.argv[1:] if flag != '--update'])} {CMD_FLAGS}"
+# Reconstruct remaining args for bot.py
+flags = f"{' '.join(sys.argv[1:])} {CMD_FLAGS}".strip()
 
 
 def signal_handler(sig, frame):
@@ -129,8 +157,8 @@ def check_project():
 
     if (project_path == parent_dir) and (project_url not in supported_project_urls) and (not project_is_tgwui_fork):
         print_big_message(f"Bot is unexpectedly running in the environment of '{project_url}'.")
-        print_big_message(f"Please refer to 'https://github.com/altoiddealer/ad_discordbot/wiki/installation'")
-        print_big_message(f"Only attempt installing with 'text-generation-webui integration' if ad_discordbot is in it's directory.")
+        print("Please refer to 'https://github.com/altoiddealer/ad_discordbot/wiki/installation'")
+        print("Only attempt installing with 'text-generation-webui integration' if ad_discordbot is in it's directory.")
         sys.exit(1)
 
     # Check if bot is running as text-generation-webui integration.
@@ -309,24 +337,48 @@ def update_requirements(initial_installation=False, pull=True):
 
 
 def launch_bot():
-    run_cmd(f"python bot.py {flags}", environment=True)
+    run_path = os.path.join(script_dir, 'bot.py')
+    # Need to call the bot from TGWUI dir
+    if is_tgwui_integrated:
+        os.chdir("..")
+    run_cmd(f"python {run_path} {flags}", environment=True)
 
+
+# Intercept custom bot arguments
+def extract_args(args_list):
+    extracted_argv = []
+    remaining_argv = []
+
+    i = 0
+    while i < len(sys.argv):
+        arg = sys.argv[i]
+        if arg in args_list:
+            extracted_argv.append(arg)
+            if i + 1 < len(sys.argv) and not sys.argv[i + 1].startswith("--"):
+                extracted_argv.append(sys.argv[i + 1])
+                i += 1  # Skip the next value as well
+        else:
+            remaining_argv.append(arg)
+        i += 1
+
+    sys.argv = remaining_argv  # Remove extracted args to avoid conflicts
+    return extracted_argv
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(add_help=False)
-    parser.add_argument("--conda-env-path", type=str, help="Path to the active Conda environment")
-    args, unknown_args = parser.parse_known_args()
-    # Check for any argument that starts with '--update-wizard-'
-    for arg in unknown_args:
+
+    # Extract `scripts_os` from `--update-wizard-` argument
+    scripts_os = None
+    for arg in launcher_args:
         if arg.startswith("--update-wizard-"):
             scripts_os = arg[len("--update-wizard-"):]
-    # Write/update user_env.txt
-    if args.conda_env_path:
-        env_flag_path = os.path.join(script_dir, "installer_files", "user_env.txt")
+
+    # Extract and write `--conda-env-path` argument value
+    if "--conda-env-path" in launcher_args and launcher_args["--conda-env-path"]:
+        conda_env_path = launcher_args["--conda-env-path"]
         with open(env_flag_path, "w") as f:
-            f.write(args.conda_env_path)
+            f.write(conda_env_path)
+
     # Update paths
-    conda_env_path = os.path.abspath(args.conda_env_path)
     install_path = os.path.dirname(conda_env_path)
     # Check if bot is nested in TGWUI directory
     parent_is_tgwui, is_tgwui_integrated = check_project()
@@ -367,7 +419,7 @@ if __name__ == "__main__":
                     print("Switching to text-generation-webui integration...")
                     new_conda_path = os.path.join(parent_dir, "installer_files", "conda")
                 # Apply change and launch the os launcher
-                with open(env_flag, "w") as f:
+                with open(env_flag_path, "w") as f:
                     f.write(new_conda_path)
                 switch_to_launcher()
             elif choice == 'N':
