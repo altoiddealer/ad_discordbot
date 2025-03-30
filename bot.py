@@ -38,7 +38,7 @@ from functools import partial
 sys.path.append("ad_discordbot")
 
 from modules.utils_files import load_file, merge_base, save_yaml_file  # noqa: F401
-from modules.utils_shared import shared_path, bg_task_queue, task_event, flows_queue, flows_event, patterns, bot_emojis, config, bot_database
+from modules.utils_shared import bot_args, shared_path, bg_task_queue, task_event, flows_queue, flows_event, patterns, bot_emojis, config, bot_database
 from modules.database import StarBoard, Statistics, BaseFileMemory
 from modules.utils_misc import check_probability, fix_dict, update_dict, sum_update_dict, update_dict_matched_keys, random_value_from_range, convert_lists_to_tuples, get_time, format_time, format_time_difference, get_normalized_weights  # noqa: F401
 from modules.utils_discord import Embeds, guild_only, guild_or_owner_only, configurable_for_dm_if, is_direct_message, ireply, sleep_delete_message, send_long_message, \
@@ -64,31 +64,6 @@ bot_statistics = Statistics()
 #################### DISCORD / BOT STARTUP ######################
 #################################################################
 bot_embeds = Embeds()
-
-# Intercept custom bot arguments
-def parse_bot_args():
-    bot_arg_list = ["--limit-history", "--token"]
-    #bot_arg_list = ["--is-tgwui-integrated", "--limit-history", "--token"]
-    bot_argv = []
-    for arg in bot_arg_list:
-        try:
-            index = sys.argv.index(arg)
-        except Exception:
-            index = None
-
-        if index is not None:
-            bot_argv.append(sys.argv.pop(index))
-            bot_argv.append(sys.argv.pop(index))
-
-    import argparse
-    parser = argparse.ArgumentParser(formatter_class=lambda prog: argparse.HelpFormatter(prog, max_help_position=54))
-    parser.add_argument("--token", type=str, help="Discord bot token to use their API.")
-    parser.add_argument("--limit-history", type=int, help="When the history gets too large, performance issues can occur. Limit the history to improve performance.")
-    #parser.add_argument("--is-tgwui-integrated", action="store_true", help="Indicates integration with TGWUI.")
-    bot_args = parser.parse_args(bot_argv)
-    return bot_args
-
-bot_args = parse_bot_args()
 
 # Set Discord bot token from config, or args, or prompt for it, or exit
 TOKEN = config.discord.get('TOKEN', None)
@@ -323,10 +298,12 @@ if sd.enabled:
 #################################################################
 ##################### TEXTGENWEBUI STARTUP ######################
 #################################################################
-sys.path.append(shared_path.dir_tgwui)
+is_tgwui_integrated = bot_args.is_tgwui_integrated
+if is_tgwui_integrated:
+    sys.path.append(shared_path.dir_tgwui)
 
-from modules.utils_tgwui import tts, tgwui, shared, utils, extensions_module, \
-    custom_chatbot_wrapper, chatbot_wrapper, load_character, save_history, unload_model, count_tokens
+    from modules.utils_tgwui import tts, tgwui, shared, utils, extensions_module, \
+        custom_chatbot_wrapper, chatbot_wrapper, load_character, save_history, unload_model, count_tokens
 
 #################################################################
 ##################### BACKGROUND QUEUE TASK #####################

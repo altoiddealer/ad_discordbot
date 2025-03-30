@@ -1,6 +1,8 @@
+import argparse
 import asyncio
 import os
 import re
+import sys
 from shutil import copyfile
 from modules.utils_files import load_file
 from modules.utils_misc import fix_dict
@@ -12,6 +14,36 @@ task_event = asyncio.Event()
 bg_task_queue = asyncio.Queue()
 flows_queue = asyncio.Queue()
 flows_event = asyncio.Event()
+
+# Intercept custom bot arguments
+def parse_bot_args():
+    bot_arg_list = ["--is-tgwui-integrated", "--limit-history", "--token"]
+    flag_only_args = {"--is-tgwui-integrated"}
+    
+    bot_argv = []
+    for arg in bot_arg_list:
+        try:
+            index = sys.argv.index(arg)
+        except ValueError:
+            continue
+
+        bot_argv.append(sys.argv.pop(index))
+
+        # If the argument requires a value, pop the next item as well
+        if arg not in flag_only_args and index < len(sys.argv):
+            bot_argv.append(sys.argv.pop(index))
+
+    # Define the argument parser
+    parser = argparse.ArgumentParser(formatter_class=lambda prog: argparse.HelpFormatter(prog, max_help_position=54))
+    parser.add_argument("--token", type=str, help="Discord bot token to use their API.")
+    parser.add_argument("--limit-history", type=int, help="When the history gets too large, performance issues can occur. Limit the history to improve performance.")
+    parser.add_argument("--is-tgwui-integrated", action="store_true", help="Indicates integration with TGWUI.")
+
+    # Parse the arguments
+    bot_args = parser.parse_args(bot_argv)
+    return bot_args
+
+bot_args = parse_bot_args()
 
 class SharedPath:
 
