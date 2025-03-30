@@ -49,7 +49,7 @@ per_server_settings:
 dynamic_prompting_enabled: true
 
 
-# Main textgen-webui settings
+# text-generation-webui settings (Bot must be installed with TGWUI Integration)
 # Note: Many native textgen-webui settings are honored: 'CMD_FLAGS.txt' (extensions) / 'settings.yaml' / 'models/config-user.yaml' (LLM model settings)
 textgenwebui:
   enabled: true                         # Controls whether TGWUI is part of the bot (does not register relavent commands for discord, etc)

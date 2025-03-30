@@ -45,6 +45,8 @@ def parse_bot_args():
 
 bot_args = parse_bot_args()
 
+is_tgwui_integrated = bot_args.is_tgwui_integrated
+
 class SharedPath:
 
     def init_user_config_files(root, src_dir, file) -> str:
@@ -65,9 +67,17 @@ class SharedPath:
         os.makedirs(path, exist_ok=True)
         return path
 
-    dir_tgwui = os.path.abspath('.') # because the start file goes up one dir.
+    dir_tgwui = os.path.abspath('..')
     log.debug(f'TGWUI dir: {dir_tgwui}')
-    dir_root = 'ad_discordbot'
+
+    # Gets this directory (modules folder)
+    utils_shared_file_dir = os.path.dirname(os.path.abspath(__file__))
+    # Get the parent directory (bot's root directory)
+    bot_root_dir_name = os.path.basename(os.path.dirname(utils_shared_file_dir))
+    # Use relative path if tgwui integrated (ex: 'ad_discord') else absolute path
+    print("is_tgwui_integrated:", is_tgwui_integrated)
+    dir_root = os.getcwd()
+    print("bot_root_dir_name:", bot_root_dir_name)
 
     # Internal
     dir_internal = init_shared_paths(dir_root, 'internal', 'persistent settings not intended to be modified by users')

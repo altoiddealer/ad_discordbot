@@ -38,7 +38,7 @@ from functools import partial
 sys.path.append("ad_discordbot")
 
 from modules.utils_files import load_file, merge_base, save_yaml_file  # noqa: F401
-from modules.utils_shared import bot_args, shared_path, bg_task_queue, task_event, flows_queue, flows_event, patterns, bot_emojis, config, bot_database
+from modules.utils_shared import bot_args, is_tgwui_integrated, shared_path, bg_task_queue, task_event, flows_queue, flows_event, patterns, bot_emojis, config, bot_database
 from modules.database import StarBoard, Statistics, BaseFileMemory
 from modules.utils_misc import check_probability, fix_dict, update_dict, sum_update_dict, update_dict_matched_keys, random_value_from_range, convert_lists_to_tuples, get_time, format_time, format_time_difference, get_normalized_weights  # noqa: F401
 from modules.utils_discord import Embeds, guild_only, guild_or_owner_only, configurable_for_dm_if, is_direct_message, ireply, sleep_delete_message, send_long_message, \
@@ -298,12 +298,18 @@ if sd.enabled:
 #################################################################
 ##################### TEXTGENWEBUI STARTUP ######################
 #################################################################
-is_tgwui_integrated = bot_args.is_tgwui_integrated
 if is_tgwui_integrated:
+    log.info('The bot is installed with text-generation-webui integration. Loading applicable modules and features.')
     sys.path.append(shared_path.dir_tgwui)
 
     from modules.utils_tgwui import tts, tgwui, shared, utils, extensions_module, \
         custom_chatbot_wrapper, chatbot_wrapper, load_character, save_history, unload_model, count_tokens
+else:
+    log.warning('The bot is NOT installed with text-generation-webui integration.')
+    log.warning('Features related to text generation and TTS will not be available.')
+    log.warning('To integrate the bot with TGWUI, please refer to the github.')
+
+tgwui_enabled = is_tgwui_integrated and tgwui.enabled
 
 #################################################################
 ##################### BACKGROUND QUEUE TASK #####################
@@ -538,7 +544,7 @@ async def on_ready():
         await init_guilds()
 
         # Load character(s)
-        if tgwui.enabled:
+        if tgwui_enabled:
             await init_characters()
 
         # Start background task to to change image models automatically
@@ -570,7 +576,7 @@ async def on_message(message: discord.Message):
     text = message.clean_content # primarily converts @mentions to actual user names
     settings:Settings = get_settings(message)
     last_character = bot_settings.get_last_setting_for("last_character", message)
-    if tgwui.enabled and not settings.behavior.bot_should_reply(message, text, last_character): 
+    if tgwui_enabled and not settings.behavior.bot_should_reply(message, text, last_character): 
         return # Check that bot should reply or not
     # Store the current time. The value will save locally to database.yaml at another time
     bot_database.update_last_msg_for(message.channel.id, 'user', save_now=False)
@@ -967,7 +973,7 @@ async def set_server_voice_channel(ctx: commands.Context, channel: Optional[disc
     bot_database.update_voice_channels(ctx.guild.id, channel.id)
     await ctx.send(f"Voice channel for **{ctx.guild}** set to **{channel.name}**.", delete_after=5)
 
-if tgwui.enabled:
+if tgwui_enabled:
     # Register command for helper function to toggle TTS
     @client.hybrid_command(description='Toggles TTS on/off')
     @guild_only()
@@ -1220,7 +1226,7 @@ class Params:
                         if key in actions:
                             setattr(self, key, value)
             # Disable things as set by config
-            if not tgwui.enabled:
+            if not tgwui_enabled:
                 self.should_gen_text = False
                 self.should_send_text = False
             if not sd.enabled:
@@ -3101,7 +3107,7 @@ class Tasks(TaskProcessing):
                 await self.build_llm_payload()
 
                 # Process text generation
-                if tgwui.enabled:
+                if tgwui_enabled:
 
                     # Process LLM model change if any
                     if self.params.llmmodel:
@@ -5124,7 +5130,7 @@ async def sync(ctx: commands.Context):
 #################################################################
 ######################### LLM COMMANDS ##########################
 #################################################################
-if tgwui.enabled:
+if tgwui_enabled:
     # /reset_conversation command - Resets current character
     @client.hybrid_command(description="Reset the conversation with current character")
     @configurable_for_dm_if(lambda ctx: config.discord_dm_setting('allow_chatting', True))
@@ -5461,7 +5467,7 @@ def get_all_characters():
         log.error(f"An error occurred while getting all characters: {e}")
     return all_characters, filtered_characters
 
-if tgwui.enabled:
+if tgwui_enabled:
     # Command to change characters
     @client.hybrid_command(description="Choose a character")
     @guild_only()
@@ -5778,7 +5784,7 @@ async def process_llmmodel(ctx, selected_llmmodel):
     except Exception as e:
         log.error(f"Error processing /llmmodel command: {e}")
 
-if tgwui.enabled:
+if tgwui_enabled:
 
     @client.hybrid_command(description="Choose an LLM Model")
     @guild_or_owner_only()
@@ -5999,7 +6005,7 @@ async def fetch_speak_options():
         log.error(f"Error building options for '/speak' command: {e}")
         return None, None
 
-if tgwui.enabled and tts.client and tts.client in tts.supported_clients:
+if tgwui_enabled and tts.client and tts.client in tts.supported_clients:
     lang_list, all_voices = asyncio.run(fetch_speak_options())
     if all_voices:
 
@@ -6151,7 +6157,7 @@ async def process_prompt(ctx: commands.Context, selections:dict):
         log.error(f"Error processing '/prompt': {e}")
         await ctx.send(f"Error processing '/prompt': {e}", ephemeral=True)
 
-if tgwui.enabled:
+if tgwui_enabled:
     @client.hybrid_command(name="prompt", description=f'Generate text with advanced options')
     @app_commands.describe(prompt='Your prompt to the LLM.')
     @app_commands.describe(begin_reply_with='The LLM will continue their reply from this.')
