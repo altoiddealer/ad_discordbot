@@ -1871,7 +1871,7 @@ class TaskProcessing(TaskAttributes):
                 # Only try streaming TTS if TTS enabled and responses can be chunked
                 def warn_stream_tts(self, char_name:str):
                     log.warning(f"The bot will try streaming TTS responses ('{tts.client}' is running, and '{char_name}' is configured to stream replies).")
-                    if tts.client == 'alltalk_tts':
+                    if 'alltalk' in tts.client:
                         log.warning("**The application MAY hang/crash IF using 'alltalk_tts' in low VRAM mode**")
                     log.info("This MAY have unexpected side effects, particularly for other running extensions (if any).")
                     log.info(f"If you experience issues, please try the following:")
@@ -3664,7 +3664,7 @@ class Tasks(TaskProcessing):
             loop = asyncio.get_event_loop()
             if tts.api_mode == True:
                 request = {'text_input': self.text}
-                client_args:dict = tts_args[tts.client]
+                client_args:dict = tts_args.get(tts.client, {})
                 if client_args.get(tts.lang_key):
                     selected_language = tts_args[tts.client][tts.lang_key]
                     # TODO: Improve language handling
@@ -5852,8 +5852,6 @@ async def process_speak_args(ctx: commands.Context, selected_voice=None, lang=No
             pass # Default to voice in last_extension_params
         elif f'{tts.client}-{tts.voice_key}' in shared.settings:
             pass # Default to voice in shared.settings
-        else:
-            await ctx.send("No voice was selected or provided, and a default voice was not found. Request will probably fail...", ephemeral=True)
         return tts_args
     except Exception as e:
         log.error(f"Error processing tts options: {e}")
@@ -5883,7 +5881,7 @@ async def process_user_voice(ctx: commands.Context, voice_input=None):
     try:
         if not (voice_input and getattr(voice_input, 'content_type', '').startswith("audio/")):
             return ''
-        if tts.client != 'alltalk_tts' and tts.client != 'coqui_tts':
+        if 'alltalk' not in tts.client and tts.client != 'coqui_tts':
             await ctx.send("Sorry, current tts extension does not allow using a voice attachment (only works for 'alltalk_tts' and 'coqui_tts)", ephemeral=True)
             return ''
         voiceurl = voice_input.url
