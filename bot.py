@@ -987,7 +987,7 @@ if tgwui_enabled:
 ###################### DYNAMIC PROMPTING ########################
 #################################################################
 def get_wildcard_value(matched_text:str, dir_path: Optional[str] = None) -> Optional[str]:
-    dir_path = dir_path or shared_path.dir_wildcards
+    dir_path = dir_path or shared_path.dir_user_wildcards
     selected_option: Optional[str] = None
     search_phrase = matched_text[2:] if matched_text.startswith('##') else matched_text
     search_path = f"{search_phrase}.txt"
@@ -1022,7 +1022,7 @@ def get_wildcard_value(matched_text:str, dir_path: Optional[str] = None) -> Opti
             # Get the last component of the nested directory path
             search_phrase = os.path.split(nested_dir)[-1]
             # Remove the last component from the nested directory path
-            nested_dir = os.path.join(shared_path.dir_wildcards, os.path.dirname(nested_dir))
+            nested_dir = os.path.join(shared_path.dir_user_wildcards, os.path.dirname(nested_dir))
             # Recursively check filenames in the nested directory
             selected_option = get_wildcard_value(search_phrase, nested_dir)
     return selected_option
@@ -1075,7 +1075,7 @@ def get_braces_value(matched_text:str) -> str:
         wildcard_match = patterns.wildcard.search(option)
         if wildcard_match:
             wildcard_phrase = wildcard_match.group()
-            wildcard_value = get_wildcard_value(matched_text=wildcard_phrase, dir_path=shared_path.dir_wildcards)
+            wildcard_value = get_wildcard_value(matched_text=wildcard_phrase, dir_path=shared_path.dir_user_wildcards)
             if wildcard_value:
                 chosen_options[index] = wildcard_value
     chosen_options = [option for option in chosen_options if option is not None]
@@ -1109,7 +1109,7 @@ async def dynamic_prompting(text: str, ictx: Optional[CtxInteraction] = None, us
     wildcard_matches = sorted(wildcard_matches, key=lambda x: -x.start())  # Sort matches in reverse order by their start indices
     for match in wildcard_matches:
         matched_text = match.group()
-        replaced_text = get_wildcard_value(matched_text=matched_text, dir_path=shared_path.dir_wildcards)
+        replaced_text = get_wildcard_value(matched_text=matched_text, dir_path=shared_path.dir_user_wildcards)
         if replaced_text:
             start, end = match.start(), match.end()
             # Replace matched text
@@ -2396,7 +2396,7 @@ class TaskProcessing(TaskAttributes):
             sd_output_dir = joined_output_dir.replace(f'{base_dir}{os.sep}{base_dir}', base_dir) # replace double base prefix with one
             # Ensure the necessary directories exist
             os.makedirs(sd_output_dir, exist_ok=True)
-            temp_dir = os.path.join(shared_path.dir_root, 'user_images', '__temp')
+            temp_dir = os.path.join(shared_path.dir_user_images, '__temp')
             os.makedirs(temp_dir, exist_ok=True)
             # Generate images, save locally
             images = await self.sd_img_gen(temp_dir)
@@ -2698,7 +2698,7 @@ class TaskProcessing(TaskAttributes):
         image_file_path = ''
         method = ''
         try:
-            home_path = os.path.join(shared_path.dir_root, 'user_images')
+            home_path = shared_path.dir_user_images
             full_path = os.path.join(home_path, value)
             # If value contains valid image extension
             if any(ext in value for ext in (".txt", ".png", ".jpg")): # extension included in value

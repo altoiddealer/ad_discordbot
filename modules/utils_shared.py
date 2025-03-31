@@ -3,7 +3,7 @@ import asyncio
 import os
 import re
 import sys
-from shutil import copyfile
+from shutil import copyfile, move
 from modules.utils_files import load_file
 from modules.utils_misc import fix_dict
 
@@ -94,11 +94,19 @@ class SharedPath:
     img_models, img_models_template = init_user_config_files(dir_root, templates, 'dict_imgmodels.yaml')
     tags, tags_template = init_user_config_files(dir_root, templates, 'dict_tags.yaml')
 
-    # Wildcards
-    dir_wildcards = init_shared_paths(dir_root, 'wildcards', "wildcard files for Dynamic Prompting feature. Refer to the bot's wiki on GitHub for more information.")
 
-    # User images
-    dir_user_images = init_shared_paths(dir_root, 'user_images', "Images that the user may use for various bot functions.")
+    # User
+    user_dir = init_shared_paths(dir_root, 'user', "for files which may be used for bot functions.")
+
+    dir_user_wildcards = init_shared_paths(user_dir, 'wildcards', "wildcard files for Dynamic Prompting feature. Refer to the bot's wiki on GitHub for more information.")
+    old_wildcards = os.path.join(dir_root, 'wildcards')
+    if os.path.exists(old_wildcards):
+        log.warning(f'Please migrate your existing "/wildcards" directory to: "{dir_user_wildcards}"')
+
+    dir_user_images = init_shared_paths(user_dir, 'images', "Images that the user may use for various bot functions.")
+    old_user_images = os.path.join(dir_root, 'user_images')
+    if os.path.exists(old_user_images):
+        log.info(f'Please migrate your existing "/user_images" to: "{dir_user_images}"')
 
 shared_path = SharedPath()
 
