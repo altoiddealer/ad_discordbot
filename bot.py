@@ -309,6 +309,7 @@ else:
     log.warning('Features related to text generation and TTS will not be available.')
     log.warning('To integrate the bot with TGWUI, please refer to the github.')
 
+# Must be TGWUI integrated install, and also enabled in config
 tgwui_enabled = is_tgwui_integrated and tgwui.enabled
 
 #################################################################
@@ -421,26 +422,22 @@ def get_character(guild_id:int|None=None, guild_settings=None):
         joined_msg = f'has joined {settings._guild_name}'
     try:
         # Try loading last known character with fallback sources
-        sources = [
-            bot_settings.get_last_setting_for("last_character", guild_id=guild_id),
-            settings.llmcontext.name,
-            client.user.display_name
-        ]
+        sources = [bot_settings.get_last_setting_for("last_character", guild_id=guild_id),
+                   settings.llmcontext.name,
+                   client.user.display_name]
         char_name = None
-        for try_source in sources:
-            log.debug(f'Trying to load character "{try_source}"...')
+        for source_name in sources:
+            log.debug(f'Trying to load character "{source_name}"...')
             try:
-                _, char_name, _, _, _ = load_character(try_source, '', '')
+                _, char_name, _, _, _ = load_character(source_name, '', '')
                 if char_name:
-                    log.info(f'"{try_source}" {joined_msg}.')
-                    source = try_source
-                    break  # Character loaded successfully, exit the loop
+                    log.info(f'"{source_name}" {joined_msg}.')
+                    return source_name
             except Exception as e:
                 log.error(f"Error loading character for chat mode: {e}")
         if not char_name:
             log.error(f"Character not found. Tried files: {sources}")
             return None
-        return source
     except Exception as e:
         log.error(f"Error trying to load character data: {e}")
         return None
