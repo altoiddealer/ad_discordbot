@@ -12,6 +12,6 @@ icon_embed.png
 
 internal/*
 sd_outputs/*
-user_images/*
-wildcards/*
-wildcards
+user/images/*
+user/wildcards/*
+user/wildcards
