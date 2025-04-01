@@ -37,7 +37,7 @@ set "ENV_PARENT=%PARENT_DIR%\installer_files\env"
 
 
 @rem Read user_env.txt into ENV_FLAG
-set ENV_FLAG=""
+set "ENV_FLAG="
 if exist "%HOME_DIR%\internal\user_env.txt" (
     set /p ENV_FLAG=<"%HOME_DIR%\internal\user_env.txt"
 )

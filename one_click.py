@@ -375,6 +375,9 @@ if __name__ == "__main__":
     # Extract and write `--conda-env-path` argument value
     if "--conda-env-path" in launcher_args and launcher_args["--conda-env-path"]:
         conda_env_path = launcher_args["--conda-env-path"]
+        internal_path = os.path.join(script_dir, "internal")
+        if not os.path.exists(internal_path):
+            os.makedirs(internal_path)
         with open(env_flag_path, "w") as f:
             f.write(conda_env_path)
 

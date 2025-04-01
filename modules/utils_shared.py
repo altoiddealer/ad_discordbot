@@ -96,9 +96,9 @@ class SharedPath:
 
 
     # User
-    user_dir = init_shared_paths(dir_root, 'user', "for files which may be used for bot functions.")
+    user_dir = init_shared_paths(dir_root, 'user', "for files which may be used for bot functions")
 
-    dir_user_wildcards = init_shared_paths(user_dir, 'wildcards', "wildcard files for Dynamic Prompting feature. Refer to the bot's wiki on GitHub for more information.")
+    dir_user_wildcards = init_shared_paths(user_dir, 'wildcards', "wildcard files for Dynamic Prompting feature. Refer to the bot's wiki on GitHub for more information")
     old_wildcards = os.path.join(dir_root, 'wildcards')
     if os.path.exists(old_wildcards):
         log.warning(f'Please migrate your existing "/wildcards" directory to: "{dir_user_wildcards}"')
