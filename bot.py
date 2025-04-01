@@ -436,7 +436,7 @@ def get_character(guild_id:int|None=None, guild_settings=None):
             except Exception as e:
                 log.error(f"Error loading character for chat mode: {e}")
         if not char_name:
-            log.error(f"Character not found. Tried files: {sources}")
+            log.error(f"Character not found. Tried files: {sources}.")          
             return None
     except Exception as e:
         log.error(f"Error trying to load character data: {e}")
@@ -450,13 +450,11 @@ async def init_characters():
             log.info("----------------------------------------------")
             log.info(f"Initializing {settings._guild_name}...")
             char_name = get_character(guild_id, settings)
-            if char_name:
-                await character_loader(char_name, settings, guild_id=guild_id)
+            await character_loader(char_name, settings, guild_id=guild_id)
     # Not per-server characters
     else:
         char_name = get_character()
-        if char_name:
-            await character_loader(char_name, bot_settings)
+        await character_loader(char_name, bot_settings)
     bot_status.build_idle_weights()
 
 def update_base_tags_modified():
@@ -5251,8 +5249,23 @@ async def load_character_data(char_name):
 
     return char_data
 
+def load_default_character(settings:"Settings", guild_id:int|None=None):
+    try:
+        # Update stored database / shared.settings values for character
+        bot_settings.set_last_setting_for("last_character", 'default', guild_id=guild_id, save_now=True)
+        # Fix any invalid settings while warning user
+        settings.fix_settings()
+        # save settings
+        settings.save()
+    except Exception as e:
+        log.error(f"Error loading default character. {e}")
+        print(traceback.format_exc())
+
 # Collect character information
 async def character_loader(char_name, settings:"Settings", guild_id:int|None=None):
+    if char_name is None:
+        load_default_character(settings, guild_id)
+        return
     try:
         textgen_data = {'name': char_name, 'greeting': '', 'context': ''}
         if tgwui_enabled:
@@ -5297,7 +5310,8 @@ async def character_loader(char_name, settings:"Settings", guild_id:int|None=Non
         char_llmcontext.update(textgen_data)
         # Update stored database / shared.settings values for character
         bot_settings.set_last_setting_for("last_character", char_name, guild_id=guild_id, save_now=True)
-        shared.settings['character'] = char_name
+        if tgwui_enabled:
+            shared.settings['character'] = char_name
 
         # Collect behavior data
         char_behavior = char_data.get('behavior', {})
@@ -5446,20 +5460,23 @@ async def process_character(ctx, selected_character_value):
 def get_all_characters():
     all_characters = []
     filtered_characters = []
-    characters_path = os.path.join(shared_path.dir_tgwui, "characters")
+    character_paths = [shared_path.dir_user_characters]
+    if tgwui_enabled:
+        character_paths.append(os.path.join(shared_path.dir_tgwui, "characters"))
     try:
-        for file in sorted(Path(characters_path).glob("*")):
-            if file.suffix in [".json", ".yml", ".yaml"]:
-                character = {}
-                character['name'] = file.stem
-                all_characters.append(character)
+        for character_path in character_paths:
+            for file in sorted(Path(character_path).glob("*")):
+                if file.suffix in [".json", ".yml", ".yaml"]:
+                    character = {}
+                    character['name'] = file.stem
+                    all_characters.append(character)
 
-                char_data = load_file(file, {})
-                if not char_data:
-                    continue
+                    char_data = load_file(file, {})
+                    if not char_data:
+                        continue
 
-                if char_data.get('bot_in_character_menu', True):
-                    filtered_characters.append(character)
+                    if char_data.get('bot_in_character_menu', True):
+                        filtered_characters.append(character)
 
     except Exception as e:
         log.error(f"An error occurred while getting all characters: {e}")
