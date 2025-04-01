@@ -10,7 +10,9 @@ activesettings.yaml
 CMD_FLAGS.txt
 icon_embed.png
 
+installer_files/*
 internal/*
+outputs/*
 sd_outputs/*
 user_images/*
 wildcards/*
