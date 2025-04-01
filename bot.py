@@ -1184,7 +1184,7 @@ class Params:
         # Image related params
         self.img_censoring: int = kwargs.get('img_censoring', 0)
         self.endpoint: str      = kwargs.get('endpoint', '/sdapi/v1/txt2img')
-        self.sd_output_dir: str = kwargs.get('sd_output_dir', 'sd_outputs')
+        self.sd_output_dir: str = kwargs.get('sd_output_dir', '')
 
         # discord/HMessage related params
         self.ref_message                 = kwargs.get('ref_message', None)
@@ -2388,10 +2388,16 @@ class TaskProcessing(TaskAttributes):
 
     async def process_image_gen(self:Union["Task","Tasks"]):
         try:
-            base_dir = shared_path.dir_root
-            joined_output_dir = os.path.join(base_dir, self.params.sd_output_dir)
+            base_dir = os.path.abspath(shared_path.dir_root)
+            # Accept value whether it is relative or absolute
+            if os.path.isabs(self.params.sd_output_dir):
+                sd_output_dir = self.params.sd_output_dir
+            else:
+                sd_output_dir = os.path.join(shared_path.output_dir, self.params.sd_output_dir)
             # backwards compatibility (user defined output dir was originally expected to include the base directory)
-            sd_output_dir = joined_output_dir.replace(f'{base_dir}{os.sep}{base_dir}', base_dir) # replace double base prefix with one
+            if not os.path.commonpath([base_dir, sd_output_dir]).startswith(base_dir):
+                log.warning("Tried setting the SD output directory outside the bot. Defaulting to '/output'.")
+                sd_output_dir = shared_path.output_dir
             # Ensure the necessary directories exist
             os.makedirs(sd_output_dir, exist_ok=True)
             temp_dir = os.path.join(shared_path.dir_user_images, '__temp')

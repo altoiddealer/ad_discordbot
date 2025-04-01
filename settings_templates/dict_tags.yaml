@@ -19,8 +19,6 @@ global_tag_keys:
 
 # 'base_tags' are always in effect. Base tags have lower priority than tags defined anywhere else.
 base_tags:
-  - sd_output_dir: 'sd_outputs/' # generated images will be saved at this location (relative to base dir 'ad_discordbot/')
-
   # Use {time} or {date} written anywhere in your prompts, which will be replaced with the current date/time. The tags 'offset' and '(date/time)_format' will apply to the result.
   - time_offset: 0.0              # 0 = today's date (system time). -0.5 shifts the current date to be 12 hours ago. (UOM = days).
     time_format: '%H:%M:%S'       # Examples: '%H:%M:%S' (HH:MM:SS), '%I:%M:%S %p' (12HR:MM:SS AM/PM)
@@ -244,7 +242,7 @@ tag_presets:
 #   llm_param_variances: {dictionary} Randomization ranges for textgen-webui state parameters. Must be formatted as a dictionary.
 
 # Relevant to img generation (A1111 / Forge):
-#   sd_output_dir: 'string'           Location to save any generated images relative to base dir 'ad_discordbot/'. Default: 'sd_outputs/'
+#   sd_output_dir: 'string'           Location to save any generated images relative to output dir 'ad_discordbot/output/'. Default: ''
 #   should_gen_image: (true/false)    If bot should generate an image using Stable Diffusion. The LLM's reply will be used as the img prompt, unless no LLM Model is loaded or 'should_gen_text' is False - in which case user message is prompt.
 #   should_send_image: (true/false)   If bot should send generated image to channel. Mainly used for 'flows' tag.
 #   change_imgmodel: 'string'         For (change/swap)_imgmodel: 'change' will trigger a persistent change. 'swap' will only change the Img model for the current interaction.

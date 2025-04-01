@@ -12,7 +12,7 @@ icon_embed.png
 
 installer_files/*
 internal/*
-outputs/*
+output/*
 sd_outputs/*
 user_images/*
 wildcards/*
