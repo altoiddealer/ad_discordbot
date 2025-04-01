@@ -1546,35 +1546,35 @@ class TaskProcessing(TaskAttributes):
         prevent_multiple = []
         try:
             for tag in self.tags.matches:
-                tag:TAG
-                tag_name, tag_print = self.tags.get_name_print_for(tag)
+                tag_dict:TAG = self.tags.untuple(tag)
+                tag_name, tag_print = self.tags.get_name_print_for(tag_dict)
                 # Check if censored
-                if phase == 'llm' and 'llm_censoring' in tag and bool(tag['llm_censoring']) == True:
-                    censor_text = tag.get('matched_trigger', '')
+                if phase == 'llm' and 'llm_censoring' in tag_dict and bool(tag_dict['llm_censoring']) == True:
+                    censor_text = tag_dict.get('matched_trigger', '')
                     censor_message = f' (text match: {censor_text})'
                     log.info(f"[TAGS] Censoring: LLM generation was blocked{censor_message if censor_text else ''}")
                     self.embeds.create('censor', "Text prompt was flagged as inappropriate", "Text generation task has been cancelled.")
                     await self.embeds.send('censor', delete_after=5)
                     raise TaskCensored
-                if 'flow' in tag and not 'flow' in prevent_multiple:
+                if 'flow' in tag_dict and not 'flow' in prevent_multiple:
                     prevent_multiple.append('flow')
                     if not flows.event.is_set():
-                        await flows.build_queue(dict(tag.pop('flow')))
-                if 'toggle_vc_playback' in tag and not 'toggle_vc_playback' in prevent_multiple:
+                        await flows.build_queue(dict(tag_dict.pop('flow')))
+                if 'toggle_vc_playback' in tag_dict and not 'toggle_vc_playback' in prevent_multiple:
                     prevent_multiple.append('toggle_vc_playback')
                     if not is_direct_message(self.ictx):
-                        await voice_clients.toggle_playback_in_voice_channel(self.ictx.guild.id, str(tag.pop('toggle_vc_playback')))
-                if 'send_user_image' in tag:
-                    user_image_file = str(tag.pop('send_user_image'))
+                        await voice_clients.toggle_playback_in_voice_channel(self.ictx.guild.id, str(tag_dict.pop('toggle_vc_playback')))
+                if 'send_user_image' in tag_dict:
+                    user_image_file = str(tag_dict.pop('send_user_image'))
                     user_image_args = self.get_image_tag_args('User image', user_image_file, key=None, set_dir=None)
                     user_image = discord.File(user_image_args)
                     self.params.send_user_image.append(user_image)
                     log.info(f'[TAGS] Sending user image for matched {tag_print}')
-                if 'persist' in tag:
+                if 'persist' in tag_dict:
                     if not tag_name:
                         log.warning(f"[TAGS] A persistent {tag_print} was matched, but it is missing a required 'name' parameter. Cannot make tag persistent.")
                     else:
-                        persist = int(tag.pop('persist'))
+                        persist = int(tag_dict.pop('persist'))
                         log.info(f'[TAGS] A persistent {tag_print} was matched, which will be auto-applied for the next ({persist}) tag matching phases (pre-{phase.upper()} gen).')
                         persistent_tags.append_tag_name_to(phase, self.channel.id, persist, tag_name)
 
