@@ -18,6 +18,4 @@ user_images/*
 wildcards/*
 wildcards
 
-user/images/*
-user/wildcards/*
-user/wildcards
+user/*

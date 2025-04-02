@@ -44,6 +44,7 @@ from modules.utils_misc import check_probability, fix_dict, update_dict, sum_upd
 from modules.utils_discord import Embeds, guild_only, guild_or_owner_only, configurable_for_dm_if, is_direct_message, ireply, sleep_delete_message, send_long_message, \
     EditMessageModal, SelectedListItem, SelectOptionsView, get_user_ctx_inter, get_message_ctx_inter, apply_reactions_to_messages, replace_msg_in_history_and_discord, MAX_MESSAGE_LENGTH, muffled_send  # noqa: F401
 from modules.utils_aspect_ratios import ar_parts_from_dims, dims_from_ar, avg_from_dims, get_aspect_ratio_parts, calculate_aspect_ratio_sizes  # noqa: F401
+from modules.utils_chat import custom_load_character, load_character_data
 from modules.history import HistoryManager, History, HMessage, cnf
 from modules.typing import AlertUserError, TAG
 from modules.utils_asyncio import generate_in_executor
@@ -303,7 +304,7 @@ if is_tgwui_integrated:
     sys.path.append(shared_path.dir_tgwui)
 
     from modules.utils_tgwui import tts, tgwui, shared, utils, extensions_module, \
-        custom_chatbot_wrapper, chatbot_wrapper, load_character, save_history, unload_model, count_tokens
+        custom_chatbot_wrapper, chatbot_wrapper, save_history, unload_model, count_tokens
 else:
     log.warning('The bot is NOT installed with text-generation-webui integration.')
     log.warning('Features related to text generation and TTS will not be available.')
@@ -428,13 +429,10 @@ def get_character(guild_id:int|None=None, guild_settings=None):
         char_name = None
         for source_name in sources:
             log.debug(f'Trying to load character "{source_name}"...')
-            try:
-                _, char_name, _, _, _ = load_character(source_name, '', '')
-                if char_name:
-                    log.info(f'"{source_name}" {joined_msg}.')
-                    return source_name
-            except Exception as e:
-                log.error(f"Error loading character for chat mode: {e}")
+            _, char_name, _, _, _ = custom_load_character(source_name, '', '', try_tgwui=tgwui_enabled)
+            if char_name:
+                log.info(f'"{source_name}" {joined_msg}.')
+                return source_name
         if not char_name:
             log.error(f"Character not found. Tried files: {sources}.")          
             return None
@@ -1346,7 +1344,7 @@ class TaskProcessing(TaskAttributes):
 
     async def swap_llm_character(self:Union["Task","Tasks"], char_name:str):
         try:
-            char_data = await load_character_data(char_name)
+            char_data = await load_character_data(char_name, try_tgwui=tgwui_enabled)
             if char_data.get('state', {}):
                 self.llm_payload['state'] = char_data['state']
                 self.llm_payload['state']['name1'] = self.user_name
@@ -5237,24 +5235,6 @@ if tgwui_enabled:
     async def continue_llm_gen(inter: discord.Interaction, message:discord.Message):
         await process_cont_regen_cmds(inter, message, 'Continue')
 
-
-async def load_character_data(char_name):
-    char_data = {}
-    for ext in ['.yaml', '.yml', '.json']:
-        character_file = os.path.join(shared_path.dir_tgwui, "characters", f"{char_name}{ext}")
-        if os.path.exists(character_file):
-            loaded_data = load_file(character_file)
-            if loaded_data is None:
-                continue
-
-            char_data = dict(loaded_data)
-            break  # Break the loop if data is successfully loaded
-
-    if char_data is None:
-        log.error(f"Failed to load data for: {char_name} (tried: .yaml/.yml/.json). Perhaps missing file?")
-
-    return char_data
-
 def load_default_character(settings:"Settings", guild_id:int|None=None):
     try:
         # Update stored database / shared.settings values for character
@@ -5273,16 +5253,14 @@ async def character_loader(char_name, settings:"Settings", guild_id:int|None=Non
         load_default_character(settings, guild_id)
         return
     try:
-        textgen_data = {'name': char_name, 'greeting': '', 'context': ''}
-        if tgwui_enabled:
-            # Get data using textgen-webui native character loading function
-            _, name, _, greeting, context = load_character(char_name, '', '')
-            missing_keys = [key for key, value in {'name': name, 'greeting': greeting, 'context': context}.items() if not value]
-            if any (missing_keys):
-                log.warning(f'Note that character "{char_name}" is missing the following info:"{missing_keys}".')
-            textgen_data = {'name': name, 'greeting': greeting, 'context': context}
+        # Get data using textgen-webui native character loading function
+        _, name, _, greeting, context = custom_load_character(char_name, '', '', try_tgwui=tgwui_enabled)
+        missing_keys = [key for key, value in {'name': name, 'greeting': greeting, 'context': context}.items() if not value]
+        if any (missing_keys):
+            log.warning(f'Note that character "{char_name}" is missing the following info:"{missing_keys}".')
+        textgen_data = {'name': name, 'greeting': greeting, 'context': context}
         # Check for extra bot data
-        char_data = await load_character_data(char_name)
+        char_data = await load_character_data(char_name, try_tgwui=tgwui_enabled)
         char_instruct = char_data.get('instruction_template_str', None)
         # Merge with basesettings
         char_data = merge_base(char_data, 'llmcontext')
