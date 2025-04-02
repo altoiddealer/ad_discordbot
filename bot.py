@@ -7013,7 +7013,8 @@ class CustomHistory(History):
     def save_sync(self, fp=None, force=False, force_tgwui=False):
         try:
             status = super().save_sync(fp=fp, force=force)
-            self._save_for_tgwui(status, force=force_tgwui)
+            if tgwui_enabled:
+                self._save_for_tgwui(status, force=force_tgwui)
             
             if not status: # don't bother saving if nothing changed
                 return False
