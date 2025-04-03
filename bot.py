@@ -1672,10 +1672,6 @@ class TaskProcessing(TaskAttributes):
             self.llm_payload['text'] = self.text
         else:
             await self.init_llm_payload()
-        # make working copy of user's request
-        self.llm_prompt = self.text
-        # apply previously matched tags to prompt
-        self.tags.process_tag_insertions(self.llm_prompt)
         # collect matched tag values
         llm_payload_mods, formatting = await self.collect_llm_tag_values()
         # apply tags relevant to LLM payload
@@ -3096,7 +3092,14 @@ class Tasks(TaskProcessing):
 
             await self.tags.match_tags(self.text, self.settings.get_vars(), phase='llm') # match tags labeled for user / userllm.
             await self.apply_generic_tag_matches(phase='llm')
-            self.params.update_bot_should_do(self.tags)  # check what bot should do
+
+            # make working copy of user's request
+            self.llm_prompt = self.text
+            # apply previously matched tags to prompt
+            self.tags.process_tag_insertions(self.llm_prompt)
+
+            # check what bot should do
+            self.params.update_bot_should_do(self.tags)
 
             # Bot should generate text...
             if self.params.should_gen_text:
