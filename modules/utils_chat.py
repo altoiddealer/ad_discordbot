@@ -3,8 +3,9 @@ import json
 import os
 from pathlib import Path
 from PIL import Image, ImageOps
-from modules.utils_shared import shared_path, load_file
-from modules.utils_tgwui import load_character
+from modules.utils_shared import shared_path, load_file, is_tgwui_integrated
+if is_tgwui_integrated:
+    from modules.utils_tgwui import load_character
 
 from modules.logs import import_track, get_logger; import_track(__file__, fp=True); log = get_logger(__name__)  # noqa: E702
 logging = log

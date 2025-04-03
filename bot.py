@@ -568,7 +568,7 @@ async def on_message(message: discord.Message):
     text = message.clean_content # primarily converts @mentions to actual user names
     settings:Settings = get_settings(message)
     last_character = bot_settings.get_last_setting_for("last_character", message)
-    if tgwui_enabled and not settings.behavior.bot_should_reply(message, text, last_character): 
+    if not settings.behavior.bot_should_reply(message, text, last_character): 
         return # Check that bot should reply or not
     # Store the current time. The value will save locally to database.yaml at another time
     bot_database.update_last_msg_for(message.channel.id, 'user', save_now=False)
@@ -2174,7 +2174,7 @@ class TaskProcessing(TaskAttributes):
                 bot_text = greeting_msg
             await send_long_message(self.channel, greeting_msg)
             # Play TTS Greeting
-            if tts.enabled and config.textgenwebui.get('tts_settings', {}).get('tts_greeting', False):
+            if tgwui_enabled and tts.enabled and config.textgenwebui.get('tts_settings', {}).get('tts_greeting', False):
                 self.text = bot_text
                 self.embeds.enabled_embeds = {'system': False}
                 self.params.tts_args = self.settings.llmcontext.extensions
@@ -5271,7 +5271,7 @@ async def character_loader(char_name, settings:"Settings", guild_id:int|None=Non
         char_llmcontext = {}
         use_voice_channels = True
         for key, value in char_data.items():
-            if key == 'extensions' and isinstance(value, dict):
+            if tgwui_enabled and key == 'extensions' and isinstance(value, dict):
                 if not tts.enabled:
                     for subkey, _ in value.items():
                         if subkey in tts.supported_clients and char_data[key][subkey].get('activate'):
@@ -5322,9 +5322,10 @@ async def character_loader(char_name, settings:"Settings", guild_id:int|None=Non
         log.info(f'Mode is set to "{state_dict["mode"]}"{guild_msg}.')
 
         # Check for any char defined or model defined instruct_template
-        update_instruct = char_instruct or tgwui.instruction_template_str or None
-        if update_instruct:
-            state_dict['instruction_template_str'] = update_instruct
+        if tgwui_enabled:
+            update_instruct = char_instruct or tgwui.instruction_template_str or None
+            if update_instruct:
+                state_dict['instruction_template_str'] = update_instruct
     except Exception as e:
         log.error(f"Error loading character. Check spelling and file structure. Use bot cmd '/character' to try again. {e}")
         print(traceback.format_exc())
@@ -5466,28 +5467,27 @@ def get_all_characters():
         log.error(f"An error occurred while getting all characters: {e}")
     return all_characters, filtered_characters
 
-if tgwui_enabled:
-    # Command to change characters
-    @client.hybrid_command(description="Choose a character")
-    @guild_only()
-    async def character(ctx: commands.Context):
-        _, filtered_characters = get_all_characters()
-        if filtered_characters:
-            items_for_character = [i['name'] for i in filtered_characters]
-            warned_too_many_character = False # TODO use the warned_once feature?
-            characters_view = SelectOptionsView(items_for_character,
-                                            custom_id_prefix='characters',
-                                            placeholder_prefix='Characters: ',
-                                            unload_item=None,
-                                            warned=warned_too_many_character)
-            view_message = await ctx.send('### Select a Character.', view=characters_view, ephemeral=True)
-            await characters_view.wait()
+# Command to change characters
+@client.hybrid_command(description="Choose a character")
+@guild_only()
+async def character(ctx: commands.Context):
+    _, filtered_characters = get_all_characters()
+    if filtered_characters:
+        items_for_character = [i['name'] for i in filtered_characters]
+        warned_too_many_character = False # TODO use the warned_once feature?
+        characters_view = SelectOptionsView(items_for_character,
+                                        custom_id_prefix='characters',
+                                        placeholder_prefix='Characters: ',
+                                        unload_item=None,
+                                        warned=warned_too_many_character)
+        view_message = await ctx.send('### Select a Character.', view=characters_view, ephemeral=True)
+        await characters_view.wait()
 
-            selected_item = characters_view.get_selected()
-            await view_message.delete()
-            await process_character(ctx, selected_item)
-        else:
-            await ctx.send('There are no characters available', ephemeral=True)
+        selected_item = characters_view.get_selected()
+        await view_message.delete()
+        await process_character(ctx, selected_item)
+    else:
+        await ctx.send('There are no characters available', ephemeral=True)
 
 #################################################################
 ####################### /IMGMODEL COMMAND #######################
