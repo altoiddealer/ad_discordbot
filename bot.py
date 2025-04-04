@@ -1630,8 +1630,8 @@ class TaskProcessing(TaskAttributes):
         self.params.update_bot_should_do(self.tags) # check for updates from tags
         if self.params.should_gen_image and await sd.online(self.ictx):
             # CLONE CURRENT TASK AND QUEUE IT
+            log.info('An image task was triggered, created and queued.')
             await self.embeds.send('system', title='Generating an image', description='An image task was triggered, created and queued.', delete_after=5)
-            #await self.channel.send('()', delete_after=5)
             img_gen_task = self.clone('img_gen', self.ictx, ignore_list=['llm_payload'])
             await task_manager.task_queue.put(img_gen_task)
 
@@ -3172,15 +3172,6 @@ class Tasks(TaskProcessing):
             if sd.enabled:
                 await self.message_img_gen()
 
-            # Create an img gen task if bot did not generate text but should generate image:
-            if not self.last_resp and self.params.should_gen_image:
-                if await sd.online(self.ictx):   # Notify user their prompt will be used directly for img gen
-                    await self.channel.send('Bot was triggered to not generate a text response.\n \
-                                    **Creating an image generation task using your input as the prompt...**', delete_after=5)
-                # CREATE A TASK AND QUEUE IT
-                img_gen_task = self.clone('img_gen', self.ictx, ignore_list=['llm_payload'])
-                await task_manager.task_queue.put(img_gen_task)
-
             return self.user_hmessage, self.bot_hmessage
 
         except TaskCensored:
@@ -3984,10 +3975,14 @@ class IsTyping:
         if hasattr(self, 'typing_event'):
             self.typing_event.clear()
 
-    def __del__(self):
+    async def close(self):
         self.stop()
-        if hasattr(self, 'typing_task') and self.typing_task is not None:
+        if self.typing_task:
             self.typing_task.cancel()
+            # try:
+            #     await self.typing_task
+            # except asyncio.CancelledError:
+            #     log.debug("Typing task cancelled.")
 
 #################################################################
 ################## MESSAGE (INSTANCE IN TASK) ###################
@@ -4200,9 +4195,10 @@ class Task(Tasks):
                 start_time = self.message.istyping_time
             self.istyping.start(start_time=start_time, end_time=end_time)
 
-    def stop_typing(self):
-        if self.istyping is not None:
-            self.istyping.stop()
+    async def stop_typing(self):
+        if self.istyping:
+            await self.istyping.close()
+            self.istyping = None
 
     def clone(self, name:str='', ictx:CtxInteraction|None=None, ignore_list:list|None=None, init_now:Optional[bool]=False, keep_typing:Optional[bool]=False) -> "Task":
         '''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
@@ -4291,12 +4287,6 @@ class Task(Tasks):
         except TaskCensored:
             raise
 
-    # Ensures typing tasks are cleaned up while deleting Task() instance
-    def __del__(self):
-        if self.istyping is not None:
-            self.istyping.stop()
-            del self.istyping
-
 #################################################################
 ######################### TASK MANAGER ##########################
 #################################################################
@@ -4345,7 +4335,7 @@ class TaskManager(Tasks):
                         await message_manager.queue_delayed_message(task)
                     # Finished tasks are deleted
                     else:
-                        task.stop_typing()
+                        await task.stop_typing()
                         del task
                         await bot_status.schedule_go_idle()
 
@@ -6326,7 +6316,7 @@ class MessageManager():
                 await task.message_post_llm_task()
         except Exception as e:
             log.error('An error occurred while sending a delayed message:', e)
-        task.stop_typing()                      # stop typing
+        await task.stop_typing()
         del task                                # delete task object
         self.last_send_time = time.time()       # log time
         self.send_msg_event.clear()
