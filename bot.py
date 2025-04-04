@@ -4557,7 +4557,7 @@ if sd.enabled:
                                 app_commands.Choice(name="Yes, send my prompt to the LLM", value="Yes"),
                                 app_commands.Choice(name="Yes, auto-prefixed: 'Provide a detailed image prompt description for: '", value="YesWithPrefix")]
             else:
-                use_llm_choices = [app_commands.Choice(name="**option disabled** (LLM is not integrated)", value="None")]
+                use_llm_choices = [app_commands.Choice(name="**disabled** (LLM not available)", value="None")]
             return size_choices, style_choices, use_llm_choices
 
         except Exception as e:
