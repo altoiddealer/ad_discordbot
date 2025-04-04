@@ -4552,9 +4552,12 @@ if sd.enabled:
                             for option in size_options]
             style_choices = [app_commands.Choice(name=option['name'], value=option['name'])
                              for option in style_options]
-            use_llm_choices = [app_commands.Choice(name="No, just img gen from my prompt", value="No"),
-                               app_commands.Choice(name="Yes, send my prompt to the LLM", value="Yes"),
-                               app_commands.Choice(name="Yes, auto-prefixed: 'Provide a detailed image prompt description for: '", value="YesWithPrefix")]
+            if tgwui_enabled:
+                use_llm_choices = [app_commands.Choice(name="No, just img gen from my prompt", value="No"),
+                                app_commands.Choice(name="Yes, send my prompt to the LLM", value="Yes"),
+                                app_commands.Choice(name="Yes, auto-prefixed: 'Provide a detailed image prompt description for: '", value="YesWithPrefix")]
+            else:
+                use_llm_choices = [app_commands.Choice(name="**option disabled** (LLM is not integrated)", value="None")]
             return size_choices, style_choices, use_llm_choices
 
         except Exception as e:
@@ -4624,9 +4627,11 @@ if sd.enabled:
     cnet_enabled = config.sd['extensions'].get('controlnet_enabled', False)
     reactor_enabled = config.sd['extensions'].get('reactor_enabled', False)
 
+    use_llm_status = 'Whether to send your prompt to LLM. Results may vary!' if tgwui_enabled else '**option disabled** (LLM is not integrated)'
+
     if cnet_enabled and reactor_enabled:
         @client.hybrid_command(name="image", description=f'Generate an image using {sd.client}')
-        @app_commands.describe(use_llm='Whether to send your prompt to LLM. Results may vary!')
+        @app_commands.describe(use_llm=use_llm_status)
         @app_commands.describe(style='Applies a positive/negative prompt preset')
         @app_commands.describe(img2img='Diffuses from an input image instead of pure latent noise.')
         @app_commands.describe(img2img_mask='Masks the diffusion strength for the img2img input. Requires img2img.')
@@ -4645,6 +4650,7 @@ if sd.enabled:
             await process_image(ctx, user_selections)
     elif cnet_enabled and not reactor_enabled:
         @client.hybrid_command(name="image", description=f'Generate an image using {sd.client}')
+        @app_commands.describe(use_llm=use_llm_status)
         @app_commands.describe(style='Applies a positive/negative prompt preset')
         @app_commands.describe(img2img='Diffuses from an input image instead of pure latent noise.')
         @app_commands.describe(img2img_mask='Masks the diffusion strength for the img2img input. Requires img2img.')
@@ -4660,6 +4666,7 @@ if sd.enabled:
             await process_image(ctx, user_selections)
     elif reactor_enabled and not cnet_enabled:
         @client.hybrid_command(name="image", description=f'Generate an image using {sd.client}')
+        @app_commands.describe(use_llm=use_llm_status)
         @app_commands.describe(style='Applies a positive/negative prompt preset')
         @app_commands.describe(img2img='Diffuses from an input image instead of pure latent noise.')
         @app_commands.describe(img2img_mask='Masks the diffusion strength for the img2img input. Requires img2img.')
@@ -4675,6 +4682,7 @@ if sd.enabled:
             await process_image(ctx, user_selections)
     else:
         @client.hybrid_command(name="image", description=f'Generate an image using {sd.client}')
+        @app_commands.describe(use_llm=use_llm_status)
         @app_commands.describe(style='Applies a positive/negative prompt preset')
         @app_commands.describe(img2img='Diffuses from an input image instead of pure latent noise.')
         @app_commands.describe(img2img_mask='Masks the diffusion strength for the img2img input. Requires img2img.')
@@ -4699,6 +4707,8 @@ if sd.enabled:
         # User inputs from /image command
         prompt = selections.get('prompt', '')
         use_llm = selections.get('use_llm', None)
+        if not tgwui_enabled:
+            use_llm = None
         size = selections.get('size', None)
         style = selections.get('style', {})
         neg_prompt = selections.get('neg_prompt', '')
