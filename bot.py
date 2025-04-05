@@ -69,9 +69,15 @@ TOKEN = config.discord.get('TOKEN', None)
 
 bot_token = bot_args.token if bot_args.token else TOKEN
 if not bot_token:
-    print('\nA Discord bot token is required. Please enter it below.\n \
-          For help, refer to Install instructions on the project page\n \
-          (https://github.com/altoiddealer/ad_discordbot)')
+    print(
+        '''A Discord bot token is required. You may enter it now or manually in 'config.yaml'.
+          You may also use '--token {token}' in 'CMD_FLAGS.txt.
+          If you enter it here, #comments will be cleared from 'config.yaml'.
+          Clean settings templates always available in '/settings_templates/'
+        
+          For help regarding Discord bot token, see Install instructions on the project page
+          (https://github.com/altoiddealer/ad_discordbot)'''
+          )
 
     print('\nDiscord bot token (enter "0" to exit):\n')
     bot_token = (input().strip())
