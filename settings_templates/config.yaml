@@ -57,7 +57,6 @@ textgenwebui:
   # History handling settings
   chat_history:
     limit_history: true                 # Recommended to keep as true. This will limit the stored history to roughly the current 'truncation_length' (more than enough retained). You may have performance issues if set to false.
-    autosave_history: false             # Set this value to true to continuously save history. Use '/save_conversation' to manually save your conversation.
     export_for_tgwui: true              # Defines if your history save can be later imported into standalone text-generation-webui.
     autoload_history: false             # Set to true if you want the character to load with the most recently saved chat history.
     change_char_history_method: new     # 'new' - start new history; 'keep' - retain history for next character (only applicable if 'autoload_history: true')
