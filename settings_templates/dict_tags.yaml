@@ -63,7 +63,7 @@ base_tags:
         should_gen_text: false                  # ** IF NO TEXT GEN - the prompt will be used directly for Image Generation **
         should_send_text: true                  # Send the prompt to channel
 
-  # Tag that triggers a 'Flow' which asks M1nty-SDXL repeatedly to add more details to it's previous reply.
+  # Tag that triggers a 'Flow' which asks Prompt_Enhancer_XL repeatedly to add more details to it's previous reply.
   - trigger: 'loopback'                         # Intended to be used with a prompt like 'draw _______ loopback'
     insert_text: ''
     insert_text_method: 'replace'
@@ -75,7 +75,7 @@ base_tags:
           format_prompt: 'Provide a more detailed version of this prompt: {llm_0}'
           save_history: False
           load_history: -1
-          swap_character: M1nty-SDXL
+          swap_character: Prompt_Enhancer_XL
           should_send_text: false
           should_gen_image: false
       - flow_step: Request more details
@@ -86,19 +86,19 @@ base_tags:
         should_send_text: true                  # finally, send the reply to channel
 
   # Tag to trigger M1nty to make a more elaborate prompt from user's prompt
-  - name: 'img gen M1nty SDXL'
+  - name: 'img gen Prompt_Enhancer_XL'
     trigger: 'draw,generate'
     insert_text: ''               # Replace the matched phrase with an empty string
     insert_text_method: replace   # Other methods are 'before' and 'after', but 'replace' is correct for this...
     search_mode: user             # Only search user's prompt (will not trigger from LLM reply)
     on_prefix_only: true          # Only triggers if matched at very beginning
     should_gen_image: true        # Triggers an image generation (will send to channel afterwards by default - cann be suppressed with 'should_send_image' tag)
-    swap_character: M1nty-SDXL    # Swap to character finetuned for writing more elaborate image prompts from simple prompts
+    swap_character: Prompt_Enhancer_XL    # Swap to character finetuned for writing more elaborate image prompts from simple prompts
     load_history: -1              # 0 = default (all history included) / -1 = prompt excludes chat history / > 1 = llm only sees this many recent exchanges.
     save_history: false           # Do not write this interaction to the main chat history
 
   - name: Example using only_with_tags
-    only_with_tags: ['img gen M1nty SDXL', 'another tag name'] # Condition that is True if any of the listed tag names are matched
+    only_with_tags: ['img gen Prompt_Enhancer_XL', 'another tag name'] # Condition that is True if any of the listed tag names are matched
     # Does nothing. Just for example usage of the parameter.
 
   # Some tags to trigger/enhance image responses using the current character including chat history
