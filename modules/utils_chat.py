@@ -88,7 +88,7 @@ def load_bot_character(character, name1, name2, should_warn=True):
 
     if filepath is None or not filepath.exists():
         if should_warn:
-            log.error(f"Could not find the character \"{character}\" inside characters/. No character has been loaded.")
+            log.error(f"Could not find the character \"{character}\" inside 'user/characters/'. No character has been loaded.")
             raise ValueError
         return None, None, None, None, None
 
