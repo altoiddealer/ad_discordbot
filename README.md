@@ -2,7 +2,7 @@
 
 ### Uniting [text-generation-webui](https://github.com/oobabooga/text-generation-webui) and Stable Diffusion ([A1111](https://github.com/AUTOMATIC1111/stable-diffusion-webui) / [Forge](https://github.com/lllyasviel/stable-diffusion-webui-forge) / [ReForge](https://github.com/Panchovix/stable-diffusion-webui-reForge)) for casual fun, creativity & professional use.
 
-- **text-generation-webui** is required. **Stable Diffusion** is optional.
+- Both **text-generation-webui** and **Stable Diffusion** are **optional.**
 - The features of both can be independently enabled/disabled in the main config file.
 
 ---
@@ -23,6 +23,18 @@
 
 <details>
   <summary>click to expand</summary>
+
+   **04/04/2025:** Major rewrite of core install logic (can now be installed as a Standalone!) **Update Wizards!**
+
+   This bot has always required text-generation-webui to function.  Now, the bot may installed as a standalone, or optionally with TGWUI integration.
+
+   This update also replaces the Update scripts with Update Wizards.  From the wizard it is possible to change between Standalone and TGWUI integration.
+
+   <img width="662" alt="Screenshot 2025-04-04 215229" src="https://github.com/user-attachments/assets/03a20ac8-db09-4fbf-91b4-8376d8bc059e" />
+
+   <img width="609" alt="Screenshot 2025-04-04 215515" src="https://github.com/user-attachments/assets/4593ecdb-3e44-487e-a213-884fb627af80" />
+   
+  ---
 
    **08/19/2024:** Major User Settings Enhancement: **Per-Server Settings!**
 
@@ -384,7 +396,7 @@
 
 ## Installation
 
-1. **Install oobabooga's [text-generation-webui](https://github.com/oobabooga/text-generation-webui)**
+1. **OPTIONAL FOR TGWUI INTEGRATION:** Install oobabooga's [text-generation-webui](https://github.com/oobabooga/text-generation-webui)
 
 2. **[Create a Discord bot account](https://discordpy.readthedocs.io/en/stable/discord.html), invite it to your server, and note its authentication token**.
 
@@ -392,20 +404,21 @@
    
    !!! **[Enabling Privileged Intents](https://discord.com/developers/docs/topics/gateway#enabling-privileged-intents)** !!!
 
-4. Clone this repository into **/text-generation-webui/**
+4. Clone this repository anywhere.
+   
+   **FOR TGWUI INTEGRATION:** clone into **/text-generation-webui/**
+   
    ```
    git clone https://github.com/altoiddealer/ad_discordbot
    ```
 
-5. **Run the updater** for your OS (**ex: update_windows.bat**) which will install requirements:
+5. **Run the launcher** for your OS (**ex: start_windows.bat**)
 
-6. **Run the launcher** for your OS (**ex: start_windows.bat**)
-
-7. **Enter your bot token (from Step 2) into the CMD window**
+6. **Enter your bot token (from Step 2) into the CMD window**
 
    <img width="559" alt="Screenshot 2024-05-25 100216" src="https://github.com/altoiddealer/ad_discordbot/assets/1613484/ff5207ec-954e-4e71-975d-ce171c1c42c8">
 
-8. **The bot should now be up and running!**
+7. **The bot should now be up and running!**
   
    If a Welcome message does not appear in your main channel, you can use `/helpmenu` to see it.
 
@@ -480,18 +493,7 @@
 
 ## Updating
 
-1. **Run the launcher** for your OS (**ex: start_windows.bat**)
+1. **Run the update-wizard** for your OS (**ex: update_wizard_windows.bat**)
 
-2. **IF settings template files have changed ('config.yaml', 'dict_X.yaml', etc:**
+<img width="609" alt="Screenshot 2025-04-04 215515" src="https://github.com/user-attachments/assets/f33ff332-babd-4508-8b73-58aca743b5c3" />
 
-   **The bot should continue functioning, but you may miss out on new features until migrating new settings to your existing settings**
-   - migrate the changes from the files in **`settings_templates`** into your settings,
-   - **OR** migrate values from your settings into a copy of the updated templates
-
-   **Example**: config.yaml gets updated with a new feature.
-
-   Solution is to either:
-
-   * Update your existing config.yaml with the new feature,
-
-   * **OR** make a copy of the new config.yaml and update it with your settings.
