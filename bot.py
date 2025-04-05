@@ -1372,63 +1372,6 @@ class TaskProcessing(TaskAttributes):
             swap_llmmodel: str           = mods.get('swap_llmmodel', None)
             should_tts: bool             = mods.get('should_tts', None)
 
-            # Begin reply with handling
-            if begin_reply_with is not None:
-                setattr(self.params, 'begin_reply_with', begin_reply_with)
-                self.apply_begin_reply_with()
-                log.info(f"[TAGS] Reply is being continued from: '{begin_reply_with}'")
-
-            # TTS Adjustments
-            if should_tts is not None:
-                self.params.should_tts = should_tts
-            # History handling
-            if save_history is not None:
-                self.params.save_to_history = save_history # save_to_history
-            if filter_history_for is not None or load_history is not None or include_hidden_history is not None:
-                history_to_render = self.local_history
-                include_hidden = False
-                # Filter history
-                if filter_history_for is not None:
-                    history_to_render = self.local_history.get_filtered_history_for(names_list=filter_history_for)
-                    log.info(f"[TAGS] History is being filtered for: {filter_history_for}")
-                # Include hidden history
-                if include_hidden_history:
-                    include_hidden = True
-                    log.info(f"[TAGS] Any 'hidden' History is being included.")
-                # Render history for payload
-                i_list, v_list = history_to_render.render_to_tgwui_tuple(include_hidden)
-                # Factor load history tag
-                if load_history is not None:
-                    if load_history <= 0:
-                        i_list, v_list = [], []
-                        log.info("[TAGS] History is being ignored")
-                    else:
-                        # Calculate the number of items to retain (up to the length of history)
-                        num_to_retain = min(load_history, len(i_list))
-                        i_list, v_list = i_list[-num_to_retain:], v_list[-num_to_retain:]
-                        log.info(f'[TAGS] History is being limited to previous {load_history} exchanges')
-                # Apply history changes
-                self.llm_payload['state']['history']['internal'] = i_list
-                self.llm_payload['state']['history']['visible'] = v_list
-            # Payload param variances
-            if param_variances:
-                processed_params = self.process_param_variances(param_variances)
-                log.info(f'[TAGS] LLM Param Variances: {processed_params}')
-                sum_update_dict(self.llm_payload['state'], processed_params) # Updates dictionary while adding floats + ints
-            if state:
-                update_dict(self.llm_payload['state'], state)
-                log.info('[TAGS] LLM State was modified')
-            # Context insertions
-            if prefix_context:
-                prefix_str = "\n".join(str(item) for item in prefix_context)
-                if prefix_str:
-                    self.llm_payload['state']['context'] = f"{prefix_str}\n{self.llm_payload['state']['context']}"
-                    log.info('[TAGS] Prefixed context with text.')
-            if suffix_context:
-                suffix_str = "\n".join(str(item) for item in suffix_context)
-                if suffix_str:
-                    self.llm_payload['state']['context'] = f"{self.llm_payload['state']['context']}\n{suffix_str}"
-                    log.info('[TAGS] Suffixed context with text.')
             # Character handling
             char_params = change_character or swap_character or {} # 'character_change' will trump 'character_swap'
             if char_params:
@@ -1446,21 +1389,81 @@ class TaskProcessing(TaskAttributes):
                         verb = 'Swapping'
                         await self.swap_llm_character(swap_character)
                     log.info(f'[TAGS] {verb} Character: {char_params}')
-            # LLM model handling
-            model_change = change_llmmodel or swap_llmmodel or None # 'llmmodel_change' will trump 'llmmodel_swap'
-            if model_change:
-                if model_change == shared.model_name:
-                    log.info(f'[TAGS] LLM model was triggered to change, but it is the same as current ("{shared.model_name}").')
-                else:
-                    mode = 'change' if model_change == change_llmmodel else 'swap'
-                    verb = 'Changing' if mode == 'change' else 'Swapping'
-                    # Error handling
-                    all_llmmodels = utils.get_available_models()
-                    if not any(model_change == model for model in all_llmmodels):
-                        log.error(f'LLM model not found: {model_change}')
+
+            # Tags applicable to TGWUI
+            if tgwui_enabled:
+                # Begin reply with handling
+                if begin_reply_with is not None:
+                    setattr(self.params, 'begin_reply_with', begin_reply_with)
+                    self.apply_begin_reply_with()
+                    log.info(f"[TAGS] Reply is being continued from: '{begin_reply_with}'")
+                # TTS Adjustments
+                if should_tts is not None:
+                    self.params.should_tts = should_tts
+                # History handling
+                if save_history is not None:
+                    self.params.save_to_history = save_history # save_to_history
+                if filter_history_for is not None or load_history is not None or include_hidden_history is not None:
+                    history_to_render = self.local_history
+                    include_hidden = False
+                    # Filter history
+                    if filter_history_for is not None:
+                        history_to_render = self.local_history.get_filtered_history_for(names_list=filter_history_for)
+                        log.info(f"[TAGS] History is being filtered for: {filter_history_for}")
+                    # Include hidden history
+                    if include_hidden_history:
+                        include_hidden = True
+                        log.info(f"[TAGS] Any 'hidden' History is being included.")
+                    # Render history for payload
+                    i_list, v_list = history_to_render.render_to_tgwui_tuple(include_hidden)
+                    # Factor load history tag
+                    if load_history is not None:
+                        if load_history <= 0:
+                            i_list, v_list = [], []
+                            log.info("[TAGS] History is being ignored")
+                        else:
+                            # Calculate the number of items to retain (up to the length of history)
+                            num_to_retain = min(load_history, len(i_list))
+                            i_list, v_list = i_list[-num_to_retain:], v_list[-num_to_retain:]
+                            log.info(f'[TAGS] History is being limited to previous {load_history} exchanges')
+                    # Apply history changes
+                    self.llm_payload['state']['history']['internal'] = i_list
+                    self.llm_payload['state']['history']['visible'] = v_list
+                # Payload param variances
+                if param_variances:
+                    processed_params = self.process_param_variances(param_variances)
+                    log.info(f'[TAGS] LLM Param Variances: {processed_params}')
+                    sum_update_dict(self.llm_payload['state'], processed_params) # Updates dictionary while adding floats + ints
+                if state:
+                    update_dict(self.llm_payload['state'], state)
+                    log.info('[TAGS] LLM State was modified')
+                # Context insertions
+                if prefix_context:
+                    prefix_str = "\n".join(str(item) for item in prefix_context)
+                    if prefix_str:
+                        self.llm_payload['state']['context'] = f"{prefix_str}\n{self.llm_payload['state']['context']}"
+                        log.info('[TAGS] Prefixed context with text.')
+                if suffix_context:
+                    suffix_str = "\n".join(str(item) for item in suffix_context)
+                    if suffix_str:
+                        self.llm_payload['state']['context'] = f"{self.llm_payload['state']['context']}\n{suffix_str}"
+                        log.info('[TAGS] Suffixed context with text.')
+                # LLM model handling
+                model_change = change_llmmodel or swap_llmmodel or None # 'llmmodel_change' will trump 'llmmodel_swap'
+                if model_change:
+                    if model_change == shared.model_name:
+                        log.info(f'[TAGS] LLM model was triggered to change, but it is the same as current ("{shared.model_name}").')
                     else:
-                        log.info(f'[TAGS] {verb} LLM Model: {model_change}')
-                        self.params.llmmodel = {'llmmodel_name': model_change, 'mode': mode, 'verb': verb}
+                        mode = 'change' if model_change == change_llmmodel else 'swap'
+                        verb = 'Changing' if mode == 'change' else 'Swapping'
+                        # Error handling
+                        all_llmmodels = utils.get_available_models()
+                        if not any(model_change == model for model in all_llmmodels):
+                            log.error(f'LLM model not found: {model_change}')
+                        else:
+                            log.info(f'[TAGS] {verb} LLM Model: {model_change}')
+                            self.params.llmmodel = {'llmmodel_name': model_change, 'mode': mode, 'verb': verb}
+
         except TaskCensored:
             raise
         except Exception as e:
@@ -1664,12 +1667,16 @@ class TaskProcessing(TaskAttributes):
         # Toggle TTS back on if it was toggled off
         await tts.apply_toggle_tts(self.settings, toggle='on', tts_sw=tts_sw)
 
-    async def build_llm_payload(self:Union["Task","Tasks"]):
+    async def process_user_prompt(self:Union["Task","Tasks"]):
         # Update an existing LLM payload (Flows), or initialize with defaults
-        if self.llm_payload:
-            self.llm_payload['text'] = self.text
-        else:
-            await self.init_llm_payload()
+        if tgwui_enabled:
+            if self.llm_payload:
+                self.llm_payload['text'] = self.text
+            else:
+                await self.init_llm_payload()
+        # apply previously matched tags
+        await self.apply_generic_tag_matches(phase='llm')
+        self.tags.process_tag_insertions(self.llm_prompt)
         # collect matched tag values
         llm_payload_mods, formatting = await self.collect_llm_tag_values()
         # apply tags relevant to LLM payload
@@ -3086,35 +3093,31 @@ class Tasks(TaskProcessing):
     # message_task is split into two separate functions to apply any intentional delays after text is generated (behavior settings)
     async def message_llm_task(self:"Task"):
         try:
-            await spontaneous_messaging.reset_for_channel(self.ictx) # Stop any pending spontaneous message task for current channel
-
-            await self.tags.match_tags(self.text, self.settings.get_vars(), phase='llm') # match tags labeled for user / userllm.
-            await self.apply_generic_tag_matches(phase='llm')
-
             # make working copy of user's request
             self.llm_prompt = self.text
-            # apply previously matched tags to prompt
-            self.tags.process_tag_insertions(self.llm_prompt)
+
+            # Stop any pending spontaneous message task for current channel
+            await spontaneous_messaging.reset_for_channel(self.ictx)
+
+            # match tags labeled for user / userllm.
+            await self.tags.match_tags(self.text, self.settings.get_vars(), phase='llm')
+
+            # Updates prompt / LLM payload based on previously matched tags.
+            await self.process_user_prompt()
 
             # check what bot should do
             self.params.update_bot_should_do(self.tags)
 
             # Bot should generate text...
-            if self.params.should_gen_text:
-                
-                # Updates payload and prompt based on previously matched tags. Should run even if TGWUI disabled.
-                await self.build_llm_payload()
+            if tgwui_enabled and self.params.should_gen_text:
 
-                # Process text generation
-                if tgwui_enabled:
+                # Process LLM model change if any
+                if self.params.llmmodel:
+                    # RUN CHANGE LLMMODEL AS SUBTASK
+                    self.run_subtask('change_llmmodel')
 
-                    # Process LLM model change if any
-                    if self.params.llmmodel:
-                        # RUN CHANGE LLMMODEL AS SUBTASK
-                        self.run_subtask('change_llmmodel')
-
-                    # generate text with TGWUI
-                    await self.message_llm_gen()
+                # generate text with TGWUI
+                await self.message_llm_gen()
 
         except TaskCensored:
             await self.embeds.delete('img_gen')
