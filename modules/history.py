@@ -10,7 +10,7 @@ from typing import Union
 import copy
 from uuid import uuid4
 import json
-from modules.utils_shared import patterns
+from modules.utils_shared import patterns, is_tgwui_integrated
 from modules.utils_discord import get_message_ctx_inter, get_user_ctx_inter
 import asyncio
 from typing import (

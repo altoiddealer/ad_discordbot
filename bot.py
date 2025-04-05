@@ -35,15 +35,14 @@ import signal
 from typing import Union
 from functools import partial
 
-sys.path.append("ad_discordbot")
-
 from modules.utils_files import load_file, merge_base, save_yaml_file  # noqa: F401
-from modules.utils_shared import shared_path, bg_task_queue, task_event, flows_queue, flows_event, patterns, bot_emojis, config, bot_database
+from modules.utils_shared import bot_args, is_tgwui_integrated, shared_path, bg_task_queue, task_event, flows_queue, flows_event, patterns, bot_emojis, config, bot_database
 from modules.database import StarBoard, Statistics, BaseFileMemory
 from modules.utils_misc import check_probability, fix_dict, update_dict, sum_update_dict, update_dict_matched_keys, random_value_from_range, convert_lists_to_tuples, get_time, format_time, format_time_difference, get_normalized_weights  # noqa: F401
 from modules.utils_discord import Embeds, guild_only, guild_or_owner_only, configurable_for_dm_if, is_direct_message, ireply, sleep_delete_message, send_long_message, \
     EditMessageModal, SelectedListItem, SelectOptionsView, get_user_ctx_inter, get_message_ctx_inter, apply_reactions_to_messages, replace_msg_in_history_and_discord, MAX_MESSAGE_LENGTH, muffled_send  # noqa: F401
 from modules.utils_aspect_ratios import ar_parts_from_dims, dims_from_ar, avg_from_dims, get_aspect_ratio_parts, calculate_aspect_ratio_sizes  # noqa: F401
+from modules.utils_chat import custom_load_character, load_character_data
 from modules.history import HistoryManager, History, HMessage, cnf
 from modules.typing import AlertUserError, TAG
 from modules.utils_asyncio import generate_in_executor
@@ -65,37 +64,20 @@ bot_statistics = Statistics()
 #################################################################
 bot_embeds = Embeds()
 
-# Intercept custom bot arguments
-def parse_bot_args():
-    bot_arg_list = ["--limit-history", "--token"]
-    bot_argv = []
-    for arg in bot_arg_list:
-        try:
-            index = sys.argv.index(arg)
-        except Exception:
-            index = None
-
-        if index is not None:
-            bot_argv.append(sys.argv.pop(index))
-            bot_argv.append(sys.argv.pop(index))
-
-    import argparse
-    parser = argparse.ArgumentParser(formatter_class=lambda prog: argparse.HelpFormatter(prog, max_help_position=54))
-    parser.add_argument("--token", type=str, help="Discord bot token to use their API.")
-    parser.add_argument("--limit-history", type=int, help="When the history gets too large, performance issues can occur. Limit the history to improve performance.")
-    bot_args = parser.parse_args(bot_argv)
-    return bot_args
-
-bot_args = parse_bot_args()
-
 # Set Discord bot token from config, or args, or prompt for it, or exit
 TOKEN = config.discord.get('TOKEN', None)
 
 bot_token = bot_args.token if bot_args.token else TOKEN
 if not bot_token:
-    print('\nA Discord bot token is required. Please enter it below.\n \
-          For help, refer to Install instructions on the project page\n \
-          (https://github.com/altoiddealer/ad_discordbot)')
+    print(
+        '''A Discord bot token is required. You may enter it now or manually in 'config.yaml'.
+          You may also use '--token {token}' in 'CMD_FLAGS.txt.
+          If you enter it here, #comments will be cleared from 'config.yaml'.
+          Clean settings templates always available in '/settings_templates/'
+        
+          For help regarding Discord bot token, see Install instructions on the project page
+          (https://github.com/altoiddealer/ad_discordbot)'''
+          )
 
     print('\nDiscord bot token (enter "0" to exit):\n')
     bot_token = (input().strip())
@@ -321,10 +303,19 @@ if sd.enabled:
 #################################################################
 ##################### TEXTGENWEBUI STARTUP ######################
 #################################################################
-sys.path.append(shared_path.dir_tgwui)
+if is_tgwui_integrated:
+    log.info('The bot is installed with text-generation-webui integration. Loading applicable modules and features.')
+    sys.path.append(shared_path.dir_tgwui)
 
-from modules.utils_tgwui import tts, tgwui, shared, utils, extensions_module, \
-    custom_chatbot_wrapper, chatbot_wrapper, load_character, save_history, unload_model, count_tokens
+    from modules.utils_tgwui import tts, tgwui, shared, utils, extensions_module, \
+        custom_chatbot_wrapper, chatbot_wrapper, save_history, unload_model, count_tokens
+else:
+    log.warning('The bot is NOT installed with text-generation-webui integration.')
+    log.warning('Features related to text generation and TTS will not be available.')
+    log.warning('To integrate the bot with TGWUI, please refer to the github.')
+
+# Must be TGWUI integrated install, and also enabled in config
+tgwui_enabled = is_tgwui_integrated and tgwui.enabled
 
 #################################################################
 ##################### BACKGROUND QUEUE TASK #####################
@@ -436,26 +427,19 @@ def get_character(guild_id:int|None=None, guild_settings=None):
         joined_msg = f'has joined {settings._guild_name}'
     try:
         # Try loading last known character with fallback sources
-        sources = [
-            bot_settings.get_last_setting_for("last_character", guild_id=guild_id),
-            settings.llmcontext.name,
-            client.user.display_name
-        ]
+        sources = [bot_settings.get_last_setting_for("last_character", guild_id=guild_id),
+                   settings.llmcontext.name,
+                   client.user.display_name]
         char_name = None
-        for try_source in sources:
-            log.debug(f'Trying to load character "{try_source}"...')
-            try:
-                _, char_name, _, _, _ = load_character(try_source, '', '')
-                if char_name:
-                    log.info(f'"{try_source}" {joined_msg}.')
-                    source = try_source
-                    break  # Character loaded successfully, exit the loop
-            except Exception as e:
-                log.error(f"Error loading character for chat mode: {e}")
+        for source_name in sources:
+            log.debug(f'Trying to load character "{source_name}"...')
+            _, char_name, _, _, _ = custom_load_character(source_name, '', '', try_tgwui=tgwui_enabled)
+            if char_name:
+                log.info(f'"{source_name}" {joined_msg}.')
+                return source_name
         if not char_name:
-            log.error(f"Character not found. Tried files: {sources}")
+            log.error(f"Character not found. Tried files: {sources}.")          
             return None
-        return source
     except Exception as e:
         log.error(f"Error trying to load character data: {e}")
         return None
@@ -468,13 +452,11 @@ async def init_characters():
             log.info("----------------------------------------------")
             log.info(f"Initializing {settings._guild_name}...")
             char_name = get_character(guild_id, settings)
-            if char_name:
-                await character_loader(char_name, settings, guild_id=guild_id)
+            await character_loader(char_name, settings, guild_id=guild_id)
     # Not per-server characters
     else:
         char_name = get_character()
-        if char_name:
-            await character_loader(char_name, bot_settings)
+        await character_loader(char_name, bot_settings)
     bot_status.build_idle_weights()
 
 def update_base_tags_modified():
@@ -559,8 +541,7 @@ async def on_ready():
         await init_guilds()
 
         # Load character(s)
-        if tgwui.enabled:
-            await init_characters()
+        await init_characters()
 
         # Start background task to to change image models automatically
         await init_auto_change_imgmodels()
@@ -591,7 +572,7 @@ async def on_message(message: discord.Message):
     text = message.clean_content # primarily converts @mentions to actual user names
     settings:Settings = get_settings(message)
     last_character = bot_settings.get_last_setting_for("last_character", message)
-    if tgwui.enabled and not settings.behavior.bot_should_reply(message, text, last_character): 
+    if not settings.behavior.bot_should_reply(message, text, last_character): 
         return # Check that bot should reply or not
     # Store the current time. The value will save locally to database.yaml at another time
     bot_database.update_last_msg_for(message.channel.id, 'user', save_now=False)
@@ -988,7 +969,7 @@ async def set_server_voice_channel(ctx: commands.Context, channel: Optional[disc
     bot_database.update_voice_channels(ctx.guild.id, channel.id)
     await ctx.send(f"Voice channel for **{ctx.guild}** set to **{channel.name}**.", delete_after=5)
 
-if tgwui.enabled:
+if tgwui_enabled:
     # Register command for helper function to toggle TTS
     @client.hybrid_command(description='Toggles TTS on/off')
     @guild_only()
@@ -1006,7 +987,7 @@ if tgwui.enabled:
 ###################### DYNAMIC PROMPTING ########################
 #################################################################
 def get_wildcard_value(matched_text:str, dir_path: Optional[str] = None) -> Optional[str]:
-    dir_path = dir_path or shared_path.dir_wildcards
+    dir_path = dir_path or shared_path.dir_user_wildcards
     selected_option: Optional[str] = None
     search_phrase = matched_text[2:] if matched_text.startswith('##') else matched_text
     search_path = f"{search_phrase}.txt"
@@ -1041,7 +1022,7 @@ def get_wildcard_value(matched_text:str, dir_path: Optional[str] = None) -> Opti
             # Get the last component of the nested directory path
             search_phrase = os.path.split(nested_dir)[-1]
             # Remove the last component from the nested directory path
-            nested_dir = os.path.join(shared_path.dir_wildcards, os.path.dirname(nested_dir))
+            nested_dir = os.path.join(shared_path.dir_user_wildcards, os.path.dirname(nested_dir))
             # Recursively check filenames in the nested directory
             selected_option = get_wildcard_value(search_phrase, nested_dir)
     return selected_option
@@ -1094,7 +1075,7 @@ def get_braces_value(matched_text:str) -> str:
         wildcard_match = patterns.wildcard.search(option)
         if wildcard_match:
             wildcard_phrase = wildcard_match.group()
-            wildcard_value = get_wildcard_value(matched_text=wildcard_phrase, dir_path=shared_path.dir_wildcards)
+            wildcard_value = get_wildcard_value(matched_text=wildcard_phrase, dir_path=shared_path.dir_user_wildcards)
             if wildcard_value:
                 chosen_options[index] = wildcard_value
     chosen_options = [option for option in chosen_options if option is not None]
@@ -1128,7 +1109,7 @@ async def dynamic_prompting(text: str, ictx: Optional[CtxInteraction] = None, us
     wildcard_matches = sorted(wildcard_matches, key=lambda x: -x.start())  # Sort matches in reverse order by their start indices
     for match in wildcard_matches:
         matched_text = match.group()
-        replaced_text = get_wildcard_value(matched_text=matched_text, dir_path=shared_path.dir_wildcards)
+        replaced_text = get_wildcard_value(matched_text=matched_text, dir_path=shared_path.dir_user_wildcards)
         if replaced_text:
             start, end = match.start(), match.end()
             # Replace matched text
@@ -1205,7 +1186,7 @@ class Params:
         # Image related params
         self.img_censoring: int = kwargs.get('img_censoring', 0)
         self.endpoint: str      = kwargs.get('endpoint', '/sdapi/v1/txt2img')
-        self.sd_output_dir: str = kwargs.get('sd_output_dir', 'sd_outputs')
+        self.sd_output_dir: str = kwargs.get('sd_output_dir', '')
 
         # discord/HMessage related params
         self.ref_message                 = kwargs.get('ref_message', None)
@@ -1241,7 +1222,7 @@ class Params:
                         if key in actions:
                             setattr(self, key, value)
             # Disable things as set by config
-            if not tgwui.enabled:
+            if not tgwui_enabled:
                 self.should_gen_text = False
                 self.should_send_text = False
             if not sd.enabled:
@@ -1367,7 +1348,7 @@ class TaskProcessing(TaskAttributes):
 
     async def swap_llm_character(self:Union["Task","Tasks"], char_name:str):
         try:
-            char_data = await load_character_data(char_name)
+            char_data = await load_character_data(char_name, try_tgwui=tgwui_enabled)
             if char_data.get('state', {}):
                 self.llm_payload['state'] = char_data['state']
                 self.llm_payload['state']['name1'] = self.user_name
@@ -1397,63 +1378,6 @@ class TaskProcessing(TaskAttributes):
             swap_llmmodel: str           = mods.get('swap_llmmodel', None)
             should_tts: bool             = mods.get('should_tts', None)
 
-            # Begin reply with handling
-            if begin_reply_with is not None:
-                setattr(self.params, 'begin_reply_with', begin_reply_with)
-                self.apply_begin_reply_with()
-                log.info(f"[TAGS] Reply is being continued from: '{begin_reply_with}'")
-
-            # TTS Adjustments
-            if should_tts is not None:
-                self.params.should_tts = should_tts
-            # History handling
-            if save_history is not None:
-                self.params.save_to_history = save_history # save_to_history
-            if filter_history_for is not None or load_history is not None or include_hidden_history is not None:
-                history_to_render = self.local_history
-                include_hidden = False
-                # Filter history
-                if filter_history_for is not None:
-                    history_to_render = self.local_history.get_filtered_history_for(names_list=filter_history_for)
-                    log.info(f"[TAGS] History is being filtered for: {filter_history_for}")
-                # Include hidden history
-                if include_hidden_history:
-                    include_hidden = True
-                    log.info(f"[TAGS] Any 'hidden' History is being included.")
-                # Render history for payload
-                i_list, v_list = history_to_render.render_to_tgwui_tuple(include_hidden)
-                # Factor load history tag
-                if load_history is not None:
-                    if load_history <= 0:
-                        i_list, v_list = [], []
-                        log.info("[TAGS] History is being ignored")
-                    else:
-                        # Calculate the number of items to retain (up to the length of history)
-                        num_to_retain = min(load_history, len(i_list))
-                        i_list, v_list = i_list[-num_to_retain:], v_list[-num_to_retain:]
-                        log.info(f'[TAGS] History is being limited to previous {load_history} exchanges')
-                # Apply history changes
-                self.llm_payload['state']['history']['internal'] = i_list
-                self.llm_payload['state']['history']['visible'] = v_list
-            # Payload param variances
-            if param_variances:
-                processed_params = self.process_param_variances(param_variances)
-                log.info(f'[TAGS] LLM Param Variances: {processed_params}')
-                sum_update_dict(self.llm_payload['state'], processed_params) # Updates dictionary while adding floats + ints
-            if state:
-                update_dict(self.llm_payload['state'], state)
-                log.info('[TAGS] LLM State was modified')
-            # Context insertions
-            if prefix_context:
-                prefix_str = "\n".join(str(item) for item in prefix_context)
-                if prefix_str:
-                    self.llm_payload['state']['context'] = f"{prefix_str}\n{self.llm_payload['state']['context']}"
-                    log.info('[TAGS] Prefixed context with text.')
-            if suffix_context:
-                suffix_str = "\n".join(str(item) for item in suffix_context)
-                if suffix_str:
-                    self.llm_payload['state']['context'] = f"{self.llm_payload['state']['context']}\n{suffix_str}"
-                    log.info('[TAGS] Suffixed context with text.')
             # Character handling
             char_params = change_character or swap_character or {} # 'character_change' will trump 'character_swap'
             if char_params:
@@ -1471,21 +1395,81 @@ class TaskProcessing(TaskAttributes):
                         verb = 'Swapping'
                         await self.swap_llm_character(swap_character)
                     log.info(f'[TAGS] {verb} Character: {char_params}')
-            # LLM model handling
-            model_change = change_llmmodel or swap_llmmodel or None # 'llmmodel_change' will trump 'llmmodel_swap'
-            if model_change:
-                if model_change == shared.model_name:
-                    log.info(f'[TAGS] LLM model was triggered to change, but it is the same as current ("{shared.model_name}").')
-                else:
-                    mode = 'change' if model_change == change_llmmodel else 'swap'
-                    verb = 'Changing' if mode == 'change' else 'Swapping'
-                    # Error handling
-                    all_llmmodels = utils.get_available_models()
-                    if not any(model_change == model for model in all_llmmodels):
-                        log.error(f'LLM model not found: {model_change}')
+
+            # Tags applicable to TGWUI
+            if tgwui_enabled:
+                # Begin reply with handling
+                if begin_reply_with is not None:
+                    setattr(self.params, 'begin_reply_with', begin_reply_with)
+                    self.apply_begin_reply_with()
+                    log.info(f"[TAGS] Reply is being continued from: '{begin_reply_with}'")
+                # TTS Adjustments
+                if should_tts is not None:
+                    self.params.should_tts = should_tts
+                # History handling
+                if save_history is not None:
+                    self.params.save_to_history = save_history # save_to_history
+                if filter_history_for is not None or load_history is not None or include_hidden_history is not None:
+                    history_to_render = self.local_history
+                    include_hidden = False
+                    # Filter history
+                    if filter_history_for is not None:
+                        history_to_render = self.local_history.get_filtered_history_for(names_list=filter_history_for)
+                        log.info(f"[TAGS] History is being filtered for: {filter_history_for}")
+                    # Include hidden history
+                    if include_hidden_history:
+                        include_hidden = True
+                        log.info(f"[TAGS] Any 'hidden' History is being included.")
+                    # Render history for payload
+                    i_list, v_list = history_to_render.render_to_tgwui_tuple(include_hidden)
+                    # Factor load history tag
+                    if load_history is not None:
+                        if load_history <= 0:
+                            i_list, v_list = [], []
+                            log.info("[TAGS] History is being ignored")
+                        else:
+                            # Calculate the number of items to retain (up to the length of history)
+                            num_to_retain = min(load_history, len(i_list))
+                            i_list, v_list = i_list[-num_to_retain:], v_list[-num_to_retain:]
+                            log.info(f'[TAGS] History is being limited to previous {load_history} exchanges')
+                    # Apply history changes
+                    self.llm_payload['state']['history']['internal'] = i_list
+                    self.llm_payload['state']['history']['visible'] = v_list
+                # Payload param variances
+                if param_variances:
+                    processed_params = self.process_param_variances(param_variances)
+                    log.info(f'[TAGS] LLM Param Variances: {processed_params}')
+                    sum_update_dict(self.llm_payload['state'], processed_params) # Updates dictionary while adding floats + ints
+                if state:
+                    update_dict(self.llm_payload['state'], state)
+                    log.info('[TAGS] LLM State was modified')
+                # Context insertions
+                if prefix_context:
+                    prefix_str = "\n".join(str(item) for item in prefix_context)
+                    if prefix_str:
+                        self.llm_payload['state']['context'] = f"{prefix_str}\n{self.llm_payload['state']['context']}"
+                        log.info('[TAGS] Prefixed context with text.')
+                if suffix_context:
+                    suffix_str = "\n".join(str(item) for item in suffix_context)
+                    if suffix_str:
+                        self.llm_payload['state']['context'] = f"{self.llm_payload['state']['context']}\n{suffix_str}"
+                        log.info('[TAGS] Suffixed context with text.')
+                # LLM model handling
+                model_change = change_llmmodel or swap_llmmodel or None # 'llmmodel_change' will trump 'llmmodel_swap'
+                if model_change:
+                    if model_change == shared.model_name:
+                        log.info(f'[TAGS] LLM model was triggered to change, but it is the same as current ("{shared.model_name}").')
                     else:
-                        log.info(f'[TAGS] {verb} LLM Model: {model_change}')
-                        self.params.llmmodel = {'llmmodel_name': model_change, 'mode': mode, 'verb': verb}
+                        mode = 'change' if model_change == change_llmmodel else 'swap'
+                        verb = 'Changing' if mode == 'change' else 'Swapping'
+                        # Error handling
+                        all_llmmodels = utils.get_available_models()
+                        if not any(model_change == model for model in all_llmmodels):
+                            log.error(f'LLM model not found: {model_change}')
+                        else:
+                            log.info(f'[TAGS] {verb} LLM Model: {model_change}')
+                            self.params.llmmodel = {'llmmodel_name': model_change, 'mode': mode, 'verb': verb}
+
         except TaskCensored:
             raise
         except Exception as e:
@@ -1653,8 +1637,8 @@ class TaskProcessing(TaskAttributes):
         self.params.update_bot_should_do(self.tags) # check for updates from tags
         if self.params.should_gen_image and await sd.online(self.ictx):
             # CLONE CURRENT TASK AND QUEUE IT
+            log.info('An image task was triggered, created and queued.')
             await self.embeds.send('system', title='Generating an image', description='An image task was triggered, created and queued.', delete_after=5)
-            #await self.channel.send('()', delete_after=5)
             img_gen_task = self.clone('img_gen', self.ictx, ignore_list=['llm_payload'])
             await task_manager.task_queue.put(img_gen_task)
 
@@ -1689,15 +1673,15 @@ class TaskProcessing(TaskAttributes):
         # Toggle TTS back on if it was toggled off
         await tts.apply_toggle_tts(self.settings, toggle='on', tts_sw=tts_sw)
 
-    async def build_llm_payload(self:Union["Task","Tasks"]):
+    async def process_user_prompt(self:Union["Task","Tasks"]):
         # Update an existing LLM payload (Flows), or initialize with defaults
-        if self.llm_payload:
-            self.llm_payload['text'] = self.text
-        else:
-            await self.init_llm_payload()
-        # make working copy of user's request
-        self.llm_prompt = self.text
-        # apply previously matched tags to prompt
+        if tgwui_enabled:
+            if self.llm_payload:
+                self.llm_payload['text'] = self.text
+            else:
+                await self.init_llm_payload()
+        # apply previously matched tags
+        await self.apply_generic_tag_matches(phase='llm')
         self.tags.process_tag_insertions(self.llm_prompt)
         # collect matched tag values
         llm_payload_mods, formatting = await self.collect_llm_tag_values()
@@ -2197,7 +2181,7 @@ class TaskProcessing(TaskAttributes):
                 bot_text = greeting_msg
             await send_long_message(self.channel, greeting_msg)
             # Play TTS Greeting
-            if tts.enabled and config.textgenwebui.get('tts_settings', {}).get('tts_greeting', False):
+            if tgwui_enabled and tts.enabled and config.textgenwebui.get('tts_settings', {}).get('tts_greeting', False):
                 self.text = bot_text
                 self.embeds.enabled_embeds = {'system': False}
                 self.params.tts_args = self.settings.llmcontext.extensions
@@ -2409,13 +2393,19 @@ class TaskProcessing(TaskAttributes):
 
     async def process_image_gen(self:Union["Task","Tasks"]):
         try:
-            base_dir = shared_path.dir_root
-            joined_output_dir = os.path.join(base_dir, self.params.sd_output_dir)
+            base_dir = os.path.abspath(shared_path.dir_root)
+            # Accept value whether it is relative or absolute
+            if os.path.isabs(self.params.sd_output_dir):
+                sd_output_dir = self.params.sd_output_dir
+            else:
+                sd_output_dir = os.path.join(shared_path.output_dir, self.params.sd_output_dir)
             # backwards compatibility (user defined output dir was originally expected to include the base directory)
-            sd_output_dir = joined_output_dir.replace(f'{base_dir}{os.sep}{base_dir}', base_dir) # replace double base prefix with one
+            if not os.path.commonpath([base_dir, sd_output_dir]).startswith(base_dir):
+                log.warning("Tried setting the SD output directory outside the bot. Defaulting to '/output'.")
+                sd_output_dir = shared_path.output_dir
             # Ensure the necessary directories exist
             os.makedirs(sd_output_dir, exist_ok=True)
-            temp_dir = os.path.join(shared_path.dir_root, 'user_images', '__temp')
+            temp_dir = os.path.join(shared_path.dir_user_images, '__temp')
             os.makedirs(temp_dir, exist_ok=True)
             # Generate images, save locally
             images = await self.sd_img_gen(temp_dir)
@@ -2717,7 +2707,7 @@ class TaskProcessing(TaskAttributes):
         image_file_path = ''
         method = ''
         try:
-            home_path = os.path.join(shared_path.dir_root, 'user_images')
+            home_path = shared_path.dir_user_images
             full_path = os.path.join(home_path, value)
             # If value contains valid image extension
             if any(ext in value for ext in (".txt", ".png", ".jpg")): # extension included in value
@@ -3109,28 +3099,31 @@ class Tasks(TaskProcessing):
     # message_task is split into two separate functions to apply any intentional delays after text is generated (behavior settings)
     async def message_llm_task(self:"Task"):
         try:
-            await spontaneous_messaging.reset_for_channel(self.ictx) # Stop any pending spontaneous message task for current channel
+            # make working copy of user's request
+            self.llm_prompt = self.text
 
-            await self.tags.match_tags(self.text, self.settings.get_vars(), phase='llm') # match tags labeled for user / userllm.
-            await self.apply_generic_tag_matches(phase='llm')
-            self.params.update_bot_should_do(self.tags)  # check what bot should do
+            # Stop any pending spontaneous message task for current channel
+            await spontaneous_messaging.reset_for_channel(self.ictx)
+
+            # match tags labeled for user / userllm.
+            await self.tags.match_tags(self.text, self.settings.get_vars(), phase='llm')
+
+            # Updates prompt / LLM payload based on previously matched tags.
+            await self.process_user_prompt()
+
+            # check what bot should do
+            self.params.update_bot_should_do(self.tags)
 
             # Bot should generate text...
-            if self.params.should_gen_text:
-                
-                # Updates payload and prompt based on previously matched tags. Should run even if TGWUI disabled.
-                await self.build_llm_payload()
+            if tgwui_enabled and self.params.should_gen_text:
 
-                # Process text generation
-                if tgwui.enabled:
+                # Process LLM model change if any
+                if self.params.llmmodel:
+                    # RUN CHANGE LLMMODEL AS SUBTASK
+                    self.run_subtask('change_llmmodel')
 
-                    # Process LLM model change if any
-                    if self.params.llmmodel:
-                        # RUN CHANGE LLMMODEL AS SUBTASK
-                        self.run_subtask('change_llmmodel')
-
-                    # generate text with TGWUI
-                    await self.message_llm_gen()
+                # generate text with TGWUI
+                await self.message_llm_gen()
 
         except TaskCensored:
             await self.embeds.delete('img_gen')
@@ -3185,15 +3178,6 @@ class Tasks(TaskProcessing):
             # Create an img gen task if triggered to
             if sd.enabled:
                 await self.message_img_gen()
-
-            # Create an img gen task if bot did not generate text but should generate image:
-            if not self.last_resp and self.params.should_gen_image:
-                if await sd.online(self.ictx):   # Notify user their prompt will be used directly for img gen
-                    await self.channel.send('Bot was triggered to not generate a text response.\n \
-                                    **Creating an image generation task using your input as the prompt...**', delete_after=5)
-                # CREATE A TASK AND QUEUE IT
-                img_gen_task = self.clone('img_gen', self.ictx, ignore_list=['llm_payload'])
-                await task_manager.task_queue.put(img_gen_task)
 
             return self.user_hmessage, self.bot_hmessage
 
@@ -3998,10 +3982,14 @@ class IsTyping:
         if hasattr(self, 'typing_event'):
             self.typing_event.clear()
 
-    def __del__(self):
+    async def close(self):
         self.stop()
-        if hasattr(self, 'typing_task') and self.typing_task is not None:
+        if self.typing_task:
             self.typing_task.cancel()
+            # try:
+            #     await self.typing_task
+            # except asyncio.CancelledError:
+            #     log.debug("Typing task cancelled.")
 
 #################################################################
 ################## MESSAGE (INSTANCE IN TASK) ###################
@@ -4214,9 +4202,10 @@ class Task(Tasks):
                 start_time = self.message.istyping_time
             self.istyping.start(start_time=start_time, end_time=end_time)
 
-    def stop_typing(self):
-        if self.istyping is not None:
-            self.istyping.stop()
+    async def stop_typing(self):
+        if self.istyping:
+            await self.istyping.close()
+            self.istyping = None
 
     def clone(self, name:str='', ictx:CtxInteraction|None=None, ignore_list:list|None=None, init_now:Optional[bool]=False, keep_typing:Optional[bool]=False) -> "Task":
         '''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
@@ -4305,12 +4294,6 @@ class Task(Tasks):
         except TaskCensored:
             raise
 
-    # Ensures typing tasks are cleaned up while deleting Task() instance
-    def __del__(self):
-        if self.istyping is not None:
-            self.istyping.stop()
-            del self.istyping
-
 #################################################################
 ######################### TASK MANAGER ##########################
 #################################################################
@@ -4359,7 +4342,7 @@ class TaskManager(Tasks):
                         await message_manager.queue_delayed_message(task)
                     # Finished tasks are deleted
                     else:
-                        task.stop_typing()
+                        await task.stop_typing()
                         del task
                         await bot_status.schedule_go_idle()
 
@@ -4576,9 +4559,12 @@ if sd.enabled:
                             for option in size_options]
             style_choices = [app_commands.Choice(name=option['name'], value=option['name'])
                              for option in style_options]
-            use_llm_choices = [app_commands.Choice(name="No, just img gen from my prompt", value="No"),
-                               app_commands.Choice(name="Yes, send my prompt to the LLM", value="Yes"),
-                               app_commands.Choice(name="Yes, auto-prefixed: 'Provide a detailed image prompt description for: '", value="YesWithPrefix")]
+            if tgwui_enabled:
+                use_llm_choices = [app_commands.Choice(name="No, just img gen from my prompt", value="No"),
+                                app_commands.Choice(name="Yes, send my prompt to the LLM", value="Yes"),
+                                app_commands.Choice(name="Yes, auto-prefixed: 'Provide a detailed image prompt description for: '", value="YesWithPrefix")]
+            else:
+                use_llm_choices = [app_commands.Choice(name="**disabled** (LLM not available)", value="None")]
             return size_choices, style_choices, use_llm_choices
 
         except Exception as e:
@@ -4648,9 +4634,11 @@ if sd.enabled:
     cnet_enabled = config.sd['extensions'].get('controlnet_enabled', False)
     reactor_enabled = config.sd['extensions'].get('reactor_enabled', False)
 
+    use_llm_status = 'Whether to send your prompt to LLM. Results may vary!' if tgwui_enabled else '**option disabled** (LLM is not integrated)'
+
     if cnet_enabled and reactor_enabled:
         @client.hybrid_command(name="image", description=f'Generate an image using {sd.client}')
-        @app_commands.describe(use_llm='Whether to send your prompt to LLM. Results may vary!')
+        @app_commands.describe(use_llm=use_llm_status)
         @app_commands.describe(style='Applies a positive/negative prompt preset')
         @app_commands.describe(img2img='Diffuses from an input image instead of pure latent noise.')
         @app_commands.describe(img2img_mask='Masks the diffusion strength for the img2img input. Requires img2img.')
@@ -4669,6 +4657,7 @@ if sd.enabled:
             await process_image(ctx, user_selections)
     elif cnet_enabled and not reactor_enabled:
         @client.hybrid_command(name="image", description=f'Generate an image using {sd.client}')
+        @app_commands.describe(use_llm=use_llm_status)
         @app_commands.describe(style='Applies a positive/negative prompt preset')
         @app_commands.describe(img2img='Diffuses from an input image instead of pure latent noise.')
         @app_commands.describe(img2img_mask='Masks the diffusion strength for the img2img input. Requires img2img.')
@@ -4684,6 +4673,7 @@ if sd.enabled:
             await process_image(ctx, user_selections)
     elif reactor_enabled and not cnet_enabled:
         @client.hybrid_command(name="image", description=f'Generate an image using {sd.client}')
+        @app_commands.describe(use_llm=use_llm_status)
         @app_commands.describe(style='Applies a positive/negative prompt preset')
         @app_commands.describe(img2img='Diffuses from an input image instead of pure latent noise.')
         @app_commands.describe(img2img_mask='Masks the diffusion strength for the img2img input. Requires img2img.')
@@ -4699,6 +4689,7 @@ if sd.enabled:
             await process_image(ctx, user_selections)
     else:
         @client.hybrid_command(name="image", description=f'Generate an image using {sd.client}')
+        @app_commands.describe(use_llm=use_llm_status)
         @app_commands.describe(style='Applies a positive/negative prompt preset')
         @app_commands.describe(img2img='Diffuses from an input image instead of pure latent noise.')
         @app_commands.describe(img2img_mask='Masks the diffusion strength for the img2img input. Requires img2img.')
@@ -4723,6 +4714,8 @@ if sd.enabled:
         # User inputs from /image command
         prompt = selections.get('prompt', '')
         use_llm = selections.get('use_llm', None)
+        if not tgwui_enabled:
+            use_llm = None
         size = selections.get('size', None)
         style = selections.get('style', {})
         neg_prompt = selections.get('neg_prompt', '')
@@ -5145,7 +5138,7 @@ async def sync(ctx: commands.Context):
 #################################################################
 ######################### LLM COMMANDS ##########################
 #################################################################
-if tgwui.enabled:
+if tgwui_enabled:
     # /reset_conversation command - Resets current character
     @client.hybrid_command(description="Reset the conversation with current character")
     @configurable_for_dm_if(lambda ctx: config.discord_dm_setting('allow_chatting', True))
@@ -5252,35 +5245,32 @@ if tgwui.enabled:
     async def continue_llm_gen(inter: discord.Interaction, message:discord.Message):
         await process_cont_regen_cmds(inter, message, 'Continue')
 
-
-async def load_character_data(char_name):
-    char_data = None
-    for ext in ['.yaml', '.yml', '.json']:
-        character_file = os.path.join(shared_path.dir_tgwui, "characters", f"{char_name}{ext}")
-        if os.path.exists(character_file):
-            char_data = load_file(character_file)
-            if char_data is None:
-                continue
-
-            char_data = dict(char_data)
-            break  # Break the loop if data is successfully loaded
-
-    if char_data is None:
-        log.error(f"Failed to load data for: {char_name} (tried: .yaml/.yml/.json). Perhaps missing file?")
-
-    return char_data
+def load_default_character(settings:"Settings", guild_id:int|None=None):
+    try:
+        # Update stored database / shared.settings values for character
+        bot_settings.set_last_setting_for("last_character", 'default', guild_id=guild_id, save_now=True)
+        # Fix any invalid settings while warning user
+        settings.fix_settings()
+        # save settings
+        settings.save()
+    except Exception as e:
+        log.error(f"Error loading default character. {e}")
+        print(traceback.format_exc())
 
 # Collect character information
 async def character_loader(char_name, settings:"Settings", guild_id:int|None=None):
+    if char_name is None:
+        load_default_character(settings, guild_id)
+        return
     try:
         # Get data using textgen-webui native character loading function
-        _, name, _, greeting, context = load_character(char_name, '', '')
+        _, name, _, greeting, context = custom_load_character(char_name, '', '', try_tgwui=tgwui_enabled)
         missing_keys = [key for key, value in {'name': name, 'greeting': greeting, 'context': context}.items() if not value]
         if any (missing_keys):
             log.warning(f'Note that character "{char_name}" is missing the following info:"{missing_keys}".')
         textgen_data = {'name': name, 'greeting': greeting, 'context': context}
         # Check for extra bot data
-        char_data = await load_character_data(char_name)
+        char_data = await load_character_data(char_name, try_tgwui=tgwui_enabled)
         char_instruct = char_data.get('instruction_template_str', None)
         # Merge with basesettings
         char_data = merge_base(char_data, 'llmcontext')
@@ -5291,7 +5281,7 @@ async def character_loader(char_name, settings:"Settings", guild_id:int|None=Non
         char_llmcontext = {}
         use_voice_channels = True
         for key, value in char_data.items():
-            if key == 'extensions' and isinstance(value, dict):
+            if tgwui_enabled and key == 'extensions' and isinstance(value, dict):
                 if not tts.enabled:
                     for subkey, _ in value.items():
                         if subkey in tts.supported_clients and char_data[key][subkey].get('activate'):
@@ -5314,7 +5304,8 @@ async def character_loader(char_name, settings:"Settings", guild_id:int|None=Non
         char_llmcontext.update(textgen_data)
         # Update stored database / shared.settings values for character
         bot_settings.set_last_setting_for("last_character", char_name, guild_id=guild_id, save_now=True)
-        shared.settings['character'] = char_name
+        if tgwui_enabled:
+            shared.settings['character'] = char_name
 
         # Collect behavior data
         char_behavior = char_data.get('behavior', {})
@@ -5341,9 +5332,10 @@ async def character_loader(char_name, settings:"Settings", guild_id:int|None=Non
         log.info(f'Mode is set to "{state_dict["mode"]}"{guild_msg}.')
 
         # Check for any char defined or model defined instruct_template
-        update_instruct = char_instruct or tgwui.instruction_template_str or None
-        if update_instruct:
-            state_dict['instruction_template_str'] = update_instruct
+        if tgwui_enabled:
+            update_instruct = char_instruct or tgwui.instruction_template_str or None
+            if update_instruct:
+                state_dict['instruction_template_str'] = update_instruct
     except Exception as e:
         log.error(f"Error loading character. Check spelling and file structure. Use bot cmd '/character' to try again. {e}")
         print(traceback.format_exc())
@@ -5463,47 +5455,49 @@ async def process_character(ctx, selected_character_value):
 def get_all_characters():
     all_characters = []
     filtered_characters = []
-    characters_path = os.path.join(shared_path.dir_tgwui, "characters")
+    character_paths = [shared_path.dir_user_characters]
+    if tgwui_enabled:
+        character_paths.append(os.path.join(shared_path.dir_tgwui, "characters"))
     try:
-        for file in sorted(Path(characters_path).glob("*")):
-            if file.suffix in [".json", ".yml", ".yaml"]:
-                character = {}
-                character['name'] = file.stem
-                all_characters.append(character)
+        for character_path in character_paths:
+            for file in sorted(Path(character_path).glob("*")):
+                if file.suffix in [".json", ".yml", ".yaml"]:
+                    character = {}
+                    character['name'] = file.stem
+                    all_characters.append(character)
 
-                char_data = load_file(file, {})
-                if not char_data:
-                    continue
+                    char_data = load_file(file, {})
+                    if not char_data:
+                        continue
 
-                if char_data.get('bot_in_character_menu', True):
-                    filtered_characters.append(character)
+                    if char_data.get('bot_in_character_menu', True):
+                        filtered_characters.append(character)
 
     except Exception as e:
         log.error(f"An error occurred while getting all characters: {e}")
     return all_characters, filtered_characters
 
-if tgwui.enabled:
-    # Command to change characters
-    @client.hybrid_command(description="Choose a character")
-    @guild_only()
-    async def character(ctx: commands.Context):
-        _, filtered_characters = get_all_characters()
-        if filtered_characters:
-            items_for_character = [i['name'] for i in filtered_characters]
-            warned_too_many_character = False # TODO use the warned_once feature?
-            characters_view = SelectOptionsView(items_for_character,
-                                            custom_id_prefix='characters',
-                                            placeholder_prefix='Characters: ',
-                                            unload_item=None,
-                                            warned=warned_too_many_character)
-            view_message = await ctx.send('### Select a Character.', view=characters_view, ephemeral=True)
-            await characters_view.wait()
+# Command to change characters
+@client.hybrid_command(description="Choose a character")
+@guild_only()
+async def character(ctx: commands.Context):
+    _, filtered_characters = get_all_characters()
+    if filtered_characters:
+        items_for_character = [i['name'] for i in filtered_characters]
+        warned_too_many_character = False # TODO use the warned_once feature?
+        characters_view = SelectOptionsView(items_for_character,
+                                        custom_id_prefix='characters',
+                                        placeholder_prefix='Characters: ',
+                                        unload_item=None,
+                                        warned=warned_too_many_character)
+        view_message = await ctx.send('### Select a Character.', view=characters_view, ephemeral=True)
+        await characters_view.wait()
 
-            selected_item = characters_view.get_selected()
-            await view_message.delete()
-            await process_character(ctx, selected_item)
-        else:
-            await ctx.send('There are no characters available', ephemeral=True)
+        selected_item = characters_view.get_selected()
+        await view_message.delete()
+        await process_character(ctx, selected_item)
+    else:
+        await ctx.send('There are no characters available', ephemeral=True)
 
 #################################################################
 ####################### /IMGMODEL COMMAND #######################
@@ -5799,7 +5793,7 @@ async def process_llmmodel(ctx, selected_llmmodel):
     except Exception as e:
         log.error(f"Error processing /llmmodel command: {e}")
 
-if tgwui.enabled:
+if tgwui_enabled:
 
     @client.hybrid_command(description="Choose an LLM Model")
     @guild_or_owner_only()
@@ -6018,7 +6012,7 @@ async def fetch_speak_options():
         log.error(f"Error building options for '/speak' command: {e}")
         return None, None
 
-if tgwui.enabled and tts.client and tts.client in tts.supported_clients:
+if tgwui_enabled and tts.client and tts.client in tts.supported_clients:
     lang_list, all_voices = asyncio.run(fetch_speak_options())
     if all_voices:
 
@@ -6170,7 +6164,7 @@ async def process_prompt(ctx: commands.Context, selections:dict):
         log.error(f"Error processing '/prompt': {e}")
         await ctx.send(f"Error processing '/prompt': {e}", ephemeral=True)
 
-if tgwui.enabled:
+if tgwui_enabled:
     @client.hybrid_command(name="prompt", description=f'Generate text with advanced options')
     @app_commands.describe(prompt='Your prompt to the LLM.')
     @app_commands.describe(begin_reply_with='The LLM will continue their reply from this.')
@@ -6339,7 +6333,7 @@ class MessageManager():
                 await task.message_post_llm_task()
         except Exception as e:
             log.error('An error occurred while sending a delayed message:', e)
-        task.stop_typing()                      # stop typing
+        await task.stop_typing()
         del task                                # delete task object
         self.last_send_time = time.time()       # log time
         self.send_msg_event.clear()
@@ -7029,7 +7023,8 @@ class CustomHistory(History):
     def save_sync(self, fp=None, force=False, force_tgwui=False):
         try:
             status = super().save_sync(fp=fp, force=force)
-            self._save_for_tgwui(status, force=force_tgwui)
+            if tgwui_enabled:
+                self._save_for_tgwui(status, force=force_tgwui)
             
             if not status: # don't bother saving if nothing changed
                 return False

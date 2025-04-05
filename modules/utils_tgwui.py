@@ -10,7 +10,7 @@ import aiohttp
 from pathlib import Path
 from threading import Lock
 from modules.typing import CtxInteraction
-from modules.utils_shared import shared_path, config, bot_database, patterns
+from modules.utils_shared import shared_path, config, bot_database, patterns, is_tgwui_integrated
 from modules.utils_misc import check_probability
 
 sys.path.append(shared_path.dir_tgwui)
