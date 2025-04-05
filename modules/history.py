@@ -867,6 +867,7 @@ class History:
 @dataclass
 class HistoryManager:
     limit_history: bool                     = field(default=True)
+    autosave_history: bool                  = field(default=False)
     export_for_tgwui: bool                  = field(default=True)
     autoload_history: bool                  = field(default=False)
     change_char_history_method: str         = field(default='new')
