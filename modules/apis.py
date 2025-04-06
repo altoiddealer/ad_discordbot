@@ -16,11 +16,13 @@ class API:
 
     def assign_functions(self, api_config:dict):
         function = api_config.get('function')
-        if function is not None and function in ['imggen', 'textgen', 'tts']:
+        if function is not None and function in ['imggen', 'textgen', 'ttsgen']:
             function_key = function + '_client_name'
             self_function_key = getattr(self, function_key)
+            # Only accept first instance
             if self_function_key is None:
                 self_function_key = api_config['name']
+                log.info(f'[APIs] Assigned "{api_config['name']}" as a default client ({function}).')
 
     def api_config_validated(self, api_config) -> bool:
         if not isinstance(api_config, dict):
@@ -45,9 +47,9 @@ class API:
             # Collect all valid user APIs
             name = api_config['name']
             self.clients[name] = APIClient(
-                api_url=api_config["base_url"],
-                default_headers=api_config.get("headers"),
-                timeout=api_config.get("timeout", 10)
+                url=api_config["url"],
+                headers=api_config.get("default_headers"),
+                timeout=api_config.get("default_timeout", 10)
             )
 
 class APIClient:
