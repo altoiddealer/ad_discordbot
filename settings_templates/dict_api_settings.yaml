@@ -1,0 +1,32 @@
+# WIP!!
+
+# You may define APIs here (a list of dictionaries), making them available to use for various bot functions such as the Tags system and user defined commands.
+# You may assign ONE default API for each: Image Generation ('imggen'); Text Generation ('textgen'); and TTS Generation ('ttsgen') - by including a 'function' key value in the API definition.
+
+- name: Stable Diffusion WebUI
+  url: http://127.0.0.1:7860
+  function: imggen  # Flags this API as default for image generation
+  enabled: true
+  default_headers:
+    Content-Type: application/json
+  default_timeout: 10 # seconds to wait before aborting api call
+  auth: null
+
+- name: Text Generation WebUI
+  url: http://127.0.0.1:7861
+  function: textgen # text generation
+  enabled: false
+  default_headers:
+    Content-Type: application/json
+  default_timeout: 10 # seconds to wait before aborting api call
+  auth: null
+
+- name: AllTalk TTS v2
+  url: http://127.0.0.1:7851
+  function: ttsgen # tts generation
+  enabled: false
+  default_headers:
+    Content-Type: application/x-www-form-urlencoded
+  default_timeout: 10
+  auth: null
+

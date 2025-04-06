@@ -89,6 +89,7 @@ class SharedPath:
     templates = os.path.join(dir_root, 'settings_templates')
 
     config, config_template = init_user_config_files(dir_root, templates, 'config.yaml')
+    api_settings, api_settings_template = init_user_config_files(dir_root, templates, 'dict_api_settings.yaml')
     base_settings, base_settings_template = init_user_config_files(dir_root, templates, 'dict_base_settings.yaml')
     cmd_options, cmd_options_template = init_user_config_files(dir_root, templates, 'dict_cmdoptions.yaml')
     img_models, img_models_template = init_user_config_files(dir_root, templates, 'dict_imgmodels.yaml')
