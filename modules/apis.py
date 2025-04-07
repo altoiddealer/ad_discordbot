@@ -6,57 +6,79 @@ from modules.utils_shared import shared_path, load_file, is_tgwui_integrated, co
 from modules.logs import import_track, get_logger; import_track(__file__, fp=True); log = get_logger(__name__)  # noqa: E702
 logging = log
 
+
 class API:
     def __init__(self):
-        self.clients:dict = {}
-        self.imggen_client_name:Optional[str] = None
-        self.textgen_client_name:Optional[str] = None
-        self.tts_clent_name:Optional[str] = None
+        self.clients:dict[str, APIClient] = {}
+        self.imggen_client:Optional[APIClient] = None
+        self.textgen_client:Optional[APIClient] = None
+        self.tts_client:Optional[APIClient] = None
         self.init()
 
-    def assign_functions(self, api_config:dict):
-        function = api_config.get('function')
-        if function is not None and function in ['imggen', 'textgen', 'ttsgen']:
-            function_key = function + '_client_name'
+    def assign_functions(self, api_client:"APIClient"):
+        if api_client.function is not None and api_client.function in ['imggen', 'textgen', 'ttsgen']:
+            function_key = api_client.function + '_client'
             self_function_key = getattr(self, function_key)
             # Only accept first instance
             if self_function_key is None:
-                self_function_key = api_config['name']
-                log.info(f'[APIs] Assigned "{api_config['name']}" as a default client ({function}).')
-
-    def api_config_validated(self, api_config) -> bool:
-        if not isinstance(api_config, dict):
-            log.warning('[APIs] An API definition was not formatted as a dictionary. Ignoring.')
-            return False
-        name = api_config.get('name')
-        if name is None:
-            log.warning('[APIs] Encountered an API definition without a "name" key value. Ignoring.')
-            return False
-        url = api_config.get('base_url')
-        if url is None:
-            log.warning('[APIs] Encountered an API definition without a "base_url" key value. Ignoring.')
-            return False
-        return True
+                self_function_key = api_client.name
+                log.info(f'[APIs] Assigned "{api_client.name}" as a default client ({api_client.function}).')
 
     def init(self):
         apis = load_file(shared_path.api_settings)
         for api_config in apis:
-            if not self.api_config_validated(api_config):
+            if not isinstance(api_config, dict):
+                log.warning('[API] An API definition was not formatted as a dictionary. Ignoring.')
                 continue
-            self.assign_functions(api_config)
             # Collect all valid user APIs
             name = api_config['name']
-            self.clients[name] = APIClient(
-                url=api_config["url"],
-                headers=api_config.get("default_headers"),
-                timeout=api_config.get("default_timeout", 10)
-            )
+            try:
+                api_client = APIClient(name=api_config['name'],
+                                       url=api_config['url'],
+                                       headers=api_config.get('default_headers'),
+                                       timeout=api_config.get('default_timeout', 10),
+                                       endpoints=api_config.get('endpoints', []))
+                self.clients[name] = api_client
+            except KeyError as e:
+                log.warning(f"[API] Skipping API Client due to missing key: {e}")
+            self.assign_functions(api_client)
+
 
 class APIClient:
-    def __init__(self, api_url: str, default_headers: Optional[Dict[str, str]] = None, timeout: int = 10):
-        self.api_url = api_url.rstrip("/")
+    def __init__(self, name: str, url: str, default_headers: Optional[Dict[str,str]] = None, default_timeout: int = 10, endpoints=None):
+        self.name = name
+        self.url = url.rstrip("/")
         self.default_headers = default_headers or {}
-        self.timeout = timeout
+        self.default_timeout = default_timeout
+        self.endpoints: dict[str, Endpoint] = {}
+        self.openapi_schema = None        
+        if endpoints:
+            self._collect_endpoints(endpoints)
+        asyncio.create_task(self._fetch_openapi_schema())
+
+    def _collect_endpoints(self, endpoints_config:list[dict]):
+        for ep in endpoints_config:
+            try:
+                endpoint = Endpoint(name=ep["name"],
+                                    path=ep["path"],
+                                    method=ep.get("method", "GET"),
+                                    response_type=ep.get("response_type", "json"),
+                                    headers=ep.get("headers"))
+                self.endpoints[endpoint.name] = endpoint
+            except KeyError as e:
+                log.warning(f"[APIClient] Skipping endpoint due to missing key: {e}")
+
+    async def _fetch_openapi_schema(self):
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(f"{self.url}/openapi.json") as response:
+                    if response.status == 200:
+                        self.openapi_schema = await response.json()
+                        log.debug(f"Loaded OpenAPI schema for {self.name}")
+                    else:
+                        log.debug(f"No OpenAPI schema available at {self.name}")
+        except Exception as e:
+            log.error(f"Failed to load OpenAPI schema from {self.url} for {self.name}: {e}")
 
     async def request(
         self,
@@ -73,10 +95,22 @@ class APIClient:
         timeout: Optional[int] = None,
     ) -> Union[Dict[str, Any], str, bytes, None]:
         
-        url = f"{self.api_url}{endpoint}" if endpoint.startswith("/") else f"{self.api_url}/{endpoint}"
+        url = f"{self.url}{endpoint}" if endpoint.startswith("/") else f"{self.url}/{endpoint}"
         headers = {**self.default_headers, **(headers or {})}
         timeout = timeout or self.timeout
-        
+
+        # Schema Validation
+        # schema = self._get_request_schema(endpoint, method)
+        # if schema:
+        #     try:
+        #         if json:
+        #             jsonschema.validate(instance=json, schema=schema)
+        #         elif data and isinstance(data, dict):
+        #             jsonschema.validate(instance=data, schema=schema)
+        #     except jsonschema.ValidationError as e:
+        #         log.error(f"Schema validation failed for {method} {endpoint}: {e.message}")
+        #         raise
+
         for attempt in range(retry + 1):
             try:
                 async with aiohttp.ClientSession() as session:
@@ -115,3 +149,48 @@ class APIClient:
                 await asyncio.sleep(2 ** attempt)  # Exponential backoff
         
         return None
+
+
+class Endpoint:
+    def __init__(self, name: str, path: str, method: str = "GET", response_type: str = "json", headers: Optional[Dict[str, str]] = None):
+        self.name = name
+        self.path = path
+        self.method = method.upper()
+        self.response_type = response_type
+        self.headers = headers or {}
+
+    def get_schema(self, openapi_schema: dict) -> Optional[dict]:
+        if not openapi_schema:
+            return None
+
+        paths = openapi_schema.get("paths", {})
+        endpoint_spec = paths.get(self.path)
+        if not endpoint_spec:
+            return None
+
+        method_spec = endpoint_spec.get(self.method.lower())
+        if not method_spec:
+            return None
+
+        request_body = method_spec.get("requestBody", {})
+        content = request_body.get("content", {})
+        app_json = content.get("application/json", {})
+        return app_json.get("schema")
+
+    def __repr__(self):
+        return f"<Endpoint {self.method} {self.path}>"
+
+
+# # Accessing an endpoint
+# ep = client.endpoints.get("Post txt2img")
+# payload = {
+#     "prompt": "a beautiful mountain landscape",
+#     "steps": 30,
+#     "cfg_scale": 7.5,
+# }
+
+# # Validate before sending
+# ep.validate_payload(payload, client.openapi_schema)
+
+# # Or just call directly
+# response = await ep.call(client, json=payload)

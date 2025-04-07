@@ -5,16 +5,21 @@
 
 - name: Stable Diffusion WebUI
   url: http://127.0.0.1:7860
-  function: imggen  # Flags this API as default for image generation
   enabled: true
   default_headers:
     Content-Type: application/json
   default_timeout: 10 # seconds to wait before aborting api call
   auth: null
+  # Add any endpoints that you may use for bot functions (Tags system, user commands, etc)
+  endpoints:
+    - {name: Post txt2img, path: /sdapi/v1/txt2img, method: POST, response_type: json}
+    - {name: Post img2img, path: /sdapi/v1/img2img, method: POST, response_type: json}
+    - {name: Get ImgModels, path: /sdapi/v1/sd-models, method: GET, response_type: json}
+    - {name: Get Options, path: /sdapi/v1/options, method: GET, response_type: json}
+    - {name: Post Options, path: /sdapi/v1/options, method: POST, response_type: json}
 
 - name: Text Generation WebUI
   url: http://127.0.0.1:7861
-  function: textgen # text generation
   enabled: false
   default_headers:
     Content-Type: application/json
@@ -23,7 +28,6 @@
 
 - name: AllTalk TTS v2
   url: http://127.0.0.1:7851
-  function: ttsgen # tts generation
   enabled: false
   default_headers:
     Content-Type: application/x-www-form-urlencoded
