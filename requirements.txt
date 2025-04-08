@@ -6,5 +6,6 @@ pyyaml
 Pillow>=9.5.0
 requests
 pydub
+jsonschema
 
 pywin32; platform_system == "Windows"

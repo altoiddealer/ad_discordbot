@@ -1,5 +1,6 @@
 import aiohttp
 import asyncio
+import jsonschema
 from typing import Any, Dict, Optional, Union
 from modules.utils_shared import shared_path, load_file, is_tgwui_integrated, config
 
@@ -10,6 +11,7 @@ logging = log
 class API:
     def __init__(self):
         self.clients:dict[str, APIClient] = {}
+
         self.imggen_client:Optional[APIClient] = None
         self.textgen_client:Optional[APIClient] = None
         self.tts_client:Optional[APIClient] = None
@@ -31,29 +33,46 @@ class API:
                 log.warning('[API] An API definition was not formatted as a dictionary. Ignoring.')
                 continue
             # Collect all valid user APIs
-            name = api_config['name']
             try:
                 api_client = APIClient(name=api_config['name'],
                                        url=api_config['url'],
                                        headers=api_config.get('default_headers'),
                                        timeout=api_config.get('default_timeout', 10),
-                                       endpoints=api_config.get('endpoints', []))
-                self.clients[name] = api_client
+                                       auth=api_config.get('auth'),
+                                       endpoints_config=api_config.get('endpoints', []))
+                self.clients[api_config['name']] = api_client
             except KeyError as e:
                 log.warning(f"[API] Skipping API Client due to missing key: {e}")
             self.assign_functions(api_client)
 
 
 class APIClient:
-    def __init__(self, name: str, url: str, default_headers: Optional[Dict[str,str]] = None, default_timeout: int = 10, endpoints=None):
+    def __init__(self,
+                 name: str,
+                 url: str,
+                 default_headers: Optional[Dict[str,str]] = None,
+                 default_timeout: int = 120,
+                 auth: Optional[dict] = None,
+                 endpoints_config=None):
+
         self.name = name
         self.url = url.rstrip("/")
         self.default_headers = default_headers or {}
         self.default_timeout = default_timeout
+        self.auth = auth
         self.endpoints: dict[str, Endpoint] = {}
-        self.openapi_schema = None        
-        if endpoints:
-            self._collect_endpoints(endpoints)
+        self.openapi_schema = None    
+        # set auth
+        if auth:
+            try:
+                self.auth = aiohttp.BasicAuth(auth["username"], auth["password"])
+            except KeyError:
+                log.warning(f"[APIClient:{self.name}] Invalid auth dict: 'username' or 'password' missing.")
+                self.auth = None
+        # collect endpoints
+        if endpoints_config:
+            self._collect_endpoints(endpoints_config)
+        # fetch schema
         asyncio.create_task(self._fetch_openapi_schema())
 
     def _collect_endpoints(self, endpoints_config:list[dict]):
@@ -63,7 +82,8 @@ class APIClient:
                                     path=ep["path"],
                                     method=ep.get("method", "GET"),
                                     response_type=ep.get("response_type", "json"),
-                                    headers=ep.get("headers"))
+                                    headers=ep.get("headers", self.default_headers),
+                                    timeout=ep.get("timeout", self.default_timeout))
                 self.endpoints[endpoint.name] = endpoint
             except KeyError as e:
                 log.warning(f"[APIClient] Skipping endpoint due to missing key: {e}")
@@ -79,6 +99,31 @@ class APIClient:
                         log.debug(f"No OpenAPI schema available at {self.name}")
         except Exception as e:
             log.error(f"Failed to load OpenAPI schema from {self.url} for {self.name}: {e}")
+
+    def validate_payload(self, method:str, endpoint:str, json:str|None=None, data:str|None=None):
+        if self.openapi_schema:
+            try:
+                if json:
+                    jsonschema.validate(instance=json, schema=self.openapi_schema)
+                elif data and isinstance(data, dict):
+                    jsonschema.validate(instance=data, schema=self.openapi_schema)
+            except jsonschema.ValidationError as e:
+                log.error(f"Schema validation failed for {method} {endpoint}: {e.message}")
+                raise
+
+    async def online(self) -> bool:
+        try:
+            response = await self.request(
+                endpoint='',
+                method='GET',
+                retry=0,
+                return_text=True,
+                timeout=5
+            )
+            return True if response is not None else False
+        except Exception as e:
+            log.debug(f"[{self.name}] API offline check failed: {e}")
+            return False
 
     async def request(
         self,
@@ -97,19 +142,21 @@ class APIClient:
         
         url = f"{self.url}{endpoint}" if endpoint.startswith("/") else f"{self.url}/{endpoint}"
         headers = {**self.default_headers, **(headers or {})}
-        timeout = timeout or self.timeout
+        timeout = timeout or self.default_timeout
+        auth=auth or self.auth
+        
+        # Validate payload
+        self.validate_payload(method, endpoint, json, data)
 
-        # Schema Validation
-        # schema = self._get_request_schema(endpoint, method)
-        # if schema:
-        #     try:
-        #         if json:
-        #             jsonschema.validate(instance=json, schema=schema)
-        #         elif data and isinstance(data, dict):
-        #             jsonschema.validate(instance=data, schema=schema)
-        #     except jsonschema.ValidationError as e:
-        #         log.error(f"Schema validation failed for {method} {endpoint}: {e.message}")
-        #         raise
+        if self.openapi_schema:
+            try:
+                if json:
+                    jsonschema.validate(instance=json, schema=self.openapi_schema)
+                elif data and isinstance(data, dict):
+                    jsonschema.validate(instance=data, schema=self.openapi_schema)
+            except jsonschema.ValidationError as e:
+                log.error(f"Schema validation failed for {method} {endpoint}: {e.message}")
+                raise
 
         for attempt in range(retry + 1):
             try:
@@ -152,12 +199,19 @@ class APIClient:
 
 
 class Endpoint:
-    def __init__(self, name: str, path: str, method: str = "GET", response_type: str = "json", headers: Optional[Dict[str, str]] = None):
+    def __init__(self,
+                 name: str,
+                 path: str,
+                 method: str = "GET",
+                 response_type: str = "json",
+                 headers: Optional[Dict[str, str]] = None,
+                 timeout: int = 10):
         self.name = name
         self.path = path
         self.method = method.upper()
         self.response_type = response_type
         self.headers = headers or {}
+        self.timeout = timeout
 
     def get_schema(self, openapi_schema: dict) -> Optional[dict]:
         if not openapi_schema:
@@ -177,6 +231,15 @@ class Endpoint:
         app_json = content.get("application/json", {})
         return app_json.get("schema")
 
+    async def call(self, client:"APIClient", **kwargs):
+        """
+        Convenience wrapper to call this endpoint directly.
+        Assumes `client.request()` exists.
+        """
+        return await client.request(endpoint=self.path,
+                                    method=self.method,
+                                    **kwargs)
+    
     def __repr__(self):
         return f"<Endpoint {self.method} {self.path}>"
 

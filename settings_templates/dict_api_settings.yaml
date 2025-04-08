@@ -1,22 +1,24 @@
 # WIP!!
 
-# You may define APIs here (a list of dictionaries), making them available to use for various bot functions such as the Tags system and user defined commands.
+# You may define APIs here (a list of dictionaries), making them available to use for various bot functions,
+# including the above config settings, the Tags system (dict_tags.yaml), user defined commands (dict_commands.yaml), etc.
 # You may assign ONE default API for each: Image Generation ('imggen'); Text Generation ('textgen'); and TTS Generation ('ttsgen') - by including a 'function' key value in the API definition.
-
 - name: Stable Diffusion WebUI
   url: http://127.0.0.1:7860
   enabled: true
   default_headers:
     Content-Type: application/json
-  default_timeout: 10 # seconds to wait before aborting api call
-  auth: null
+  default_timeout: 120 # seconds to wait before aborting api call
+  auth: null # dict format (if using)
+    #username: myuser
+    #password: mypass
   # Add any endpoints that you may use for bot functions (Tags system, user commands, etc)
   endpoints:
     - {name: Post txt2img, path: /sdapi/v1/txt2img, method: POST, response_type: json}
     - {name: Post img2img, path: /sdapi/v1/img2img, method: POST, response_type: json}
-    - {name: Get ImgModels, path: /sdapi/v1/sd-models, method: GET, response_type: json}
-    - {name: Get Options, path: /sdapi/v1/options, method: GET, response_type: json}
-    - {name: Post Options, path: /sdapi/v1/options, method: POST, response_type: json}
+    - {name: Get ImgModels, path: /sdapi/v1/sd-models, method: GET, response_type: json, timeout: 10}
+    - {name: Get Options, path: /sdapi/v1/options, method: GET, response_type: json, timeout: 10}
+    - {name: Post Options, path: /sdapi/v1/options, method: POST, response_type: json, timeout: 10}
 
 - name: Text Generation WebUI
   url: http://127.0.0.1:7861
