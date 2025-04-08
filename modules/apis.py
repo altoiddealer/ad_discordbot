@@ -231,14 +231,62 @@ class Endpoint:
         app_json = content.get("application/json", {})
         return app_json.get("schema")
 
-    async def call(self, client:"APIClient", **kwargs):
+    def sanitize_payload(self, payload: Dict[str, Any], openapi_schema: dict, strict: bool=False) -> Dict[str, Any]:
+        """
+        Recursively sanitizes the payload using the OpenAPI schema by removing unknown keys.
+        """
+        schema = self.get_schema(openapi_schema)
+        if not schema:
+            log.debug(f"No schema found for {self.method} {self.path} — skipping sanitization")
+            return payload
+
+        def _sanitize(data: dict, schema_props: dict) -> dict:
+            cleaned = {}
+            for k, v in data.items():
+                if k not in schema_props:
+                    log.debug(f"Sanitize: removed unknown key '{k}'")
+                    continue
+
+                prop_schema = schema_props[k]
+                if isinstance(v, dict) and "properties" in prop_schema:
+                    cleaned[k] = _sanitize(v, prop_schema["properties"])
+                else:
+                    cleaned[k] = v
+
+            return cleaned
+
+        schema_props = schema.get("properties", {})
+        final_cleaned = _sanitize(payload, schema_props)
+        if strict and not final_cleaned:
+            raise ValueError(f"All keys in payload were removed during sanitization for endpoint {self.name}")
+
+        return final_cleaned
+
+    async def call(self, client:"APIClient", sanitize:bool=False, strict: bool = False, **kwargs):
         """
         Convenience wrapper to call this endpoint directly.
         Assumes `client.request()` exists.
+
+        :param sanitize: If True, attempt to sanitize payload against the schema
+        :param strict: If True and sanitize=True, raise an error if payload is fully removed
         """
-        return await client.request(endpoint=self.path,
-                                    method=self.method,
-                                    **kwargs)
+        json_payload = kwargs.get('json')
+        data_payload = kwargs.get('data')
+
+        if sanitize:
+            if isinstance(json_payload, dict):
+                json_payload = self.sanitize_payload(json_payload, client.openapi_schema, strict=strict)
+            if isinstance(data_payload, dict):
+                data_payload = self.sanitize_payload(data_payload, client.openapi_schema, strict=strict)
+
+        return await client.request(
+            endpoint=self.path,
+            method=self.method,
+            json=json_payload,
+            data=data_payload,
+            headers=kwargs.get("headers", self.headers),
+            **kwargs
+        )
     
     def __repr__(self):
         return f"<Endpoint {self.method} {self.path}>"
