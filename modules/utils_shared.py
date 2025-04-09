@@ -125,8 +125,9 @@ class Config(BaseFileMemory):
         self.discord: dict
         self.per_server_settings: dict
         self.dynamic_prompting_enabled: bool
-        self.textgenwebui: dict
-        self.sd: dict
+        self.textgen: dict
+        self.ttsgen: dict
+        self.imggen: dict
         super().__init__(shared_path.config, version=2, missing_okay=True)
         self.fix_config()
 
@@ -134,8 +135,9 @@ class Config(BaseFileMemory):
         self.discord = data.pop('discord', {})
         self.per_server_settings = data.pop('per_server_settings', {})
         self.dynamic_prompting_enabled = data.pop('dynamic_prompting_enabled', True)
-        self.textgenwebui = data.pop('textgenwebui', {})
-        self.sd = data.pop('sd', {})
+        self.textgen = data.pop('textgen', {})
+        self.ttsgen = data.pop('ttsgen', {})
+        self.imggen = data.pop('imggen', {})
 
     def fix_config(self):
         config_dict = self.get_vars()
@@ -163,6 +165,9 @@ class Config(BaseFileMemory):
         return self.get('discord', {}).get('direct_messages', {}).get(key, default)
 
 config = Config()
+
+from modules.utils_discord import Embeds
+bot_embeds = Embeds()
 
 class SharedRegex: # Search for [ (]r['"] in vscode
     braces = re.compile(r'{{([^{}]+?)}}(?=[^\w$:]|$$|$)') # {{this syntax|separate items can be divided|another item}}

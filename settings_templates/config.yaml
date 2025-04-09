@@ -1,8 +1,7 @@
-# Channel IDs can be obtained by enabling "Developer Mode" for your discord account. Then, simply right-click on a channel and "Get Channel ID"
+# Main settings for Discord, Textgen, Imggen, and TTSgen
 
-# Main Discord settings
+# Discord settings
 discord:
-
   # **BOT TOKEN IS REQUIRED** (https://discordpy.readthedocs.io/en/stable/discord.html)
   TOKEN: ""
   # Feature for the bot to automatically react to messages to indicate special attributes in chat history (hidden, regenerated, continued, etc)
@@ -43,47 +42,48 @@ per_server_settings:
   # Only enable the following if: (1) You have lots of free VRAM (2) Your client settings allow multiple models to be loaded in VRAM.
   per_server_imgmodel_settings: false # In addition to separate settings, this uses the payload to drive model handling (instead of /models API).
 
-
 # Dynamic Prompting feature. Uses similar syntax and usage as the SD WebUI extension 'sd-dynamic-prompts'.
 # More details here: https://github.com/altoiddealer/ad_discordbot/wiki/dynamic-prompting
 dynamic_prompting_enabled: true
 
 
-# text-generation-webui settings (Bot must be installed with TGWUI Integration)
+# Textgen settings
 # Note: Many native textgen-webui settings are honored: 'CMD_FLAGS.txt' (extensions) / 'settings.yaml' / 'models/config-user.yaml' (LLM model settings)
-textgenwebui:
-  enabled: true                         # Controls whether TGWUI is part of the bot (does not register relavent commands for discord, etc)
-  TGWUI_URL: "http://127.0.0.1:7861"    # Currently a placeholder value for if this bot switches to using the TGWUI API
-  # History handling settings
+textgen:
+  enabled: true                     # Controls whether TGWUI is part of the bot (does not register relavent commands for discord, etc)
+  api_name: Text Generation WebUI   # The name of an API in 'dict_api_settings.yaml'. textgen API WILL BE IGNORED (for main textgen functions) if the bot is installed as TGWUI integrated!!
+  # History handling settings.
   chat_history:
-    limit_history: true                 # Recommended to keep as true. This will limit the stored history to roughly the current 'truncation_length' (more than enough retained). You may have performance issues if set to false.
-    export_for_tgwui: true              # Defines if your history save can be later imported into standalone text-generation-webui.
-    autoload_history: false             # Set to true if you want the character to load with the most recently saved chat history.
-    change_char_history_method: new     # 'new' - start new history; 'keep' - retain history for next character (only applicable if 'autoload_history: true')
-    greeting_or_history: history        # 'history' - Sends copy of most recent message exchange whenever history is loaded; 'greeting' - Only send character's greeting
-    per_channel_history: true           # If true, each channel will have its own chat history. Log files will not be compatible with text-generation-webui unless processed by .bat in '/utils/'
-
-  # Supported TTS Clients: 'alltalk_tts', 'coqui_tts', 'silero_tts', 'edge_tts' and 'elevenlabs_tts' have been tested. Other tts extensions may work.
-  # REQUIRES: 'pip install pynacl' in textgen-webui venv for bot to join a voice channel
-  # Use command '/set_server_voice_channel' in each server that you want to connect to voice channel for playing TTS
-  tts_settings:
-    extension: ''                       # '' = Disabled. Ex: 'alltalk_tts' (Loads automatically. Don't include in '--extensions' launch flag)
-    play_mode: 2                        # 0 = use voice channel / 1 = upload file to chat channel / 2 = both (use voice & upload file)
-    mp3_bit_rate: 128                   # If play_mode = 1 or 2, and the output (.wav) exceeds 8MB (discord limit), it will convert to .mp3 before uploading.
-    save_mode: 1                        # 0 = save outputs / 1 = try deleting outputs. Note: Can't delete outputs uploaded to channel. (../extensions/coqui_tts/outputs)
-    tts_greeting: true                  # Whether to generate TTS for greeting when using '/character' or '/reset_conversation'
-    tts_streaming: true                 # Setting only valid if character behavior has `chance_to_stream_reply`. Set to "false" if you want text streaming and TTS, but not TTS streaming.
-    api_key: ''                         # May be required for some tts extensions (ex: elevenlabs_tts)
-    # API for TTS is currently a WIP. These settings are currently limited to the '/speak' command
-    api_url: 'http://127.0.0.1:7851'
-    api_get_voices_endpoint: '/api/voices'
-    api_generate_endpoint: '/api/tts-generate'
+    limit_history: true             # Recommended to keep as true. This will limit the stored history to roughly the current 'truncation_length' (more than enough retained). You may have performance issues if set to false.
+    export_for_tgwui: true          # Defines if your history save can be later imported into standalone text-generation-webui.
+    autoload_history: false         # Set to true if you want the character to load with the most recently saved chat history.
+    change_char_history_method: new # 'new' - start new history; 'keep' - retain history for next character (only applicable if 'autoload_history: true')
+    greeting_or_history: history    # 'history' - Sends copy of most recent message exchange whenever history is loaded; 'greeting' - Only send character's greeting
+    per_channel_history: true       # If true, each channel will have its own chat history. Log files will not be compatible with text-generation-webui unless processed by .bat in '/utils/'
 
 
-# Main SD WebUI settings
-sd:
+# TTS settings. Use command '/set_server_voice_channel' in each server that you want to connect to voice channel for playing TTS
+ttsgen:
+  enabled: false
+  api_name: AllTalk TTS v2            # The name of an API in 'dict_api_settings.yaml'. textgen API WILL BE IGNORED (for main textgen functions) if the bot is installed as TGWUI integrated!!
+  play_mode: 2                        # 0 = use voice channel / 1 = upload file to chat channel / 2 = both (use voice & upload file)
+  mp3_bit_rate: 128                   # If play_mode = 1 or 2, and the output (.wav) exceeds 8MB (discord limit), it will convert to .mp3 before uploading.
+  save_mode: 1                        # 0 = save outputs / 1 = try deleting outputs. Note: Can't delete outputs uploaded to channel. (../extensions/coqui_tts/outputs)
+  tts_greeting: true                  # Whether to generate TTS for greeting when using '/character' or '/reset_conversation'
+  tts_streaming: true                 # Setting only valid if character behavior has `chance_to_stream_reply`. Set to "false" if you want text streaming and TTS, but not TTS streaming.
+  # API for TTS is currently a WIP. These settings are currently limited to the '/speak' command
+  api_url: 'http://127.0.0.1:7851'
+  api_get_voices_endpoint: '/api/voices'
+  api_generate_endpoint: '/api/tts-generate'
+  # Extension method (non-API) only works with TGWUI integrated install. Supported TTS Clients: 'alltalk_tts', 'coqui_tts', 'silero_tts', 'edge_tts' and 'elevenlabs_tts' have been tested. Other tts extensions may work.
+  tgwui_extension: ''                 # '' = Disabled. Ex: 'alltalk_tts' (Loads automatically! Don't include in '--extensions' launch flag!)
+
+
+# Imggen settings
+imggen:
   enabled: true                         # Controls whether SD WebUI is part of the bot (does not register relavent commands for discord, etc)
-  SD_URL: "http://127.0.0.1:7860"       # Default URL for A1111 API. Adjust if you have issues connecting.
+  api_name: Stable Diffusion WebUI      # The name of an API in 'dict_api_settings.yaml'.
+  # The following are only applicable for A1111 / Forge / ReForge (the bot will detect this via API)
   extensions:                           # Only set extensions as True if they are installed AND active in your A1111.
     controlnet_enabled: false           # Requires: sd-webui-controlnet (https://github.com/Mikubill/sd-webui-controlnet) AND configuring 'dict_cmdoptions.yaml'
     forgecouple_enabled: false          # Requires: sd-forge-couple (https://github.com/Haoming02/sd-forge-couple) **Only works for Forge, not A1111**
