@@ -13,7 +13,6 @@ from typing import Optional
 from modules.typing import CtxInteraction
 from modules.utils_shared import shared_path, config, bot_database, patterns, is_tgwui_integrated
 from modules.utils_misc import check_probability
-from modules.tts import tts
 
 sys.path.append(shared_path.dir_tgwui)
 
@@ -28,6 +27,36 @@ from modules.prompts import count_tokens
 
 from modules.logs import import_track, get_logger; import_track(__file__, fp=True); log = get_logger(__name__)  # noqa: E702
 logging = log
+
+class TTS:
+    def __init__(self):
+        self.enabled:bool = False
+        self.api_mode:bool = False
+        self.settings:dict = config.ttsgen
+        self.api_name:Optional[str] = self.settings.get('api_name')
+        self.api_url:Optional[str] = self.settings.get('api_url')
+        self.api_get_voices_endpoint:Optional[str] = ''
+        self.api_generate_endpoint:Optional[str] = ''
+
+    # Toggles TTS on/off
+    async def apply_toggle_tts(self, settings, toggle:str='on', tts_sw:bool=False):
+        try:
+            #settings:"Settings" = get_settings(ictx)
+            llmcontext_dict = vars(settings.llmcontext)
+            extensions:dict = copy.deepcopy(llmcontext_dict.get('extensions', {}))
+            if toggle == 'off' and extensions.get(tgwui.tts_extension, {}).get('activate'):
+                extensions[tgwui.tts_extension]['activate'] = False
+                await tgwui.update_extensions(extensions)
+                # Return True if subsequent apply_toggle_tts() should enable TTS
+                return True
+            if tts_sw:
+                extensions[tgwui.tts_extension]['activate'] = True
+                await tgwui.update_extensions(extensions)
+        except Exception as e:
+            log.error(f'[TTS] An error occurred while toggling the TTS on/off: {e}')
+        return False
+    
+tts = TTS()
 
 # Majority of this code section is sourced from 'modules/server.py'
 class TGWUI():

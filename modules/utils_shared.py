@@ -166,9 +166,6 @@ class Config(BaseFileMemory):
 
 config = Config()
 
-from modules.utils_discord import Embeds
-bot_embeds = Embeds()
-
 class SharedRegex: # Search for [ (]r['"] in vscode
     braces = re.compile(r'{{([^{}]+?)}}(?=[^\w$:]|$$|$)') # {{this syntax|separate items can be divided|another item}}
     wildcard = re.compile(r'##[\w-]+(?=[^\w-]|$)') # ##this-syntax represents a wildcard .txt file

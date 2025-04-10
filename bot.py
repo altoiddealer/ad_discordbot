@@ -36,7 +36,7 @@ from typing import Union
 from functools import partial
 
 from modules.utils_files import load_file, merge_base, save_yaml_file  # noqa: F401
-from modules.utils_shared import bot_args, is_tgwui_integrated, shared_path, bg_task_queue, task_event, flows_queue, flows_event, patterns, bot_emojis, config, bot_database, bot_embeds
+from modules.utils_shared import bot_args, is_tgwui_integrated, shared_path, bg_task_queue, task_event, flows_queue, flows_event, patterns, bot_emojis, config, bot_database
 from modules.database import StarBoard, Statistics, BaseFileMemory
 from modules.utils_misc import check_probability, fix_dict, update_dict, sum_update_dict, update_dict_matched_keys, random_value_from_range, convert_lists_to_tuples, get_time, format_time, format_time_difference, get_normalized_weights  # noqa: F401
 from modules.utils_discord import Embeds, guild_only, guild_or_owner_only, configurable_for_dm_if, is_direct_message, ireply, sleep_delete_message, send_long_message, \
@@ -62,6 +62,8 @@ bot_statistics = Statistics()
 #################################################################
 #################### DISCORD / BOT STARTUP ######################
 #################################################################
+bot_embeds = Embeds()
+
 # Set Discord bot token from config, or args, or prompt for it, or exit
 TOKEN = config.discord.get('TOKEN', None)
 
@@ -101,6 +103,171 @@ intents = discord.Intents.default()
 intents.message_content = True
 client = commands.Bot(command_prefix=".", intents=intents)
 client.is_first_on_ready = True # type: ignore
+
+#################################################################
+################### Stable Diffusion Startup ####################
+#################################################################
+class SD:
+    def __init__(self):
+        self.enabled:bool = config.sd.get('enabled', True)
+        self.url:str = config.sd.get('SD_URL', 'http://127.0.0.1:7860')
+        self.client:str = None
+        self.session_id:str = None
+        self.last_img_payload = {}
+
+        if self.enabled:
+            if asyncio.run(self.online()):
+                asyncio.run(self.init_sdclient())
+
+    async def online(self, ictx:CtxInteraction|None=None):
+        channel = ictx.channel if ictx else None
+        e_title = f"Stable Diffusion is not running at: {self.url}"
+        e_description = f"Launch your SD WebUI client with `--api --listen` command line arguments\n\
+            Read more [here](https://github.com/AUTOMATIC1111/stable-diffusion-webui/wiki/API)"
+
+        async with aiohttp.ClientSession() as session:
+            try:
+                async with session.get(f'{self.url}/') as response:
+                    if response.status == 200:
+                        log.debug(f'Request status to SD: {response.status}')
+                        return True
+                    else:
+                        log.warning(f'Non-200 status code received: {response.status}')
+                        await bot_embeds.send('system', e_title, e_description, channel=channel, delete_after=10)
+                        return False
+            except aiohttp.ClientError as exc:
+                # never successfully connected
+                if self.client is None:
+                    log.warning(e_title)
+                    log.warning("Launch your SD WebUI client with `--api --listen` command line arguments")
+                    log.warning("Image commands/features will function when client is active and accessible via API.'")
+                # was previously connected
+                else:
+                    log.warning(exc)
+                await bot_embeds.send('system', e_title, e_description, channel=channel, delete_after=10)
+                return False
+
+    async def api(self, endpoint:str, method='get', json=None, retry=True, warn=True) -> dict:
+        headers = {'Content-Type': 'application/json'}
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.request(method.lower(), url=f'{self.url}{endpoint}', json=json or {}, headers=headers) as response:
+                    response_text = await response.text()
+                    if response.status == 200:
+                        r = await response.json()
+                        if self.client is None and endpoint not in ['/sdapi/v1/cmd-flags', '/API/GetNewSession']:
+                            await self.init_sdclient()
+                            if self.client and not self.client == 'SwarmUI':
+                                bot_settings.imgmodel.refresh_enabled_extensions(print=True)
+                                for settings in guild_settings.values():
+                                    settings:Settings
+                                    settings.imgmodel.refresh_enabled_extensions()
+                        return r
+                    # Try resolving certain issues and retrying
+                    elif response.status in [422, 500]:
+                        error_json = await response.json()
+                        try_resolve = False
+                        # Check if it's related to an invalid override script
+                        if 'Script' in error_json.get('detail', ''):
+                            script_name = error_json['detail'].split("'")[1]  # Extract the script name
+                            if json and 'alwayson_scripts' in json:
+                                # Remove the problematic script
+                                if script_name in json['alwayson_scripts']:
+                                    log.info(f"Removing invalid script: {script_name}")
+                                    json['alwayson_scripts'].pop(script_name, None)
+                                    try_resolve = True
+                        elif 'KeyError' in error_json.get('error', ''):
+                            # Extract the key name from the error message
+                            key_error_msg = error_json.get('errors', '')
+                            key_name = key_error_msg.split("'")[1]  # Extract the key inside single quotes
+                            log.info(f"Removing invalid key: {key_name}")
+                            # Remove the problematic key from the payload
+                            if json and key_name in json:
+                                json.pop(key_name, None)
+                                try_resolve = True
+                        if try_resolve:
+                            return await self.api(endpoint, method, json, retry=False, warn=warn)
+                    # Handle internal server error (status 500)
+                    elif response.status == 500:
+                        error_json = await response.json()
+                        # Check if it's related to the KeyError
+                        if 'KeyError' in error_json.get('error', '') and "'forge_inference_memory'" in error_json.get('errors', ''):
+                            log.info("Removing problematic key: 'forge_inference_memory'")
+                            # Remove 'forge_inference_memory' from the payload if it exists
+                            if json and 'forge_inference_memory' in json:
+                                json.pop('forge_inference_memory', None)
+                            
+                            # Retry the request with the modified payload
+                            return await self.api(endpoint, method, json, retry=False, warn=warn)
+
+                    # Log the error if the request failed
+                    if warn:
+                        log.error(f'{self.url}{endpoint} response: {response.status} "{response.reason}"')
+                        log.error(f'Response content: {response_text}')
+                    
+                    # Retry on specific status codes (408, 500)
+                    if retry and response.status in [408, 500]:
+                        log.info("Retrying the request in 3 seconds...")
+                        await asyncio.sleep(3)
+                        return await self.api(endpoint, method, json, retry=False)
+
+        except aiohttp.client.ClientConnectionError:
+            log.warning(f'Failed to connect to: "{self.url}{endpoint}", offline?')
+
+        except Exception as e:
+            if endpoint == '/sdapi/v1/server-restart' or endpoint == '/sdapi/v1/progress':
+                return None
+            else:
+                log.error(f'Error getting data from "{self.url}{endpoint}": {e}')
+                traceback.print_exc()
+
+    def determine_client_type(self, r):
+        ui_settings_file = r.get("ui_settings_file", "").lower()
+        if "reforge" in ui_settings_file:
+            self.client = 'SD WebUI ReForge'
+        elif "forge" in ui_settings_file:
+            self.client = 'SD WebUI Forge'
+        elif "webui" in ui_settings_file:
+            self.client = 'A1111 SD WebUI'
+        else:
+            self.client = 'SD WebUI'
+
+    async def try_sdwebuis(self):
+        try:
+            log.info("Checking if SD Client is A1111, Forge, ReForge, or other.")
+            r = await self.api(endpoint='/sdapi/v1/cmd-flags')
+            if not r:
+                raise ConnectionError(f'Failed to connect to SD API, ensure it is running or disable the API in your config.')
+            self.determine_client_type(r)
+        except ConnectionError as e:
+            log.error(f"Connection error: {e}")
+        except Exception as e:
+            log.error(f"Unexpected error when checking SD WebUI clients: {e}")
+            traceback.print_exc()
+
+    async def try_swarmui(self):
+        try:
+            log.info("Checking if SD Client is SwarmUI.")
+            r = await self.api(endpoint='/API/GetNewSession', method='post', warn=False)
+            if r is None:
+                return False  # Early return if the response is None or the API call failed
+
+            self.session_id = r.get('session_id', None)
+            if self.session_id:
+                self.client = 'SwarmUI'
+                return True
+        except aiohttp.ClientError as e:
+            log.error(f"Error getting SwarmUI session: {e}")
+        return False
+
+    async def init_sdclient(self):
+        if await self.try_swarmui():
+            return
+
+        if not self.session_id:
+            await self.try_sdwebuis()
+
+sd = SD()
 
 if sd.enabled:
     # Function to attempt restarting the SD WebUI Client in the event it gets stuck
@@ -620,8 +787,172 @@ if config.discord['post_active_settings'].get('enabled', True):
 
 
 #################################################################
-######################### TTS COMMANDS ##########################
+######################## TTS PROCESSING #########################
 #################################################################
+class VoiceClients:
+    def __init__(self):
+        self.guild_vcs:dict = {}
+        self.expected_state:dict = {}
+        self.queued_tts:list = []
+
+    def is_connected(self, guild_id):
+        if self.guild_vcs.get(guild_id):
+            return self.guild_vcs[guild_id].is_connected()
+        return False
+    
+    def should_be_connected(self, guild_id):
+        return self.expected_state.get(guild_id, False)
+
+    # Try loading character data regardless of mode (chat/instruct)
+    async def restore_state(self):
+        for guild_id, should_be_connected in self.expected_state.items():
+            try:
+                if should_be_connected and not self.is_connected(guild_id):
+                    voice_channel = client.get_channel(bot_database.voice_channels[guild_id])
+                    self.guild_vcs[guild_id] = await voice_channel.connect()
+                elif not should_be_connected and self.is_connected(guild_id):
+                    await self.guild_vcs[guild_id].disconnect()
+            except Exception as e:
+                log.error(f'[Voice Clients] An error occurred while restoring voice channel state for guild ID "{guild_id}": {e}')
+
+    async def toggle_voice_client(self, guild_id, toggle:str=None):
+        try:
+            if toggle == 'enabled' and not self.is_connected(guild_id):
+                if bot_database.voice_channels.get(guild_id):
+                    voice_channel = client.get_channel(bot_database.voice_channels[guild_id])
+                    self.guild_vcs[guild_id] = await voice_channel.connect()
+                    self.expected_state[guild_id] = True
+                else:
+                    log.warning(f'[Voice Clients] "{tgwui.tts_extension}" enabled, but a valid voice channel is not set for this server.')
+                    log.info('[Voice Clients] Use "/set_server_voice_channel" to select a voice channel for this server.')
+            if toggle == 'disabled':
+                if self.is_connected(guild_id):
+                    await self.guild_vcs[guild_id].disconnect()
+                    self.expected_state[guild_id] = False
+        except Exception as e:
+            log.error(f'[Voice Clients] An error occurred while toggling voice channel for guild ID "{guild_id}": {e}')
+
+    async def voice_channel(self, guild_id:int, vc_setting:bool=True):
+        try:
+            # Start voice client if configured, and not explicitly deactivated in character settings
+            if tts.enabled and vc_setting == True and int(tts.settings.get('play_mode', 0)) != 1 and not self.guild_vcs.get(guild_id):
+                try:
+                    if tgwui.tts_extension and tgwui.tts_extension in shared.args.extensions:
+                        await self.toggle_voice_client(guild_id, 'enabled')
+                    else:
+                        if not bot_database.was_warned('char_tts'):
+                            bot_database.update_was_warned('char_tts')
+                            log.warning('[Voice Clients] No "tts_client" is specified in config.yaml')
+                except Exception as e:
+                    log.error(f"[Voice Clients] An error occurred while connecting to voice channel: {e}")
+            # Stop voice client if explicitly deactivated in character settings
+            if self.guild_vcs.get(guild_id) and self.guild_vcs[guild_id].is_connected():
+                if vc_setting is False:
+                    log.info("[Voice Clients] New context has setting to disconnect from voice channel. Disconnecting...")
+                    await self.toggle_voice_client(guild_id, 'disabled')
+        except Exception as e:
+            log.error(f"[Voice Clients] An error occurred while managing channel settings: {e}")
+
+    def after_playback(self, guild_id, file, error):
+        if error:
+            log.info(f'[Voice Clients] Message from audio player: {error}, output: {error.stderr.decode("utf-8")}')
+        # Check save mode setting
+        if int(tts.settings.get('save_mode', 0)) > 0:
+            try:
+                os.remove(file)
+            except Exception:
+                pass
+        # Check if there are queued tasks
+        if self.queued_tts:
+            # Pop the first task from the queue and play it
+            next_file = self.queued_tts.pop(0)
+            source = discord.FFmpegPCMAudio(next_file)
+            self.guild_vcs[guild_id].play(source, after=lambda e: self.after_playback(guild_id, next_file, e))
+
+    async def play_in_voice_channel(self, guild_id, file):
+        if not self.guild_vcs.get(guild_id):
+            log.warning(f"[Voice Clients] tts response detected, but bot is not connected to a voice channel in guild ID {guild_id}")
+            return
+        # Queue the task if audio is already playing
+        if self.guild_vcs[guild_id].is_playing():
+            self.queued_tts.append(file)
+        else:
+            # Otherwise, play immediately
+            source = discord.FFmpegPCMAudio(file)
+            self.guild_vcs[guild_id].play(source, after=lambda e: self.after_playback(guild_id, file, e))
+
+    async def toggle_playback_in_voice_channel(self, guild_id, action='stop'):
+        if self.guild_vcs.get(guild_id):          
+            guild_vc:discord.VoiceClient = self.guild_vcs[guild_id]
+            if action == 'stop' and guild_vc.is_playing():
+                guild_vc.stop()
+                log.info(f"TTS playback was stopped for guild {guild_id}")
+            elif (action == 'pause' or action == 'toggle') and guild_vc.is_playing():
+                guild_vc.pause()
+                log.info(f"TTS playback was paused in guild {guild_id}")
+            elif (action == 'resume' or action == 'toggle') and guild_vc.is_paused():
+                guild_vc.resume()
+                log.info(f"TTS playback resumed in guild {guild_id}")
+
+    def detect_format(self, file_path):
+        try:
+            audio = AudioSegment.from_wav(file_path)
+            return 'wav'
+        except:
+            pass  
+        try:
+            audio = AudioSegment.from_mp3(file_path)
+            return 'mp3'
+        except:
+            pass
+        return None
+
+    async def upload_tts_file(self, channel:discord.TextChannel, tts_resp:str|None=None, bot_hmessage:HMessage|None=None):
+        file = tts_resp
+        filename = os.path.basename(file)
+        original_ext = os.path.splitext(filename)[1]
+        correct_ext = original_ext
+        detected_format = self.detect_format(file)
+        if detected_format is None:
+            raise ValueError(f"Could not determine the audio file format for file: {file}")
+        if original_ext != f'.{detected_format}':
+            correct_ext = f'.{detected_format}'
+            new_filename = os.path.splitext(filename)[0] + correct_ext
+            new_file_path = os.path.join(os.path.dirname(file), new_filename)
+            os.rename(file, new_file_path)
+            file = new_file_path
+
+        mp3_filename = os.path.splitext(filename)[0] + '.mp3'
+        
+        bit_rate = int(tts.settings.get('mp3_bit_rate', 128))
+        with io.BytesIO() as buffer:
+            if file.endswith('wav'):
+                audio = AudioSegment.from_wav(file)
+            elif file.endswith('mp3'):
+                audio = AudioSegment.from_mp3(file)
+            else:
+                log.error('TTS generated unsupported file format:', file)
+            audio.export(buffer, format="mp3", bitrate=f"{bit_rate}k")
+            mp3_file = File(buffer, filename=mp3_filename)
+            
+            sent_message = await channel.send(file=mp3_file)
+            # if bot_hmessage:
+            #     bot_hmessage.update(audio_id=sent_message.id)
+
+    async def process_tts_resp(self, ictx:CtxInteraction, tts_resp:Optional[str]=None, bot_hmessage:Optional[HMessage]=None):
+        play_mode = int(tts.settings.get('play_mode', 0))
+        # Upload to interaction channel
+        if play_mode > 0:
+            await self.upload_tts_file(ictx.channel, tts_resp, bot_hmessage)
+        # Play in voice channel
+        connected = self.guild_vcs.get(ictx.guild.id)
+        if not is_direct_message(ictx) and play_mode != 1 and self.guild_vcs.get(ictx.guild.id):
+            await bg_task_queue.put(self.play_in_voice_channel(ictx.guild.id, tts_resp)) # run task in background
+        if bot_hmessage:
+            bot_hmessage.update(spoken=True)
+
+voice_clients = VoiceClients()
+
 # Command to set voice channels
 @client.hybrid_command(name="set_server_voice_channel", description="Assign a channel as the voice channel for this server")
 @app_commands.checks.has_permissions(manage_channels=True)
@@ -638,12 +969,12 @@ async def set_server_voice_channel(ctx: commands.Context, channel: Optional[disc
     bot_database.update_voice_channels(ctx.guild.id, channel.id)
     await ctx.send(f"Voice channel for **{ctx.guild}** set to **{channel.name}**.", delete_after=5)
 
-if tts.enabled:
+if tgwui_enabled:
     # Register command for helper function to toggle TTS
     @client.hybrid_command(description='Toggles TTS on/off')
     @guild_only()
     async def toggle_tts(ctx: commands.Context):
-        if tgwui_enabled and not tgwui.tts_extension:
+        if not tgwui.tts_extension:
             await ctx.reply('No TTS client is configured, so the TTS setting cannot be toggled.', ephemeral=True, delete_after=5)
             return
         await ireply(ctx, 'toggle TTS') # send a response msg to the user
@@ -1532,9 +1863,9 @@ class TaskProcessing(TaskAttributes):
                     # TTS streaming
                     cant_stream_tts = ['edge_tts']
                     self.stream_tts:bool         = tts.enabled and self.can_chunk and config.textgenwebui['tts_settings'].get('tts_streaming', True) and task.params.should_tts
-                    if self.stream_tts and tts.client in cant_stream_tts:
+                    if self.stream_tts and tgwui.tts_extension in cant_stream_tts:
                         self.stream_tts = False
-                        log.error(f"TTS Streaming is confirmed non-functional for {tts.client} (for now), so this is being disabled.")
+                        log.error(f"TTS Streaming is confirmed non-functional for {tgwui.tts_extension} (for now), so this is being disabled.")
                     self.streamed_tts:bool       = False
                     if self.stream_tts and not bot_database.was_warned('stream_tts'):
                         char_name = bot_settings.get_last_setting_for("last_character", task.ictx)
@@ -1542,12 +1873,12 @@ class TaskProcessing(TaskAttributes):
                 
                 # Only try streaming TTS if TTS enabled and responses can be chunked
                 def warn_stream_tts(self, char_name:str):
-                    log.warning(f"The bot will try streaming TTS responses ('{tts.client}' is running, and '{char_name}' is configured to stream replies).")
-                    if 'alltalk' in tts.client:
+                    log.warning(f"The bot will try streaming TTS responses ('{tgwui.tts_extension}' is running, and '{char_name}' is configured to stream replies).")
+                    if 'alltalk' in tgwui.tts_extension:
                         log.warning("**The application MAY hang/crash IF using 'alltalk_tts' in low VRAM mode**")
                     log.info("This MAY have unexpected side effects, particularly for other running extensions (if any).")
                     log.info(f"If you experience issues, please try the following:")
-                    log.info(f"• Ensure your TTS client is updated ({tts.client})")
+                    log.info(f"• Ensure your TTS client is updated ({tgwui.tts_extension})")
                     log.info(f"• Disable the TTS Setting 'tts_streaming'")
                     log.info(f"• Change {char_name}'s 'chance_to_stream_reply' behavior to '0.0', or disable TTS.")
                     log.info(f"• Report any Issues (https://github.com/altoiddealer/ad_discordbot/issues)")
@@ -3336,15 +3667,15 @@ class Tasks(TaskProcessing):
             loop = asyncio.get_event_loop()
             if tts.api_mode == True:
                 request = {'text_input': self.text}
-                client_args:dict = tts_args.get(tts.client, {})
+                client_args:dict = tts_args.get(tgwui.tts_extension, {})
                 if client_args.get(tts.lang_key):
-                    selected_language = tts_args[tts.client][tts.lang_key]
+                    selected_language = tts_args[tgwui.tts_extension][tts.lang_key]
                     # TODO: Improve language handling
                     if len(selected_language) > 2:
                         selected_language = 'en'
-                    request['language'] = tts_args[tts.client][tts.lang_key]
+                    request['language'] = tts_args[tgwui.tts_extension][tts.lang_key]
                 if client_args.get(tts.voice_key):
-                    request['character_voice_gen'] = tts_args[tts.client][tts.voice_key]
+                    request['character_voice_gen'] = tts_args[tgwui.tts_extension][tts.voice_key]
                 response = await tts.api(endpoint=tts.api_generate_endpoint, method='post', data=request, headers={'Content-Type': 'application/x-www-form-urlencoded'})
                 audio_fp = response.get('output_file_path')
                 if audio_fp:
@@ -4953,7 +5284,7 @@ async def character_loader(char_name, settings:"Settings", guild_id:int|None=Non
             if tgwui_enabled and key == 'extensions' and isinstance(value, dict):
                 if not tts.enabled:
                     for subkey, _ in value.items():
-                        if subkey in tts.supported_clients and char_data[key][subkey].get('activate'):
+                        if subkey in tgwui.supported_tts_extensions and char_data[key][subkey].get('activate'):
                             char_data[key][subkey]['activate'] = False
                 await tgwui.update_extensions(value)
                 char_llmcontext['extensions'] = value
@@ -4964,11 +5295,12 @@ async def character_loader(char_name, settings:"Settings", guild_id:int|None=Non
                 value = base_tags.update_tags(value) # Unpack any tag presets
                 char_llmcontext['tags'] = value
         # Connect to voice channels
-        if guild_id:
-            await voice_clients.voice_channel(guild_id, use_voice_channels)
-        else:
-            for vc_guild_id in bot_database.voice_channels:
-                await voice_clients.voice_channel(vc_guild_id, use_voice_channels)
+        if tgwui_enabled:
+            if guild_id:
+                await voice_clients.voice_channel(guild_id, use_voice_channels)
+            else:
+                for vc_guild_id in bot_database.voice_channels:
+                    await voice_clients.voice_channel(vc_guild_id, use_voice_channels)
         # Merge llmcontext data and extra data
         char_llmcontext.update(textgen_data)
         # Update stored database / shared.settings values for character
@@ -5514,23 +5846,23 @@ async def process_speak_args(ctx: commands.Context, selected_voice=None, lang=No
     try:
         tts_args = {}
         if lang:
-            if tts.client == 'elevenlabs_tts':
+            if tgwui.tts_extension == 'elevenlabs_tts':
                 if lang != 'English':
-                    tts_args.setdefault(tts.client, {}).setdefault('model', 'eleven_multilingual_v1')
+                    tts_args.setdefault(tgwui.tts_extension, {}).setdefault('model', 'eleven_multilingual_v1')
                     # Currently no language parameter for elevenlabs_tts
             else:
-                tts_args.setdefault(tts.client, {}).setdefault(tts.lang_key, lang)
-                tts_args[tts.client][tts.lang_key] = lang
+                tts_args.setdefault(tgwui.tts_extension, {}).setdefault(tts.lang_key, lang)
+                tts_args[tgwui.tts_extension][tts.lang_key] = lang
         if selected_voice or user_voice:
-            tts_args.setdefault(tts.client, {}).setdefault(tts.voice_key, 'temp_voice.wav' if user_voice else selected_voice)
-        elif tts.client == 'silero_tts' and lang:
+            tts_args.setdefault(tgwui.tts_extension, {}).setdefault(tts.voice_key, 'temp_voice.wav' if user_voice else selected_voice)
+        elif tgwui.tts_extension == 'silero_tts' and lang:
             if lang != 'English':
                 tts_args = await process_speak_silero_non_eng(ctx, lang) # returns complete args for silero_tts
                 if selected_voice: 
                     await ctx.send(f'Currently, non-English languages will use a default voice (not using "{selected_voice}")', ephemeral=True)
-        elif tts.client in tgwui.last_extension_params and tts.voice_key in tgwui.last_extension_params[tts.client]:
+        elif tgwui.tts_extension in tgwui.last_extension_params and tts.voice_key in tgwui.last_extension_params[tgwui.tts_extension]:
             pass # Default to voice in last_extension_params
-        elif f'{tts.client}-{tts.voice_key}' in shared.settings:
+        elif f'{tgwui.tts_extension}-{tts.voice_key}' in shared.settings:
             pass # Default to voice in shared.settings
         return tts_args
     except Exception as e:
@@ -5561,7 +5893,7 @@ async def process_user_voice(ctx: commands.Context, voice_input=None):
     try:
         if not (voice_input and getattr(voice_input, 'content_type', '').startswith("audio/")):
             return ''
-        if 'alltalk' not in tts.client and tts.client != 'coqui_tts':
+        if 'alltalk' not in tgwui.tts_extension and tgwui.tts_extension != 'coqui_tts':
             await ctx.send("Sorry, current tts extension does not allow using a voice attachment (only works for 'alltalk_tts' and 'coqui_tts)", ephemeral=True)
             return ''
         voiceurl = voice_input.url
@@ -5570,7 +5902,7 @@ async def process_user_voice(ctx: commands.Context, voice_input=None):
             await ctx.send("Invalid audio format. Please try again with a WAV or MP3 file.", ephemeral=True)
             return ''
         voice_data_ext = voiceurl_without_params[-4:]
-        user_voice = f'extensions/{tts.client}/voices/temp_voice{voice_data_ext}'
+        user_voice = f'extensions/{tgwui.tts_extension}/voices/temp_voice{voice_data_ext}'
         async with aiohttp.ClientSession() as session:
             async with session.get(voiceurl) as resp:
                 if resp.status == 200:
@@ -5624,11 +5956,11 @@ async def fetch_speak_options():
                 tts.api_mode = True
             except Exception:
                 pass
-        if tts.client == 'coqui_tts' or 'alltalk' in tts.client:
+        if tgwui.tts_extension == 'coqui_tts' or 'alltalk' in tgwui.tts_extension:
             lang_list = ['Arabic', 'Chinese', 'Czech', 'Dutch', 'English', 'French', 'German', 'Hungarian', 'Italian', 'Japanese', 'Korean', 'Polish', 'Portuguese', 'Russian', 'Spanish', 'Turkish']
             if not all_voices:
                 try:
-                    if tts.client == 'coqui_tts':
+                    if tgwui.tts_extension == 'coqui_tts':
                         from extensions.coqui_tts.script import get_available_voices
                         all_voices = get_available_voices()
                     else:
@@ -5636,7 +5968,7 @@ async def fetch_speak_options():
                         all_voices = get_available_voices()
                 except Exception:
                     pass
-        elif tts.client == 'silero_tts':
+        elif tgwui.tts_extension == 'silero_tts':
             lang_list = ['English', 'Spanish', 'French', 'German', 'Russian', 'Tatar', 'Ukranian', 'Uzbek', 'English (India)', 'Avar', 'Bashkir', 'Bulgarian', 'Chechen', 'Chuvash', 'Kalmyk', 'Karachay-Balkar', 'Kazakh', 'Khakas', 'Komi-Ziryan', 'Mari', 'Nogai', 'Ossetic', 'Tuvinian', 'Udmurt', 'Yakut']
             log.warning('''There's too many Voice/language permutations to make them all selectable in "/speak" command. Loading a bunch of English options. Non-English languages will automatically play using respective default speaker.''')
             if not all_voices:
@@ -5644,7 +5976,7 @@ async def fetch_speak_options():
                     all_voices = [f"en_{index}" for index in range(1, 76)] # will just include English voices in select menus. Other languages will use defaults.
                 except Exception:
                     pass
-        elif tts.client == 'elevenlabs_tts':
+        elif tgwui.tts_extension == 'elevenlabs_tts':
             lang_list = ['English', 'German', 'Polish', 'Spanish', 'Italian', 'French', 'Portuegese', 'Hindi', 'Arabic']
             if not all_voices:
                 try:
@@ -5655,7 +5987,7 @@ async def fetch_speak_options():
                     all_voices = refresh_voices()
                 except Exception:
                     pass
-        elif tts.client == 'edge_tts':
+        elif tgwui.tts_extension == 'edge_tts':
             lang_list = ['English']
             if not all_voices:
                 try:
@@ -5666,7 +5998,7 @@ async def fetch_speak_options():
                     pass
             else:
                 all_voices = [voice['ShortName'] for voice in voices if 'ShortName' in voice and voice['ShortName'].startswith('en-')]
-        elif tts.client == 'vits_api_tts':
+        elif tgwui.tts_extension == 'vits_api_tts':
             lang_list = ['English']
             if not all_voices:
                 try:
@@ -5681,7 +6013,7 @@ async def fetch_speak_options():
         log.error(f"Error building options for '/speak' command: {e}")
         return None, None
 
-if tgwui_enabled and tts.client and tts.client in tts.supported_clients:
+if tgwui_enabled and tgwui.tts_extension and tgwui.tts_extension in tgwui.supported_tts_extensions:
     lang_list, all_voices = asyncio.run(fetch_speak_options())
     if all_voices:
 
