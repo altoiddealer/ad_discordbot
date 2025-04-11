@@ -109,8 +109,8 @@ client.is_first_on_ready = True # type: ignore
 #################################################################
 class SD:
     def __init__(self):
-        self.enabled:bool = config.sd.get('enabled', True)
-        self.url:str = config.sd.get('SD_URL', 'http://127.0.0.1:7860')
+        self.enabled:bool = config.imggen.get('enabled', True)
+        self.url:str = config.imggen.get('SD_URL', 'http://127.0.0.1:7860')
         self.client:str = None
         self.session_id:str = None
         self.last_img_payload = {}
@@ -157,11 +157,7 @@ class SD:
                         r = await response.json()
                         if self.client is None and endpoint not in ['/sdapi/v1/cmd-flags', '/API/GetNewSession']:
                             await self.init_sdclient()
-                            if self.client and not self.client == 'SwarmUI':
-                                bot_settings.imgmodel.refresh_enabled_extensions(print=True)
-                                for settings in guild_settings.values():
-                                    settings:Settings
-                                    settings.imgmodel.refresh_enabled_extensions()
+
                         return r
                     # Try resolving certain issues and retrying
                     elif response.status in [422, 500]:
@@ -1695,7 +1691,7 @@ class TaskProcessing(TaskAttributes):
         self.llm_payload['text'] = self.llm_prompt
 
     def apply_server_mode(self:Union["Task","Tasks"]):
-        if self.ictx and config.textgenwebui.get('server_mode', False):
+        if self.ictx and config.textgen.get('server_mode', False):
             try:
                 name1 = f'Server: {self.ictx.guild}'
                 self.llm_payload['state']['name1'] = name1
@@ -1862,7 +1858,7 @@ class TaskProcessing(TaskAttributes):
                     self.last_checked:str        = ''
                     # TTS streaming
                     cant_stream_tts = ['edge_tts']
-                    self.stream_tts:bool         = tts.enabled and self.can_chunk and config.textgenwebui['tts_settings'].get('tts_streaming', True) and task.params.should_tts
+                    self.stream_tts:bool         = tts.enabled and self.can_chunk and config.ttsgen.get('tts_streaming', True) and task.params.should_tts
                     if self.stream_tts and tgwui.tts_extension in cant_stream_tts:
                         self.stream_tts = False
                         log.error(f"TTS Streaming is confirmed non-functional for {tgwui.tts_extension} (for now), so this is being disabled.")
@@ -2181,7 +2177,7 @@ class TaskProcessing(TaskAttributes):
                 bot_text = greeting_msg
             await send_long_message(self.channel, greeting_msg)
             # Play TTS Greeting
-            if tgwui_enabled and tts.enabled and config.textgenwebui.get('tts_settings', {}).get('tts_greeting', False):
+            if tgwui_enabled and tts.enabled and config.ttsgen.get('tts_greeting', False):
                 self.text = bot_text
                 self.embeds.enabled_embeds = {'system': False}
                 self.params.tts_args = self.settings.llmcontext.extensions
@@ -2438,7 +2434,7 @@ class TaskProcessing(TaskAttributes):
             if stashed_prompt:
                 self.img_payload['prompt'] = self.stashed_prompt
 
-            # Remove duplicate negative prompts while prserving original order
+            # Remove duplicate negative prompts while preserving original order
             negative_prompt_list = self.img_payload.get('negative_prompt', '').split(', ')
             unique_values_set = set()
             unique_values_list = []
@@ -2451,7 +2447,7 @@ class TaskProcessing(TaskAttributes):
 
             ## Clean up extension keys
             # get alwayson_scripts dict
-            extensions = config.sd['extensions']
+            extensions = config.imggen['extensions']
             alwayson_scripts:dict = self.img_payload.get('alwayson_scripts', {})
             # Clean ControlNet
             if alwayson_scripts.get('controlnet'):
@@ -2505,39 +2501,6 @@ class TaskProcessing(TaskAttributes):
                 elif isinstance(self.img_payload['alwayson_scripts']['reactor']['args'], dict):
                     self.img_payload['alwayson_scripts']['reactor']['args'] = list(self.img_payload['alwayson_scripts']['reactor']['args'].values())
 
-            # Workaround for denoising strength bug
-            if not self.img_payload.get('enable_hr', False) and not self.img_payload.get('init_images', False):
-                self.img_payload['denoising_strength'] = None
-
-            # Fix SD Client compatibility for sampler names / schedulers
-            sampler_name:str = self.img_payload.get('sampler_name', '')
-            if sampler_name:
-                known_schedulers = [' uniform', ' karras', ' exponential', ' polyexponential', ' sgm uniform']
-                for value in known_schedulers:
-                    if sampler_name.lower().endswith(value):
-                        if not bot_database.was_warned('sampler_name'):
-                            bot_database.update_was_warned('sampler_name')
-                            # Extract the value (without leading space) and set it to the 'scheduler' key
-                            self.img_payload['scheduler'] = value.strip()
-                            if sd.client == 'A1111 SD WebUI':
-                                log.warning(f'Img payload value "sampler_name": "{sampler_name}" is incompatible with current version of "{sd.client}". "{value}" must be omitted from "sampler_name", and instead used for the "scheduler" parameter. This is being corrected automatically. To avoid this warning, please update "sampler_name" parameter wherever present in your settings.')
-                                # Remove the matched part from sampler_name
-                                start_index = sampler_name.lower().rfind(value)
-                                fixed_sampler_name = sampler_name[:start_index].strip()
-                                self.img_payload['sampler_name'] = fixed_sampler_name
-                                self.settings.imgmodel.payload['sampler_name'] = fixed_sampler_name
-                                self.settings.imgmodel.payload['scheduler'] = value.strip()
-                            else:
-                                log.warning(f'Img payload value "sampler_name": "{sampler_name}" may cause an error due to the scheduler ("{value}") being part of the value. The scheduler may be expected as a separate parameter in current version of "{sd.client}".')
-                            break
-
-            # Delete all empty keys
-            keys_to_delete = []
-            for key, value in self.img_payload.items():
-                if value == "":
-                    keys_to_delete.append(key)
-            for key in keys_to_delete:
-                del self.img_payload[key]
         except Exception as e:
             log.error(f"An error occurred when cleaning img_payload: {e}")
 
@@ -2551,14 +2514,14 @@ class TaskProcessing(TaskAttributes):
                 return
             if sd.client == 'SD WebUI ReForge':
                 self.img_payload['alwayson_scripts'].setdefault('dynamic lora weights (reforge)', {}).setdefault('args', []).append({'Enable Dynamic Lora Weights': True})
-            scaling_settings = [v for k, v in config.sd['extensions'].get('lrctl', {}).items() if 'scaling' in k]
+            scaling_settings = [v for k, v in config.imggen['extensions'].get('lrctl', {}).items() if 'scaling' in k]
             scaling_settings = scaling_settings if scaling_settings else ['']
             # Flatten the matches dictionary values to get a list of all tags (including those within tuples)
             matched_tags.sort(key=lambda x: (isinstance(x, tuple), x[1] if isinstance(x, tuple) else float('inf')))
             all_matched_tags = [tag if isinstance(tag, dict) else tag[0] for tag in matched_tags]
             # Filter the matched tags to include only those with certain patterns in their text fields
             lora_tags = [tag for tag in all_matched_tags if any(patterns.sd_lora.findall(text) for text in (tag.get('positive_prompt', ''), tag.get('positive_prompt_prefix', ''), tag.get('positive_prompt_suffix', '')))]
-            if len(lora_tags) >= config.sd['extensions']['lrctl']['min_loras']:
+            if len(lora_tags) >= config.imggen['extensions']['lrctl']['min_loras']:
                 for index, tag in enumerate(lora_tags):
                     # Determine the key with a non-empty value among the specified keys
                     used_key = next((key for key in ['positive_prompt', 'positive_prompt_prefix', 'positive_prompt_suffix'] if tag.get(key, '')), None)
@@ -2572,7 +2535,7 @@ class TaskProcessing(TaskAttributes):
                                     lora_weight = float(lora_weight_match.group())
                                     # Selecting the appropriate scaling based on the index
                                     scaling_key = f'lora_{index + 1}_scaling' if index+1 < len(scaling_settings) else 'additional_loras_scaling'
-                                    scaling_values = config.sd['extensions']['lrctl'].get(scaling_key, '')
+                                    scaling_values = config.imggen['extensions']['lrctl'].get(scaling_key, '')
                                     if scaling_values:
                                         scaling_factors = [round(float(factor.split('@')[0]) * lora_weight, 2) for factor in scaling_values.split(',')]
                                         scaling_steps = [float(step.split('@')[1]) for step in scaling_values.split(',')]
@@ -2851,20 +2814,20 @@ class TaskProcessing(TaskAttributes):
                 log.info(f"[TAGS] Applied Param Variances: '{processed_params}'")
                 sum_update_dict(self.img_payload, processed_params)
             # Controlnet handling
-            if controlnet and config.sd['extensions'].get('controlnet_enabled', False):
+            if controlnet and config.imggen['extensions'].get('controlnet_enabled', False):
                 self.img_payload['alwayson_scripts']['controlnet']['args'] = controlnet
             # forge_couple handling
-            if forge_couple and config.sd['extensions'].get('forgecouple_enabled', False):
+            if forge_couple and config.imggen['extensions'].get('forgecouple_enabled', False):
                 self.img_payload['alwayson_scripts']['forge_couple']['args'].update(forge_couple)
                 self.img_payload['alwayson_scripts']['forge_couple']['args']['enable'] = True
                 log.info(f"[TAGS] Enabled forge_couple: {forge_couple}")
             # layerdiffuse handling
-            if layerdiffuse and config.sd['extensions'].get('layerdiffuse_enabled', False):
+            if layerdiffuse and config.imggen['extensions'].get('layerdiffuse_enabled', False):
                 self.img_payload['alwayson_scripts']['layerdiffuse']['args'].update(layerdiffuse)
                 self.img_payload['alwayson_scripts']['layerdiffuse']['args']['enabled'] = True
                 log.info(f"[TAGS] Enabled layerdiffuse: {layerdiffuse}")
             # ReActor face swap handling
-            if reactor and config.sd['extensions'].get('reactor_enabled', False):
+            if reactor and config.imggen['extensions'].get('reactor_enabled', False):
                 self.img_payload['alwayson_scripts']['reactor']['args'].update(reactor)
                 if reactor.get('mask'):
                     self.img_payload['alwayson_scripts']['reactor']['args']['save_original'] = True
@@ -2959,7 +2922,7 @@ class TaskProcessing(TaskAttributes):
         forge_couple_args = {}
         layerdiffuse_args = {}
         reactor_args = {}
-        extensions = config.sd.get('extensions', {})
+        extensions = config.imggen.get('extensions', {})
         accept_only_first = ['aspect_ratio', 'img2img', 'img2img_mask', 'sd_output_dir', 'last_img_payload']
         try:
             for tag in self.tags.matches:
@@ -3036,9 +2999,15 @@ class TaskProcessing(TaskAttributes):
             if controlnet_args:
                 img_payload_mods.setdefault('controlnet', [])
                 for index in sorted(set(controlnet_args.keys())):   # This flattens down any gaps between collected ControlNet units (ensures lowest index is 0, next is 1, and so on)
-                    cnet_basesettings = copy.copy(self.settings.imgmodel.payload['alwayson_scripts']['controlnet']['args'][0])  # Copy of required dict items
+                    alwayson = self.img_payload.setdefault('alwayson_scripts', {})
+                    controlnet = alwayson.setdefault('controlnet', {})
+                    args = controlnet.setdefault('args', [])
+                    # Ensure at least one element exists
+                    if len(args) == 0:
+                        args.append({})
+                    user_default_cnet_unit = copy.copy(args[0])
                     cnet_unit_args = controlnet_args.get(index, {})
-                    cnet_unit = update_dict(cnet_basesettings, cnet_unit_args)
+                    cnet_unit = update_dict(user_default_cnet_unit, cnet_unit_args)
                     img_payload_mods['controlnet'].append(cnet_unit)
             if forge_couple_args:
                 img_payload_mods.setdefault('forge_couple', {})
@@ -3882,7 +3851,7 @@ class Tasks(TaskProcessing):
             # Apply tags relevant to Img gen
             await self.process_img_payload_tags(img_payload_mods)
             # Process loractl
-            if config.sd['extensions'].get('lrctl', {}).get('enabled', False):
+            if config.imggen['extensions'].get('lrctl', {}).get('enabled', False):
                 self.apply_loractl()
             # Apply tags relevant to Img prompts
             self.process_img_prompt_tags()
@@ -4595,7 +4564,7 @@ if sd.enabled:
     async def get_cnet_data() -> dict:
 
         async def check_cnet_online():
-            if config.sd['extensions'].get('controlnet_enabled', False):
+            if config.imggen['extensions'].get('controlnet_enabled', False):
                 try:
                     online = await sd.api(endpoint='/controlnet/model_list', method='get', json=None, retry=False)
                     if online: 
@@ -4607,7 +4576,7 @@ if sd.enabled:
             return False
 
         filtered_cnet_data = {}
-        if config.sd['extensions'].get('controlnet_enabled', False):
+        if config.imggen['extensions'].get('controlnet_enabled', False):
             try:
                 all_cnet_data = await sd.api(endpoint='/controlnet/control_types', method='get', json=None, retry=False)
                 for key, value in all_cnet_data["control_types"].items():
@@ -4631,8 +4600,8 @@ if sd.enabled:
     size_choices, style_choices, use_llm_choices = asyncio.run(get_imgcmd_choices(size_options, style_options))
 
     # Check if extensions enabled in config
-    cnet_enabled = config.sd['extensions'].get('controlnet_enabled', False)
-    reactor_enabled = config.sd['extensions'].get('reactor_enabled', False)
+    cnet_enabled = config.imggen['extensions'].get('controlnet_enabled', False)
+    reactor_enabled = config.imggen['extensions'].get('reactor_enabled', False)
 
     use_llm_status = 'Whether to send your prompt to LLM. Results may vary!' if tgwui_enabled else '**option disabled** (LLM is not integrated)'
 
@@ -6662,60 +6631,6 @@ class Behavior(SettingsBase):
         return random.random() < probability
 
 
-class ImgModel(SettingsBase):
-    def __init__(self):
-        self.tags = []
-        self.payload = {'alwayson_scripts': {}, 'override_settings': {}}
-
-    def refresh_enabled_extensions(self, print=False):
-        self.init_sd_extensions()
-        merge_base(self.payload, 'imgmodel,payload')
-        if print:
-            self.print_sd_extensions()
-
-    def init_sd_extensions(self):
-        extensions:dict = config.sd['extensions']
-        # Initialize ControlNet defaults
-        if extensions.get('controlnet_enabled'):
-            self.payload['alwayson_scripts']['controlnet'] = {'args': [{
-                'enabled': False, 'image': None, 'mask_image': None, 'model': 'None', 'module': 'None', 'weight': 1.0, 'processor_res': 64, 'pixel_perfect': True,
-                'guidance_start': 0.0, 'guidance_end': 1.0, 'threshold_a': 64, 'threshold_b': 64, 'control_mode': 0, 'resize_mode': 1, 'lowvram': False, 'save_detected_map': False}]}
-        # Initialize Forge Couple defaults
-        if extensions.get('forgecouple_enabled'):
-            self.payload['alwayson_scripts']['forge_couple'] = {'args': {
-                'enable': False, 'mode': 'Basic', 'sep': 'SEP', 'direction': 'Horizontal', 'global_effect': 'First Line',
-                'global_weight': 0.5, 'maps': [['0:0.5', '0.0:1.0', '1.0'],['0.5:1.0', '0.0:1.0', '1.0']]}}
-        # Initialize layerdiffuse defaults
-        if extensions.get('layerdiffuse_enabled'):
-            self.payload['alwayson_scripts']['layerdiffuse'] = {'args': {
-                'enabled': False, 'method': '(SDXL) Only Generate Transparent Image (Attention Injection)', 'weight': 1.0, 'stop_at': 1.0, 'foreground': None, 'background': None,
-                'blending': None, 'resize_mode': 'Crop and Resize', 'output_mat_for_i2i': False, 'fg_prompt': '', 'bg_prompt': '', 'blended_prompt': ''}}
-        # Initialize ReActor defaults
-        if extensions.get('reactor_enabled'):
-            self.payload['alwayson_scripts']['reactor'] = {'args': {
-                'image': '', 'enabled': False, 'source_faces': '0', 'target_faces': '0', 'model': 'inswapper_128.onnx', 'restore_face': 'CodeFormer', 'restore_visibility': 1,
-                'restore_upscale': True, 'upscaler': '4x_NMKD-Superscale-SP_178000_G', 'scale': 1.5, 'upscaler_visibility': 1, 'swap_in_source_img': False, 'swap_in_gen_img': True, 'log_level': 1,
-                'gender_detect_source': 0, 'gender_detect_target': 0, 'save_original': False, 'codeformer_weight': 0.8, 'source_img_hash_check': False, 'target_img_hash_check': False, 'system': 'CUDA',
-                'face_mask_correction': True, 'source_type': 0, 'face_model': '', 'source_folder': '', 'multiple_source_images': None, 'random_img': True, 'force_upscale': True, 'threshold': 0.6, 'max_faces': 2, 'tab_single': None}}
-
-    def print_sd_extensions(self):
-        if not sd.client:
-            return
-        extensions:dict = config.sd['extensions']
-        forge_clients = ['SD WebUI Forge', 'SD WebUI ReForge']
-        if extensions.get('controlnet_enabled'):
-            log.info('"ControlNet" extension support is enabled and active.')
-        if extensions.get('forgecouple_enabled'):
-            log.info('"Forge Couple" extension support is enabled and active.')
-            if sd.client != 'SD WebUI Forge':
-                log.warning(f'"Forge Couple" is not known to be compatible with "{sd.client}". If you experience errors, disable this extension in config.yaml')
-        if extensions.get('layerdiffuse_enabled'):
-            log.info('"layerdiffuse" extension support is enabled and active.')
-            if sd.client != 'SD WebUI Forge':
-                log.warning(f'"layerdiffuse" is not known to be compatible with "{sd.client}". If you experience errors, disable this extension in config.yaml')
-        if extensions.get('reactor_enabled'):
-            log.info('"ReActor" extension support is enabled and active.')
-
 class LLMContext(SettingsBase):
     def __init__(self):
         self.context = 'The following is a conversation with an AI Large Language Model. The AI has been trained to answer questions, provide recommendations, and help with decision making. The AI follows user requests. The AI thinks outside the box.'
@@ -6855,7 +6770,6 @@ class Settings(BaseFileMemory):
 
     def load_defaults(self):
         self.behavior = Behavior()
-        self.imgmodel = ImgModel()
         self.llmcontext = LLMContext()
         self.llmstate = LLMState()
 
@@ -7145,7 +7059,7 @@ class CustomHistoryManager(HistoryManager):
         
         return id_, character, mode
 
-bot_history = CustomHistoryManager(class_builder_history=CustomHistory, **config.textgenwebui.get('chat_history', {}))
+bot_history = CustomHistoryManager(class_builder_history=CustomHistory, **config.textgen.get('chat_history', {}))
 
 
 def exit_handler():
