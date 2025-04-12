@@ -6249,7 +6249,8 @@ class BotStatus:
             for settings in guild_settings.values():
                 settings:"Settings"
                 all_resp_sets.append(settings.behavior.responsiveness)
-            self.responsiveness = max(all_resp_sets)
+            if all_resp_sets:
+                self.responsiveness = max(all_resp_sets)
         responsiveness = max(0.0, min(1.0, self.responsiveness)) # clamped between 0.0 and 1.0
         if responsiveness == 1.0:
             return
