@@ -519,11 +519,21 @@ async def first_run():
     finally:
         bot_database.set('first_run', False)
 
+async def in_any_guilds():
+    if len(client.guilds) == 0:
+        log.error("The bot is not a member of any guilds. Please invite it to a server and try again.")
+        log.error("Shutting down in 5 seconds...")
+        await asyncio.sleep(5)
+        await client.close()
+        sys.exit(3)
+
 #################################################################
 ########################### ON READY ############################
 #################################################################
 @client.event
 async def on_ready():
+    await in_any_guilds()
+
     # If first time running bot
     if bot_database.first_run:
         await first_run()
