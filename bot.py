@@ -46,7 +46,7 @@ from modules.utils_chat import custom_load_character, load_character_data
 from modules.history import HistoryManager, History, HMessage, cnf
 from modules.typing import AlertUserError, TAG
 from modules.utils_asyncio import generate_in_executor
-from modules.tags import base_tags, persistent_tags, Tags
+from modules.tags import base_tags, persistent_tags, Tags, TAG_LIST
 
 from discord.ext.commands.errors import HybridCommandError, CommandError
 from discord.errors import DiscordException
@@ -6639,7 +6639,6 @@ class LLMContext(SettingsBase):
         self.name = 'AI'
         self.use_voice_channel = False
         self.bot_in_character_menu = True
-        self.tags = []
 
 
 class LLMState(SettingsBase):
@@ -6722,12 +6721,18 @@ class LLMState(SettingsBase):
         self._continue = False
 
 
+class ModelTags(SettingsBase):
+    def __init__(self):
+        self.char_tags: TAG_LIST = []
+        self.imgmodel_tags: TAG_LIST = []
+
+
 # Returns the value of default settings as a dictionary
 def defaults_to_dict():
     return {'behavior': Behavior().get_vars(),
-            'imgmodel': ImgModel().get_vars(),
             'llmcontext': LLMContext().get_vars(),
-            'llmstate': LLMState().get_vars()}
+            'llmstate': LLMState().get_vars(),
+            'tags': ModelTags().get_vars()}
 
 # Initializes as settings file (bot_database -> BaseFileMemory)
 class Settings(BaseFileMemory):
@@ -6737,9 +6742,9 @@ class Settings(BaseFileMemory):
         self._guild_name = guild.name if guild else None
         # settings values
         self.behavior: Behavior
-        self.imgmodel: ImgModel
         self.llmcontext: LLMContext
         self.llmstate: LLMState
+        self.modeltags: ModelTags
         # Always initializes 'bot_settings' instance. Can initialize per-guild settings instances.
         self._settings_fp = shared_path.active_settings
         if guild:
@@ -6753,9 +6758,9 @@ class Settings(BaseFileMemory):
         for k, v in data.items():
             if k in ['db_version']:
                 continue
-            elif k in ['behavior', 'imgmodel', 'llmcontext', 'llmstate']:
+            elif k in ['behavior', 'llmcontext', 'llmstate', 'modeltags']:
                 main_key = getattr(self, k, None)
-                if isinstance(main_key, (Behavior, ImgModel, LLMContext, LLMState)):
+                if isinstance(main_key, (Behavior, LLMContext, LLMState, ModelTags)):
                     main_key_dict = vars(main_key)
                     if isinstance(v, dict) and isinstance(main_key_dict, dict):
                         update_dict_matched_keys(main_key_dict, v)
@@ -6772,6 +6777,7 @@ class Settings(BaseFileMemory):
         self.behavior = Behavior()
         self.llmcontext = LLMContext()
         self.llmstate = LLMState()
+        self.modeltags = ModelTags()
 
     # overrides BaseFileMemory method
     def load(self, data=None):
@@ -6786,17 +6792,12 @@ class Settings(BaseFileMemory):
         if (not self._guild_id) or last_guild_settings:
             data = load_file(self._fp, {}, missing_okay=self._missing_okay)
             self.init_settings(data)
-            # Modifies ImgModel depending on current SD extension config
-            self.imgmodel.init_sd_extensions()
-            # Only print message for bot_settings instance
-            if (not self._guild_id):
-                self.imgmodel.print_sd_extensions()
         # Initialize new guild settings from current bot_settings
         else:
             log.info(f'[Per Server Settings] Initializing "{self._guild_name}" with copy of your main settings.')
             data = copy.deepcopy(bot_settings.get_vars(public_only=True))
             self.init_settings(data)
-            # Skip update_settings() and init_sd_extensions() (already applied to bot_settings)
+            # Skip update_settings() (already applied to bot_settings)
             # file will typically save while loading each character, but may only load one character
             if config.is_per_character:
                 self.save()
@@ -6812,15 +6813,15 @@ class Settings(BaseFileMemory):
         # return dict excluding "_key" keys
         if public_only:
             return {'behavior': self.behavior.get_vars(),
-                    'imgmodel': self.imgmodel.get_vars(),
                     'llmcontext': self.llmcontext.get_vars(),
-                    'llmstate': self.llmstate.get_vars()}
+                    'llmstate': self.llmstate.get_vars(),
+                    'modeltags': self.modeltags.get_vars()}
         # return complete dict
         else:
             return {'behavior': vars(self.behavior),
-                    'imgmodel': vars(self.imgmodel),
                     'llmcontext': vars(self.llmcontext),
-                    'llmstate': vars(self.llmstate)}
+                    'llmstate': vars(self.llmstate),
+                    'modeltags': vars(self.modeltags)}
     
     def save(self):
         data = self.get_vars(public_only=True)

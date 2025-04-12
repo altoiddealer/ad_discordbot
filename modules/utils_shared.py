@@ -102,6 +102,7 @@ class SharedPath:
     user_dir = init_shared_paths(dir_root, 'user', "for files which may be used for bot functions")
 
     dir_user_characters = init_shared_paths(user_dir, 'characters', f"Character files to be used with the bot{' (merge in with TGWUI characters)' if is_tgwui_integrated else ''}.")
+    dir_user_payloads = init_shared_paths(user_dir, 'payloads', "Payloads to be used for API calls.")
 
     dir_user_images = init_shared_paths(user_dir, 'images', "Images to be used for various bot functions.")
     old_user_images = os.path.join(dir_root, 'user_images')

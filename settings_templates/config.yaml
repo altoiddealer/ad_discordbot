@@ -83,6 +83,7 @@ ttsgen:
 imggen:
   enabled: true                         # Controls whether SD WebUI is part of the bot (does not register relavent commands for discord, etc)
   api_name: Stable Diffusion WebUI      # The name of an API in 'dict_api_settings.yaml'.
+  txt2img_endpoint_name: Post txt2img   # The name of the txt2img endpoint for your imggen API.
   # The following are only applicable for A1111 / Forge / ReForge (the bot will detect this via API)
   extensions:                           # Only set extensions as True if they are installed AND active in your A1111.
     controlnet_enabled: false           # Requires: sd-webui-controlnet (https://github.com/Mikubill/sd-webui-controlnet) AND configuring 'dict_cmdoptions.yaml'

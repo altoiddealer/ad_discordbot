@@ -1,5 +1,6 @@
 import aiohttp
 import asyncio
+import os
 import jsonschema
 from typing import Any, Dict, Optional, Union
 from modules.utils_shared import shared_path, load_file, is_tgwui_integrated, config
@@ -10,21 +11,28 @@ logging = log
 
 class API:
     def __init__(self):
+        # ALL API clients
         self.clients:dict[str, APIClient] = {}
 
+        # Main API clients
         self.imggen_client:Optional[APIClient] = None
         self.textgen_client:Optional[APIClient] = None
         self.tts_client:Optional[APIClient] = None
         self.init()
 
-    def assign_functions(self, api_client:"APIClient"):
-        if api_client.function is not None and api_client.function in ['imggen', 'textgen', 'ttsgen']:
-            function_key = api_client.function + '_client'
-            self_function_key = getattr(self, function_key)
-            # Only accept first instance
-            if self_function_key is None:
-                self_function_key = api_client.name
-                log.info(f'[APIs] Assigned "{api_client.name}" as a default client ({api_client.function}).')
+    def set_main_apis(self, api_client:"APIClient"):
+        client_type = ''
+        if api_client.name == config.textgen['api_name']:
+            self.textgen_client = api_client
+            client_type = 'Text Gen'
+        elif api_client.name == config.ttsgen['api_name']:
+            self.ttsgen_client = api_client
+            client_type = 'TTS Gen'
+        elif api_client.name == config.imggen['api_name']:
+            self.imggen_client = api_client
+            client_type = 'Img Gen'
+        if client_type:
+            log.info(f'[APIs] Initialized with "{api_client.name}" as the default textgen client.')
 
     def init(self):
         apis = load_file(shared_path.api_settings)
@@ -43,7 +51,7 @@ class API:
                 self.clients[api_config['name']] = api_client
             except KeyError as e:
                 log.warning(f"[API] Skipping API Client due to missing key: {e}")
-            self.assign_functions(api_client)
+            self.set_main_apis(api_client)
 
 
 class APIClient:
@@ -61,7 +69,8 @@ class APIClient:
         self.default_timeout = default_timeout
         self.auth = auth
         self.endpoints: dict[str, Endpoint] = {}
-        self.openapi_schema = None    
+        self.openapi_schema = None
+        self._endpoint_fetch_payloads = [] # to execute after endpoints are collected
         # set auth
         if auth:
             try:
@@ -72,8 +81,12 @@ class APIClient:
         # collect endpoints
         if endpoints_config:
             self._collect_endpoints(endpoints_config)
-        # fetch schema
-        asyncio.create_task(self._fetch_openapi_schema())
+        # fetch schema and resolve payloads
+        async def setup():
+            await self._fetch_openapi_schema()
+            self._assign_endpoint_schemas()
+            await self._resolve_deferred_payloads()
+        asyncio.create_task(setup())
 
     def _collect_endpoints(self, endpoints_config:list[dict]):
         for ep in endpoints_config:
@@ -82,8 +95,13 @@ class APIClient:
                                     path=ep["path"],
                                     method=ep.get("method", "GET"),
                                     response_type=ep.get("response_type", "json"),
+                                    payload_config=ep.get("payload"),
                                     headers=ep.get("headers", self.default_headers),
                                     timeout=ep.get("timeout", self.default_timeout))
+                # get deferred payloads after collecting all endpoints
+                if hasattr(endpoint, "_deferred_payload_source"):
+                    self._endpoint_fetch_payloads.append(endpoint)
+
                 self.endpoints[endpoint.name] = endpoint
             except KeyError as e:
                 log.warning(f"[APIClient] Skipping endpoint due to missing key: {e}")
@@ -99,6 +117,46 @@ class APIClient:
                         log.debug(f"No OpenAPI schema available at {self.name}")
         except Exception as e:
             log.error(f"Failed to load OpenAPI schema from {self.url} for {self.name}: {e}")
+
+    def _assign_endpoint_schemas(self):
+        if not self.openapi_schema:
+            return
+
+        for endpoint in self.endpoints.values():
+            endpoint.set_schema_from_openapi(self.openapi_schema)
+
+    async def _resolve_deferred_payloads(self):
+        for ep in self._endpoint_fetch_payloads:
+            ep:Endpoint
+            ref = ep._deferred_payload_source
+            ref_ep = self.endpoints.get(ref)
+
+            if ref_ep is None:
+                log.warning(f"[APIClient:{self.name}] Endpoint '{ep.name}' references unknown payload source: '{ref}'")
+                # Try schema fallback
+                if ep.schema:
+                    ep.payload = ep.generate_payload_from_schema()
+                    log.debug(f"[APIClient:{self.name}] Fallback: Using schema-based payload for '{ep.name}'")
+                continue
+
+            log.debug(f"[APIClient:{self.name}] Fetching payload for '{ep.name}' using endpoint '{ref}'")
+
+            try:
+                data = await ref_ep.call(client=self)
+                if isinstance(data, dict):
+                    ep.payload = data
+                else:
+                    log.warning(f"[APIClient:{self.name}] Endpoint '{ref}' returned non-dict data for '{ep.name}'")
+                    # Try schema fallback
+                    if ep.schema:
+                        ep.payload = ep.generate_payload_from_schema()
+                        log.debug(f"[APIClient:{self.name}] Fallback: Using schema-based payload for '{ep.name}'")
+            except Exception as e:
+                log.error(f"[APIClient:{self.name}] Failed to fetch payload from '{ref}' for '{ep.name}': {e}")
+                if ep.schema:
+                    ep.payload = ep.generate_payload_from_schema()
+                    log.debug(f"[APIClient:{self.name}] Fallback: Using schema-based payload for '{ep.name}'")
+
 
     def validate_payload(self, method:str, endpoint:str, json:str|None=None, data:str|None=None):
         if self.openapi_schema:
@@ -204,14 +262,81 @@ class Endpoint:
                  path: str,
                  method: str = "GET",
                  response_type: str = "json",
+                 payload_config: Optional[str|dict] = None,
                  headers: Optional[Dict[str, str]] = None,
                  timeout: int = 10):
         self.name = name
         self.path = path
         self.method = method.upper()
         self.response_type = response_type
+        self.payload = {}
+        self.schema: Optional[dict] = None
         self.headers = headers or {}
         self.timeout = timeout
+        self._deferred_payload_source = None
+        if payload_config:
+            self.init_payload(payload_config)
+
+    def init_payload(self, payload_config):
+        # dictionary value
+        if isinstance(payload_config, dict):
+            self.payload = payload_config
+        # string value
+        elif isinstance(payload_config, str):
+            payload_fp = os.path.join(shared_path.dir_user_payloads, payload_config)
+            # string is file path
+            if os.path.exists(payload_fp):
+                self.payload = load_file(payload_fp)
+            # any other string should be a 'get' endpoint. Need to get after.
+            else:
+                self._deferred_payload_source = payload_config  # name of another endpoint
+
+    def set_schema_from_openapi(self, openapi_schema: dict):
+        if not openapi_schema:
+            return
+
+        paths = openapi_schema.get("paths", {})
+        endpoint_spec = paths.get(self.path)
+        if not endpoint_spec:
+            return
+
+        method_spec = endpoint_spec.get(self.method.lower())
+        if not method_spec:
+            return
+
+        request_body = method_spec.get("requestBody", {})
+        content = request_body.get("content", {})
+        app_json = content.get("application/json", {})
+        schema = app_json.get("schema")
+
+        if schema:
+            self.schema = schema
+
+    def generate_payload_from_schema(self) -> dict:
+        if not self.schema:
+            return {}
+
+        def resolve_schema(schema: dict) -> Any:
+            if "default" in schema:
+                return schema["default"]
+            if "example" in schema:
+                return schema["example"]
+            if schema.get("type") == "object":
+                return {
+                    k: resolve_schema(v)
+                    for k, v in schema.get("properties", {}).items()
+                }
+            if schema.get("type") == "array":
+                item_schema = schema.get("items", {})
+                return [resolve_schema(item_schema)]
+            return None
+
+        payload = resolve_schema(self.schema)
+        if not isinstance(payload, dict):
+            log.debug(f"[Endpoint:{self.name}] Generated non-dict payload from schema")
+            return {}
+
+        return payload
 
     def get_schema(self, openapi_schema: dict) -> Optional[dict]:
         if not openapi_schema:
@@ -235,7 +360,7 @@ class Endpoint:
         """
         Recursively sanitizes the payload using the OpenAPI schema by removing unknown keys.
         """
-        schema = self.get_schema(openapi_schema)
+        schema = self.schema or self.get_schema(openapi_schema)
         if not schema:
             log.debug(f"No schema found for {self.method} {self.path} — skipping sanitization")
             return payload

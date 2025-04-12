@@ -42,16 +42,16 @@ persistent_tags = PersistentTags()
 
 class BaseTags(BaseFileMemory):
     def __init__(self) -> None:
-        self.global_tag_keys: dict
+        self._global_tag_keys: dict
         self.tags: list
-        self.tag_presets: list
+        self._tag_presets: list
         super().__init__(shared_path.tags, version=1, missing_okay=True)
         self.tags = self.update_tags(self.tags)
 
     def load_defaults(self, data: dict):
-        self.global_tag_keys = data.pop('global_tag_keys', {})
+        self._global_tag_keys = data.pop('global_tag_keys', {})
         self.tags = data.pop('base_tags', [])
-        self.tag_presets = data.pop('tag_presets', [])
+        self._tag_presets = data.pop('tag_presets', [])
 
     def expand_triggers(self, all_tags:list) -> list:
         def expand_value(value:str) -> str:
@@ -95,7 +95,7 @@ class BaseTags(BaseFileMemory):
             for tag in tags:
                 if 'tag_preset_name' in tag:
                     # Find matching tag preset in tag_presets
-                    for preset in self.tag_presets:
+                    for preset in self._tag_presets:
                         if 'tag_preset_name' in preset and preset['tag_preset_name'] == tag['tag_preset_name']:
                             # Merge corresponding tag presets
                             updated_tags.extend(preset.get('tags', []))
@@ -105,7 +105,7 @@ class BaseTags(BaseFileMemory):
                     updated_tags.append(tag)
             # Add global tag keys to each tag item
             for tag in updated_tags:
-                for key, value in self.global_tag_keys.items():
+                for key, value in self._global_tag_keys.items():
                     if key not in tag:
                         tag[key] = value
             updated_tags = self.expand_triggers(updated_tags) # expand any simplified trigger phrases
@@ -122,6 +122,9 @@ class Tags():
         self.ictx = ictx
         self.user = get_user_ctx_inter(self.ictx) if self.ictx else None # Union[discord.User, discord.Member]
         self.tags_initialized = False
+        # tags lists
+        self.char_tags: TAG_LIST = []
+        self.imgmodel_tags: TAG_LIST = []
         self.matches:list = []
         self.matches_names:list = []
         self.unmatched = {'user': [], 'llm': [], 'userllm': []}
@@ -139,8 +142,8 @@ class Tags():
             self.tags_initialized = True
             base_tags_obj = BaseTags()
             base_tags: TAG_LIST      = getattr(base_tags_obj, "tags", [])
-            char_tags: TAG_LIST      = settings['llmcontext'].get('tags', []) # character specific tags
-            imgmodel_tags: TAG_LIST  = settings['imgmodel'].get('tags', []) # imgmodel specific tags
+            char_tags: TAG_LIST      = settings['modeltags'].get('char_tags', []) # character specific tags
+            imgmodel_tags: TAG_LIST  = settings['modeltags'].get('imgmodel_tags', []) # imgmodel specific tags
             tags_from_text           = self.get_tags_from_text(text, phase)
             flow_step_tags: TAG_LIST = []
             if flows_queue.qsize() > 0:

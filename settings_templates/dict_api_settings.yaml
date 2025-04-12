@@ -14,7 +14,7 @@
     #password: mypass
   # Add any endpoints that you may use for bot functions (Tags system, user commands, etc)
   endpoints:
-    - {name: Post txt2img, path: /sdapi/v1/txt2img, method: POST, response_type: json}
+    - {name: Post txt2img, path: /sdapi/v1/txt2img, method: POST, response_type: json, payload: sd-webui}
     - {name: Post img2img, path: /sdapi/v1/img2img, method: POST, response_type: json}
     - {name: Get ImgModels, path: /sdapi/v1/sd-models, method: GET, response_type: json, timeout: 10}
     - {name: Get Options, path: /sdapi/v1/options, method: GET, response_type: json, timeout: 10}
