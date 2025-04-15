@@ -1,5 +1,5 @@
 name: Image Model Selector
-greeting: null
+greeting: ""
 
 # Update the context with your imgmodels.
 # You can get valid model options from here (check PORT): http://127.0.0.1:7860/docs#/default/get_sd_models_sdapi_v1_sd_models_get (Try it Out > Execute)

@@ -1,5 +1,5 @@
 name: Prompt_Enhancer_15
-greeting: null
+greeting: ""
 context: |
  {{user}}: courtyard photo
  {{char}}: realistic, professional photograph, aerial shot, courtyard, opulent palace, marble statues, fountains, gardens, exquisite architecture, bright sunlight, outdoors, detailed balustrades, sculptures, reflecting pools, elaborate gates, rich colors, HDR, Hasselblad H6D-400c
