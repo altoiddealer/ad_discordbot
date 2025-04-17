@@ -1157,11 +1157,11 @@ async def announce_changes(change_label:str, change_name:str, ictx: CtxInteracti
                 continue
             # Public channels in interaction server
             elif any(channel_id == channel.id for channel in ictx.guild.channels):
-                await bot_embeds.send('change', f"{user_name} {change_label} in <#{ictx.channel.id}>:", channel=channel)
+                await bot_embeds.send('change', f"{user_name} {change_label} in <#{ictx.channel.id}>:", f'**{change_name}**', channel=channel)
             # Channel is in another server
             elif channel_id not in [channel.id for channel in ictx.guild.channels]:
                 if change_label != 'reset the conversation':
-                    await bot_embeds.send('change', f"A user {change_label} in another bot server:", channel=channel)
+                    await bot_embeds.send('change', f"A user {change_label} in another bot server:", f'**{change_name}**', channel=channel)
     except Exception as e:
         log.error(f'An error occurred while announcing changes to announce channels: {e}')
 
