@@ -515,11 +515,21 @@ async def first_run():
     finally:
         bot_database.set('first_run', False)
 
+async def in_any_guilds():
+    if len(client.guilds) == 0:
+        log.error("The bot is not a member of any guilds. Please invite it to a server and try again.")
+        log.error("Shutting down in 5 seconds...")
+        await asyncio.sleep(5)
+        await client.close()
+        sys.exit(3)
+
 #################################################################
 ########################### ON READY ############################
 #################################################################
 @client.event
 async def on_ready():
+    await in_any_guilds()
+
     # If first time running bot
     if bot_database.first_run:
         await first_run()
@@ -1082,43 +1092,46 @@ def get_braces_value(matched_text:str) -> str:
     return replaced_text
 
 async def dynamic_prompting(text: str, ictx: Optional[CtxInteraction] = None, user_name=None) -> str:
-    if not config.get('dynamic_prompting_enabled', True):
-        return text
+    try:
+        if not config.get('dynamic_prompting_enabled', True):
+            return text
 
-    # copy text for adding comments
-    text_with_comments = text
-    # Process braces patterns
-    braces_start_indexes = []
-    braces_matches = patterns.braces.finditer(text)
-    braces_matches = sorted(braces_matches, key=lambda x: -x.start())  # Sort matches in reverse order by their start indices
-    for match in braces_matches:
-        braces_start_indexes.append(match.start())  # retain all start indexes for updating 'text_with_comments' for wildcard match phase
-        matched_text = match.group(1)               # Extract the text inside the braces
-        replaced_text = get_braces_value(matched_text)
-        # Replace matched text
-        text = text.replace(match.group(0), replaced_text, 1)
-        # Update comment
-        highlighted_changes = '`' + replaced_text + '`'
-        text_with_comments = text_with_comments.replace(match.group(0), highlighted_changes, 1)
-    # Process wildcards not in braces
-    wildcard_matches = patterns.wildcard.finditer(text)
-    wildcard_matches = sorted(wildcard_matches, key=lambda x: -x.start())  # Sort matches in reverse order by their start indices
-    for match in wildcard_matches:
-        matched_text = match.group()
-        replaced_text = get_wildcard_value(matched_text=matched_text, dir_path=shared_path.dir_user_wildcards)
-        if replaced_text:
-            start, end = match.start(), match.end()
+        # copy text for adding comments
+        text_with_comments = text
+        # Process braces patterns
+        braces_start_indexes = []
+        braces_matches = patterns.braces.finditer(text)
+        braces_matches = sorted(braces_matches, key=lambda x: -x.start())  # Sort matches in reverse order by their start indices
+        for match in braces_matches:
+            braces_start_indexes.append(match.start())  # retain all start indexes for updating 'text_with_comments' for wildcard match phase
+            matched_text = match.group(1)               # Extract the text inside the braces
+            replaced_text = get_braces_value(matched_text)
             # Replace matched text
-            text = text[:start] + replaced_text + text[end:]
-            # Calculate offset based on the number of braces matches with lower start indexes
-            offset = sum(1 for idx in braces_start_indexes if idx < start) * 2
-            adjusted_start = start + offset
-            adjusted_end = end + offset
+            text = text.replace(match.group(0), replaced_text, 1)
+            # Update comment
             highlighted_changes = '`' + replaced_text + '`'
-            text_with_comments = (text_with_comments[:adjusted_start] + highlighted_changes + text_with_comments[adjusted_end:])
-    # send a message showing the selected options
-    if ictx and user_name and (braces_matches or wildcard_matches):
-        await ictx.reply(content=f"__Text with **[Dynamic Prompting](<https://github.com/altoiddealer/ad_discordbot/wiki/dynamic-prompting>)**__:\n>>> **{user_name}**: {text_with_comments}", mention_author=False, silent=True)
+            text_with_comments = text_with_comments.replace(match.group(0), highlighted_changes, 1)
+        # Process wildcards not in braces
+        wildcard_matches = patterns.wildcard.finditer(text)
+        wildcard_matches = sorted(wildcard_matches, key=lambda x: -x.start())  # Sort matches in reverse order by their start indices
+        for match in wildcard_matches:
+            matched_text = match.group()
+            replaced_text = get_wildcard_value(matched_text=matched_text, dir_path=shared_path.dir_user_wildcards)
+            if replaced_text:
+                start, end = match.start(), match.end()
+                # Replace matched text
+                text = text[:start] + replaced_text + text[end:]
+                # Calculate offset based on the number of braces matches with lower start indexes
+                offset = sum(1 for idx in braces_start_indexes if idx < start) * 2
+                adjusted_start = start + offset
+                adjusted_end = end + offset
+                highlighted_changes = '`' + replaced_text + '`'
+                text_with_comments = (text_with_comments[:adjusted_start] + highlighted_changes + text_with_comments[adjusted_end:])
+        # send a message showing the selected options
+        if ictx and user_name and (braces_matches or wildcard_matches):
+            await ictx.reply(content=f"__Text with **[Dynamic Prompting](<https://github.com/altoiddealer/ad_discordbot/wiki/dynamic-prompting>)**__:\n>>> **{user_name}**: {text_with_comments}", mention_author=False, silent=True)
+    except Exception as e:
+        log.error(f'An error occurred while processing Dynamic Prompting: {e}')
     return text
 
 #################################################################
@@ -1140,11 +1153,11 @@ async def announce_changes(change_label:str, change_name:str, ictx: CtxInteracti
                 continue
             # Public channels in interaction server
             elif any(channel_id == channel.id for channel in ictx.guild.channels):
-                await bot_embeds.send('change', f"{user_name} {change_label} in <#{ictx.channel.id}>:", channel=channel)
+                await bot_embeds.send('change', f"{user_name} {change_label} in <#{ictx.channel.id}>:", f'**{change_name}**', channel=channel)
             # Channel is in another server
             elif channel_id not in [channel.id for channel in ictx.guild.channels]:
                 if change_label != 'reset the conversation':
-                    await bot_embeds.send('change', f"A user {change_label} in another bot server:", channel=channel)
+                    await bot_embeds.send('change', f"A user {change_label} in another bot server:", f'**{change_name}**', channel=channel)
     except Exception as e:
         log.error(f'An error occurred while announcing changes to announce channels: {e}')
 
@@ -4681,7 +4694,7 @@ if sd.enabled:
             await ctx.reply("Stable Diffusion is not online.", ephemeral=True, delete_after=5)
             return
         # User inputs from /image command
-        prompt = selections.get('prompt', '')
+        pos_prompt = selections.get('prompt', '')
         use_llm = selections.get('use_llm', None)
         if not tgwui_enabled:
             use_llm = None
@@ -4699,7 +4712,7 @@ if sd.enabled:
         img2img_dict = {}
         cnet_dict = {}
         try:
-            pos_prompt = await dynamic_prompting(prompt)
+            pos_prompt = await dynamic_prompting(pos_prompt)
             log_msg = ""
             if use_llm and use_llm != 'No':
                 log_msg += "\nUse LLM: True (image was generated from LLM reply)"
@@ -6219,7 +6232,8 @@ class BotStatus:
             for settings in guild_settings.values():
                 settings:"Settings"
                 all_resp_sets.append(settings.behavior.responsiveness)
-            self.responsiveness = max(all_resp_sets)
+            if all_resp_sets:
+                self.responsiveness = max(all_resp_sets)
         responsiveness = max(0.0, min(1.0, self.responsiveness)) # clamped between 0.0 and 1.0
         if responsiveness == 1.0:
             return

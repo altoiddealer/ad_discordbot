@@ -1,0 +1,8 @@
+/nationalities/african__
+/nationalities/europe__
+/nationalities/south-america__
+/nationalities/north-america__
+/nationalities/asia__
+/nationalities/oceania__
+/nationalities/atlantic-islands__
+/nationalities/central-america__

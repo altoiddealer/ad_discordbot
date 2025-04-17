@@ -158,10 +158,6 @@ class Config(BaseFileMemory):
     def is_per_server_imgmodels(self):
         return self.per_server_settings.get('per_server_imgmodel_settings', False)
 
-    def run_migration(self):
-        _old_active = os.path.join(shared_path.dir_root, 'config.py')
-        self._migrate_from_file(_old_active, load=True)
-
     def discord_dm_setting(self, key, default=None):
         return self.get('discord', {}).get('direct_messages', {}).get(key, default)
 
