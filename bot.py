@@ -6645,6 +6645,11 @@ class Behavior(SettingsBase):
         return random.random() < probability
 
 
+class ImgModel(SettingsBase):
+    def __init__(self):
+        self.payload = {}
+
+
 class LLMContext(SettingsBase):
     def __init__(self):
         self.context = 'The following is a conversation with an AI Large Language Model. The AI has been trained to answer questions, provide recommendations, and help with decision making. The AI follows user requests. The AI thinks outside the box.'
@@ -6744,6 +6749,7 @@ class ModelTags(SettingsBase):
 # Returns the value of default settings as a dictionary
 def defaults_to_dict():
     return {'behavior': Behavior().get_vars(),
+            'imgmodel': ImgModel().get_vars(),
             'llmcontext': LLMContext().get_vars(),
             'llmstate': LLMState().get_vars(),
             'tags': ModelTags().get_vars()}
@@ -6756,6 +6762,7 @@ class Settings(BaseFileMemory):
         self._guild_name = guild.name if guild else None
         # settings values
         self.behavior: Behavior
+        self.imgmodel: ImgModel
         self.llmcontext: LLMContext
         self.llmstate: LLMState
         self.modeltags: ModelTags
@@ -6774,7 +6781,7 @@ class Settings(BaseFileMemory):
                 continue
             elif k in ['behavior', 'llmcontext', 'llmstate', 'modeltags']:
                 main_key = getattr(self, k, None)
-                if isinstance(main_key, (Behavior, LLMContext, LLMState, ModelTags)):
+                if isinstance(main_key, (Behavior, ImgModel, LLMContext, LLMState, ModelTags)):
                     main_key_dict = vars(main_key)
                     if isinstance(v, dict) and isinstance(main_key_dict, dict):
                         update_dict_matched_keys(main_key_dict, v)
@@ -6789,6 +6796,7 @@ class Settings(BaseFileMemory):
 
     def load_defaults(self):
         self.behavior = Behavior()
+        self.imgmodel = ImgModel()
         self.llmcontext = LLMContext()
         self.llmstate = LLMState()
         self.modeltags = ModelTags()
@@ -6827,12 +6835,14 @@ class Settings(BaseFileMemory):
         # return dict excluding "_key" keys
         if public_only:
             return {'behavior': self.behavior.get_vars(),
+                    'imgmodel': self.imgmodel.get_vars(),
                     'llmcontext': self.llmcontext.get_vars(),
                     'llmstate': self.llmstate.get_vars(),
                     'modeltags': self.modeltags.get_vars()}
         # return complete dict
         else:
             return {'behavior': vars(self.behavior),
+                    'imgmodel': vars(self.imgmodel),
                     'llmcontext': vars(self.llmcontext),
                     'llmstate': vars(self.llmstate),
                     'modeltags': vars(self.modeltags)}
