@@ -1,38 +1,63 @@
-# WIP!!
+# Assign main APIs here (defined in "all_apis" - below this section)
+bot_api_functions:
+  # Many standard bot functions rely on these endpoints. To disable any, set as null or comment out the line. Worst case, you get an error in CMD window.
+  imggen:
+    api_name: Stable Diffusion WebUI
+    post_txt2img_endpoint_name: Post txt2img
+    post_img2img_endpoint_name: Post img2img
+    post_options_endpoint_name: Post Options
+    get_imgmodels_endpoint_name: Get ImgModels
+    get_controlnet_models_endpoint_name: Get Cnet Models
+    get_controlnet_control_types_endpoint_name: Get Cnet Control Types
+  # API for Text Gen is WIP. Bot currently cannot use textgen API for main functions.
+  textgen: {} # placeholder.
+  # API for TTS is WIP. These settings are currently limited to the '/speak' command (will not work for message requests)
+  ttsgen:
+    api_name: AllTalk TTS v2
+    get_voices_endpoint_name: Get TTS Voices
+    post_generate_endpoint_name: Post TTS Generate
 
-# You may define APIs here (a list of dictionaries), making them available to use for various bot functions,
-# including the above config settings, the Tags system (dict_tags.yaml), user defined commands (dict_commands.yaml), etc.
-# You may assign ONE default API for each: Image Generation ('imggen'); Text Generation ('textgen'); and TTS Generation ('ttsgen') - by including a 'function' key value in the API definition.
-- name: Stable Diffusion WebUI
-  url: http://127.0.0.1:7860
-  enabled: true
-  default_headers:
-    Content-Type: application/json
-  default_timeout: 120 # seconds to wait before aborting api call
-  auth: null # dict format (if using)
-    #username: myuser
-    #password: mypass
-  # Add any endpoints that you may use for bot functions (Tags system, user commands, etc)
-  endpoints:
-    - {name: Post txt2img, path: /sdapi/v1/txt2img, method: POST, response_type: json, payload: sd-webui}
-    - {name: Post img2img, path: /sdapi/v1/img2img, method: POST, response_type: json}
-    - {name: Get ImgModels, path: /sdapi/v1/sd-models, method: GET, response_type: json, timeout: 10}
-    - {name: Get Options, path: /sdapi/v1/options, method: GET, response_type: json, timeout: 10}
-    - {name: Post Options, path: /sdapi/v1/options, method: POST, response_type: json, timeout: 10}
 
-- name: Text Generation WebUI
-  url: http://127.0.0.1:7861
-  enabled: false
-  default_headers:
-    Content-Type: application/json
-  default_timeout: 10 # seconds to wait before aborting api call
-  auth: null
+# Define any APIs to use with the bot
+all_apis:
+  # You may define any number of APIs here (a list of dictionaries), making them available to use for various bot functions,
+  # including the above config settings, the Tags system (dict_tags.yaml), user defined commands (dict_commands.yaml), etc.
+  # You may assign ONE default API for each: Image Generation ('imggen'); Text Generation ('textgen'); and TTS Generation ('ttsgen') - by including a 'function' key value in the API definition.
+  - name: Stable Diffusion WebUI
+    url: http://127.0.0.1:7860
+    enabled: true
+    default_headers:
+      Content-Type: application/json
+    default_timeout: 120 # seconds to wait before aborting api call
+    auth: null # dict format (if using)
+      #username: myuser
+      #password: mypass
+    # Add any endpoints that you may use for bot functions (Tags system, user commands, etc)
+    endpoints:
+      - {name: Post txt2img, path: /sdapi/v1/txt2img, method: POST, response_type: json, payload: sd-webui}
+      - {name: Post img2img, path: /sdapi/v1/img2img, method: POST, response_type: json}
+      - {name: Get ImgModels, path: /sdapi/v1/sd-models, method: GET, response_type: json, timeout: 10}
+      - {name: Get Options, path: /sdapi/v1/options, method: GET, response_type: json, timeout: 10}
+      - {name: Post Options, path: /sdapi/v1/options, method: POST, response_type: json, timeout: 10}
+      - {name: Get Cnet Models, path: /controlnet/model_list, method: GET, response_type: json, timeout: 10}
+      - {name: Get Cnet Control Types, path: /controlnet/control_types, method: GET, response_type: json, timeout: 10}
 
-- name: AllTalk TTS v2
-  url: http://127.0.0.1:7851
-  enabled: false
-  default_headers:
-    Content-Type: application/x-www-form-urlencoded
-  default_timeout: 10
-  auth: null
+  - name: Text Generation WebUI
+    url: http://127.0.0.1:7861
+    enabled: false
+    default_headers:
+      Content-Type: application/json
+    default_timeout: 10
+    auth: null
+    endpoints: []
 
+  - name: AllTalk TTS v2
+    url: http://127.0.0.1:7851
+    enabled: false
+    default_headers:
+      Content-Type: application/x-www-form-urlencoded
+    default_timeout: 10
+    auth: null
+    endpoints:
+      - {name: Get TTS Voices, path: /api/voices, method: GET, response_type: json}
+      - {name: Post TTS Generate, path: /api/tts-generate, method: POST, response_type: json}

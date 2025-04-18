@@ -3054,7 +3054,7 @@ class TaskProcessing(TaskAttributes):
             self.img_payload = {"prompt": self.img_prompt, "negative_prompt": neg_prompt, "seed": -1}
 
             # Apply settings from imgmodel configuration
-            imgmodel_img_payload = copy.deepcopy(self.settings.imgmodel.payload)
+            imgmodel_img_payload = copy.deepcopy(self.settings.imgmodel.payload_mods)
             self.img_payload.update(imgmodel_img_payload)
 
         except Exception as e:
@@ -5648,14 +5648,14 @@ async def change_imgmodel(selected_imgmodel_params:dict, ictx:CtxInteraction=Non
             settings.imgmodel.tags = imgmodel_tags
 
             # Update model loading payload
-            override_settings = settings.imgmodel.payload['override_settings']
+            override_settings:dict = settings.imgmodel.payload_mods.get('override_settings', {})
             load_new_model.update(override_settings)
 
             # Remove options we do not want to retain in Settings
             if not config.is_per_server_imgmodels():
                 imgmodel_options = list(override_settings.keys())  # list all options
                 # Replace override_settings with an empty dict
-                settings.imgmodel.payload['override_settings'] = {}
+                settings.imgmodel.payload_mods['override_settings'] = {}
                 if imgmodel_options:
                     log.info(f"[Change Imgmodel] Applying Options which won't be retained for next bot startup: {imgmodel_options}")
 
@@ -6647,7 +6647,8 @@ class Behavior(SettingsBase):
 
 class ImgModel(SettingsBase):
     def __init__(self):
-        self.payload = {}
+        self.payload_mods = {}
+        self.tags = []
 
 
 class LLMContext(SettingsBase):
@@ -6658,6 +6659,7 @@ class LLMContext(SettingsBase):
         self.name = 'AI'
         self.use_voice_channel = False
         self.bot_in_character_menu = True
+        self.tags = []
 
 
 class LLMState(SettingsBase):
@@ -6740,19 +6742,12 @@ class LLMState(SettingsBase):
         self._continue = False
 
 
-class ModelTags(SettingsBase):
-    def __init__(self):
-        self.char_tags: TAG_LIST = []
-        self.imgmodel_tags: TAG_LIST = []
-
-
 # Returns the value of default settings as a dictionary
 def defaults_to_dict():
     return {'behavior': Behavior().get_vars(),
             'imgmodel': ImgModel().get_vars(),
             'llmcontext': LLMContext().get_vars(),
-            'llmstate': LLMState().get_vars(),
-            'tags': ModelTags().get_vars()}
+            'llmstate': LLMState().get_vars()}
 
 # Initializes as settings file (bot_database -> BaseFileMemory)
 class Settings(BaseFileMemory):
@@ -6765,7 +6760,6 @@ class Settings(BaseFileMemory):
         self.imgmodel: ImgModel
         self.llmcontext: LLMContext
         self.llmstate: LLMState
-        self.modeltags: ModelTags
         # Always initializes 'bot_settings' instance. Can initialize per-guild settings instances.
         self._settings_fp = shared_path.active_settings
         if guild:
@@ -6779,9 +6773,9 @@ class Settings(BaseFileMemory):
         for k, v in data.items():
             if k in ['db_version']:
                 continue
-            elif k in ['behavior', 'llmcontext', 'llmstate', 'modeltags']:
+            elif k in ['behavior', 'imgmodel', 'llmcontext', 'llmstate']:
                 main_key = getattr(self, k, None)
-                if isinstance(main_key, (Behavior, ImgModel, LLMContext, LLMState, ModelTags)):
+                if isinstance(main_key, (Behavior, ImgModel, LLMContext, LLMState)):
                     main_key_dict = vars(main_key)
                     if isinstance(v, dict) and isinstance(main_key_dict, dict):
                         update_dict_matched_keys(main_key_dict, v)
@@ -6799,7 +6793,6 @@ class Settings(BaseFileMemory):
         self.imgmodel = ImgModel()
         self.llmcontext = LLMContext()
         self.llmstate = LLMState()
-        self.modeltags = ModelTags()
 
     # overrides BaseFileMemory method
     def load(self, data=None):
@@ -6837,15 +6830,13 @@ class Settings(BaseFileMemory):
             return {'behavior': self.behavior.get_vars(),
                     'imgmodel': self.imgmodel.get_vars(),
                     'llmcontext': self.llmcontext.get_vars(),
-                    'llmstate': self.llmstate.get_vars(),
-                    'modeltags': self.modeltags.get_vars()}
+                    'llmstate': self.llmstate.get_vars()}
         # return complete dict
         else:
             return {'behavior': vars(self.behavior),
                     'imgmodel': vars(self.imgmodel),
                     'llmcontext': vars(self.llmcontext),
-                    'llmstate': vars(self.llmstate),
-                    'modeltags': vars(self.modeltags)}
+                    'llmstate': vars(self.llmstate)}
     
     def save(self):
         data = self.get_vars(public_only=True)

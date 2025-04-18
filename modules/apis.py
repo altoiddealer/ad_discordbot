@@ -18,6 +18,17 @@ class API:
         self.imggen_client:Optional[APIClient] = None
         self.textgen_client:Optional[APIClient] = None
         self.tts_client:Optional[APIClient] = None
+
+        # Main endpoints
+        self.post_txt2img_endpoint_name:Optional[str] = None
+        self.post_img2img_endpoint_name:Optional[str] = None
+        self.post_options_endpoint_name:Optional[str] = None
+        self.get_imgmodels_endpoint_name:Optional[str] = None
+        self.get_controlnet_models_endpoint_name:Optional[str] = None
+        self.get_controlnet_control_types_endpoint_name:Optional[str] = None
+        self.get_voices_endpoint_name:Optional[str] = None
+        self.post_generate_endpoint_name:Optional[str] = None
+
         self.init()
 
     def set_main_apis(self, api_client:"APIClient"):
@@ -35,7 +46,12 @@ class API:
             log.info(f'[APIs] Initialized with "{api_client.name}" as the default textgen client.')
 
     def init(self):
-        apis = load_file(shared_path.api_settings)
+        data = load_file(shared_path.api_settings)
+        main_api_settings:dict = data.get('bot_api_functions', {})
+        main_imggen_endpoints = main_api_settings.get('imggen', {})
+        main_textgen_endpoints = main_api_settings.get('textgen', {})
+        main_ttsgen_endpoints = main_api_settings.get('ttsgen', {})
+        apis:dict = data.get('all_apis', {})
         for api_config in apis:
             if not isinstance(api_config, dict):
                 log.warning('[API] An API definition was not formatted as a dictionary. Ignoring.')
