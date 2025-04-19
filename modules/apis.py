@@ -35,7 +35,7 @@ class API:
                            "textgen": TextGenClient,
                            "ttsgen": TTSGenClient}
 
-        # Iterate over all APIs
+        # Iterate over all APIs data
         apis:dict = data.get('all_apis', {})
         for api_config in apis:
             if not isinstance(api_config, dict):
@@ -43,7 +43,7 @@ class API:
                 continue
             name = api_config.get("name")
             if not name:
-                log.warning("[API] API config missing 'name'. Skipping.")
+                log.warning("[API] API config missing required 'name'. Skipping.")
                 continue
 
             # Determine if this API is a "main" one
@@ -57,12 +57,13 @@ class API:
             # Collect all valid user APIs
             try:
                 api_client = ClientClass(name=api_config['name'],
-                                       url=api_config['url'],
-                                       headers=api_config.get('default_headers'),
-                                       timeout=api_config.get('default_timeout', 10),
-                                       auth=api_config.get('auth'),
-                                       endpoints_config=api_config.get('endpoints', []),
-                                       **main_config)
+                                         url=api_config['url'],
+                                         headers=api_config.get('default_headers'),
+                                         timeout=api_config.get('default_timeout', 10),
+                                         auth=api_config.get('auth'),
+                                         endpoints_config=api_config.get('endpoints', []),
+                                         **main_config)
+                # Capture all clients
                 self.clients[name] = api_client
                 # Capture main clients
                 if is_main:
@@ -70,6 +71,8 @@ class API:
                     log.info(f"[API] Registered main {api_func_type} client: {name}")
             except KeyError as e:
                 log.warning(f"[API] Skipping API Client due to missing key: {e}")
+            except TypeError as e:
+                log.warning(f"[API] Failed to create API client '{name}': {e}")
 
 
 class APIClient:
