@@ -13,61 +13,63 @@ class API:
     def __init__(self):
         # ALL API clients
         self.clients:dict[str, APIClient] = {}
-
         # Main API clients
-        self.imggen_client:Optional[APIClient] = None
-        self.textgen_client:Optional[APIClient] = None
-        self.tts_client:Optional[APIClient] = None
-
-        # Main endpoints
-        self.post_txt2img_endpoint_name:Optional[str] = None
-        self.post_img2img_endpoint_name:Optional[str] = None
-        self.post_options_endpoint_name:Optional[str] = None
-        self.get_imgmodels_endpoint_name:Optional[str] = None
-        self.get_controlnet_models_endpoint_name:Optional[str] = None
-        self.get_controlnet_control_types_endpoint_name:Optional[str] = None
-        self.get_voices_endpoint_name:Optional[str] = None
-        self.post_generate_endpoint_name:Optional[str] = None
-
+        self.imggen_client:Optional[ImgGenClient] = None
+        self.textgen_client:Optional[TextGenClient] = None
+        self.tts_client:Optional[TTSGenClient] = None
         self.init()
 
-    def set_main_apis(self, api_client:"APIClient"):
-        client_type = ''
-        if api_client.name == config.textgen['api_name']:
-            self.textgen_client = api_client
-            client_type = 'Text Gen'
-        elif api_client.name == config.ttsgen['api_name']:
-            self.ttsgen_client = api_client
-            client_type = 'TTS Gen'
-        elif api_client.name == config.imggen['api_name']:
-            self.imggen_client = api_client
-            client_type = 'Img Gen'
-        if client_type:
-            log.info(f'[APIs] Initialized with "{api_client.name}" as the default textgen client.')
-
     def init(self):
+        # Load API Settings yaml
         data = load_file(shared_path.api_settings)
+
+        # Main APIs
         main_api_settings:dict = data.get('bot_api_functions', {})
-        main_imggen_endpoints = main_api_settings.get('imggen', {})
-        main_textgen_endpoints = main_api_settings.get('textgen', {})
-        main_ttsgen_endpoints = main_api_settings.get('ttsgen', {})
+        main_api_func_keys = ['imggen', 'textgen', 'ttsgen']
+        # Reverse lookup for matching API names to their function type
+        main_api_name_map = {main_api_settings[k].get("name"): k
+                             for k in main_api_func_keys
+                             if isinstance(main_api_settings.get(k), dict) and "name" in main_api_settings[k]}
+        # Map function type to specialized client class
+        client_type_map = {"imggen": ImgGenClient,
+                           "textgen": TextGenClient,
+                           "ttsgen": TTSGenClient}
+
+        # Iterate over all APIs
         apis:dict = data.get('all_apis', {})
         for api_config in apis:
             if not isinstance(api_config, dict):
                 log.warning('[API] An API definition was not formatted as a dictionary. Ignoring.')
                 continue
+            name = api_config.get("name")
+            if not name:
+                log.warning("[API] API config missing 'name'. Skipping.")
+                continue
+
+            # Determine if this API is a "main" one
+            api_func_type = main_api_name_map.get(name)
+            is_main = api_func_type is not None
+            # Determine which client class to use
+            ClientClass = client_type_map.get(api_func_type, APIClient)
+            # Collect additional config for main clients
+            main_config = main_api_settings.get(api_func_type, {}) if is_main else {}
+
             # Collect all valid user APIs
             try:
-                api_client = APIClient(name=api_config['name'],
+                api_client = ClientClass(name=api_config['name'],
                                        url=api_config['url'],
                                        headers=api_config.get('default_headers'),
                                        timeout=api_config.get('default_timeout', 10),
                                        auth=api_config.get('auth'),
-                                       endpoints_config=api_config.get('endpoints', []))
-                self.clients[api_config['name']] = api_client
+                                       endpoints_config=api_config.get('endpoints', []),
+                                       **main_config)
+                self.clients[name] = api_client
+                # Capture main clients
+                if is_main:
+                    setattr(self, f"{api_func_type}_client", api_client)
+                    log.info(f"[API] Registered main {api_func_type} client: {name}")
             except KeyError as e:
                 log.warning(f"[API] Skipping API Client due to missing key: {e}")
-            self.set_main_apis(api_client)
 
 
 class APIClient:
@@ -270,6 +272,56 @@ class APIClient:
                 await asyncio.sleep(2 ** attempt)  # Exponential backoff
         
         return None
+
+
+class ImgGenClient(APIClient):
+    def __init__(self, *args, **kwargs):
+        imggen_config:dict = kwargs.pop("imggen_config", {})
+        super().__init__(*args, **kwargs)
+
+        self.post_txt2img: Optional[Endpoint] = None
+        self.post_img2img: Optional[Endpoint] = None
+        self.post_options: Optional[Endpoint] = None
+        self.get_imgmodels: Optional[Endpoint] = None
+        self.get_controlnet_models: Optional[Endpoint] = None
+        self.get_controlnet_control_types: Optional[Endpoint] = None
+        
+        # Collect endpoints used for main ImgGen functions
+        endpoint_keys = {'post_txt2img_endpoint_name': 'post_txt2img',
+                         'post_img2img_endpoint_name': 'post_img2img',
+                         'post_options_endpoint_name': 'post_options',
+                         'get_imgmodels_endpoint_name': 'get_imgmodels',
+                         'get_controlnet_models_endpoint_name': 'get_controlnet_models',
+                         'get_controlnet_control_types_endpoint_name': 'get_controlnet_control_types'}
+        for config_key, attr_name in endpoint_keys.items():
+            ep_name = imggen_config.get(config_key)
+            setattr(self, attr_name, self.endpoints.get(ep_name) if ep_name else None)       
+
+    def do_imggen_specific_thing(self):
+        log.info(f"[ImgGenClient:{self.name}] Doing something special for image generation!")
+
+
+class TextGenClient(APIClient):
+    def __init__(self, *args, **kwargs):
+        textgen_config:dict = kwargs.pop("textgen_config", {})
+        super().__init__(*args, **kwargs)
+        # TODO Main TextGen API support
+
+
+class TTSGenClient(APIClient):
+    def __init__(self, *args, **kwargs):
+        ttsgen_config:dict = kwargs.pop("ttsgen_config", {})
+        super().__init__(*args, **kwargs)
+
+        self.get_voices: Optional[Endpoint] = None
+        self.post_generate: Optional[Endpoint] = None
+
+        # Collect endpoints used for main TTSGen functions
+        endpoint_keys = {'get_voices_endpoint_name': 'get_voices',
+                         'post_generate_endpoint_name': 'post_generate'}
+        for config_key, attr_name in endpoint_keys.items():
+            ep_name = ttsgen_config.get(config_key)
+            setattr(self, attr_name, self.endpoints.get(ep_name) if ep_name else None) 
 
 
 class Endpoint:

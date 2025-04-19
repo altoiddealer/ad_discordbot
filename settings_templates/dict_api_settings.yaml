@@ -1,4 +1,4 @@
-# Assign main APIs here (defined in "all_apis" - below this section)
+# You may assign one main APIs for each "imggen", "textgen", "ttsgen" (defined in "all_apis" - below this section)
 bot_api_functions:
   # Many standard bot functions rely on these endpoints. To disable any, set as null or comment out the line. Worst case, you get an error in CMD window.
   imggen:
