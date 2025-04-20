@@ -2,6 +2,7 @@ import aiohttp
 import asyncio
 import os
 import jsonschema
+import jsonref
 from PIL import Image, PngImagePlugin
 import io
 import base64
@@ -136,10 +137,12 @@ class APIClient:
 
     async def _fetch_openapi_schema(self):
         try:
+            def dereference_schema(schema: dict) -> dict:
+                return jsonref.JsonRef.replace_refs(schema)
             async with aiohttp.ClientSession() as session:
                 async with session.get(f"{self.url}/openapi.json") as response:
                     if 200 <= response.status < 300:
-                        self.openapi_schema = await response.json()
+                        self.openapi_schema = dereference_schema(await response.json())
                         log.debug(f"Loaded OpenAPI schema for {self.name}")
                     else:
                         log.debug(f"No OpenAPI schema available at {self.name}")
@@ -433,7 +436,6 @@ class Endpoint:
         self.schema: Optional[dict] = None
         self.headers = headers or {}
         self.timeout = timeout
-        self._deferred_payload_source = None
         if payload_config:
             self.init_payload(payload_config)
 
@@ -447,9 +449,16 @@ class Endpoint:
             # string is file path
             if os.path.exists(payload_fp):
                 self.payload = load_file(payload_fp)
-            # any other string should be a 'get' endpoint. Need to get after.
+            # any other string should be a 'get' endpoint. Need to get payload after client init.
             else:
-                self._deferred_payload_source = payload_config  # name of another endpoint
+                setattr(self, '_deferred_payload_source', payload_config)
+
+    def get_preferred_content_type(self):
+        if isinstance(self.headers, dict):
+            return self.headers.get("Content-Type")
+        if isinstance(self.headers, str):
+            return self.headers.strip().lower()
+        return None
 
     def set_schema_from_openapi(self, openapi_schema: dict):
         if not openapi_schema:
@@ -466,37 +475,43 @@ class Endpoint:
 
         request_body = method_spec.get("requestBody", {})
         content = request_body.get("content", {})
-        app_json = content.get("application/json", {})
-        schema = app_json.get("schema")
+        preferred_content_type = self.get_preferred_content_type()
 
-        if schema:
-            self.schema = schema
+        if preferred_content_type and preferred_content_type in content:
+            schema = content[preferred_content_type].get("schema")
+            if schema:
+                self.schema = schema
+                return
 
     def generate_payload_from_schema(self) -> dict:
         if not self.schema:
             return {}
 
         def resolve_schema(schema: dict) -> Any:
+            # Only use fields with a "default"
             if "default" in schema:
                 return schema["default"]
-            if "example" in schema:
-                return schema["example"]
-            if schema.get("type") == "object":
-                return {
-                    k: resolve_schema(v)
-                    for k, v in schema.get("properties", {}).items()
-                }
-            if schema.get("type") == "array":
+
+            schema_type = schema.get("type")
+
+            if schema_type == "object":
+                result = {}
+                for k, v in schema.get("properties", {}).items():
+                    value = resolve_schema(v)
+                    if value is not None:
+                        result[k] = value
+                return result if result else None
+
+            if schema_type == "array":
                 item_schema = schema.get("items", {})
-                return [resolve_schema(item_schema)]
+                value = resolve_schema(item_schema)
+                return [value] if value is not None else None
+
+            # Skip anything without a default
             return None
 
         payload = resolve_schema(self.schema)
-        if not isinstance(payload, dict):
-            log.debug(f"[Endpoint:{self.name}] Generated non-dict payload from schema")
-            return {}
-
-        return payload
+        return payload if isinstance(payload, dict) else {}
 
     def get_schema(self, openapi_schema: dict) -> Optional[dict]:
         if not openapi_schema:

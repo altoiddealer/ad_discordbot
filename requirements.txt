@@ -7,5 +7,6 @@ Pillow>=9.5.0
 requests
 pydub
 jsonschema
+jsonref
 
 pywin32; platform_system == "Windows"
