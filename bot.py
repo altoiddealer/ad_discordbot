@@ -19,7 +19,7 @@ import typing
 import io
 import base64
 import yaml
-from PIL import Image, PngImagePlugin
+from PIL import Image
 import requests
 import aiohttp
 import math
@@ -36,7 +36,7 @@ from typing import Union
 from functools import partial
 
 from modules.utils_files import load_file, merge_base, save_yaml_file  # noqa: F401
-from modules.utils_shared import bot_args, is_tgwui_integrated, shared_path, bg_task_queue, task_event, flows_queue, flows_event, patterns, bot_emojis, config, bot_database
+from modules.utils_shared import bot_args, is_tgwui_integrated, shared_path, bg_task_queue, task_event, flows_queue, flows_event, patterns, bot_emojis, config, bot_database, get_api
 from modules.database import StarBoard, Statistics, BaseFileMemory
 from modules.utils_misc import check_probability, fix_dict, update_dict, sum_update_dict, update_dict_matched_keys, random_value_from_range, convert_lists_to_tuples, get_time, format_time, format_time_difference, get_normalized_weights  # noqa: F401
 from modules.utils_discord import Embeds, guild_only, guild_or_owner_only, configurable_for_dm_if, is_direct_message, ireply, sleep_delete_message, send_long_message, \
@@ -54,6 +54,7 @@ from discord.app_commands import AppCommandError, CommandInvokeError
 from modules.logs import import_track, get_logger, log_file_handler, log_file_formatter; import_track(__file__, fp=True); log = get_logger(__name__)  # noqa: E702
 logging = log
 
+api = asyncio.run(get_api())
 
 # Databases
 starboard = StarBoard()
@@ -1194,7 +1195,7 @@ class Params:
 
         # Image related params
         self.img_censoring: int = kwargs.get('img_censoring', 0)
-        self.endpoint: str      = kwargs.get('endpoint', '/sdapi/v1/txt2img')
+        self.mode: str      = kwargs.get('mode', 'txt2img')
         self.sd_output_dir: str = kwargs.get('sd_output_dir', '')
 
         # discord/HMessage related params
@@ -2203,104 +2204,7 @@ class TaskProcessing(TaskAttributes):
 
 ####################### MOSTLY IMAGE GEN PROCESSING #########################
 
-    async def sd_progress_warning(self:Union["Task","Tasks"]):
-        log.error('Reached maximum retry limit')
-        await self.embeds.edit_or_send('img_gen', f'Error getting progress response from {sd.client}.', 'Image generation will continue, but progress will not be tracked.')
-
-    def progress_bar(self, value, length=15):
-        try:
-            filled_length = int(length * value)
-            bar = ':black_square_button:' * filled_length + ':black_large_square:' * (length - filled_length)
-            return f'{bar}'
-        except Exception:
-            return 0
-
-    async def fetch_progress(self:Union["Task","Tasks"], session):
-        try:
-            async with session.get(f'{sd.url}/sdapi/v1/progress') as progress_response:
-                return await progress_response.json()
-        except aiohttp.ClientError as e:
-            log.warning(f'Failed to fetch progress: {e}')
-            return None
-
-    async def check_sd_progress(self:Union["Task","Tasks"], session):
-        try:
-            eta_message = 'Not yet available'
-            await self.embeds.send('img_gen', f'Waiting for {sd.client} ...', f'{self.progress_bar(0)}\n**ETA**: {eta_message}')
-            await asyncio.sleep(1)
-
-            # Try getting progress data
-            retry_count = 0
-            while retry_count < 5:
-                progress_data = await self.fetch_progress(session)
-                if progress_data and progress_data['progress'] > 0:
-                    break
-                log.warning(f'Waiting for progress response from {sd.client}, retrying in 1 second (attempt {retry_count + 1}/5)')
-                await asyncio.sleep(1)
-                retry_count += 1
-            else:
-                await self.sd_progress_warning()
-                return
-
-            # Variables for interpreting the progress data
-            retry_count = 0
-            progress = progress_data['progress']
-            last_progress = 0
-            stall_count = 0
-            percent_complete = progress * 100
-            # Interpret the progress data
-            while percent_complete < 100 and retry_count < 5:
-                progress_data = await self.fetch_progress(session)
-                # Yes progress data
-                if progress_data:
-                    # Sort out progress data
-                    progress = progress_data['progress']
-                    percent_complete = progress * 100
-                    eta = progress_data['eta_relative']
-                    # Assert nice print values when ETA complete
-                    if eta == 0:
-                        progress = 1.0
-                        percent_complete = 100
-                    # Waiting for substantial progress
-                    if progress <= 0.01:
-                        title = f'Preparing to generate image ...'
-                    # Progress is underway
-                    else:
-                        eta_message = f'{round(eta, 2)} seconds'
-                        # Check if stalled
-                        comment = ''
-                        if progress == last_progress:
-                            stall_count += 1
-                            if stall_count > 2:
-                                comment = ' (Stalled)'
-                        else:
-                            stall_count = 0
-                        # Update main progress message
-                        title = f'Generating image: {percent_complete:.0f}%{comment}'
-
-                    # Update ETA message
-                    description = f"{self.progress_bar(progress)}\n**ETA**: {eta_message}"
-                    # Update embed
-                    await self.embeds.edit('img_gen', title, description)
-
-                    last_progress = progress
-                    await asyncio.sleep(1)
-
-                # No progress data
-                else:
-                    log.warning(f'Connection closed with {sd.client}, retrying in 1 second (attempt {retry_count + 1}/5)')
-                    await asyncio.sleep(1)
-                    retry_count += 1
-            await self.embeds.delete('img_gen')
-        except Exception as e:
-            log.error(f'Error tracking {sd.client} image generation progress: {e}')
-
-    async def track_progress(self:Union["Task","Tasks"]):
-        if self.embeds.enabled('img_gen'):
-            async with aiohttp.ClientSession() as session:
-                await self.check_sd_progress(session)
-
-    async def layerdiffuse_hack(self:Union["Task","Tasks"], temp_dir, images, pnginfo):
+    async def layerdiffuse_hack(self:Union["Task","Tasks"], images, pnginfo):
         try:
             ld_output = None
             for i, image in enumerate(images):
@@ -2312,6 +2216,7 @@ class TaskProcessing(TaskAttributes):
             if ld_output is None:
                 log.warning("Failed to find layerdiffuse output image")
                 return images
+            temp_dir = shared_path.dir_temp_images
             # Workaround for layerdiffuse PNG infoReActor + layerdiffuse combination
             reactor = self.img_payload['alwayson_scripts'].get('reactor', {})
             if reactor and reactor['args'][1]:          # if ReActor was enabled:
@@ -2327,58 +2232,108 @@ class TaskProcessing(TaskAttributes):
         except Exception as e:
             log.error(f'Error processing layerdiffuse images: {e}')
 
-    async def apply_reactor_mask(self:Union["Task","Tasks"], temp_dir, images: list[Image.Image], pnginfo, reactor_mask):
+    async def apply_reactor_mask(self:Union["Task","Tasks"], images: list[Image.Image], pnginfo, reactor_mask):
         try:
             reactor_mask = Image.open(io.BytesIO(base64.b64decode(reactor_mask))).convert('L')
             orig_image = images[0]                                          # Open original image
             face_image = images.pop(1)                                      # Open image with faceswap applied
             face_image.putalpha(reactor_mask)                               # Apply reactor mask as alpha to faceswap image
             orig_image.paste(face_image, (0, 0), face_image)                # Paste the masked faceswap image onto the original
-            orig_image.save(f'{temp_dir}/temp_img_0.png', pnginfo=pnginfo)  # Save the image with correct pnginfo
+            orig_image.save(f'{shared_path.dir_temp_images}/temp_img_0.png', pnginfo=pnginfo)  # Save the image with correct pnginfo
             images[0] = orig_image                                          # Replace first image in images list
             return images
         except Exception as e:
             log.error(f'Error masking ReActor output images: {e}')
 
-    async def save_images_and_return(self:Union["Task","Tasks"], temp_dir):
-        images = []
-        pnginfo = None
-        # save .json for debugging
-        # with open("img_payload.json", "w") as file:
-        #     json.dump(self.img_payload, file)
+    def progress_bar(self, value, length=15):
         try:
-            r = await sd.api(endpoint=self.params.endpoint, method='post', json=self.img_payload, retry=True)
-            if not isinstance(r, dict):
-                return [], r
-            for i, img_data in enumerate(r.get('images')):
-                image = Image.open(io.BytesIO(base64.b64decode(img_data.split(",", 1)[0])))
-                png_payload = {"image": "data:image/png;base64," + img_data}
-                r2 = await sd.api(endpoint='/sdapi/v1/png-info', method='post', json=png_payload, retry=True)
-                if not isinstance(r2, dict):
-                    return [], r2
-                png_info_data = r2.get("info")
-                if i == 0:  # Only capture pnginfo from the first png_img_data
-                    # Retain seed
-                    seed_match = patterns.seed_value.search(str(png_info_data))
-                    if seed_match:
-                        sd.last_img_payload['seed'] = int(seed_match.group(1))
-                    pnginfo = PngImagePlugin.PngInfo()
-                    pnginfo.add_text("parameters", png_info_data)
-                image.save(f'{temp_dir}/temp_img_{i}.png', pnginfo=pnginfo) # save image to temp directory
-                images.append(image) # collect a list of PIL images
-        except Exception as e:
-            log.error(f'Error processing images: {e}')
-            traceback.print_exc()
-            return [], e
-        return images, pnginfo
+            filled_length = int(length * value)
+            bar = ':black_square_button:' * filled_length + ':black_large_square:' * (length - filled_length)
+            return f'{bar}'
+        except Exception:
+            return 0
 
-    async def sd_img_gen(self:Union["Task","Tasks"], temp_dir:str):
+    async def fetch_progress(self: Union["Task", "Tasks"], session):
+        return await api.imggen.get_imggen_progress(session=session)
+
+    async def check_sd_progress(self: Union["Task", "Tasks"], session: aiohttp.ClientSession):
+        try:
+            eta_message = 'Not yet available'
+            await self.embeds.send('img_gen', f'Waiting for {sd.client} ...', f'{self.progress_bar(0)}\n**ETA**: {eta_message}')
+            await asyncio.sleep(1)
+
+            retry_count = 0
+            while retry_count < 5:
+                progress_data = await self.fetch_progress(session)
+                if progress_data and progress_data.get('progress', 0) > 0:
+                    break
+                log.warning(f'Waiting for progress response from {sd.client}, retrying in 1 second (attempt {retry_count + 1}/5)')
+                await asyncio.sleep(1)
+                retry_count += 1
+            else:
+                log.error('Reached maximum retry limit')
+                await self.embeds.edit_or_send('img_gen', f'Error getting progress response from {sd.client}.', 'Image generation will continue, but progress will not be tracked.')
+                return
+
+            last_progress = 0
+            stall_count = 0
+            progress = progress_data.get('progress', 0)
+            percent_complete = progress * 100
+
+            while percent_complete < 100 and retry_count < 5:
+                progress_data = await self.fetch_progress(session)
+                if progress_data:
+                    progress = progress_data.get('progress', 0)
+                    percent_complete = progress * 100
+                    eta = progress_data.get('eta_relative', 0)
+
+                    if eta == 0:
+                        progress = 1.0
+                        percent_complete = 100
+
+                    if progress <= 0.01:
+                        title = f'Preparing to generate image ...'
+                    else:
+                        eta_message = f'{round(eta, 2)} seconds'
+                        comment = ''
+                        if progress == last_progress:
+                            stall_count += 1
+                            if stall_count > 2:
+                                comment = ' (Stalled)'
+                        else:
+                            stall_count = 0
+                        title = f'Generating image: {percent_complete:.0f}%{comment}'
+
+                    description = f"{self.progress_bar(progress)}\n**ETA**: {eta_message}"
+                    await self.embeds.edit('img_gen', title, description)
+
+                    last_progress = progress
+                    await asyncio.sleep(1)
+                else:
+                    log.warning(f'Connection closed with {sd.client}, retrying in 1 second (attempt {retry_count + 1}/5)')
+                    await asyncio.sleep(1)
+                    retry_count += 1
+
+            await self.embeds.delete('img_gen')
+
+        except Exception as e:
+            log.error(f'Error tracking {sd.client} image generation progress: {e}')
+
+    async def track_progress(self: Union["Task", "Tasks"]):
+        if self.embeds.enabled('img_gen'):
+            async with aiohttp.ClientSession() as session:
+                await self.check_sd_progress(session)
+
+    async def save_images_and_return(self: Union["Task", "Tasks"]):
+        return await api.imggen.get_image_data(image_payload=self.img_payload)
+
+    async def sd_img_gen(self:Union["Task","Tasks"]):
         try:
             reactor_args = self.img_payload.get('alwayson_scripts', {}).get('reactor', {}).get('args', [])
-            last_item = reactor_args[-1] if reactor_args else None
-            reactor_mask = reactor_args.pop() if isinstance(last_item, dict) else None
+            last_reactor_index = reactor_args[-1] if reactor_args else None
+            reactor_mask = reactor_args.pop() if isinstance(last_reactor_index, dict) else None
             # Start progress task and generation task concurrently
-            images_task = asyncio.create_task(self.save_images_and_return(temp_dir))
+            images_task = asyncio.create_task(self.save_images_and_return())
             progress_task = asyncio.create_task(self.track_progress())
             # Wait for both tasks to complete
             await asyncio.gather(images_task, progress_task)
@@ -2390,11 +2345,11 @@ class TaskProcessing(TaskAttributes):
             # Apply ReActor mask
             reactor = self.img_payload.get('alwayson_scripts', {}).get('reactor', {})
             if len(images) > 1 and reactor and reactor_mask:
-                images = await self.apply_reactor_mask(temp_dir, images, pnginfo, reactor_mask['mask'])
+                images = await self.apply_reactor_mask(images, pnginfo, reactor_mask['mask'])
             # Workaround for layerdiffuse output
             layerdiffuse = self.img_payload.get('alwayson_scripts', {}).get('layerdiffuse', {})
             if len(images) > 1 and layerdiffuse and layerdiffuse['args'][0]:
-                images = await self.layerdiffuse_hack(temp_dir, images, pnginfo)
+                images = await self.layerdiffuse_hack(images, pnginfo)
             return images
         except Exception as e:
             log.error(f'Error processing images in {sd.client} API module: {e}')
@@ -2412,19 +2367,20 @@ class TaskProcessing(TaskAttributes):
             if not os.path.commonpath([base_dir, sd_output_dir]).startswith(base_dir):
                 log.warning("Tried setting the SD output directory outside the bot. Defaulting to '/output'.")
                 sd_output_dir = shared_path.output_dir
-            # Ensure the necessary directories exist
+            # Create custom output dir if not already existing
             os.makedirs(sd_output_dir, exist_ok=True)
-            temp_dir = os.path.join(shared_path.dir_user_images, '__temp')
-            os.makedirs(temp_dir, exist_ok=True)
+
             # Generate images, save locally
-            images = await self.sd_img_gen(temp_dir)
+            images = await self.sd_img_gen()
             if not images:
                 return
+
             # Send images to discord
             # If the censor mode is 1 (blur), prefix the image file with "SPOILER_"
             file_prefix = 'temp_img_'
             if self.params.img_censoring == 1:
                 file_prefix = 'SPOILER_temp_img_'
+            temp_dir = shared_path.dir_temp_images
             image_files = [discord.File(f'{temp_dir}/temp_img_{idx}.png', filename=f'{file_prefix}{idx}.png') for idx in range(len(images))]
             if self.params.should_send_image:
                 img_ref_message = getattr(self, 'img_ref_message', None)
@@ -2434,9 +2390,6 @@ class TaskProcessing(TaskAttributes):
             last_image = f'{sd_output_dir}/{timestamp}.png'
             os.rename(f'{temp_dir}/temp_img_0.png', last_image)
             copyfile(last_image, f'{temp_dir}/temp_img_0.png')
-            # Delete temporary image files
-            # for tempfile in os.listdir(temp_dir):
-            #     os.remove(os.path.join(temp_dir, tempfile))
         except Exception as e:
             log.error(f"An error occurred when processing image generation: {e}")
 
@@ -2847,7 +2800,7 @@ class TaskProcessing(TaskAttributes):
             # Img2Img handling
             if img2img:
                 self.img_payload['init_images'] = [str(img2img)]
-                self.params.endpoint = '/sdapi/v1/img2img'
+                self.params.mode = 'img2img'
             # Inpaint Mask handling
             if img2img_mask:
                 self.img_payload['mask'] = str(img2img_mask)
@@ -4706,7 +4659,7 @@ if sd.enabled:
         face_swap = selections.get('face_swap', None)
         cnet = selections.get('cnet', None)
         # Defaults
-        endpoint = '/sdapi/v1/txt2img'
+        mode = 'txt2img'
         size_dict = {}
         faceswapimg = None
         img2img_dict = {}
@@ -4730,7 +4683,7 @@ if sd.enabled:
             if neg_prompt:
                 log_msg += f"\nNegative Prompt: {neg_prompt}"
             if img2img:
-                async def process_image_img2img(img2img, img2img_dict, endpoint, log_msg):
+                async def process_image_img2img(img2img, img2img_dict, mode, log_msg):
                     #Convert attached image to base64
                     attached_i2i_img = await img2img.read()
                     i2i_image = base64.b64encode(attached_i2i_img).decode('utf-8')
@@ -4752,11 +4705,11 @@ if sd.enabled:
                     img2img_dict['denoising_strength'] = float(denoising_strength)
                     await interaction.response.defer() # defer response for this interaction
                     await select_message.delete()
-                    endpoint = '/sdapi/v1/img2img' # Change API endpoint to img2img
+                    mode = 'img2img' # Change mode to img2img
                     log_msg += f"\nImg2Img with denoise strength: {denoising_strength}"
-                    return img2img_dict, endpoint, log_msg
+                    return img2img_dict, mode, log_msg
                 try:
-                    img2img_dict, endpoint, log_msg = await process_image_img2img(img2img, img2img_dict, endpoint, log_msg)
+                    img2img_dict, mode, log_msg = await process_image_img2img(img2img, img2img_dict, mode, log_msg)
                 except Exception as e:
                     log.error(f"An error occurred while configuring Img2Img for /image command: {e}")
             if img2img_mask:
@@ -4996,7 +4949,7 @@ if sd.enabled:
             imgcmd_params['img2img']    = img2img_dict
             imgcmd_params['message']    = log_msg
 
-            image_cmd_task.params = Params(imgcmd=imgcmd_params, endpoint=endpoint)
+            image_cmd_task.params = Params(imgcmd=imgcmd_params, mode=mode)
 
             await ireply(ctx, 'image') # send a response msg to the user
 

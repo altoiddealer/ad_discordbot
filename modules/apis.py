@@ -2,34 +2,41 @@ import aiohttp
 import asyncio
 import os
 import jsonschema
-from typing import Any, Dict, Optional, Union
-from modules.utils_shared import shared_path, load_file, is_tgwui_integrated, config
+from PIL import Image, PngImagePlugin
+import io
+import base64
+from typing import Any, Dict, Tuple, List, Optional, Union
+from modules.utils_shared import shared_path, load_file
 
 from modules.logs import import_track, get_logger; import_track(__file__, fp=True); log = get_logger(__name__)  # noqa: E702
 logging = log
 
+class APISettings():
+    def __init__(self):
+        self.main_settings:dict = {}
+    def get(self, section: str, default=None) -> dict:
+        return self.main_settings.get(section, default or {})
+
+apisettings = APISettings()
 
 class API:
     def __init__(self):
         # ALL API clients
         self.clients:dict[str, APIClient] = {}
         # Main API clients
-        self.imggen_client:Optional[ImgGenClient] = None
-        self.textgen_client:Optional[TextGenClient] = None
-        self.tts_client:Optional[TTSGenClient] = None
-        self.init()
+        self.imggen:Optional[ImgGenClient] = None
+        self.textgen:Optional[TextGenClient] = None
+        self.ttsgen:Optional[TTSGenClient] = None
 
-    def init(self):
+    async def init(self):
         # Load API Settings yaml
         data = load_file(shared_path.api_settings)
 
         # Main APIs
-        main_api_settings:dict = data.get('bot_api_functions', {})
-        main_api_func_keys = ['imggen', 'textgen', 'ttsgen']
+        apisettings.main_settings = data.get('bot_api_functions', {})
         # Reverse lookup for matching API names to their function type
-        main_api_name_map = {main_api_settings[k].get("name"): k
-                             for k in main_api_func_keys
-                             if isinstance(main_api_settings.get(k), dict) and "name" in main_api_settings[k]}
+        main_api_name_map = {v.get("name"): k for k, v in apisettings.main_settings.items()
+                             if isinstance(v, dict) and v.get("name")}
         # Map function type to specialized client class
         client_type_map = {"imggen": ImgGenClient,
                            "textgen": TextGenClient,
@@ -37,6 +44,7 @@ class API:
 
         # Iterate over all APIs data
         apis:dict = data.get('all_apis', {})
+        setup_tasks = []
         for api_config in apis:
             if not isinstance(api_config, dict):
                 log.warning('[API] An API definition was not formatted as a dictionary. Ignoring.')
@@ -51,29 +59,29 @@ class API:
             is_main = api_func_type is not None
             # Determine which client class to use
             ClientClass = client_type_map.get(api_func_type, APIClient)
-            # Collect additional config for main clients
-            main_config = main_api_settings.get(api_func_type, {}) if is_main else {}
 
             # Collect all valid user APIs
             try:
                 api_client = ClientClass(name=api_config['name'],
                                          url=api_config['url'],
-                                         headers=api_config.get('default_headers'),
-                                         timeout=api_config.get('default_timeout', 10),
+                                         default_headers=api_config.get('default_headers'),
+                                         default_timeout=api_config.get('default_timeout', 10),
                                          auth=api_config.get('auth'),
-                                         endpoints_config=api_config.get('endpoints', []),
-                                         **main_config)
+                                         endpoints_config=api_config.get('endpoints', []))
                 # Capture all clients
                 self.clients[name] = api_client
                 # Capture main clients
                 if is_main:
-                    setattr(self, f"{api_func_type}_client", api_client)
+                    setattr(self, api_func_type, api_client)
                     log.info(f"[API] Registered main {api_func_type} client: {name}")
+                if hasattr(api_client, 'setup'):
+                    setup_tasks.append(api_client.setup())
             except KeyError as e:
                 log.warning(f"[API] Skipping API Client due to missing key: {e}")
             except TypeError as e:
                 log.warning(f"[API] Failed to create API client '{name}': {e}")
 
+        await asyncio.gather(*setup_tasks)
 
 class APIClient:
     def __init__(self,
@@ -102,12 +110,11 @@ class APIClient:
         # collect endpoints
         if endpoints_config:
             self._collect_endpoints(endpoints_config)
-        # fetch schema and resolve payloads
-        async def setup():
-            await self._fetch_openapi_schema()
-            self._assign_endpoint_schemas()
-            await self._resolve_deferred_payloads()
-        asyncio.create_task(setup())
+
+    async def setup(self):
+        await self._fetch_openapi_schema()
+        self._assign_endpoint_schemas()
+        await self._resolve_deferred_payloads()
 
     def _collect_endpoints(self, endpoints_config:list[dict]):
         for ep in endpoints_config:
@@ -131,7 +138,7 @@ class APIClient:
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.get(f"{self.url}/openapi.json") as response:
-                    if response.status == 200:
+                    if 200 <= response.status < 300:
                         self.openapi_schema = await response.json()
                         log.debug(f"Loaded OpenAPI schema for {self.name}")
                     else:
@@ -217,16 +224,18 @@ class APIClient:
         return_text: bool = False,
         return_raw: bool = False,
         timeout: Optional[int] = None,
+        session: Optional[aiohttp.ClientSession] = None,
     ) -> Union[Dict[str, Any], str, bytes, None]:
-        
+
         url = f"{self.url}{endpoint}" if endpoint.startswith("/") else f"{self.url}/{endpoint}"
         headers = {**self.default_headers, **(headers or {})}
         timeout = timeout or self.default_timeout
-        auth=auth or self.auth
-        
+        auth = auth or self.auth
+
         # Validate payload
         self.validate_payload(method, endpoint, json, data)
 
+        # Optional OpenAPI schema validation
         if self.openapi_schema:
             try:
                 if json:
@@ -239,29 +248,22 @@ class APIClient:
 
         for attempt in range(retry + 1):
             try:
-                async with aiohttp.ClientSession() as session:
-                    async with session.request(
-                        method.upper(), url, params=params, data=data, json=json, headers=headers, auth=auth, timeout=timeout
-                    ) as response:
-                        
-                        response_text = await response.text()
-                        
-                        if return_raw:
-                            return await response.read()
-                        
-                        if return_text:
-                            return response_text
-                        
-                        if response.status == 200:
-                            try:
-                                return await response.json()
-                            except aiohttp.ContentTypeError:
-                                log.warning(f"Non-JSON response received from {url}")
-                                return response_text
-                        else:
-                            log.error(f"HTTP {response.status} Error: {response_text}")
-                            response.raise_for_status()
-            
+                if session is not None:
+                    # Reuse session if passed
+                    return await self._make_request(
+                        session=session, method=method, url=url, params=params, data=data,
+                        json=json, headers=headers, auth=auth, timeout=timeout,
+                        return_text=return_text, return_raw=return_raw
+                    )
+                else:
+                    # Create a session for standalone request
+                    async with aiohttp.ClientSession() as temp_session:
+                        return await self._make_request(
+                            session=temp_session, method=method, url=url, params=params, data=data,
+                            json=json, headers=headers, auth=auth, timeout=timeout,
+                            return_text=return_text, return_raw=return_raw
+                        )
+
             except aiohttp.ClientConnectionError:
                 log.warning(f"Connection error to {url}, attempt {attempt + 1}/{retry + 1}")
             except aiohttp.ClientResponseError as e:
@@ -270,21 +272,60 @@ class APIClient:
                 log.error(f"Request to {url} timed out.")
             except Exception as e:
                 log.error(f"Unexpected error with {url}: {e}")
-            
+
             if attempt < retry:
-                await asyncio.sleep(2 ** attempt)  # Exponential backoff
-        
+                await asyncio.sleep(2 ** attempt)
+
         return None
+
+    async def _make_request(
+        self,
+        session: aiohttp.ClientSession,
+        method: str,
+        url: str,
+        params: Optional[Dict[str, Any]],
+        data: Optional[Union[Dict[str, Any], str, bytes]],
+        json: Optional[Dict[str, Any]],
+        headers: Dict[str, str],
+        auth: Optional[aiohttp.BasicAuth],
+        timeout: int,
+        return_text: bool,
+        return_raw: bool,
+    ):
+        async with session.request(
+            method.upper(), url, params=params, data=data, json=json,
+            headers=headers, auth=auth, timeout=timeout
+        ) as response:
+
+            response_text = await response.text()
+
+            if return_raw:
+                return await response.read()
+
+            if return_text:
+                return response_text
+
+            if 200 <= response.status < 300:
+                try:
+                    return await response.json()
+                except aiohttp.ContentTypeError:
+                    log.warning(f"Non-JSON response received from {url}")
+                    return response_text
+            else:
+                log.error(f"HTTP {response.status} Error: {response_text}")
+                response.raise_for_status()
 
 
 class ImgGenClient(APIClient):
     def __init__(self, *args, **kwargs):
-        imggen_config:dict = kwargs.pop("imggen_config", {})
         super().__init__(*args, **kwargs)
+        imggen_config:dict = apisettings.get("imggen")
 
         self.post_txt2img: Optional[Endpoint] = None
         self.post_img2img: Optional[Endpoint] = None
-        self.post_options: Optional[Endpoint] = None
+        self.get_imgmodels: Optional[Endpoint] = None
+        self.get_progress: Optional[Endpoint] = None
+        self.post_pnginfo: Optional[Endpoint] = None
         self.get_imgmodels: Optional[Endpoint] = None
         self.get_controlnet_models: Optional[Endpoint] = None
         self.get_controlnet_control_types: Optional[Endpoint] = None
@@ -292,6 +333,8 @@ class ImgGenClient(APIClient):
         # Collect endpoints used for main ImgGen functions
         endpoint_keys = {'post_txt2img_endpoint_name': 'post_txt2img',
                          'post_img2img_endpoint_name': 'post_img2img',
+                         'get_progress_endpoint_name': 'get_progress',
+                         'post_pnginfo_endpoint_name': 'post_pnginfo',
                          'post_options_endpoint_name': 'post_options',
                          'get_imgmodels_endpoint_name': 'get_imgmodels',
                          'get_controlnet_models_endpoint_name': 'get_controlnet_models',
@@ -300,21 +343,67 @@ class ImgGenClient(APIClient):
             ep_name = imggen_config.get(config_key)
             setattr(self, attr_name, self.endpoints.get(ep_name) if ep_name else None)       
 
-    def do_imggen_specific_thing(self):
-        log.info(f"[ImgGenClient:{self.name}] Doing something special for image generation!")
+    async def get_imggen_progress(self, session: Optional[aiohttp.ClientSession] = None) -> Optional[Dict[str, Any]]:
+        try:
+            return await self.request(endpoint='/sdapi/v1/progress',
+                                      method='GET',
+                                      session=session)
+        except Exception as e:
+            log.warning(f"Progress fetch failed from {self.name}: {e}")
+            return None
+
+    async def get_image_data(
+            self,
+            image_payload: Dict[str, Any],
+            mode: str = "txt2img",
+            session: Optional[aiohttp.ClientSession] = None) -> Tuple[List[Image.Image], Optional[PngImagePlugin.PngInfo]]:
+
+        images = []
+        pnginfo = None
+        try:
+            ep_for_mode:Endpoint = getattr(self, f'post_{mode}')
+            response = await ep_for_mode.call(client=self, json=image_payload, session=session)
+
+            if not isinstance(response, dict):
+                return [], response
+
+            for i, img_data in enumerate(response.get('images', [])):
+                raw_data = base64.b64decode(img_data.split(",", 1)[0])
+                image = Image.open(io.BytesIO(raw_data))
+                
+                # Get PNG info
+                if self.post_pnginfo:
+                    png_payload = {"image": "data:image/png;base64," + img_data}
+                    r2 = await self.post_pnginfo.call(client=self, json=png_payload, session=session)
+                    if not isinstance(r2, dict):
+                        return [], r2
+                    png_info_data = r2.get("info")
+
+                    if i == 0 and png_info_data:
+                        pnginfo = PngImagePlugin.PngInfo()
+                        pnginfo.add_text("parameters", png_info_data)
+
+                image.save(f"{shared_path.dir_temp_images}/temp_img_{i}.png", pnginfo=pnginfo)
+
+                images.append(image)
+
+        except Exception as e:
+            log.error(f"Error retrieving or processing image data: {e}")
+            return [], e
+
+        return images, pnginfo
 
 
 class TextGenClient(APIClient):
     def __init__(self, *args, **kwargs):
-        textgen_config:dict = kwargs.pop("textgen_config", {})
         super().__init__(*args, **kwargs)
         # TODO Main TextGen API support
 
 
 class TTSGenClient(APIClient):
     def __init__(self, *args, **kwargs):
-        ttsgen_config:dict = kwargs.pop("ttsgen_config", {})
         super().__init__(*args, **kwargs)
+        ttsgen_config:dict = apisettings.get("ttsgen")
 
         self.get_voices: Optional[Endpoint] = None
         self.post_generate: Optional[Endpoint] = None

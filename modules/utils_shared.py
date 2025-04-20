@@ -62,7 +62,7 @@ class SharedPath:
 
     def init_shared_paths(root, dir, reason) -> str:
         path = os.path.join(root, dir)
-        if not os.path.exists(path):
+        if not os.path.exists(path) and reason:
             log.info(f'Creating "{path}" for {reason}.')
         os.makedirs(path, exist_ok=True)
         return path
@@ -105,6 +105,7 @@ class SharedPath:
     dir_user_payloads = init_shared_paths(user_dir, 'payloads', "Payloads to be used for API calls.")
 
     dir_user_images = init_shared_paths(user_dir, 'images', "Images to be used for various bot functions.")
+    dir_temp_images = init_shared_paths(dir_user_images, '__temp', "")
     old_user_images = os.path.join(dir_root, 'user_images')
     if os.path.exists(old_user_images):
         log.warning(f'Please migrate your existing "/user_images" contents to: "{dir_user_images}".')
@@ -215,3 +216,12 @@ class SharedBotEmojis:
         return [cls.hidden_emoji, cls.regen_emoji, cls.continue_emoji]
 
 bot_emojis = SharedBotEmojis()
+
+# SharedPath() must initialize before API().
+_api = None
+async def get_api():
+    global _api
+    from modules.apis import API
+    _api = API()
+    await _api.init()
+    return _api
