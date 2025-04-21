@@ -142,8 +142,8 @@ class Tags():
             self.tags_initialized = True
             base_tags_obj = BaseTags()
             base_tags: TAG_LIST      = getattr(base_tags_obj, "tags", [])
-            char_tags: TAG_LIST      = settings['modeltags'].get('char_tags', []) # character specific tags
-            imgmodel_tags: TAG_LIST  = settings['modeltags'].get('imgmodel_tags', []) # imgmodel specific tags
+            char_tags: TAG_LIST      = settings['llmcontext'].get('tags', []) # character specific tags
+            imgmodel_tags: TAG_LIST  = settings['imgmodel'].get('tags', []) # imgmodel specific tags
             tags_from_text           = self.get_tags_from_text(text, phase)
             flow_step_tags: TAG_LIST = []
             if flows_queue.qsize() > 0:

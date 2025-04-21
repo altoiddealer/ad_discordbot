@@ -36,8 +36,8 @@ class API:
         # Main APIs
         apisettings.main_settings = data.get('bot_api_functions', {})
         # Reverse lookup for matching API names to their function type
-        main_api_name_map = {v.get("name"): k for k, v in apisettings.main_settings.items()
-                             if isinstance(v, dict) and v.get("name")}
+        main_api_name_map = {v.get("api_name"): k for k, v in apisettings.main_settings.items()
+                             if isinstance(v, dict) and v.get("api_name")}
         # Map function type to specialized client class
         client_type_map = {"imggen": ImgGenClient,
                            "textgen": TextGenClient,
@@ -48,11 +48,14 @@ class API:
         setup_tasks = []
         for api_config in apis:
             if not isinstance(api_config, dict):
-                log.warning('[API] An API definition was not formatted as a dictionary. Ignoring.')
+                log.warning('An API definition was not formatted as a dictionary. Ignoring.')
                 continue
             name = api_config.get("name")
             if not name:
-                log.warning("[API] API config missing required 'name'. Skipping.")
+                log.warning("API config missing required 'name'. Skipping.")
+                continue
+            enabled = api_config.get("enabled", True)
+            if not enabled:
                 continue
 
             # Determine if this API is a "main" one
@@ -74,15 +77,16 @@ class API:
                 # Capture main clients
                 if is_main:
                     setattr(self, api_func_type, api_client)
-                    log.info(f"[API] Registered main {api_func_type} client: {name}")
+                    log.info(f"Registered main {api_func_type} client: {name}")
                 if hasattr(api_client, 'setup'):
                     setup_tasks.append(api_client.setup())
             except KeyError as e:
-                log.warning(f"[API] Skipping API Client due to missing key: {e}")
+                log.warning(f"Skipping API Client due to missing key: {e}")
             except TypeError as e:
-                log.warning(f"[API] Failed to create API client '{name}': {e}")
+                log.warning(f"Failed to create API client '{name}': {e}")
 
         await asyncio.gather(*setup_tasks)
+
 
 class APIClient:
     def __init__(self,
@@ -133,7 +137,7 @@ class APIClient:
 
                 self.endpoints[endpoint.name] = endpoint
             except KeyError as e:
-                log.warning(f"[APIClient] Skipping endpoint due to missing key: {e}")
+                log.warning(f"[APIClient:{self.name}] Skipping endpoint due to missing key: {e}")
 
     async def _fetch_openapi_schema(self):
         try:
@@ -164,10 +168,6 @@ class APIClient:
 
             if ref_ep is None:
                 log.warning(f"[APIClient:{self.name}] Endpoint '{ep.name}' references unknown payload source: '{ref}'")
-                # Try schema fallback
-                if ep.schema:
-                    ep.payload = ep.generate_payload_from_schema()
-                    log.debug(f"[APIClient:{self.name}] Fallback: Using schema-based payload for '{ep.name}'")
                 continue
 
             log.debug(f"[APIClient:{self.name}] Fetching payload for '{ep.name}' using endpoint '{ref}'")
@@ -178,15 +178,9 @@ class APIClient:
                     ep.payload = data
                 else:
                     log.warning(f"[APIClient:{self.name}] Endpoint '{ref}' returned non-dict data for '{ep.name}'")
-                    # Try schema fallback
-                    if ep.schema:
-                        ep.payload = ep.generate_payload_from_schema()
-                        log.debug(f"[APIClient:{self.name}] Fallback: Using schema-based payload for '{ep.name}'")
+
             except Exception as e:
                 log.error(f"[APIClient:{self.name}] Failed to fetch payload from '{ref}' for '{ep.name}': {e}")
-                if ep.schema:
-                    ep.payload = ep.generate_payload_from_schema()
-                    log.debug(f"[APIClient:{self.name}] Fallback: Using schema-based payload for '{ep.name}'")
 
 
     def validate_payload(self, method:str, endpoint:str, json:str|None=None, data:str|None=None):
@@ -224,10 +218,11 @@ class APIClient:
         headers: Optional[Dict[str, str]] = None,
         auth: Optional[aiohttp.BasicAuth] = None,
         retry: int = 3,
-        return_text: bool = False,
+        return_text: bool = False,  # still here if used manually
         return_raw: bool = False,
         timeout: Optional[int] = None,
         session: Optional[aiohttp.ClientSession] = None,
+        response_type: Optional[str] = None,
     ) -> Union[Dict[str, Any], str, bytes, None]:
 
         url = f"{self.url}{endpoint}" if endpoint.startswith("/") else f"{self.url}/{endpoint}"
@@ -256,7 +251,7 @@ class APIClient:
                     return await self._make_request(
                         session=session, method=method, url=url, params=params, data=data,
                         json=json, headers=headers, auth=auth, timeout=timeout,
-                        return_text=return_text, return_raw=return_raw
+                        return_text=return_text, return_raw=return_raw, response_type=response_type
                     )
                 else:
                     # Create a session for standalone request
@@ -264,7 +259,7 @@ class APIClient:
                         return await self._make_request(
                             session=temp_session, method=method, url=url, params=params, data=data,
                             json=json, headers=headers, auth=auth, timeout=timeout,
-                            return_text=return_text, return_raw=return_raw
+                            return_text=return_text, return_raw=return_raw, response_type=response_type
                         )
 
             except aiohttp.ClientConnectionError:
@@ -294,27 +289,32 @@ class APIClient:
         timeout: int,
         return_text: bool,
         return_raw: bool,
+        response_type: Optional[str],
     ):
         async with session.request(
             method.upper(), url, params=params, data=data, json=json,
             headers=headers, auth=auth, timeout=timeout
         ) as response:
 
-            response_text = await response.text()
-
             if return_raw:
                 return await response.read()
-
             if return_text:
-                return response_text
+                return await response.text()
 
+            # Decide response type based on endpoint config
             if 200 <= response.status < 300:
-                try:
-                    return await response.json()
-                except aiohttp.ContentTypeError:
-                    log.warning(f"Non-JSON response received from {url}")
-                    return response_text
+                if response_type == "bytes":
+                    return await response.read()
+                elif response_type == "text":
+                    return await response.text()
+                else:  # default to json
+                    try:
+                        return await response.json()
+                    except aiohttp.ContentTypeError:
+                        log.warning(f"Non-JSON response received from {url}")
+                        return await response.text()
             else:
+                response_text = await response.text()
                 log.error(f"HTTP {response.status} Error: {response_text}")
                 response.raise_for_status()
 
@@ -347,13 +347,12 @@ class ImgGenClient(APIClient):
             setattr(self, attr_name, self.endpoints.get(ep_name) if ep_name else None)       
 
     async def get_imggen_progress(self, session: Optional[aiohttp.ClientSession] = None) -> Optional[Dict[str, Any]]:
-        try:
-            return await self.request(endpoint='/sdapi/v1/progress',
-                                      method='GET',
-                                      session=session)
-        except Exception as e:
-            log.warning(f"Progress fetch failed from {self.name}: {e}")
-            return None
+        if self.get_progress:
+            try:
+                return await self.get_progress.call(client=self, session=session)
+            except Exception as e:
+                log.warning(f"Progress fetch failed from {self.name}: {e}")
+        return None
 
     async def get_image_data(
             self,
@@ -570,8 +569,8 @@ class Endpoint:
         :param sanitize: If True, attempt to sanitize payload against the schema
         :param strict: If True and sanitize=True, raise an error if payload is fully removed
         """
-        json_payload = kwargs.get('json')
-        data_payload = kwargs.get('data')
+        json_payload = kwargs.pop('json', None)
+        data_payload = kwargs.pop('data', None)
 
         if sanitize:
             if isinstance(json_payload, dict):
@@ -584,7 +583,9 @@ class Endpoint:
             method=self.method,
             json=json_payload,
             data=data_payload,
-            headers=kwargs.get("headers", self.headers),
+            headers=kwargs.pop('headers', self.headers),
+            timeout=kwargs.pop('timeout', self.timeout),
+            response_type=kwargs.pop('response_type', self.response_type),
             **kwargs
         )
     
