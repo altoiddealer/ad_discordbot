@@ -69,7 +69,7 @@ class API:
                 api_client = ClientClass(name=api_config['name'],
                                          url=api_config['url'],
                                          default_headers=api_config.get('default_headers'),
-                                         default_timeout=api_config.get('default_timeout', 10),
+                                         default_timeout=api_config.get('default_timeout', 60),
                                          auth=api_config.get('auth'),
                                          endpoints_config=api_config.get('endpoints', []))
                 # Capture all clients
@@ -78,6 +78,7 @@ class API:
                 if is_main:
                     setattr(self, api_func_type, api_client)
                     log.info(f"Registered main {api_func_type} client: {name}")
+                # Collect setup tasks
                 if hasattr(api_client, 'setup'):
                     setup_tasks.append(api_client.setup())
             except KeyError as e:
@@ -93,7 +94,7 @@ class APIClient:
                  name: str,
                  url: str,
                  default_headers: Optional[Dict[str,str]] = None,
-                 default_timeout: int = 120,
+                 default_timeout: int = 60,
                  auth: Optional[dict] = None,
                  endpoints_config=None):
 
@@ -130,11 +131,13 @@ class APIClient:
                                     response_type=ep.get("response_type", "json"),
                                     payload_config=ep.get("payload"),
                                     headers=ep.get("headers", self.default_headers),
-                                    timeout=ep.get("timeout", self.default_timeout))
+                                    timeout=ep.get("timeout", self.default_timeout),
+                                    retry=ep.get("retry", 3))
                 # get deferred payloads after collecting all endpoints
                 if hasattr(endpoint, "_deferred_payload_source"):
                     self._endpoint_fetch_payloads.append(endpoint)
-
+                # link APIClient to Endpoint
+                endpoint.client = self
                 self.endpoints[endpoint.name] = endpoint
             except KeyError as e:
                 log.warning(f"[APIClient:{self.name}] Skipping endpoint due to missing key: {e}")
@@ -173,7 +176,7 @@ class APIClient:
             log.debug(f"[APIClient:{self.name}] Fetching payload for '{ep.name}' using endpoint '{ref}'")
 
             try:
-                data = await ref_ep.call(client=self)
+                data = await ref_ep.call()
                 if isinstance(data, dict):
                     ep.payload = data
                 else:
@@ -194,19 +197,24 @@ class APIClient:
                 log.error(f"Schema validation failed for {method} {endpoint}: {e.message}")
                 raise
 
-    async def online(self) -> bool:
+    async def is_online(self) -> Tuple[bool, str]:
         try:
-            response = await self.request(
-                endpoint='',
-                method='GET',
-                retry=0,
-                return_text=True,
-                timeout=5
-            )
-            return True if response is not None else False
-        except Exception as e:
-            log.debug(f"[{self.name}] API offline check failed: {e}")
-            return False
+            response = await self.request(endpoint='',
+                                          method='GET',
+                                          retry=0,
+                                          return_text=True,
+                                          timeout=5)
+            if 200 <= response.status < 300:
+                return True, ''
+            else:
+                emsg = f'Non-200 status code received: {response.status}'
+                log.warning(emsg)
+            return False, emsg
+           
+        except aiohttp.ClientError as e:
+            emsg = f"[APIClient:{self.name}] is offline at url {self.url}: {e}"
+            log.warning(e)
+            return False, emsg
 
     async def request(
         self,
@@ -318,21 +326,24 @@ class APIClient:
                 log.error(f"HTTP {response.status} Error: {response_text}")
                 response.raise_for_status()
 
-
 class ImgGenClient(APIClient):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         imggen_config:dict = apisettings.get("imggen")
+        self.last_img_payload = {}
+        self.session_id = None
 
         self.post_txt2img: Optional[Endpoint] = None
         self.post_img2img: Optional[Endpoint] = None
-        self.get_imgmodels: Optional[Endpoint] = None
         self.get_progress: Optional[Endpoint] = None
         self.post_pnginfo: Optional[Endpoint] = None
+        self.post_options: Optional[Endpoint] = None
+        self.get_imgmodels: Optional[Endpoint] = None
         self.get_imgmodels: Optional[Endpoint] = None
         self.get_controlnet_models: Optional[Endpoint] = None
         self.get_controlnet_control_types: Optional[Endpoint] = None
-        
+        self.post_server_restart: Optional[Endpoint] = None
+
         # Collect endpoints used for main ImgGen functions
         endpoint_keys = {'post_txt2img_endpoint_name': 'post_txt2img',
                          'post_img2img_endpoint_name': 'post_img2img',
@@ -341,7 +352,8 @@ class ImgGenClient(APIClient):
                          'post_options_endpoint_name': 'post_options',
                          'get_imgmodels_endpoint_name': 'get_imgmodels',
                          'get_controlnet_models_endpoint_name': 'get_controlnet_models',
-                         'get_controlnet_control_types_endpoint_name': 'get_controlnet_control_types'}
+                         'get_controlnet_control_types_endpoint_name': 'get_controlnet_control_types',
+                         'post_server_restart': 'post_server_restart'}
         for config_key, attr_name in endpoint_keys.items():
             ep_name = imggen_config.get(config_key)
             setattr(self, attr_name, self.endpoints.get(ep_name) if ep_name else None)       
@@ -349,7 +361,7 @@ class ImgGenClient(APIClient):
     async def get_imggen_progress(self, session: Optional[aiohttp.ClientSession] = None) -> Optional[Dict[str, Any]]:
         if self.get_progress:
             try:
-                return await self.get_progress.call(client=self, session=session)
+                return await self.get_progress.call(session=session)
             except Exception as e:
                 log.warning(f"Progress fetch failed from {self.name}: {e}")
         return None
@@ -364,7 +376,7 @@ class ImgGenClient(APIClient):
         pnginfo = None
         try:
             ep_for_mode:Endpoint = getattr(self, f'post_{mode}')
-            response = await ep_for_mode.call(client=self, json=image_payload, session=session)
+            response = await ep_for_mode.call(json=image_payload, session=session)
 
             if not isinstance(response, dict):
                 return [], response
@@ -376,7 +388,7 @@ class ImgGenClient(APIClient):
                 # Get PNG info
                 if self.post_pnginfo:
                     png_payload = {"image": "data:image/png;base64," + img_data}
-                    r2 = await self.post_pnginfo.call(client=self, json=png_payload, session=session)
+                    r2 = await self.post_pnginfo.call(json=png_payload, session=session)
                     if not isinstance(r2, dict):
                         return [], r2
                     png_info_data = r2.get("info")
@@ -394,6 +406,33 @@ class ImgGenClient(APIClient):
             return [], e
 
         return images, pnginfo
+    
+    def is_sdwebui(self) -> bool:
+        return 'stable' in self.name.lower()
+    
+    def is_reforge(self) -> bool:
+        return 'reforge' in self.name.lower()
+    
+    def is_forge(self) -> bool:
+        return ('forge' in self.name.lower() and not self.is_reforge())
+    
+    def supports_loractrl(self) -> bool:
+        return (self.is_sdwebui() or self.is_reforge()) and not self.is_forge()
+    
+    # async def try_swarmui(self):
+    #     try:
+    #         log.info("Checking if SD Client is SwarmUI.")
+    #         r = await self.api(endpoint='/API/GetNewSession', method='post', warn=False)
+    #         if r is None:
+    #             return False  # Early return if the response is None or the API call failed
+
+    #         self.session_id = r.get('session_id', None)
+    #         if self.session_id:
+    #             self.client = 'SwarmUI'
+    #             return True
+    #     except aiohttp.ClientError as e:
+    #         log.error(f"Error getting SwarmUI session: {e}")
+    #     return False
 
 
 class TextGenClient(APIClient):
@@ -426,7 +465,9 @@ class Endpoint:
                  response_type: str = "json",
                  payload_config: Optional[str|dict] = None,
                  headers: Optional[Dict[str, str]] = None,
-                 timeout: int = 10):
+                 timeout: int = 10,
+                 retry: int = 3):
+        self.client: Optional["APIClient"] = None
         self.name = name
         self.path = path
         self.method = method.upper()
@@ -435,6 +476,7 @@ class Endpoint:
         self.schema: Optional[dict] = None
         self.headers = headers or {}
         self.timeout = timeout
+        self.retry = retry
         if payload_config:
             self.init_payload(payload_config)
 
@@ -561,7 +603,7 @@ class Endpoint:
 
         return final_cleaned
 
-    async def call(self, client:"APIClient", sanitize:bool=False, strict: bool = False, **kwargs):
+    async def call(self, sanitize:bool=False, strict: bool = False, **kwargs):
         """
         Convenience wrapper to call this endpoint directly.
         Assumes `client.request()` exists.
@@ -569,16 +611,19 @@ class Endpoint:
         :param sanitize: If True, attempt to sanitize payload against the schema
         :param strict: If True and sanitize=True, raise an error if payload is fully removed
         """
+        if self.client is None:
+            raise ValueError("Endpoint not bound to an APIClient")
+
         json_payload = kwargs.pop('json', None)
         data_payload = kwargs.pop('data', None)
 
         if sanitize:
             if isinstance(json_payload, dict):
-                json_payload = self.sanitize_payload(json_payload, client.openapi_schema, strict=strict)
+                json_payload = self.sanitize_payload(json_payload, self.client.openapi_schema, strict=strict)
             if isinstance(data_payload, dict):
-                data_payload = self.sanitize_payload(data_payload, client.openapi_schema, strict=strict)
+                data_payload = self.sanitize_payload(data_payload, self.client.openapi_schema, strict=strict)
 
-        return await client.request(
+        return await self.client.request(
             endpoint=self.path,
             method=self.method,
             json=json_payload,
@@ -586,6 +631,7 @@ class Endpoint:
             headers=kwargs.pop('headers', self.headers),
             timeout=kwargs.pop('timeout', self.timeout),
             response_type=kwargs.pop('response_type', self.response_type),
+            retry=kwargs.pop('retry', self.retry),
             **kwargs
         )
     

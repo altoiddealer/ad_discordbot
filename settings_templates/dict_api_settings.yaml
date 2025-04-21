@@ -1,6 +1,6 @@
 # You may assign one main APIs for each "imggen", "textgen", "ttsgen" (defined in "all_apis" - below this section)
 bot_api_functions:
-  # Many standard bot functions rely on these endpoints. To disable any, set as null or comment out the line.
+  # Special endpoints which the bot can use in main functions. To disable any, use value null or comment out the line.
   # Note: Main API names / endpoint names are case sensitive!
   imggen:
     api_name: Stable Diffusion WebUI
@@ -12,6 +12,7 @@ bot_api_functions:
     get_imgmodels_endpoint_name: Get ImgModels
     get_controlnet_models_endpoint_name: Get Cnet Models
     get_controlnet_control_types_endpoint_name: Get Cnet Control Types
+    post_server_restart_endpoint_name: Post Server Restart
   # API for Text Gen is WIP. Bot currently cannot use textgen API for main functions.
   textgen: {} # placeholder.
   # API for TTS is WIP. These settings are currently limited to the '/speak' command (will not work for message requests)
@@ -33,15 +34,16 @@ all_apis:
     auth: null # {username: myuser, password: mypass} # dict format with keys 'username' and 'password'
     # Add any endpoints that you may use for bot functions (Tags system, user commands, etc)
     endpoints:
-      - {name: Post txt2img, path: /sdapi/v1/txt2img, method: POST, response_type: json, payload: sd-webui.yaml, timeout: 120}
-      - {name: Post img2img, path: /sdapi/v1/img2img, method: POST, response_type: json, timeout: 120}
-      - {name: Get Progress, path: /sdapi/v1/progress, method: GET, response_type: json}
-      - {name: Post PNG Info, path: /sdapi/v1/png-info, method: POST, response_type: json}
-      - {name: Get ImgModels, path: /sdapi/v1/sd-models, method: GET, response_type: json}
-      - {name: Get Options, path: /sdapi/v1/options, method: GET, response_type: json}
-      - {name: Post Options, path: /sdapi/v1/options, method: POST, response_type: json}
-      - {name: Get Cnet Models, path: /controlnet/model_list, method: GET, response_type: json}
-      - {name: Get Cnet Control Types, path: /controlnet/control_types, method: GET, response_type: json}
+      - {name: Post txt2img, path: /sdapi/v1/txt2img, method: POST, response_type: json, retry: 1, payload: sd-webui.yaml, timeout: 120}
+      - {name: Post img2img, path: /sdapi/v1/img2img, method: POST, timeout: 120}
+      - {name: Get Progress, path: /sdapi/v1/progress, method: GET}
+      - {name: Post PNG Info, path: /sdapi/v1/png-info, method: POST}
+      - {name: Get ImgModels, path: /sdapi/v1/sd-models, method: GET}
+      - {name: Get Options, path: /sdapi/v1/options, method: GET}
+      - {name: Post Options, path: /sdapi/v1/options, method: POST}
+      - {name: Get Cnet Models, path: /controlnet/model_list, method: GET}
+      - {name: Get Cnet Control Types, path: /controlnet/control_types, method: GET}
+      - {name: Post Server Restart, path: /sdapi/v1/server-restart, method: POST, retry: 0}
 
   - name: Text Generation WebUI
     url: http://127.0.0.1:7861
@@ -59,5 +61,5 @@ all_apis:
     default_timeout: 10
     auth: null
     endpoints:
-      - {name: Get TTS Voices, path: /api/voices, method: GET, response_type: json}
-      - {name: Post TTS Generate, path: /api/tts-generate, method: POST, response_type: json}
+      - {name: Get TTS Voices, path: /api/voices, method: GET}
+      - {name: Post TTS Generate, path: /api/tts-generate, method: POST}

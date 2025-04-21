@@ -154,7 +154,7 @@ class TGWUI():
     def init_tts_extensions(self):
         # If any TTS extension defined in config.yaml, set tts bot vars and add extension to shared.args.extensions
         if self.tts_extension:
-            self.enabled = True
+            tts.enabled = True
             if 'alltalk' in self.tts_extension:
                 log.warning('[TTS] If using AllTalk v2, extension params may fail to apply (changing voices, etc). Full support is coming soon.')
                 self.voice_key = 'voice'

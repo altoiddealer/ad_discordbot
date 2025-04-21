@@ -54,7 +54,8 @@ from discord.app_commands import AppCommandError, CommandInvokeError
 from modules.logs import import_track, get_logger, log_file_handler, log_file_formatter; import_track(__file__, fp=True); log = get_logger(__name__)  # noqa: E702
 logging = log
 
-api = asyncio.run(get_api())
+from modules.apis import API, APIClient
+api:API = asyncio.run(get_api())
 
 # Databases
 starboard = StarBoard()
@@ -108,194 +109,53 @@ client.is_first_on_ready = True # type: ignore
 #################################################################
 ################### Stable Diffusion Startup ####################
 #################################################################
-class SD:
-    def __init__(self):
-        self.enabled:bool = config.imggen.get('enabled', True)
-        self.url:str = config.imggen.get('SD_URL', 'http://127.0.0.1:7860')
-        self.client:str = None
-        self.session_id:str = None
-        self.last_img_payload = {}
+async def api_online(api_type:str|None=None, api_name:str='', ictx:CtxInteraction|None=None):
+    api_client:Optional[APIClient] = None
 
-        if self.enabled:
-            if asyncio.run(self.online()):
-                asyncio.run(self.init_sdclient())
+    main_api_client:Optional[APIClient] = getattr(api, api_type)
+    if main_api_client:
+        api_client = main_api_client
+    else:
+        api_client = api.clients.get(api_name)
+    if not api_client:
+        log.debug(f"API client not found: {api_name}")
+        return
 
-    async def online(self, ictx:CtxInteraction|None=None):
-        channel = ictx.channel if ictx else None
-        e_title = f"Stable Diffusion is not running at: {self.url}"
-        e_description = f"Launch your SD WebUI client with `--api --listen` command line arguments\n\
-            Read more [here](https://github.com/AUTOMATIC1111/stable-diffusion-webui/wiki/API)"
+    api_client_online, emsg = api_client.is_online()
+    if not api_client_online and emsg and ictx:
+        await bot_embeds.send('system', f"{api_client.name} is not running at: {api_client.url}", emsg, channel=ictx.channel, delete_after=10)
 
-        async with aiohttp.ClientSession() as session:
-            try:
-                async with session.get(f'{self.url}/') as response:
-                    if response.status == 200:
-                        log.debug(f'Request status to SD: {response.status}')
-                        return True
-                    else:
-                        log.warning(f'Non-200 status code received: {response.status}')
-                        await bot_embeds.send('system', e_title, e_description, channel=channel, delete_after=10)
-                        return False
-            except aiohttp.ClientError as exc:
-                # never successfully connected
-                if self.client is None:
-                    log.warning(e_title)
-                    log.warning("Launch your SD WebUI client with `--api --listen` command line arguments")
-                    log.warning("Image commands/features will function when client is active and accessible via API.'")
-                # was previously connected
-                else:
-                    log.warning(exc)
-                await bot_embeds.send('system', e_title, e_description, channel=channel, delete_after=10)
-                return False
 
-    async def api(self, endpoint:str, method='get', json=None, retry=True, warn=True) -> dict:
-        headers = {'Content-Type': 'application/json'}
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.request(method.lower(), url=f'{self.url}{endpoint}', json=json or {}, headers=headers) as response:
-                    response_text = await response.text()
-                    if response.status == 200:
-                        r = await response.json()
-                        if self.client is None and endpoint not in ['/sdapi/v1/cmd-flags', '/API/GetNewSession']:
-                            await self.init_sdclient()
+imggen_enabled = config.imggen.get('enabled', False)
 
-                        return r
-                    # Try resolving certain issues and retrying
-                    elif response.status in [422, 500]:
-                        error_json = await response.json()
-                        try_resolve = False
-                        # Check if it's related to an invalid override script
-                        if 'Script' in error_json.get('detail', ''):
-                            script_name = error_json['detail'].split("'")[1]  # Extract the script name
-                            if json and 'alwayson_scripts' in json:
-                                # Remove the problematic script
-                                if script_name in json['alwayson_scripts']:
-                                    log.info(f"Removing invalid script: {script_name}")
-                                    json['alwayson_scripts'].pop(script_name, None)
-                                    try_resolve = True
-                        elif 'KeyError' in error_json.get('error', ''):
-                            # Extract the key name from the error message
-                            key_error_msg = error_json.get('errors', '')
-                            key_name = key_error_msg.split("'")[1]  # Extract the key inside single quotes
-                            log.info(f"Removing invalid key: {key_name}")
-                            # Remove the problematic key from the payload
-                            if json and key_name in json:
-                                json.pop(key_name, None)
-                                try_resolve = True
-                        if try_resolve:
-                            return await self.api(endpoint, method, json, retry=False, warn=warn)
-                    # Handle internal server error (status 500)
-                    elif response.status == 500:
-                        error_json = await response.json()
-                        # Check if it's related to the KeyError
-                        if 'KeyError' in error_json.get('error', '') and "'forge_inference_memory'" in error_json.get('errors', ''):
-                            log.info("Removing problematic key: 'forge_inference_memory'")
-                            # Remove 'forge_inference_memory' from the payload if it exists
-                            if json and 'forge_inference_memory' in json:
-                                json.pop('forge_inference_memory', None)
-                            
-                            # Retry the request with the modified payload
-                            return await self.api(endpoint, method, json, retry=False, warn=warn)
-
-                    # Log the error if the request failed
-                    if warn:
-                        log.error(f'{self.url}{endpoint} response: {response.status} "{response.reason}"')
-                        log.error(f'Response content: {response_text}')
-                    
-                    # Retry on specific status codes (408, 500)
-                    if retry and response.status in [408, 500]:
-                        log.info("Retrying the request in 3 seconds...")
-                        await asyncio.sleep(3)
-                        return await self.api(endpoint, method, json, retry=False)
-
-        except aiohttp.client.ClientConnectionError:
-            log.warning(f'Failed to connect to: "{self.url}{endpoint}", offline?')
-
-        except Exception as e:
-            if endpoint == '/sdapi/v1/server-restart' or endpoint == '/sdapi/v1/progress':
-                return None
-            else:
-                log.error(f'Error getting data from "{self.url}{endpoint}": {e}')
-                traceback.print_exc()
-
-    def determine_client_type(self, r):
-        ui_settings_file = r.get("ui_settings_file", "").lower()
-        if "reforge" in ui_settings_file:
-            self.client = 'SD WebUI ReForge'
-        elif "forge" in ui_settings_file:
-            self.client = 'SD WebUI Forge'
-        elif "webui" in ui_settings_file:
-            self.client = 'A1111 SD WebUI'
-        else:
-            self.client = 'SD WebUI'
-
-    async def try_sdwebuis(self):
-        try:
-            log.info("Checking if SD Client is A1111, Forge, ReForge, or other.")
-            r = await self.api(endpoint='/sdapi/v1/cmd-flags')
-            if not r:
-                raise ConnectionError(f'Failed to connect to SD API, ensure it is running or disable the API in your config.')
-            self.determine_client_type(r)
-        except ConnectionError as e:
-            log.error(f"Connection error: {e}")
-        except Exception as e:
-            log.error(f"Unexpected error when checking SD WebUI clients: {e}")
-            traceback.print_exc()
-
-    async def try_swarmui(self):
-        try:
-            log.info("Checking if SD Client is SwarmUI.")
-            r = await self.api(endpoint='/API/GetNewSession', method='post', warn=False)
-            if r is None:
-                return False  # Early return if the response is None or the API call failed
-
-            self.session_id = r.get('session_id', None)
-            if self.session_id:
-                self.client = 'SwarmUI'
-                return True
-        except aiohttp.ClientError as e:
-            log.error(f"Error getting SwarmUI session: {e}")
-        return False
-
-    async def init_sdclient(self):
-        if await self.try_swarmui():
-            return
-
-        if not self.session_id:
-            await self.try_sdwebuis()
-
-sd = SD()
-
-if sd.enabled:
+if imggen_enabled and api.imggen.post_server_restart:
     # Function to attempt restarting the SD WebUI Client in the event it gets stuck
-    @client.hybrid_command(description=f"Immediately Restarts the {sd.client} server. Requires '--api-server-stop' SD WebUI launch flag.")
+    @client.hybrid_command(description=f"Immediately restarts the main media generation server.")
     @guild_or_owner_only()
     async def restart_sd_client(ctx: commands.Context):
-        await ctx.send(f"**`/restart_sd_client` __will not work__ unless {sd.client} was launched with flag: `--api-server-stop`**", delete_after=10)
-        await sd.api(endpoint='/sdapi/v1/server-restart', method='post', json=None, retry=False)
-        title = f"{ctx.author.display_name} used '/restart_sd_client'. Restarting {sd.client} ..."
-        await bot_embeds.send('system', title=title, description='Attempting to re-establish connection in 5 seconds (Attempt 1 of 10)', channel=ctx.channel)
-        log.info(title)
-        response = None
-        retry = 1
-        while response is None and retry < 11:
-            await bot_embeds.edit('system', description=f'Attempting to re-establish connection in 5 seconds (Attempt {retry} of 10)')
-            await asyncio.sleep(5)
-            response = await sd.api(endpoint='/sdapi/v1/progress', method='get', json=None, retry=False)
-            retry += 1
-        if response:
-            title = f"{sd.client} restarted successfully."
-            await bot_embeds.edit('system', title=title, description=f"Connection re-established after {retry} out of 10 attempts.")
+        if api.imggen.is_sdwebui():
+            await ctx.send(f"**`/restart_sd_client` __will not work__ unless {api.imggen.name} was launched with flag: `--api-server-stop`**", delete_after=10)
+        await api.imggen.post_server_restart.call(retry=0)
+        title = f"{ctx.author.display_name} used '/restart_sd_client'. Restarting {api.imggen.name} ..."
+        if api.imggen.get_progress:
+            await bot_embeds.send('system', title=title, description='Attempting to re-establish connection in 5 seconds (Attempt 1 of 10)', channel=ctx.channel)
             log.info(title)
-        else:
-            title = f"{sd.client} server unresponsive after Restarting."
-            await bot_embeds.edit('system', title=title, description="Connection was not re-established after 10 attempts.")
-            log.error(title)
+            response = None
+            retry = 1
+            while response is None and retry < 11:
+                await bot_embeds.edit('system', description=f'Attempting to re-establish connection in 5 seconds (Attempt {retry} of 10)')
+                await asyncio.sleep(5)
+                response = await api.imggen.get_progress.call(retry=0)
+                retry += 1
+            if response:
+                title = f"{api.imggen.name} restarted successfully."
+                await bot_embeds.edit('system', title=title, description=f"Connection re-established after {retry} out of 10 attempts.")
+                log.info(title)
+            else:
+                title = f"{api.imggen.name} server unresponsive after Restarting."
+                await bot_embeds.edit('system', title=title, description="Connection was not re-established after 10 attempts.")
+                log.error(title)
 
-    if sd.client:
-        log.info(f"Initializing with SD WebUI enabled: '{sd.client}'")
-    else:
-        log.info("SD WebUI currently offline. Image commands/features will function when client is active and accessible via API.'")
 
 #################################################################
 ##################### TEXTGENWEBUI STARTUP ######################
@@ -375,7 +235,7 @@ async def auto_update_imgmodel_task(mode, duration):
 
 imgmodel_update_task = None # Global variable allows process to be cancelled and restarted (reset sleep timer)
 
-if sd.enabled:
+if imggen_enabled:
     # Register command for helper function to toggle auto-select imgmodel
     @client.hybrid_command(description='Toggles the automatic Img model changing task')
     @guild_or_owner_only()
@@ -405,7 +265,7 @@ async def start_auto_change_imgmodels(status:str='started'):
         log.error(f"[Auto Change Imgmodels] Error starting task: {e}")
 
 async def init_auto_change_imgmodels():
-    if sd.enabled:
+    if imggen_enabled:
         imgmodels_data = load_file(shared_path.img_models, {})
         if imgmodels_data and imgmodels_data.get('settings', {}).get('auto_change_imgmodels', {}).get('enabled', False):
             if config.is_per_server() and len(guild_settings) > 1:
@@ -1235,7 +1095,7 @@ class Params:
             if not tgwui_enabled:
                 self.should_gen_text = False
                 self.should_send_text = False
-            if not sd.enabled:
+            if not imggen_enabled:
                 self.should_gen_image = False
                 self.should_send_image = False
         except Exception as e:
@@ -1645,7 +1505,7 @@ class TaskProcessing(TaskAttributes):
         await self.tags.match_img_tags(self.img_prompt, self.settings.get_vars())
         await self.apply_generic_tag_matches(phase='img')
         self.params.update_bot_should_do(self.tags) # check for updates from tags
-        if self.params.should_gen_image and await sd.online(self.ictx):
+        if self.params.should_gen_image and await api_online(api_type='imggen', ictx=self.ictx):
             # CLONE CURRENT TASK AND QUEUE IT
             log.info('An image task was triggered, created and queued.')
             await self.embeds.send('system', title='Generating an image', description='An image task was triggered, created and queued.', delete_after=5)
@@ -2259,7 +2119,7 @@ class TaskProcessing(TaskAttributes):
     async def check_sd_progress(self: Union["Task", "Tasks"], session: aiohttp.ClientSession):
         try:
             eta_message = 'Not yet available'
-            await self.embeds.send('img_gen', f'Waiting for {sd.client} ...', f'{self.progress_bar(0)}\n**ETA**: {eta_message}')
+            await self.embeds.send('img_gen', f'Waiting for {api.imggen.name} ...', f'{self.progress_bar(0)}\n**ETA**: {eta_message}')
             await asyncio.sleep(1)
 
             retry_count = 0
@@ -2267,12 +2127,12 @@ class TaskProcessing(TaskAttributes):
                 progress_data = await self.fetch_progress(session)
                 if progress_data and progress_data.get('progress', 0) > 0:
                     break
-                log.warning(f'Waiting for progress response from {sd.client}, retrying in 1 second (attempt {retry_count + 1}/5)')
+                log.warning(f'Waiting for progress response from {api.imggen.name}, retrying in 1 second (attempt {retry_count + 1}/5)')
                 await asyncio.sleep(1)
                 retry_count += 1
             else:
                 log.error('Reached maximum retry limit')
-                await self.embeds.edit_or_send('img_gen', f'Error getting progress response from {sd.client}.', 'Image generation will continue, but progress will not be tracked.')
+                await self.embeds.edit_or_send('img_gen', f'Error getting progress response from {api.imggen.name}.', 'Image generation will continue, but progress will not be tracked.')
                 return
 
             last_progress = 0
@@ -2310,14 +2170,14 @@ class TaskProcessing(TaskAttributes):
                     last_progress = progress
                     await asyncio.sleep(1)
                 else:
-                    log.warning(f'Connection closed with {sd.client}, retrying in 1 second (attempt {retry_count + 1}/5)')
+                    log.warning(f'Connection closed with {api.imggen.name}, retrying in 1 second (attempt {retry_count + 1}/5)')
                     await asyncio.sleep(1)
                     retry_count += 1
 
             await self.embeds.delete('img_gen')
 
         except Exception as e:
-            log.error(f'Error tracking {sd.client} image generation progress: {e}')
+            log.error(f'Error tracking {api.imggen.name} image generation progress: {e}')
 
     async def track_progress(self: Union["Task", "Tasks"]):
         if self.embeds.enabled('img_gen'):
@@ -2340,7 +2200,7 @@ class TaskProcessing(TaskAttributes):
             # Get the list of images and copy of pnginfo after both tasks are done
             images, pnginfo = await images_task
             if not images:
-                await self.embeds.send('img_send', 'Error processing images.', f'Error: "{str(pnginfo)}"\nIf {sd.client} remains unresponsive, consider using "/restart_sd_client" command.')
+                await self.embeds.send('img_send', 'Error processing images.', f'Error: "{str(pnginfo)}"\nIf {api.imggen.name} remains unresponsive, consider using "/restart_sd_client" command.')
                 return None
             # Apply ReActor mask
             reactor = self.img_payload.get('alwayson_scripts', {}).get('reactor', {})
@@ -2352,7 +2212,7 @@ class TaskProcessing(TaskAttributes):
                 images = await self.layerdiffuse_hack(images, pnginfo)
             return images
         except Exception as e:
-            log.error(f'Error processing images in {sd.client} API module: {e}')
+            log.error(f'Error processing images in {api.imggen.name} API module: {e}')
             return []
 
     async def process_image_gen(self:Union["Task","Tasks"]):
@@ -2473,13 +2333,13 @@ class TaskProcessing(TaskAttributes):
     def apply_loractl(self:Union["Task","Tasks"]):
         matched_tags: list = self.tags.matches
         try:
-            if sd.client not in ['A1111 SD WebUI', 'SD WebUI ReForge']:
+            if not api.imggen.supports_loractrl():
                 if not bot_database.was_warned('loractl'):
                     bot_database.update_was_warned('loractl')
-                    log.warning(f'loractl is not known to be compatible with "{sd.client}". Not applying loractl...')
+                    log.warning(f'loractl integration is enabled in config.yaml, but is not known to be compatible with "{api.imggen.name}".')
                 return
-            if sd.client == 'SD WebUI ReForge':
-                self.img_payload['alwayson_scripts'].setdefault('dynamic lora weights (reforge)', {}).setdefault('args', []).append({'Enable Dynamic Lora Weights': True})
+            if api.imggen.is_reforge():
+                self.img_payload.setdefault('alwayson_scripts', {}).setdefault('dynamic lora weights (reforge)', {}).setdefault('args', []).append({'Enable Dynamic Lora Weights': True})
             scaling_settings = [v for k, v in config.imggen['extensions'].get('lrctl', {}).items() if 'scaling' in k]
             scaling_settings = scaling_settings if scaling_settings else ['']
             # Flatten the matches dictionary values to get a list of all tags (including those within tuples)
@@ -2735,13 +2595,13 @@ class TaskProcessing(TaskAttributes):
             # Payload handling
             if last_img_payload:
                 if isinstance(last_img_payload, bool):
-                    last_img_payload_dict = copy.deepcopy(sd.last_img_payload)
+                    last_img_payload_dict = copy.deepcopy(api.imggen.last_img_payload)
                     setattr(self, 'stashed_prompt', last_img_payload_dict.pop('prompt', '')) # Retains the prompt to re-apply later
                     update_dict(self.img_payload, last_img_payload_dict)
                     log.info("[TAGS] Applying the previous image payload as the starting point (may be modified by other tags). Note: The previous 'prompt' will be identical.")
                 elif isinstance(last_img_payload, list):
-                    # Filter sd.last_img_payload based on keys in last_img_payload
-                    last_img_payload_dict = {key: sd.last_img_payload[key] for key in last_img_payload if key in sd.last_img_payload}
+                    # Filter api.imggen.img_payload based on keys in last_img_payload
+                    last_img_payload_dict = {key:api.imggen.last_img_payload[key] for key in last_img_payload if key in api.imggen.last_img_payload}
                     if last_img_payload_dict:
                         log.info("[TAGS] Applying the following settings from the previous image payload (may be modified by other tags):")
                         log.info(f"{', '.join(last_img_payload_dict.keys())}")
@@ -3078,7 +2938,7 @@ class Tasks(TaskProcessing):
             # set img_prompt, then pre-process responses
             if not self.last_resp:
                 # If no text was generated, treat user input at the response
-                if self.params.should_gen_image and sd.enabled:
+                if self.params.should_gen_image and imggen_enabled:
                     self.img_prompt = self.llm_prompt # set image prompt to LLM prompt
             else:
                 self.img_prompt = self.last_resp      # set the image prompt to LLM response
@@ -3111,7 +2971,7 @@ class Tasks(TaskProcessing):
             await self.reset_behaviors()
 
             # Create an img gen task if triggered to
-            if sd.enabled:
+            if imggen_enabled:
                 await self.message_img_gen()
 
             return self.user_hmessage, self.bot_hmessage
@@ -3648,7 +3508,7 @@ class Tasks(TaskProcessing):
             if not self.ictx:
                 self.user_name = 'Automatically'
 
-            if not await sd.online(self.ictx): # Can't change Img model if not online!
+            if not await api_online(api_type='imggen', ictx=self.ictx): # Can't change Img model if not online!
                 log.warning('Bot tried to change Img Model, but SD API is offline.')
                 return
 
@@ -3668,7 +3528,7 @@ class Tasks(TaskProcessing):
             if mode == 'swap' or mode == 'swap_back':
                 new_model_settings = {'sd_model_checkpoint': imgmodel_params['sd_model_checkpoint']}
                 if not config.is_per_server_imgmodels():
-                    await sd.api(endpoint='/sdapi/v1/options', method='post', json=new_model_settings, retry=True)
+                    await api.imggen.post_options.call(json=new_model_settings)
                 await self.embeds.delete('change') # delete embed
                 return True
 
@@ -3824,7 +3684,7 @@ class Tasks(TaskProcessing):
             # Apply menu selections from /image command
             self.apply_imgcmd_params()
             # Retain last payload before clean_img_payload() - which creates issues when recycling
-            sd.last_img_payload = copy.deepcopy(self.img_payload)
+            api.imggen.last_img_payload = copy.deepcopy(self.img_payload)
             # Clean anything up that gets messy
             self.clean_img_payload()
             # Change imgmodel if triggered by tags
@@ -4471,7 +4331,7 @@ flows = Flows()
 #################################################################
 ######################## /IMAGE COMMAND #########################
 #################################################################
-if sd.enabled:
+if imggen_enabled:
 
     # Updates size options for /image command
     async def update_size_options(average):
@@ -4532,20 +4392,21 @@ if sd.enabled:
         async def check_cnet_online():
             if config.imggen['extensions'].get('controlnet_enabled', False):
                 try:
-                    online = await sd.api(endpoint='/controlnet/model_list', method='get', json=None, retry=False)
+                    online = await api.imggen.get_controlnet_models.call(retry=0)
                     if online: 
                         return True
                     else: 
                         return False
                 except Exception:
-                    log.warning(f"ControlNet is enabled in config.yaml, but was not responsive from {sd.client} API.")
+                    log.warning(f"ControlNet is enabled in config.yaml, but was not responsive from {api.imggen.name} API.")
             return False
 
         filtered_cnet_data = {}
         if config.imggen['extensions'].get('controlnet_enabled', False):
             try:
-                all_cnet_data = await sd.api(endpoint='/controlnet/control_types', method='get', json=None, retry=False)
-                for key, value in all_cnet_data["control_types"].items():
+                all_cnet_data:dict = await api.imggen.get_controlnet_control_types.call(retry=0)
+                all_control_types:dict = all_cnet_data.get('control_types', {})
+                for key, value in all_control_types.items():
                     if key == "All":
                         continue
                     if key in ["Reference", "Revision", "Shuffle"]:
@@ -4557,7 +4418,7 @@ if sd.enabled:
             except Exception:
                 cnet_online = await check_cnet_online()
                 if cnet_online:
-                    log.warning("ControlNet is both enabled in config.yaml and detected. However, ad_discordbot relies on the '/controlnet/control_types' \
+                    log.warning("ControlNet is both enabled in config.yaml and detected. However, the '/image' command relies on the '/controlnet/control_types' \
                         API endpoint which is missing. See here: (https://github.com/altoiddealer/ad_discordbot/wiki/troubleshooting).")
         return filtered_cnet_data
 
@@ -4572,7 +4433,7 @@ if sd.enabled:
     use_llm_status = 'Whether to send your prompt to LLM. Results may vary!' if tgwui_enabled else '**option disabled** (LLM is not integrated)'
 
     if cnet_enabled and reactor_enabled:
-        @client.hybrid_command(name="image", description=f'Generate an image using {sd.client}')
+        @client.hybrid_command(name="image", description=f'Generate an image using {api.imggen.name}')
         @app_commands.describe(use_llm=use_llm_status)
         @app_commands.describe(style='Applies a positive/negative prompt preset')
         @app_commands.describe(img2img='Diffuses from an input image instead of pure latent noise.')
@@ -4591,7 +4452,7 @@ if sd.enabled:
                                "face_swap": face_swap if face_swap else None, "cnet": controlnet if controlnet else None}
             await process_image(ctx, user_selections)
     elif cnet_enabled and not reactor_enabled:
-        @client.hybrid_command(name="image", description=f'Generate an image using {sd.client}')
+        @client.hybrid_command(name="image", description=f'Generate an image using {api.imggen.name}')
         @app_commands.describe(use_llm=use_llm_status)
         @app_commands.describe(style='Applies a positive/negative prompt preset')
         @app_commands.describe(img2img='Diffuses from an input image instead of pure latent noise.')
@@ -4607,7 +4468,7 @@ if sd.enabled:
                                "img2img": img2img if img2img else None, "img2img_mask": img2img_mask if img2img_mask else None, "cnet": controlnet if controlnet else None}
             await process_image(ctx, user_selections)
     elif reactor_enabled and not cnet_enabled:
-        @client.hybrid_command(name="image", description=f'Generate an image using {sd.client}')
+        @client.hybrid_command(name="image", description=f'Generate an image using {api.imggen.name}')
         @app_commands.describe(use_llm=use_llm_status)
         @app_commands.describe(style='Applies a positive/negative prompt preset')
         @app_commands.describe(img2img='Diffuses from an input image instead of pure latent noise.')
@@ -4623,7 +4484,7 @@ if sd.enabled:
                                "img2img": img2img if img2img else None, "img2img_mask": img2img_mask if img2img_mask else None, "face_swap": face_swap if face_swap else None}
             await process_image(ctx, user_selections)
     else:
-        @client.hybrid_command(name="image", description=f'Generate an image using {sd.client}')
+        @client.hybrid_command(name="image", description=f'Generate an image using {api.imggen.name}')
         @app_commands.describe(use_llm=use_llm_status)
         @app_commands.describe(style='Applies a positive/negative prompt preset')
         @app_commands.describe(img2img='Diffuses from an input image instead of pure latent noise.')
@@ -4643,7 +4504,7 @@ if sd.enabled:
         image_cmd_task = Task('image_cmd', ctx)
         setattr(image_cmd_task, 'imgcmd_task', True)
         # Do not process if SD WebUI is offline
-        if not await sd.online(ictx=ctx):
+        if not await api_online(api_type='imggen', ictx=ctx):
             await ctx.reply("Stable Diffusion is not online.", ephemeral=True, delete_after=5)
             return
         # User inputs from /image command
@@ -5473,7 +5334,7 @@ async def filter_imgmodels(all_imgmodels:list, ictx:CtxInteraction=None) -> list
 # Get current list of imgmodels from API
 async def fetch_imgmodels(ictx:CtxInteraction=None) -> list:
     try:
-        all_imgmodels = await sd.api(endpoint='/sdapi/v1/sd-models', method='get', json=None, retry=False)
+        all_imgmodels = await api.imggen.get_imgmodels.call()
         # Replace key names for easier management
         for imgmodel in all_imgmodels:
             if 'title' in imgmodel:
@@ -5566,19 +5427,19 @@ async def change_imgmodel(selected_imgmodel_params:dict, ictx:CtxInteraction=Non
             if config.is_per_server_imgmodels():
                 override_settings['sd_model_checkpoint'] = selected_imgmodel_params['sd_model_checkpoint']
             # Forge manages VAE / Text Encoders using "forge_additional_modules" during change model request.
-            if sd.client != 'SD WebUI Forge':
-                # Remove invalid settings
-                override_settings.pop('forge_inference_memory', None)
-                override_settings.pop('forge_additional_modules', None)
-            else:
+            if api.imggen.is_forge():
+                # Ensure required params for Forge model loading
                 if not override_settings.get('forge_additional_modules'):
-                    # Add required setting
                     forge_additional_modules = []
                     if override_settings.get('sd_vae') and override_settings['sd_vae'] != "Automatic":
                         vae = override_settings['sd_vae']
                         forge_additional_modules.append(vae)
                         log.info(f'[Change Imgmodel] VAE "{vae}" was added to Forge options "forge_additional_modules".')
                     override_settings['forge_additional_modules'] = forge_additional_modules
+            else:
+                # Remove invalid settings
+                override_settings.pop('forge_inference_memory', None)
+                override_settings.pop('forge_additional_modules', None)
 
             # Unpack any tag presets
             imgmodel_tags = base_tags.update_tags(imgmodel_tags)
@@ -5619,7 +5480,7 @@ async def change_imgmodel(selected_imgmodel_params:dict, ictx:CtxInteraction=Non
 
             # load the model
             if not config.is_per_server_imgmodels():
-                await sd.api(endpoint='/sdapi/v1/options', method='post', json=load_new_model, retry=True)
+                await api.imggen.post_options.call(json=load_new_model)
 
             # Check if old/new average resolution is different
             new_avg = avg_from_dims(settings.imgmodel.payload['width'], settings.imgmodel.payload['height'])
@@ -5687,7 +5548,7 @@ async def process_imgmodel(ctx: commands.Context, selected_imgmodel_value:str):
     except Exception as e:
         log.error(f"Error processing selected imgmodel from /imgmodel command: {e}")
 
-if sd.enabled:
+if imggen_enabled:
 
     @client.hybrid_command(description="Choose an Img Model")
     @guild_or_owner_only()
