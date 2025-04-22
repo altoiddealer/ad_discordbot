@@ -6,8 +6,10 @@ import jsonref
 from PIL import Image, PngImagePlugin
 import io
 import base64
+import copy
 from typing import Any, Dict, Tuple, List, Optional, Union
 from modules.utils_shared import shared_path, load_file
+import utils_processing
 
 from modules.logs import import_track, get_logger; import_track(__file__, fp=True); log = get_logger(__name__)  # noqa: E702
 logging = log
@@ -15,8 +17,19 @@ logging = log
 class APISettings():
     def __init__(self):
         self.main_settings:dict = {}
-    def get(self, section: str, default=None) -> dict:
+        self.response_handling_presets:dict = {}
+    def get_config_for(self, section: str, default=None) -> dict:
         return self.main_settings.get(section, default or {})
+    def collect_presets(self, presets_list):
+        for preset in presets_list:
+            if not isinstance(preset, dict):
+                log.warning("Encountered a non-dict response handling preset. Skipping.")
+                continue
+            name = preset.get('name')
+            if name:
+                self.response_handling_presets[name] = preset
+    def get_preset(self, preset_name: str, default=None) -> dict:
+        return self.response_handling_presets.get(preset_name, default or {})
 
 apisettings = APISettings()
 
@@ -35,6 +48,8 @@ class API:
 
         # Main APIs
         apisettings.main_settings = data.get('bot_api_functions', {})
+        # Response Handling Presets
+        apisettings.collect_presets(data.get('response_handling_presets', {}))
         # Reverse lookup for matching API names to their function type
         main_api_name_map = {v.get("api_name"): k for k, v in apisettings.main_settings.items()
                              if isinstance(v, dict) and v.get("api_name")}
@@ -130,6 +145,7 @@ class APIClient:
                                     method=ep.get("method", "GET"),
                                     response_type=ep.get("response_type", "json"),
                                     payload_config=ep.get("payload"),
+                                    rh_config=ep.get("response_handling"),
                                     headers=ep.get("headers", self.default_headers),
                                     timeout=ep.get("timeout", self.default_timeout),
                                     retry=ep.get("retry", 3))
@@ -326,10 +342,11 @@ class APIClient:
                 log.error(f"HTTP {response.status} Error: {response_text}")
                 response.raise_for_status()
 
+
 class ImgGenClient(APIClient):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        imggen_config:dict = apisettings.get("imggen")
+        imggen_config:dict = apisettings.get_config_for("imggen")
         self.last_img_payload = {}
         self.session_id = None
 
@@ -370,7 +387,8 @@ class ImgGenClient(APIClient):
             self,
             image_payload: Dict[str, Any],
             mode: str = "txt2img",
-            session: Optional[aiohttp.ClientSession] = None) -> Tuple[List[Image.Image], Optional[PngImagePlugin.PngInfo]]:
+            session: Optional[aiohttp.ClientSession] = None
+        ) -> Tuple[List[Image.Image], Optional[PngImagePlugin.PngInfo]]:
 
         images = []
         pnginfo = None
@@ -408,7 +426,7 @@ class ImgGenClient(APIClient):
         return images, pnginfo
     
     def is_sdwebui(self) -> bool:
-        return 'stable' in self.name.lower()
+        return any(substring in self.name.lower() for substring in ['stable', 'a1111', 'sdwebui'])
     
     def is_reforge(self) -> bool:
         return 'reforge' in self.name.lower()
@@ -444,7 +462,7 @@ class TextGenClient(APIClient):
 class TTSGenClient(APIClient):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        ttsgen_config:dict = apisettings.get("ttsgen")
+        ttsgen_config:dict = apisettings.get_config_for("ttsgen")
 
         self.get_voices: Optional[Endpoint] = None
         self.post_generate: Optional[Endpoint] = None
@@ -464,6 +482,7 @@ class Endpoint:
                  method: str = "GET",
                  response_type: str = "json",
                  payload_config: Optional[str|dict] = None,
+                 rh_config: Optional[dict[str, Any]] = None,
                  headers: Optional[Dict[str, str]] = None,
                  timeout: int = 10,
                  retry: int = 3):
@@ -472,13 +491,49 @@ class Endpoint:
         self.path = path
         self.method = method.upper()
         self.response_type = response_type
+        self.response_handling = None
         self.payload = {}
         self.schema: Optional[dict] = None
         self.headers = headers or {}
         self.timeout = timeout
         self.retry = retry
+        if rh_config:
+            self.init_response_handling(rh_config)
         if payload_config:
             self.init_payload(payload_config)
+
+    def init_response_handling(self, rh_config: dict):
+        # Expand top-level response_handling preset
+        final_rh = self._apply_preset(rh_config)
+
+        # Expand each post_process step if defined
+        post_process_steps = final_rh.get("post_process", [])
+        expanded_steps = []
+        for step in post_process_steps:
+            expanded = self._apply_preset(step)
+            expanded_steps.append(expanded)
+        final_rh["post_process"] = expanded_steps
+
+        self.response_handling = final_rh
+
+    def _apply_preset(self, rh_config: dict) -> dict:
+        """
+        Merge a config dictionary with its referenced preset (if any),
+        giving priority to explicitly defined values in config.
+        """
+        preset_name = rh_config.get("preset")
+        if not preset_name:
+            return rh_config
+
+        preset = copy.deepcopy(apisettings.get_preset(preset_name))
+        if not preset:
+            log.warning(f"Response handling preset '{preset_name}' not found.")
+            return rh_config
+
+        # Merge preset with overrides (config wins)
+        merged = {**preset, **rh_config}
+        merged.pop("preset", None)
+        return merged
 
     def init_payload(self, payload_config):
         # dictionary value
@@ -634,21 +689,13 @@ class Endpoint:
             retry=kwargs.pop('retry', self.retry),
             **kwargs
         )
-    
-    def __repr__(self):
-        return f"<Endpoint {self.method} {self.path}>"
 
-
-# # Accessing an endpoint
-# ep = client.endpoints.get("Post txt2img")
-# payload = {
-#     "prompt": "a beautiful mountain landscape",
-#     "steps": 30,
-#     "cfg_scale": 7.5,
-# }
-
-# # Validate before sending
-# ep.validate_payload(payload, client.openapi_schema)
-
-# # Or just call directly
-# response = await ep.call(client, json=payload)
+    # def handle_response(self, response):
+    #     rh = self.response_handling
+    #     if rh["type"] == "media_file":
+    #         return utils_processing.save_from_path(response)
+    #     elif rh["type"] == "base64":
+    #         return utils_processing.save_base64(response)
+    #     elif rh["type"] == "dict":
+    #         return {k: response.get(k) for k in rh.get("extract_keys", [])}
+    #     return response  # fallback
