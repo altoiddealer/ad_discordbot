@@ -8,7 +8,7 @@ import io
 import base64
 import copy
 from typing import Any, Dict, Tuple, List, Optional, Union
-from modules.utils_shared import shared_path, load_file
+from modules.utils_shared import shared_path, load_file, get_api
 import utils_processing
 
 from modules.logs import import_track, get_logger; import_track(__file__, fp=True); log = get_logger(__name__)  # noqa: E702
@@ -18,6 +18,7 @@ class APISettings():
     def __init__(self):
         self.main_settings:dict = {}
         self.response_handling_presets:dict = {}
+        self.workflows:dict = {}
     def get_config_for(self, section: str, default=None) -> dict:
         return self.main_settings.get(section, default or {})
     def collect_presets(self, presets_list):
@@ -28,10 +29,47 @@ class APISettings():
             name = preset.get('name')
             if name:
                 self.response_handling_presets[name] = preset
+    def apply_preset(self, rh_config: dict) -> dict:
+        """
+        Merge a config dictionary with its referenced preset (if any),
+        giving priority to explicitly defined values in config.
+        """
+        preset_name = rh_config.get("preset")
+        if not preset_name:
+            return rh_config
+
+        preset = copy.deepcopy(self.get_preset(preset_name))
+        if not preset:
+            log.warning(f"Response handling preset '{preset_name}' not found.")
+            return rh_config
+
+        # Merge preset with overrides (config wins)
+        merged = {**preset, **rh_config}
+        merged.pop("preset", None)
+        return merged
     def get_preset(self, preset_name: str, default=None) -> dict:
         return self.response_handling_presets.get(preset_name, default or {})
+    def collect_workflows(self, workflows_list):
+        for workflow in workflows_list:
+            if not isinstance(workflow, dict):
+                log.warning("Encountered a non-dict Workflow. Skipping.")
+                continue
+            name = workflow.get('name')
+            if name:
+                self.workflows[name] = workflow
+                workflow_steps = workflow.get('steps')
+                if workflow_steps:
+                    expanded_steps = []
+                    for step in workflow:
+                        expanded = apisettings.apply_preset(step)
+                        expanded_steps.append(expanded)
+                    self.workflows[name]['steps'] = expanded_steps
+
+    def get_workflow(self, workflow_name: str, default=None) -> dict:
+        return self.workflows.get(workflow_name, default or {})
 
 apisettings = APISettings()
+
 
 class API:
     def __init__(self):
@@ -46,10 +84,13 @@ class API:
         # Load API Settings yaml
         data = load_file(shared_path.api_settings)
 
-        # Main APIs
+        # Collect Main APIs
         apisettings.main_settings = data.get('bot_api_functions', {})
-        # Response Handling Presets
+        # Collect Response Handling Presets
         apisettings.collect_presets(data.get('response_handling_presets', {}))
+        # Collect Workflows
+        apisettings.collect_workflows(data.get('workflows', {}))
+
         # Reverse lookup for matching API names to their function type
         main_api_name_map = {v.get("api_name"): k for k, v in apisettings.main_settings.items()
                              if isinstance(v, dict) and v.get("api_name")}
@@ -504,36 +545,17 @@ class Endpoint:
 
     def init_response_handling(self, rh_config: dict):
         # Expand top-level response_handling preset
-        final_rh = self._apply_preset(rh_config)
+        final_rh = apisettings.apply_preset(rh_config)
 
         # Expand each post_process step if defined
         post_process_steps = final_rh.get("post_process", [])
         expanded_steps = []
         for step in post_process_steps:
-            expanded = self._apply_preset(step)
+            expanded = apisettings.apply_preset(step)
             expanded_steps.append(expanded)
         final_rh["post_process"] = expanded_steps
 
         self.response_handling = final_rh
-
-    def _apply_preset(self, rh_config: dict) -> dict:
-        """
-        Merge a config dictionary with its referenced preset (if any),
-        giving priority to explicitly defined values in config.
-        """
-        preset_name = rh_config.get("preset")
-        if not preset_name:
-            return rh_config
-
-        preset = copy.deepcopy(apisettings.get_preset(preset_name))
-        if not preset:
-            log.warning(f"Response handling preset '{preset_name}' not found.")
-            return rh_config
-
-        # Merge preset with overrides (config wins)
-        merged = {**preset, **rh_config}
-        merged.pop("preset", None)
-        return merged
 
     def init_payload(self, payload_config):
         # dictionary value
@@ -699,3 +721,69 @@ class Endpoint:
     #     elif rh["type"] == "dict":
     #         return {k: response.get(k) for k in rh.get("extract_keys", [])}
     #     return response  # fallback
+
+class WorkflowExecutor:
+    def __init__(self, workflow_name: str):
+        self.workflow_def:dict = apisettings.get_workflow(workflow_name)
+        self.api:API = get_api()
+        self.context: Dict[str, Any] = {}  # Stores save_as values
+        self.results: Dict[str, Any] = {}  # Final output for inspection or chaining
+
+    async def run(self):
+        steps = self.workflow_def.get("steps", [])
+
+        for step in steps:
+            if "group" in step:  # parallel group
+                await self._run_group_steps(step["group"])
+            else:
+                await self._run_step(step)
+
+        return self.results
+
+    async def _run_group_steps(self, step_group: List[dict]):
+        step_names = []
+        for step in step_group:
+            step_names.append(step.get('name'))
+        log.info(f'Processing API workflow group steps: {step_names}')
+        await asyncio.gather(*[self._run_step(step) for step in step_group])
+
+    async def _run_step(self, step: dict):
+        name = step.get("name", "<unnamed>")
+        log.info(f'Processing API Workflow step: {name}')
+        api_name = step.get("api_name")
+        endpoint_name = step.get("endpoint_name")
+
+        # Get APIClient and Endpoint
+        api_client:APIClient = self.api.clients.get(api_name)
+        if not api_client:
+            raise ValueError(f"Unknown API client: {api_name}")
+        endpoint = api_client.endpoints.get(endpoint_name)
+        if not endpoint:
+            raise ValueError(f"Unknown endpoint: {endpoint_name} for client {api_name}")
+
+        # Resolve inputs using context
+        input_data = self._resolve_inputs(step.get("input", {}))
+
+        # Make API call
+        response = await endpoint.call(json=input_data)
+
+        # Handle response
+        response_handling = step.get("response_handling", {})
+        output_key = response_handling.get("output_key")
+        result = response.get(output_key) if isinstance(response, dict) and output_key else response
+
+        # Store in context if needed
+        save_as = step.get("save_as")
+        if save_as:
+            self.context[save_as] = result
+            self.results[save_as] = result
+
+    def _resolve_inputs(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
+        resolved = {}
+        for key, val in inputs.items():
+            if isinstance(val, str) and val.startswith("{") and val.endswith("}"):
+                context_key = val[1:-1]
+                resolved[key] = self.context.get(context_key)
+            else:
+                resolved[key] = val
+        return resolved

@@ -221,7 +221,8 @@ bot_emojis = SharedBotEmojis()
 _api = None
 async def get_api():
     global _api
-    from modules.apis import API
-    _api = API()
-    await _api.init()
+    if _api is None:
+        from modules.apis import API
+        _api = API()
+        await _api.init()
     return _api

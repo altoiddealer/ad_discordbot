@@ -95,3 +95,49 @@ response_handling_presets:
     payload_key: image
     response_key: info
     metadata_field: parameters
+
+
+workflows:
+  - name: fan_out_translate
+    description: Translates a sentence into multiple languages in parallel
+    steps:
+      - name: Generate English Text
+        api_name: Text Generation WebUI
+        endpoint_name: Generate
+        input:
+          prompt: "Say hello"
+        response_handling:
+          output_key: text
+        save_as: base_text
+      - group:
+          - name: Translate to Spanish
+            api_name: DeepL API
+            endpoint_name: Translate
+            input:
+              text: "{base_text}"
+              target_lang: "ES"
+            save_as: es_text
+
+          - name: Translate to French
+            api_name: DeepL API
+            endpoint_name: Translate
+            input:
+              text: "{base_text}"
+              target_lang: "FR"
+            save_as: fr_text
+
+          - name: Translate to Japanese
+            api_name: DeepL API
+            endpoint_name: Translate
+            input:
+              text: "{base_text}"
+              target_lang: "JA"
+            save_as: ja_text
+      - name: Combine All Translations
+        api_name: Local Processor
+        endpoint_name: Join
+        input:
+          es: "{es_text}"
+          fr: "{fr_text}"
+          ja: "{ja_text}"
+        save_as: multilingual_output
