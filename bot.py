@@ -178,15 +178,21 @@ tgwui_enabled = is_tgwui_integrated and tgwui.enabled
 ######################## CHECK TTS STATUS #######################
 #################################################################
 
-def tts_enabled_and_online() -> bool:
+def tts_is_enabled(and_online: bool = False) -> bool:
     """
-    Returns True if TTS enabled in config, AND
-    TGWUI integrated and launched with TTS extension, and it's enabled
-    OR a TTS API is configured and enabled
+    Returns True if TTS is enabled in config, AND:
+    - TGWUI is integrated with the TTS extension, and (if and_online=True) it's enabled,
+      OR
+    - a TTS API is configured, and (if and_online=True) it's enabled.
     """
-    return config.tts_enabled() and \
-        (tgwui_enabled and tgwui.tts.extension) or \
-        (api.is_api_object('ttsgen') and api.ttsgen.enabled)
+    if not config.tts_enabled():
+        return False
+
+    tts_api_ready = api.is_api_object('ttsgen') and (not and_online or api.ttsgen.enabled)
+    tgwui_ready = tgwui_enabled and tgwui.tts.extension and (not and_online or tgwui.tts.enabled)
+
+    return tts_api_ready or tgwui_ready
+
 
 #################################################################
 ##################### BACKGROUND QUEUE TASK #####################
@@ -717,12 +723,12 @@ class VoiceClients:
             # Start voice client if configured, and not explicitly deactivated in settings
             if config.tts_enabled() and vc_setting == True and int(config.ttsgen.get('play_mode', 0)) != 1 and not self.guild_vcs.get(guild_id):
                 try:
-                    if tts_enabled_and_online():
+                    if tts_is_enabled(and_online=True):
                         await self.toggle_voice_client(guild_id, 'enabled')
                     else:
                         if not bot_database.was_warned('char_tts'):
                             bot_database.update_was_warned('char_tts')
-                            log.warning('[Voice Clients] Configured to join voice channel but TTS is not enabled.')
+                            log.warning('[Voice Clients] TTS is enabled in config, but no TTS clients are available/enabled.')
                 except Exception as e:
                     log.error(f"[Voice Clients] An error occurred while connecting to voice channel: {e}")
             # Stop voice client if explicitly deactivated in character settings
@@ -849,14 +855,11 @@ async def set_server_voice_channel(ctx: commands.Context, channel: Optional[disc
     bot_database.update_voice_channels(ctx.guild.id, channel.id)
     await ctx.send(f"Voice channel for **{ctx.guild}** set to **{channel.name}**.", delete_after=5)
 
-if tgwui_enabled:
+if tts_is_enabled():
     # Register command for helper function to toggle TTS
     @client.hybrid_command(description='Toggles TTS on/off')
     @guild_only()
     async def toggle_tts(ctx: commands.Context):
-        if not tgwui.tts.extension:
-            await ctx.reply('No TTS client is configured, so the TTS setting cannot be toggled.', ephemeral=True, delete_after=5)
-            return
         await ireply(ctx, 'toggle TTS') # send a response msg to the user
         # offload to TaskManager() queue
         log.info(f'{ctx.author.display_name} used "/toggle_tts"')
@@ -2064,7 +2067,7 @@ class TaskProcessing(TaskAttributes):
                 bot_text = greeting_msg
             await send_long_message(self.channel, greeting_msg)
             # Play TTS Greeting
-            if tts_enabled_and_online() and config.ttsgen.get('tts_greeting', False):
+            if tts_is_enabled(and_online=True) and config.ttsgen.get('tts_greeting', False):
                 self.text = bot_text
                 self.embeds.enabled_embeds = {'system': False}
                 self.params.tts_args = self.settings.llmcontext.extensions
