@@ -190,11 +190,11 @@ class APIClient:
                                     headers=ep.get("headers", self.default_headers),
                                     timeout=ep.get("timeout", self.default_timeout),
                                     retry=ep.get("retry", 3))
+                # link APIClient to Endpoint
+                endpoint.client = self
                 # get deferred payloads after collecting all endpoints
                 if hasattr(endpoint, "_deferred_payload_source"):
                     self._endpoint_fetch_payloads.append(endpoint)
-                # link APIClient to Endpoint
-                endpoint.client = self
                 self.endpoints[endpoint.name] = endpoint
             except KeyError as e:
                 log.warning(f"[APIClient:{self.name}] Skipping endpoint due to missing key: {e}")
@@ -219,6 +219,11 @@ class APIClient:
 
         for endpoint in self.endpoints.values():
             endpoint.set_schema_from_openapi(self.openapi_schema)
+            if endpoint.schema:
+                log.debug(f"[{self.name}] Schema assigned to endpoint '{endpoint.name}'")
+            else:
+                log.debug(f"[{self.name}] No schema found for endpoint '{endpoint.name}'")
+
 
     async def _resolve_deferred_payloads(self):
         for ep in self._endpoint_fetch_payloads:
@@ -277,10 +282,11 @@ class APIClient:
         self,
         endpoint: str,
         method: str = "GET",
-        params: Optional[Dict[str, Any]] = None,
-        data: Optional[Union[Dict[str, Any], str, bytes]] = None,
         json: Optional[Dict[str, Any]] = None,
+        data: Optional[Union[Dict[str, Any], str, bytes]] = None,
+        params: Optional[Dict[str, Any]] = None,
         headers: Optional[Dict[str, str]] = None,
+        files: Optional[Dict[str, Any]] = None,
         auth: Optional[aiohttp.BasicAuth] = None,
         retry: int = 3,
         return_text: bool = False,  # still here if used manually
@@ -315,15 +321,15 @@ class APIClient:
                     # Reuse session if passed
                     return await self._make_request(
                         session=session, method=method, url=url, params=params, data=data,
-                        json=json, headers=headers, auth=auth, timeout=timeout,
+                        json=json, files=files, headers=headers, auth=auth, timeout=timeout,
                         return_text=return_text, return_raw=return_raw, response_type=response_type
                     )
                 else:
                     # Create a session for standalone request
                     async with aiohttp.ClientSession() as temp_session:
                         return await self._make_request(
-                            session=temp_session, method=method, url=url, params=params, data=data,
-                            json=json, headers=headers, auth=auth, timeout=timeout,
+                            session=session, method=method, url=url, params=params, data=data,
+                            json=json, files=files, headers=headers, auth=auth, timeout=timeout,
                             return_text=return_text, return_raw=return_raw, response_type=response_type
                         )
 
@@ -344,11 +350,12 @@ class APIClient:
     async def _make_request(
         self,
         session: aiohttp.ClientSession,
-        method: str,
         url: str,
-        params: Optional[Dict[str, Any]],
-        data: Optional[Union[Dict[str, Any], str, bytes]],
+        method: str,
         json: Optional[Dict[str, Any]],
+        data: Optional[Union[Dict[str, Any], str, bytes]],
+        params: Optional[Dict[str, Any]],
+        files: Optional[Dict[str, Any]],
         headers: Dict[str, str],
         auth: Optional[aiohttp.BasicAuth],
         timeout: int,
@@ -356,10 +363,27 @@ class APIClient:
         return_raw: bool,
         response_type: Optional[str],
     ):
-        async with session.request(
-            method.upper(), url, params=params, data=data, json=json,
-            headers=headers, auth=auth, timeout=timeout
-        ) as response:
+        request_kwargs = {
+            "method": method.upper(),
+            "url": url,
+            "params": params,
+            "headers": headers,
+            "auth": auth,
+            "timeout": aiohttp.ClientTimeout(total=timeout),
+        }
+
+        if files:
+            form_data = aiohttp.FormData()
+            for key, val in files.items():
+                form_data.add_field(key, val, filename=getattr(val, "name", key))
+            request_kwargs["data"] = form_data
+        else:
+            if data is not None:
+                request_kwargs["data"] = data
+            if json is not None:
+                request_kwargs["json"] = json
+
+        async with session.request(**request_kwargs) as response:
 
             if return_raw:
                 return await response.read()
@@ -571,35 +595,25 @@ class Endpoint:
             else:
                 setattr(self, '_deferred_payload_source', payload_config)
 
-    def get_preferred_content_type(self):
+    def get_preferred_content_type(self) -> Optional[str]:
+        content_type = None
         if isinstance(self.headers, dict):
-            return self.headers.get("Content-Type")
-        if isinstance(self.headers, str):
-            return self.headers.strip().lower()
+            content_type = self.headers.get("Content-Type")
+        elif isinstance(self.headers, str):
+            content_type = self.headers
+
+        if content_type:
+            return content_type.split(";")[0].strip().lower()  # Strip params like charset=utf-8
+
         return None
 
-    def set_schema_from_openapi(self, openapi_schema: dict):
-        if not openapi_schema:
+    def set_schema_from_openapi(self, openapi_schema: dict, force: bool = False):
+        if not openapi_schema or (self.schema and not force):
             return
 
-        paths = openapi_schema.get("paths", {})
-        endpoint_spec = paths.get(self.path)
-        if not endpoint_spec:
-            return
-
-        method_spec = endpoint_spec.get(self.method.lower())
-        if not method_spec:
-            return
-
-        request_body = method_spec.get("requestBody", {})
-        content = request_body.get("content", {})
         preferred_content_type = self.get_preferred_content_type()
+        self.schema = self.get_schema(openapi_schema, preferred_content_type=preferred_content_type)
 
-        if preferred_content_type and preferred_content_type in content:
-            schema = content[preferred_content_type].get("schema")
-            if schema:
-                self.schema = schema
-                return
 
     def generate_payload_from_schema(self) -> dict:
         if not self.schema:
@@ -631,29 +645,54 @@ class Endpoint:
         payload = resolve_schema(self.schema)
         return payload if isinstance(payload, dict) else {}
 
-    def get_schema(self, openapi_schema: dict) -> Optional[dict]:
+    def _match_path_key(self, paths: dict) -> Optional[str]:
+        """
+        Attempt to find the OpenAPI path key that matches this endpoint's path.
+        Handles paths with parameters like /item/{id}
+        """
+        if self.path in paths:
+            return self.path  # Direct match
+
+        for defined_path in paths:
+            # Convert OpenAPI-style path to regex
+            path_regex = re.sub(r"\{[^/]+\}", "[^/]+", defined_path)
+            if re.fullmatch(path_regex, self.path):
+                return defined_path
+
+        return None
+
+    def get_schema(self, openapi_schema: dict, preferred_content_type: Optional[str] = None) -> Optional[dict]:
         if not openapi_schema:
             return None
 
-        paths = openapi_schema.get("paths", {})
-        endpoint_spec = paths.get(self.path)
-        if not endpoint_spec:
+        path_key = self._match_path_key(openapi_schema.get("paths", {}))
+        if not path_key:
             return None
 
-        method_spec = endpoint_spec.get(self.method.lower())
+        method_spec = openapi_schema["paths"][path_key].get(self.method.lower())
         if not method_spec:
             return None
 
         request_body = method_spec.get("requestBody", {})
         content = request_body.get("content", {})
-        app_json = content.get("application/json", {})
-        return app_json.get("schema")
 
-    def sanitize_payload(self, payload: Dict[str, Any], openapi_schema: dict, strict: bool=False) -> Dict[str, Any]:
+        # If a preferred type was given or derived, check that first
+        if preferred_content_type and preferred_content_type in content:
+            return content[preferred_content_type].get("schema")
+
+        # Fall back to common content types
+        for content_type in ["application/json", "application/x-www-form-urlencoded", "multipart/form-data"]:
+            if content_type in content:
+                return content[content_type].get("schema")
+
+        return None
+
+
+    def sanitize_payload(self, payload: Dict[str, Any], openapi_schema: dict) -> Dict[str, Any]:
         """
         Recursively sanitizes the payload using the OpenAPI schema by removing unknown keys.
         """
-        schema = self.schema or self.get_schema(openapi_schema)
+        schema = self.schema or self.get_schema(openapi_schema, )
         if not schema:
             log.debug(f"No schema found for {self.method} {self.path} — skipping sanitization")
             return payload
@@ -666,7 +705,17 @@ class Endpoint:
                     continue
 
                 prop_schema = schema_props[k]
-                if isinstance(v, dict) and "properties" in prop_schema:
+
+                if prop_schema.get("type") == "array" and isinstance(v, list):
+                    item_schema = prop_schema.get("items", {})
+                    if "properties" in item_schema:
+                        cleaned[k] = [
+                            _sanitize(item, item_schema["properties"]) if isinstance(item, dict) else item
+                            for item in v
+                        ]
+                    else:
+                        cleaned[k] = v
+                elif isinstance(v, dict) and "properties" in prop_schema:
                     cleaned[k] = _sanitize(v, prop_schema["properties"])
                 else:
                     cleaned[k] = v
@@ -675,40 +724,72 @@ class Endpoint:
 
         schema_props = schema.get("properties", {})
         final_cleaned = _sanitize(payload, schema_props)
-        if strict and not final_cleaned:
+        if not final_cleaned:
             raise ValueError(f"All keys in payload were removed during sanitization for endpoint {self.name}")
 
         return final_cleaned
 
-    async def call(self, sanitize:bool=False, strict: bool = False, **kwargs):
-        """
-        Convenience wrapper to call this endpoint directly.
-        Assumes `client.request()` exists.
 
-        :param sanitize: If True, attempt to sanitize payload against the schema
-        :param strict: If True and sanitize=True, raise an error if payload is fully removed
-        """
+    async def call(self, input_data: dict = None, payload_type: str = "json", payload_map: dict = None, sanitize:bool=False, **kwargs):
         if self.client is None:
             raise ValueError("Endpoint not bound to an APIClient")
 
-        json_payload = kwargs.pop('json', None)
-        data_payload = kwargs.pop('data', None)
+        headers = kwargs.pop('headers', self.headers)
+        timeout = kwargs.pop('timeout', self.timeout)
+        retry = kwargs.pop('retry', self.retry)
+        response_type = kwargs.pop('response_type', self.response_type)
+
+        json_payload = None
+        data_payload = None
+        params_payload = None
+        files_payload = None
+
+        input_data = input_data or {}
+
+        # Use explicit payload map if given
+        if payload_map:
+            json_payload = {k: input_data[k] for k in payload_map.get("json", []) if k in input_data}
+            data_payload = {k: input_data[k] for k in payload_map.get("data", []) if k in input_data}
+            params_payload = {k: input_data[k] for k in payload_map.get("params", []) if k in input_data}
+            files_payload = {k: input_data[k] for k in payload_map.get("files", []) if k in input_data}
+
+        else:
+            # Simpler payload_type override
+            if payload_type == "json":
+                json_payload = input_data
+            elif payload_type == "form":
+                data_payload = input_data
+            elif payload_type == "multipart":
+                files_payload = {}
+                data_payload = {}
+
+                for k, v in input_data.items():
+                    if hasattr(v, 'read'):  # assume it's a file-like object
+                        files_payload[k] = v
+                    else:
+                        data_payload[k] = v
+            elif payload_type == "query":
+                params_payload = input_data
+            else:
+                raise ValueError(f"Unsupported payload_type: {payload_type}")
 
         if sanitize:
-            if isinstance(json_payload, dict):
-                json_payload = self.sanitize_payload(json_payload, self.client.openapi_schema, strict=strict)
-            if isinstance(data_payload, dict):
-                data_payload = self.sanitize_payload(data_payload, self.client.openapi_schema, strict=strict)
+            if json_payload and isinstance(json_payload, dict):
+                json_payload = self.sanitize_payload(json_payload, self.client.openapi_schema)
+            if data_payload and isinstance(data_payload, dict):
+                data_payload = self.sanitize_payload(data_payload, self.client.openapi_schema)
 
         return await self.client.request(
             endpoint=self.path,
             method=self.method,
             json=json_payload,
             data=data_payload,
-            headers=kwargs.pop('headers', self.headers),
-            timeout=kwargs.pop('timeout', self.timeout),
-            response_type=kwargs.pop('response_type', self.response_type),
-            retry=kwargs.pop('retry', self.retry),
+            params=params_payload,
+            files=files_payload,
+            headers=headers,
+            timeout=timeout,
+            retry=retry,
+            response_type=response_type,
             **kwargs
         )
 
@@ -761,11 +842,16 @@ class WorkflowExecutor:
         if not endpoint:
             raise ValueError(f"Unknown endpoint: {endpoint_name} for client {api_name}")
 
-        # Resolve inputs using context
-        input_data = self._resolve_inputs(step.get("input", {}))
+        # Process input
+        input_data = await self._resolve_inputs(step.get("input", {}))
+        payload_type = step.get("payload_type", "json")
+        payload_map = step.get("payload_map")
 
-        # Make API call
-        response = await endpoint.call(json=input_data)
+        response = await endpoint.call(
+            input_data=input_data,
+            payload_type=payload_type,
+            payload_map=payload_map
+        )
 
         # Handle response
         response_handling = step.get("response_handling", {})
@@ -778,12 +864,50 @@ class WorkflowExecutor:
             self.context[save_as] = result
             self.results[save_as] = result
 
-    def _resolve_inputs(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
-        resolved = {}
-        for key, val in inputs.items():
-            if isinstance(val, str) and val.startswith("{") and val.endswith("}"):
-                context_key = val[1:-1]
-                resolved[key] = self.context.get(context_key)
-            else:
-                resolved[key] = val
-        return resolved
+
+    async def _resolve_inputs(self, inputs: Any) -> Any:
+        if isinstance(inputs, str):
+            if inputs.startswith("{") and inputs.endswith("}"):
+                context_key = inputs[1:-1]
+                return self.context.get(context_key)
+            return inputs
+
+        elif isinstance(inputs, dict):
+            if "path" in inputs and "as" in inputs:
+                return await self._process_file_input(inputs["path"], inputs["as"])
+
+            resolved = {}
+            for k, v in inputs.items():
+                resolved[k] = await self._resolve_inputs(v)
+            return resolved
+
+        elif isinstance(inputs, list):
+            return [await self._resolve_inputs(item) for item in inputs]
+
+        else:
+            return inputs
+
+
+    async def _process_file_input(self, path: str, input_type: str):
+        if input_type == "text":
+            async with aiofiles.open(path, mode='r', encoding='utf-8') as f:
+                return await f.read()
+
+        elif input_type == "base64":
+            async with aiofiles.open(path, mode='rb') as f:
+                raw = await f.read()
+                return base64.b64encode(raw).decode('utf-8')
+
+        elif input_type == "file":
+            # Special behavior — this must be handled outside JSON.
+            raise ValueError("File upload input type 'file' should be used with multipart/form-data.")
+
+        elif input_type == "raw":
+            async with aiofiles.open(path, mode='rb') as f:
+                return await f.read()
+
+        elif input_type == "url":
+            return path  # Just return the path (expected to be a full URL)
+
+        else:
+            raise ValueError(f"Unknown input type: {input_type}")

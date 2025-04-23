@@ -1,9 +1,15 @@
 import base64
 import os
 import uuid
+import aiofiles
 
 from modules.logs import import_track, get_logger; import_track(__file__, fp=True); log = get_logger(__name__)  # noqa: E702
 logging = log
+
+async def encode_to_base64(path):
+    async with aiofiles.open(path, mode='rb') as f:
+        raw = await f.read()
+        return base64.b64encode(raw).decode('utf-8')
 
 def save_base64(base64_str, output_format="png", save_to="./", prefix="file"):
     binary_data = base64.b64decode(base64_str)

@@ -34,7 +34,7 @@ all_apis:
     auth: null # {username: myuser, password: mypass} # dict format with keys 'username' and 'password'
     # Add any endpoints that you may use for bot functions (Tags system, user commands, etc)
     endpoints:
-      - {name: Post txt2img, path: /sdapi/v1/txt2img, method: POST, response_type: json, retry: 1, payload: sd-webui.yaml, timeout: 120}
+      - {name: Post txt2img, path: /sdapi/v1/txt2img, method: POST, payload_type: json, response_type: json, retry: 1, payload: sd-webui.yaml, timeout: 120}
       - {name: Post img2img, path: /sdapi/v1/img2img, method: POST, timeout: 120}
       - {name: Get Progress, path: /sdapi/v1/progress, method: GET}
       - {name: Post PNG Info, path: /sdapi/v1/png-info, method: POST}
@@ -98,6 +98,19 @@ response_handling_presets:
 
 
 workflows:
+  - name: img_to_img
+    steps:
+      - name: Transform Image
+        api_name: Stable Diffusion WebUI
+        endpoint_name: Post img2img
+        payload_type: json
+        input:
+          init_images:
+            path: "inputs/photo.jpg"
+            as: base64
+          prompt: "make it look like a Pixar character"
+        save_as: result
+
   - name: fan_out_translate
     description: Translates a sentence into multiple languages in parallel
     steps:
@@ -141,3 +154,14 @@ workflows:
           fr: "{fr_text}"
           ja: "{ja_text}"
         save_as: multilingual_output
+
+# payload_type (RECOMMENDED for all POST/PUT).
+# Use one of: json / form / multipart (file) / query
+
+
+# as value | Behavior                             | Payload area
+# text     | Load file as UTF-8 string            | json, data
+# file     | Load as binary, use multipart        | files
+# base64   | Read file, encode in base64          | json or data
+# raw      | Read file bytes, send as request body| data
+# url      | User provides a direct URL string    | json, params, etc.
