@@ -144,6 +144,30 @@ class API:
 
         await asyncio.gather(*setup_tasks)
 
+    def is_api_object(self, client_name:str|None=None, ep_name:str|None=None, log_missing:bool=False) -> bool:
+        client = getattr(self, client_name, None)
+        if client is None:
+            client = self.clients.get(client_name, None)
+
+        if not isinstance(client, APIClient):
+            if log_missing:
+                log.warning(f"API client '{client_name}' not found or invalid.")
+            return False
+
+        if ep_name is None:
+            return True
+
+        endpoint = getattr(client, ep_name, None)
+        if endpoint is None:
+            endpoint = client.endpoints.get(ep_name, None)
+
+        if not isinstance(endpoint, Endpoint):
+            if log_missing:
+                log.warning(f"Endpoint '{ep_name}' not found or invalid in client '{client_name}'.")
+            return False
+
+        return True
+
 
 class APIClient:
     def __init__(self,
@@ -224,7 +248,6 @@ class APIClient:
             else:
                 log.debug(f"[{self.name}] No schema found for endpoint '{endpoint.name}'")
 
-
     async def _resolve_deferred_payloads(self):
         for ep in self._endpoint_fetch_payloads:
             ep:Endpoint
@@ -246,7 +269,6 @@ class APIClient:
 
             except Exception as e:
                 log.error(f"[APIClient:{self.name}] Failed to fetch payload from '{ref}' for '{ep.name}': {e}")
-
 
     def validate_payload(self, method:str, endpoint:str, json:str|None=None, data:str|None=None):
         if self.openapi_schema:

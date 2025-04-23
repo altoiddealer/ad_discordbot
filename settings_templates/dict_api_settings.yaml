@@ -19,6 +19,7 @@ bot_api_functions:
   ttsgen:
     api_name: AllTalk TTS v2
     get_voices_endpoint_name: Get TTS Voices
+    get_languages_endpoint_name: null
     post_generate_endpoint_name: Post TTS Generate
 
 

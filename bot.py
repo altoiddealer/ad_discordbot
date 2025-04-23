@@ -128,7 +128,7 @@ async def api_online(api_type:str|None=None, api_name:str='', ictx:CtxInteractio
 
 imggen_enabled = config.imggen.get('enabled', False)
 
-if imggen_enabled and api.imggen.post_server_restart:
+if imggen_enabled and api.is_api_object('imggen', 'post_server_restart'):
     # Function to attempt restarting the SD WebUI Client in the event it gets stuck
     @client.hybrid_command(description=f"Immediately restarts the main media generation server.")
     @guild_or_owner_only()
@@ -137,7 +137,7 @@ if imggen_enabled and api.imggen.post_server_restart:
             await ctx.send(f"**`/restart_sd_client` __will not work__ unless {api.imggen.name} was launched with flag: `--api-server-stop`**", delete_after=10)
         await api.imggen.post_server_restart.call(retry=0)
         title = f"{ctx.author.display_name} used '/restart_sd_client'. Restarting {api.imggen.name} ..."
-        if api.imggen.get_progress:
+        if api.is_api_object('imggen', 'get_progress'):
             await bot_embeds.send('system', title=title, description='Attempting to re-establish connection in 5 seconds (Attempt 1 of 10)', channel=ctx.channel)
             log.info(title)
             response = None
@@ -245,7 +245,6 @@ if imggen_enabled:
             imgmodel_update_task.cancel()
             await ctx.send("Auto-change Imgmodels task was cancelled.", ephemeral=True, delete_after=5)
             log.info("[Auto Change Imgmodels] Task was cancelled via '/toggle_auto_change_imgmodels_task'")
-
         else:
             await bg_task_queue.put(start_auto_change_imgmodels())
             await ctx.send("Auto-change Img models task was started.", ephemeral=True, delete_after=5)
@@ -4390,15 +4389,14 @@ if imggen_enabled:
     async def get_cnet_data() -> dict:
 
         async def check_cnet_online():
-            if config.imggen['extensions'].get('controlnet_enabled', False):
-                try:
-                    online = await api.imggen.get_controlnet_models.call(retry=0)
-                    if online: 
-                        return True
-                    else: 
-                        return False
-                except Exception:
-                    log.warning(f"ControlNet is enabled in config.yaml, but was not responsive from {api.imggen.name} API.")
+            try:
+                online = await api.imggen.get_controlnet_models.call(retry=0)
+                if online: 
+                    return True
+                else: 
+                    return False
+            except Exception:
+                log.warning(f"ControlNet is enabled in config.yaml, but was not responsive from {api.imggen.name} API.")
             return False
 
         filtered_cnet_data = {}
