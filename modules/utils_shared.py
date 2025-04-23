@@ -148,19 +148,22 @@ class Config(BaseFileMemory):
         # Update the user config with any missing values from the template
         fix_dict(config_dict, config_template, 'config.yaml')
 
-    def is_per_server(self):
+    def is_per_server(self) -> bool:
         return self.per_server_settings.get('enabled', False)
     
-    def is_per_character(self):
+    def is_per_character(self) -> bool:
         if self.is_per_server:
             return self.per_server_settings.get('per_server_characters', False)
         return False
     
-    def is_per_server_imgmodels(self):
+    def is_per_server_imgmodels(self) -> bool:
         return self.per_server_settings.get('per_server_imgmodel_settings', False)
 
-    def discord_dm_setting(self, key, default=None):
+    def discord_dm_setting(self, key, default=None) -> bool:
         return self.get('discord', {}).get('direct_messages', {}).get(key, default)
+    
+    def tts_enabled(self) -> bool:
+        return self.get('ttsgen', {}).get('enabled')
 
 config = Config()
 

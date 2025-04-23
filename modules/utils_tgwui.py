@@ -9,7 +9,7 @@ import yaml
 import aiohttp
 from pathlib import Path
 from threading import Lock
-from typing import Optional
+from typing import Optional, Tuple
 from modules.typing import CtxInteraction
 from modules.utils_shared import shared_path, config, bot_database, patterns, is_tgwui_integrated
 from modules.utils_misc import check_probability
@@ -30,33 +30,88 @@ logging = log
 
 class TTS:
     def __init__(self):
+        # TGWUI Extension method
         self.enabled:bool = False
-        self.api_mode:bool = False
+
         self.settings:dict = config.ttsgen
-        self.api_name:Optional[str] = self.settings.get('api_name')
-        self.api_url:Optional[str] = self.settings.get('api_url')
-        self.api_get_voices_endpoint:Optional[str] = ''
-        self.api_generate_endpoint:Optional[str] = ''
+        self.supported_extensions = ['alltalk_tts', 'coqui_tts', 'silero_tts', 'elevenlabs_tts', 'edge_tts', 'vits_api_tts']
+        self.extension:Optional[str] = config.ttsgen.get('tgwui_extension')
+        self.voice_key:Optional[str] = None
+        self.lang_key:Optional[str] = None
 
     # Toggles TTS on/off
-    async def apply_toggle_tts(self, settings, toggle:str='on', tts_sw:bool=False):
+    async def toggle_tts_extension(self, settings, toggle:str='on', tts_sw:bool=False):
         try:
             #settings:"Settings" = get_settings(ictx)
             llmcontext_dict = vars(settings.llmcontext)
             extensions:dict = copy.deepcopy(llmcontext_dict.get('extensions', {}))
-            if toggle == 'off' and extensions.get(tgwui.tts_extension, {}).get('activate'):
-                extensions[tgwui.tts_extension]['activate'] = False
+            if toggle == 'off' and extensions.get(self.extension, {}).get('activate'):
+                extensions[self.extension]['activate'] = False
                 await tgwui.update_extensions(extensions)
-                # Return True if subsequent apply_toggle_tts() should enable TTS
+                # Return True if subsequent toggle_tts_extension() should enable TTS
                 return True
             if tts_sw:
-                extensions[tgwui.tts_extension]['activate'] = True
+                extensions[self.extension]['activate'] = True
                 await tgwui.update_extensions(extensions)
         except Exception as e:
             log.error(f'[TTS] An error occurred while toggling the TTS on/off: {e}')
         return False
     
-tts = TTS()
+    async def apply_toggle_tts(self, settings) -> str:
+        if self.enabled:
+            await self.toggle_tts_extension(settings, toggle='off')
+            self.enabled = False
+            return 'disabled'
+        else:
+            await self.toggle_tts_extension(settings, toggle='on', tts_sw=True)
+            self.enabled = True
+            return 'enabled'
+
+    async def fetch_speak_options(self) -> Tuple[list, list]:
+        try:
+            lang_list = []
+            all_voices = []
+
+            if self.extension == 'coqui_tts' or 'alltalk' in self.extension:
+                lang_list = ['Arabic', 'Chinese', 'Czech', 'Dutch', 'English', 'French', 'German', 'Hungarian', 'Italian', 'Japanese', 'Korean', 'Polish', 'Portuguese', 'Russian', 'Spanish', 'Turkish']
+                if self.extension == 'coqui_tts':
+                    from extensions.coqui_tts.script import get_available_voices
+                    all_voices = get_available_voices()
+                else:
+                    from extensions.alltalk_tts.script import get_available_voices
+                    all_voices = get_available_voices()
+
+            elif self.extension == 'silero_tts':
+                lang_list = ['English', 'Spanish', 'French', 'German', 'Russian', 'Tatar', 'Ukranian', 'Uzbek', 'English (India)', 'Avar', 'Bashkir', 'Bulgarian', 'Chechen', 'Chuvash', 'Kalmyk', 'Karachay-Balkar', 'Kazakh', 'Khakas', 'Komi-Ziryan', 'Mari', 'Nogai', 'Ossetic', 'Tuvinian', 'Udmurt', 'Yakut']
+                log.warning('''There's too many Voice/language permutations to make them all selectable in "/speak" command. Loading a bunch of English options. Non-English languages will automatically play using respective default speaker.''')
+                all_voices = [f"en_{index}" for index in range(1, 76)] # will just include English voices in select menus. Other languages will use defaults.
+
+            elif self.extension == 'elevenlabs_tts':
+                lang_list = ['English', 'German', 'Polish', 'Spanish', 'Italian', 'French', 'Portuegese', 'Hindi', 'Arabic']
+                log.info('''Getting list of available voices for elevenlabs_tts for "/speak" command...''')
+                from extensions.elevenlabs_tts.script import refresh_voices, update_api_key # type: ignore
+                api_key = '' # If you are using 'elevenlabs_tts' extension, feel free to hardcode the API key here!
+                if api_key:
+                    update_api_key(api_key)
+                all_voices = refresh_voices()
+
+            elif self.extension == 'edge_tts':
+                lang_list = ['English']
+                from extensions.edge_tts.script import edge_tts # type: ignore
+                voices = await edge_tts.list_voices()
+                all_voices = [voice['ShortName'] for voice in voices if 'ShortName' in voice and voice['ShortName'].startswith('en-')]
+
+            elif self.extension == 'vits_api_tts':
+                lang_list = ['English']
+                log.info("Collecting voices for the '/speak' command. If this fails, ensure 'vits_api_tts' is running on default URL 'http://localhost:23456/'.")
+                from extensions.vits_api_tts.script import refresh_voices # type: ignore
+                all_voices = refresh_voices()
+
+            all_voices.sort() # Sort alphabetically
+            return lang_list, all_voices
+        except Exception as e:
+            log.error(f"Error building options for '/speak' command: {e}")
+            return None, None
 
 # Majority of this code section is sourced from 'modules/server.py'
 class TGWUI():
@@ -64,11 +119,8 @@ class TGWUI():
         self.enabled:bool = config.textgen.get('enabled', True)
         self.instruction_template_str:str = None
         self.last_extension_params = {}
-        
-        self.supported_tts_extensions = ['alltalk_tts', 'coqui_tts', 'silero_tts', 'elevenlabs_tts', 'edge_tts', 'vits_api_tts']
-        self.tts_extension:Optional[str] = config.ttsgen.get('tgwui_extension')
-        self.tts_voice_key:Optional[str] = None
-        self.tts_lang_key:Optional[str] = None
+
+        self.tts = TTS()
 
         if self.enabled:
             self.init_settings()
@@ -113,12 +165,12 @@ class TGWUI():
         extensions_module.state = {}
         for index, name in enumerate(shared.args.extensions):
             if name in available_extensions:
-                if name.endswith('_tts') and self.tts_extension is None:
+                if name.endswith('_tts') and self.tts.extension is None:
                     log.warning(f'A TTS extension "{name}" attempted to load which was not set in config.yaml TTS Settings. Errors are likely to occur.')
                 if name != 'api':
                     if not bot_database.was_warned(name):
                         bot_database.update_was_warned(name)
-                        log.info(f'Loading {"your configured TTS extension" if name == self.tts_extension else "the extension"} "{name}"')
+                        log.info(f'Loading {"your configured TTS extension" if name == self.tts.extension else "the extension"} "{name}"')
                 try:
                     try:
                         exec(f"import extensions.{name}.script")
@@ -153,37 +205,37 @@ class TGWUI():
 
     def init_tts_extensions(self):
         # If any TTS extension defined in config.yaml, set tts bot vars and add extension to shared.args.extensions
-        if self.tts_extension:
-            tts.enabled = True
-            if 'alltalk' in self.tts_extension:
+        if self.tts.extension:
+            self.tts.enabled = True
+            if 'alltalk' in self.tts.extension:
                 log.warning('[TTS] If using AllTalk v2, extension params may fail to apply (changing voices, etc). Full support is coming soon.')
-                self.voice_key = 'voice'
-                self.lang_key = 'language'
+                self.tts.voice_key = 'voice'
+                self.tts.lang_key = 'language'
                 # All TTS extensions with "alltalk" in the name are supported
-                if self.tts_extension not in self.supported_tts_extensions:
-                    self.supported_tts_extensions.append(self.tts_extension)
-            elif self.tts_extension == 'coqui_tts':
-                self.voice_key = 'voice'
-                self.lang_key = 'language'
-            elif self.tts_extension in ['vits_api_tts', 'elevenlabs_tts']:
-                self.voice_key = 'selected_voice'
-                self.lang_key = ''
-            elif self.tts_extension in ['silero_tts', 'edge_tts']:
-                self.voice_key = 'speaker'
-                self.lang_key = 'language'
+                if self.tts.extension not in self.tts.supported_extensions:
+                    self.tts.supported_extensions.append(self.tts.extension)
+            elif self.tts.extension == 'coqui_tts':
+                self.tts.voice_key = 'voice'
+                self.tts.lang_key = 'language'
+            elif self.tts.extension in ['vits_api_tts', 'elevenlabs_tts']:
+                self.tts.voice_key = 'selected_voice'
+                self.tts.lang_key = ''
+            elif self.tts.extension in ['silero_tts', 'edge_tts']:
+                self.tts.voice_key = 'speaker'
+                self.tts.lang_key = 'language'
 
-            if self.tts_extension not in shared.args.extensions:
-                shared.args.extensions.append(self.tts_extension)
-            if self.tts_extension not in self.supported_tts_extensions:
-                log.warning(f'[TTS] The "/speak" command will not be registered for "{self.tts_extension}".')
-                log.warning(f'[TTS] List of supported tts_clients: {self.supported_tts_extensions}')
+            if self.tts.extension not in shared.args.extensions:
+                shared.args.extensions.append(self.tts.extension)
+            if self.tts.extension not in self.tts.supported_extensions:
+                log.warning(f'[TTS] The "/speak" command will not be registered for "{self.tts.extension}".')
+                log.warning(f'[TTS] List of supported tts_clients: {self.tts.supported_extensions}')
 
             # Ensure only one TTS extension is running
             excess_tts_clients = []
             for extension in shared.args.extensions:
                 extension:str
-                if extension.endswith('_tts') and extension != self.tts_extension:
-                    log.warning(f'[TTS] Your configured TTS client is "{self.tts_extension}", but another TTS extension "{extension}" attempted to load. Skipping "{extension}".')
+                if extension.endswith('_tts') and extension != self.tts.extension:
+                    log.warning(f'[TTS] Your configured TTS client is "{self.tts.extension}", but another TTS extension "{extension}" attempted to load. Skipping "{extension}".')
                     excess_tts_clients.append(extension)
             if excess_tts_clients:
                 log.warning(f'[TTS] Skipping: {excess_tts_clients}')
@@ -264,7 +316,7 @@ class TGWUI():
             log.error(f"An error occurred while loading LLM Model: {e}")
 
     async def update_extensions(self, params):
-        if tts.api_mode == False:
+        if self.tts.api_mode == True:
             return
         try:
             if self.last_extension_params or params:

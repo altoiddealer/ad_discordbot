@@ -124,6 +124,7 @@ class API:
             try:
                 api_client = ClientClass(name=api_config['name'],
                                          url=api_config['url'],
+                                         enabled=api_config.get(enabled, True),
                                          default_headers=api_config.get('default_headers'),
                                          default_timeout=api_config.get('default_timeout', 60),
                                          auth=api_config.get('auth'),
@@ -172,6 +173,7 @@ class API:
 class APIClient:
     def __init__(self,
                  name: str,
+                 enabled: bool,
                  url: str,
                  default_headers: Optional[Dict[str,str]] = None,
                  default_timeout: int = 60,
@@ -179,6 +181,7 @@ class APIClient:
                  endpoints_config=None):
 
         self.name = name
+        self.enabled = enabled
         self.url = url.rstrip("/")
         self.default_headers = default_headers or {}
         self.default_timeout = default_timeout
@@ -552,10 +555,12 @@ class TTSGenClient(APIClient):
         ttsgen_config:dict = apisettings.get_config_for("ttsgen")
 
         self.get_voices: Optional[Endpoint] = None
+        self.get_languages: Optional[Endpoint] = None
         self.post_generate: Optional[Endpoint] = None
 
         # Collect endpoints used for main TTSGen functions
         endpoint_keys = {'get_voices_endpoint_name': 'get_voices',
+                         'get_languages_endpoint_name': 'get_languages',
                          'post_generate_endpoint_name': 'post_generate'}
         for config_key, attr_name in endpoint_keys.items():
             ep_name = ttsgen_config.get(config_key)
