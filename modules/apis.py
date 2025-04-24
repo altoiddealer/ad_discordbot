@@ -883,7 +883,7 @@ class WorkflowExecutor:
         # Handle response
         response_handling = step.get("response_handling", {})
         output_key = response_handling.get("output_key")
-        result = response.get(output_key) if isinstance(response, dict) and output_key else response
+        result = response.get(output_key) if (isinstance(response, dict) and output_key) else response
 
         # Store in context if needed
         save_as = step.get("save_as")

@@ -40,7 +40,7 @@ class TTS:
         self.lang_key:Optional[str] = None
 
     # Toggles TTS on/off
-    async def toggle_tts_extension(self, settings, toggle:str='on', tts_sw:bool=False):
+    async def toggle_tts_extension(self, settings, toggle:str='on') -> bool:
         try:
             #settings:"Settings" = get_settings(ictx)
             llmcontext_dict = vars(settings.llmcontext)
@@ -50,7 +50,7 @@ class TTS:
                 await tgwui.update_extensions(extensions)
                 # Return True if subsequent toggle_tts_extension() should enable TTS
                 return True
-            if tts_sw:
+            elif toggle == 'on':
                 extensions[self.extension]['activate'] = True
                 await tgwui.update_extensions(extensions)
         except Exception as e:
@@ -63,7 +63,7 @@ class TTS:
             self.enabled = False
             return 'disabled'
         else:
-            await self.toggle_tts_extension(settings, toggle='on', tts_sw=True)
+            await self.toggle_tts_extension(settings, toggle='on')
             self.enabled = True
             return 'enabled'
 

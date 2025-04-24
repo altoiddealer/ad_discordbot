@@ -3,7 +3,7 @@ import logging as _logging
 from datetime import datetime, timedelta
 from dataclasses import dataclass, field
 from dataclasses_json import dataclass_json
-from typing import Any, Optional
+from typing import Any, Optional, Tuple
 from pathlib import Path
 import asyncio
 import random
@@ -175,23 +175,56 @@ else:
 tgwui_enabled = is_tgwui_integrated and tgwui.enabled
 
 #################################################################
-######################## CHECK TTS STATUS #######################
+######################### TTS SHORTCUTS #########################
 #################################################################
 
-def tts_is_enabled(and_online: bool = False) -> bool:
+async def toggle_any_tts(settings, tts_to_toggle:str='api', force:str|None=None) -> str:
     """
-    Returns True if TTS is enabled in config, AND:
-    - TGWUI is integrated with the TTS extension, and (if and_online=True) it's enabled,
-      OR
-    - a TTS API is configured, and (if and_online=True) it's enabled.
+    Parameters:
+    - tts_to_toggle (str): 'api' or 'tgwui'
+    - force (str): 'enabled' or 'disabled' - forces the TTS enabled or disabled
+    """
+    message = force
+    # Toggle TGWUI TTS
+    if tts_to_toggle == 'tgwui':
+        if force is not None:
+            await tgwui.tts.toggle_tts_extension(settings, toggle=force)
+            return message
+        else:
+            return await tgwui.tts.apply_toggle_tts(settings) # returns 'enabled' or 'disabled'
+
+    # Toggle API TTS
+    if force is None:
+        message = 'disabled' if api.ttsgen.enabled else 'enabled'
+    else:
+        force = True if force == 'enabled' else False
+    if tts_to_toggle == 'api':
+        api.ttsgen.enabled = (force) or (not api.ttsgen.enabled)
+    return message
+
+
+def tts_is_enabled(and_online:bool=False, for_mode:str='any') -> bool | Tuple[bool, bool]:
+    """
+    Check if TTS is available and optionally online.
+
+    Parameters:
+    - and_online (bool): If True, also require TTS to be currently enabled (online).
+    - for_mode (str): One of 'api', 'tgwui', 'both', or 'any'. Determines which TTS mode(s) to check.
     """
     if not config.tts_enabled():
         return False
 
-    tts_api_ready = api.is_api_object('ttsgen') and (not and_online or api.ttsgen.enabled)
-    tgwui_ready = tgwui_enabled and tgwui.tts.extension and (not and_online or tgwui.tts.enabled)
+    api_tts_ready = api.is_api_object('ttsgen') and (not and_online or api.ttsgen.enabled)
+    tgwui_tts_ready = tgwui_enabled and tgwui.tts.extension and (not and_online or tgwui.tts.enabled)
 
-    return tts_api_ready or tgwui_ready
+    if for_mode == 'api':
+        return api_tts_ready
+    elif for_mode == 'tgwui':
+        return tgwui_tts_ready
+    elif for_mode == 'both':
+        return api_tts_ready, tgwui_tts_ready
+
+    return api_tts_ready or tgwui_tts_ready
 
 
 #################################################################
@@ -757,7 +790,7 @@ class VoiceClients:
 
     async def play_in_voice_channel(self, guild_id, file):
         if not self.guild_vcs.get(guild_id):
-            log.warning(f"[Voice Clients] tts response detected, but bot is not connected to a voice channel in guild ID {guild_id}")
+            log.warning(f"[Voice Clients] TTS response detected, but bot is not connected to a voice channel in guild ID {guild_id}")
             return
         # Queue the task if audio is already playing
         if self.guild_vcs[guild_id].is_playing():
@@ -1528,17 +1561,25 @@ class TaskProcessing(TaskAttributes):
             img_gen_task = self.clone('img_gen', self.ictx, ignore_list=['llm_payload'])
             await task_manager.task_queue.put(img_gen_task)
 
-    async def check_tts_before_llm_gen(self:Union["Task","Tasks"]) -> bool:
-        if tts.enabled:
+    async def check_tts_before_llm_gen(self:Union["Task","Tasks"]) -> bool|str:
+        '''Returns 'api' or 'tgwui' if it toggled one off. Else False'''
+        toggle = False
+
+        api_tts_on, tgwui_tts_on = tts_is_enabled(and_online=True, for_mode='both')
+        if api_tts_on or tgwui_tts_on:
             # Toggle TTS off if not sending text, or if triggered by Tags
             if (not self.params.should_send_text) or (self.params.should_tts == False):
-                return await tgwui.tts.toggle_tts_extension(self.settings, toggle='off')
-            # Conditions which are only valid for guild interactions
-            if hasattr(self.ictx, 'guild') and getattr(self.ictx.guild, 'voice_client', None):
-                # Toggle TTS off if interaction server is not connected to Voice Channel
-                if not voice_clients.guild_vcs.get(self.ictx.guild.id) and int(config.ttsgen.get('play_mode', 0)) == 0:
-                    return await tgwui.tts.toggle_tts_extension(self.settings, toggle='off')
-        return False
+                toggle = True
+            # If guild interaction, and guild not enabled for VC playback
+            elif hasattr(self.ictx, 'guild') and getattr(self.ictx.guild, 'voice_client', None) \
+                and not voice_clients.guild_vcs.get(self.ictx.guild.id) and int(config.ttsgen.get('play_mode', 0)) == 0:
+                toggle = True
+
+            if toggle:
+                toggle = 'api' if api_tts_on else 'tgwui'
+                await toggle_any_tts(self.settings, toggle, force='off')
+
+        return toggle
 
     async def message_llm_gen(self:Union["Task","Tasks"]):
         # if no LLM model is loaded, notify that no text will be generated
@@ -1557,7 +1598,8 @@ class TaskProcessing(TaskAttributes):
         # generate text with text-generation-webui
         await self.llm_gen()
         # Toggle TTS back on if it was toggled off
-        await tgwui.tts.toggle_tts_extension(self.settings, toggle='on', tts_sw=tts_sw)
+        if tts_sw:
+            await toggle_any_tts(self.settings, tts_sw, force='on')
 
     async def process_user_prompt(self:Union["Task","Tasks"]):
         # Update an existing LLM payload (Flows), or initialize with defaults
@@ -3433,10 +3475,12 @@ class Tasks(TaskProcessing):
     async def toggle_tts_task(self:"Task"):
         try:
             message = 'toggled'
-            if tgwui_enabled:
-                message = await tgwui.tts.apply_toggle_tts(self.settings)
-            elif api.is_api_object('ttsgen'):
-                api.ttsgen.enabled = not api.ttsgen.enabled
+            api_tts_on, tgwui_tts_on = tts_is_enabled(for_mode='both')
+            if not api_tts_on and not tgwui_tts_on:
+                log.warning('Tried to toggle TTS but no client is available to toggle.')
+                return
+            toggle = 'api' if api_tts_on else 'tgwui'
+            message = toggle_any_tts(self.settings, toggle)
             vc_guild_ids = [self.ictx.guild.id] if config.is_per_server() else [guild.id for guild in client.guilds]
             for vc_guild_id in vc_guild_ids:
                 await voice_clients.toggle_voice_client(vc_guild_id, message)
