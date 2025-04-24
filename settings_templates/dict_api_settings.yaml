@@ -4,23 +4,23 @@ bot_api_functions:
   # Note: Main API names / endpoint names are case sensitive!
   imggen:
     api_name: Stable Diffusion WebUI
-    post_txt2img_endpoint_name: Post txt2img
-    post_img2img_endpoint_name: Post img2img
-    get_progress_endpoint_name: Get Progress
-    post_png_info_endpoint_name: Post PNG Info
-    post_options_endpoint_name: Post Options
-    get_imgmodels_endpoint_name: Get ImgModels
-    get_controlnet_models_endpoint_name: Get Cnet Models
-    get_controlnet_control_types_endpoint_name: Get Cnet Control Types
-    post_server_restart_endpoint_name: Post Server Restart
+    post_txt2img: {endpoint_name: Post txt2img}
+    post_img2img: {endpoint_name: Post img2img}
+    get_progress: {endpoint_name: Get Progress}
+    post_png_info: {endpoint_name: Post PNG Info}
+    post_options: {endpoint_name: Post Options}
+    get_imgmodels: {endpoint_name: Get ImgModels}
+    get_controlnet_models: {endpoint_name: Get Cnet Models}
+    get_controlnet_control_types: {endpoint_name: Get Cnet Control Types}
+    post_server_restart: {endpoint_name: Post Server Restart}
   # API for Text Gen is WIP. Bot currently cannot use textgen API for main functions.
   textgen: {} # placeholder.
   # API for TTS is WIP. These settings are currently limited to the '/speak' command (will not work for message requests)
   ttsgen:
     api_name: AllTalk TTS v2
-    get_voices_endpoint_name: Get TTS Voices
-    get_languages_endpoint_name: null
-    post_generate_endpoint_name: Post TTS Generate
+    get_voices: {endpoint_name: Get TTS Voices}
+    get_languages: {endpoint_name: null}
+    post_generate: {endpoint_name: Post TTS Generate, text_key: text_input}
 
 
 # Define any APIs to use with the bot

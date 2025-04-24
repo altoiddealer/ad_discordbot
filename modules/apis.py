@@ -562,10 +562,34 @@ class TTSGenClient(APIClient):
         endpoint_keys = {'get_voices_endpoint_name': 'get_voices',
                          'get_languages_endpoint_name': 'get_languages',
                          'post_generate_endpoint_name': 'post_generate'}
+        # Collect endpoints used for main TTSGen functions
         for config_key, attr_name in endpoint_keys.items():
-            ep_name = ttsgen_config.get(config_key)
-            setattr(self, attr_name, self.endpoints.get(ep_name) if ep_name else None) 
+            config_entry = ttsgen_config.get(config_key)
+            if isinstance(config_entry, dict):
+                endpoint_name = config_entry.get("endpoint_name")
+                if endpoint_name:
+                    setattr(self, attr_name, self.endpoints.get(endpoint_name))
 
+    # def _collect_endpoints(self, endpoints_config: list[dict]): # class override
+    #     for ep in endpoints_config:
+    #         try:
+    #             endpoint = TTSGenEndpoint(name=ep["name"],
+    #                                       path=ep["path"],
+    #                                       method=ep.get("method", "GET"),
+    #                                       response_type=ep.get("response_type", "json"),
+    #                                       payload_config=ep.get("payload"),
+    #                                       rh_config=ep.get("response_handling"),
+    #                                       headers=ep.get("headers", self.default_headers),
+    #                                       timeout=ep.get("timeout", self.default_timeout),
+    #                                       retry=ep.get("retry", 3))
+    #             # link TTSGenClient to Endpoint
+    #             endpoint.client = self
+    #             # get deferred payloads after collecting all endpoints
+    #             if hasattr(endpoint, "_deferred_payload_source"):
+    #                 self._endpoint_fetch_payloads.append(endpoint)
+    #             self.endpoints[endpoint.name] = endpoint
+    #         except KeyError as e:
+    #             log.warning(f"[TTSGenClient:{self.name}] Skipping endpoint due to missing key: {e}")
 
 class Endpoint:
     def __init__(self,
@@ -765,6 +789,8 @@ class Endpoint:
         timeout = kwargs.pop('timeout', self.timeout)
         retry = kwargs.pop('retry', self.retry)
         response_type = kwargs.pop('response_type', self.response_type)
+        explicit_type = payload_type in ["json", "form", "multipart", "query"]
+        preferred_content = self.get_preferred_content_type()
 
         json_payload = None
         data_payload = None
@@ -779,26 +805,43 @@ class Endpoint:
             data_payload = {k: input_data[k] for k in payload_map.get("data", []) if k in input_data}
             params_payload = {k: input_data[k] for k in payload_map.get("params", []) if k in input_data}
             files_payload = {k: input_data[k] for k in payload_map.get("files", []) if k in input_data}
-
+        
         else:
-            # Simpler payload_type override
-            if payload_type == "json":
-                json_payload = input_data
-            elif payload_type == "form":
-                data_payload = input_data
-            elif payload_type == "multipart":
-                files_payload = {}
-                data_payload = {}
-
-                for k, v in input_data.items():
-                    if hasattr(v, 'read'):  # assume it's a file-like object
-                        files_payload[k] = v
-                    else:
-                        data_payload[k] = v
-            elif payload_type == "query":
-                params_payload = input_data
+            if explicit_type:
+                if payload_type == "json":
+                    json_payload = input_data
+                elif payload_type == "form":
+                    data_payload = input_data
+                elif payload_type == "multipart":
+                    files_payload = {}
+                    data_payload = {}
+                    for k, v in input_data.items():
+                        if hasattr(v, 'read'):
+                            files_payload[k] = v
+                        else:
+                            data_payload[k] = v
+                elif payload_type == "query":
+                    params_payload = input_data
             else:
-                raise ValueError(f"Unsupported payload_type: {payload_type}")
+                if preferred_content == "application/json":
+                    json_payload = input_data
+                elif preferred_content == "application/x-www-form-urlencoded":
+                    data_payload = input_data
+                elif preferred_content and preferred_content.startswith("multipart/form-data"):
+                    files_payload = {}
+                    data_payload = {}
+                    for k, v in input_data.items():
+                        if hasattr(v, 'read'):
+                            files_payload[k] = v
+                        else:
+                            data_payload[k] = v
+                elif preferred_content == "application/octet-stream":
+                    data_payload = input_data
+                elif preferred_content == "text/plain":
+                    data_payload = str(input_data)
+                else:
+                    log.warning(f"Cannot infer payload type from Content-Type: {preferred_content}. Defaulting to json.")
+                    json_payload = input_data
 
         if sanitize:
             if json_payload and isinstance(json_payload, dict):
@@ -829,6 +872,11 @@ class Endpoint:
     #     elif rh["type"] == "dict":
     #         return {k: response.get(k) for k in rh.get("extract_keys", [])}
     #     return response  # fallback
+
+# class TTSGenEndpoint(Endpoint):
+#     def __init__(self, *args, **kwargs):
+#         super().__init__(*args, **kwargs)
+
 
 class WorkflowExecutor:
     def __init__(self, workflow_name: str):

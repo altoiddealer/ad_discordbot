@@ -175,59 +175,6 @@ else:
 tgwui_enabled = is_tgwui_integrated and tgwui.enabled
 
 #################################################################
-######################### TTS SHORTCUTS #########################
-#################################################################
-
-async def toggle_any_tts(settings, tts_to_toggle:str='api', force:str|None=None) -> str:
-    """
-    Parameters:
-    - tts_to_toggle (str): 'api' or 'tgwui'
-    - force (str): 'enabled' or 'disabled' - forces the TTS enabled or disabled
-    """
-    message = force
-    # Toggle TGWUI TTS
-    if tts_to_toggle == 'tgwui':
-        if force is not None:
-            await tgwui.tts.toggle_tts_extension(settings, toggle=force)
-            return message
-        else:
-            return await tgwui.tts.apply_toggle_tts(settings) # returns 'enabled' or 'disabled'
-
-    # Toggle API TTS
-    if force is None:
-        message = 'disabled' if api.ttsgen.enabled else 'enabled'
-    else:
-        force = True if force == 'enabled' else False
-    if tts_to_toggle == 'api':
-        api.ttsgen.enabled = (force) or (not api.ttsgen.enabled)
-    return message
-
-
-def tts_is_enabled(and_online:bool=False, for_mode:str='any') -> bool | Tuple[bool, bool]:
-    """
-    Check if TTS is available and optionally online.
-
-    Parameters:
-    - and_online (bool): If True, also require TTS to be currently enabled (online).
-    - for_mode (str): One of 'api', 'tgwui', 'both', or 'any'. Determines which TTS mode(s) to check.
-    """
-    if not config.tts_enabled():
-        return False
-
-    api_tts_ready = api.is_api_object('ttsgen') and (not and_online or api.ttsgen.enabled)
-    tgwui_tts_ready = tgwui_enabled and tgwui.tts.extension and (not and_online or tgwui.tts.enabled)
-
-    if for_mode == 'api':
-        return api_tts_ready
-    elif for_mode == 'tgwui':
-        return tgwui_tts_ready
-    elif for_mode == 'both':
-        return api_tts_ready, tgwui_tts_ready
-
-    return api_tts_ready or tgwui_tts_ready
-
-
-#################################################################
 ##################### BACKGROUND QUEUE TASK #####################
 #################################################################
 
@@ -450,6 +397,9 @@ async def on_ready():
     # Ensure startup tasks do not re-execute if bot's discord connection status fluctuates
     if client.is_first_on_ready: # type: ignore
         client.is_first_on_ready = False # type: ignore
+
+        # Enforce only one TTS method enabled
+        enforce_one_tts_method()
 
         # Create background task processing queue
         client.loop.create_task(process_tasks_in_background())
@@ -704,10 +654,64 @@ if config.discord['post_active_settings'].get('enabled', True):
         # Process message updates in the background
         await bg_task_queue.put(switch_settings_channels(ctx.guild, channel))          
 
-
 #################################################################
 ######################## TTS PROCESSING #########################
 #################################################################
+async def toggle_any_tts(settings, tts_to_toggle:str='api', force:str|None=None) -> str:
+    """
+    Parameters:
+    - tts_to_toggle (str): 'api' or 'tgwui'
+    - force (str): 'enabled' or 'disabled' - forces the TTS enabled or disabled
+    """
+    message = force
+    # Toggle TGWUI TTS
+    if tts_to_toggle == 'tgwui':
+        if force is not None:
+            await tgwui.tts.toggle_tts_extension(settings, toggle=force)
+            return message
+        else:
+            return await tgwui.tts.apply_toggle_tts(settings) # returns 'enabled' or 'disabled'
+
+    # Toggle API TTS
+    if force is None:
+        message = 'disabled' if api.ttsgen.enabled else 'enabled'
+    else:
+        force = True if force == 'enabled' else False
+    if tts_to_toggle == 'api':
+        api.ttsgen.enabled = (force) or (not api.ttsgen.enabled)
+    return message
+
+
+def tts_is_enabled(and_online:bool=False, for_mode:str='any') -> bool | Tuple[bool, bool]:
+    """
+    Check if TTS is available and optionally online.
+
+    Parameters:
+    - and_online (bool): If True, also require TTS to be currently enabled (online).
+    - for_mode (str): One of 'api', 'tgwui', 'both', or 'any'. Determines which TTS mode(s) to check.
+    """
+    if not config.tts_enabled():
+        return False
+
+    api_tts_ready = api.is_api_object('ttsgen') and (not and_online or api.ttsgen.enabled)
+    tgwui_tts_ready = tgwui_enabled and tgwui.tts.extension and (not and_online or tgwui.tts.enabled)
+
+    if for_mode == 'api':
+        return api_tts_ready
+    elif for_mode == 'tgwui':
+        return tgwui_tts_ready
+    elif for_mode == 'both':
+        return api_tts_ready, tgwui_tts_ready
+
+    return api_tts_ready or tgwui_tts_ready
+
+def enforce_one_tts_method():
+    api_tts_on, tgwui_tts_on = tts_is_enabled(and_online=True, for_mode='both')
+    if api_tts_on and tgwui_tts_on:
+        log.warning("Bot was initialized with both API and TGWUI extension TTS methods enabled. Disabling TGWUI extension.")
+        toggle_any_tts(bot_settings, 'tgwui', force='off')
+        tgwui.tts.enabled = False
+
 class VoiceClients:
     def __init__(self):
         self.guild_vcs:dict = {}
@@ -1791,7 +1795,7 @@ class TaskProcessing(TaskAttributes):
                     # TTS streaming
                     cant_stream_tts = ['edge_tts']
                     self.stream_tts:bool         = config.tts_enabled() and self.can_chunk and config.ttsgen.get('tts_streaming', True) and task.params.should_tts
-                    if self.stream_tts and tgwui.tts.extension in cant_stream_tts:
+                    if self.stream_tts and tgwui_enabled and tgwui.tts.extension in cant_stream_tts:
                         self.stream_tts = False
                         log.error(f"TTS Streaming is confirmed non-functional for {tgwui.tts.extension} (for now), so this is being disabled.")
                     self.streamed_tts:bool       = False
@@ -1801,15 +1805,15 @@ class TaskProcessing(TaskAttributes):
                 
                 # Only try streaming TTS if TTS enabled and responses can be chunked
                 def warn_stream_tts(self, char_name:str):
-                    log.warning(f"The bot will try streaming TTS responses ('{tgwui.tts.extension}' is running, and '{char_name}' is configured to stream replies).")
-                    if 'alltalk' in tgwui.tts.extension:
-                        log.warning("**The application MAY hang/crash IF using 'alltalk_tts' in low VRAM mode**")
-                    log.info("This MAY have unexpected side effects, particularly for other running extensions (if any).")
-                    log.info(f"If you experience issues, please try the following:")
-                    log.info(f"• Ensure your TTS client is updated ({tgwui.tts.extension})")
-                    log.info(f"• Disable the TTS Setting 'tts_streaming'")
-                    log.info(f"• Change {char_name}'s 'chance_to_stream_reply' behavior to '0.0', or disable TTS.")
-                    log.info(f"• Report any Issues (https://github.com/altoiddealer/ad_discordbot/issues)")
+                    log.warning(f"The bot will try streaming TTS responses ('{char_name}' is configured to stream replies).")
+                    log.info(f"If you experience issues, consider disabling TTSGen setting 'tts_streaming'")
+                    log.info(f"Consider changing {char_name}'s 'chance_to_stream_reply' behavior to '0.0', or disable TTS.")
+                    log.info(f"Report any Issues (https://github.com/altoiddealer/ad_discordbot/issues)")
+                    if tgwui_enabled:
+                        if 'alltalk' in tgwui.tts.extension:
+                            log.warning("**The application MAY hang/crash IF using 'alltalk_tts' in low VRAM mode**")
+                        log.info(f"If you have issues, ensure your TTS client is updated ({tgwui.tts.extension})")
+                        log.info("This MAY have unexpected side effects, particularly for other running TGWUI extensions (if any).")
                     bot_database.update_was_warned('stream_tts')
 
                 async def try_chunking(self, resp:str):
@@ -1876,7 +1880,7 @@ class TaskProcessing(TaskAttributes):
                                 await check_censored(chunk)      # check for censored text
                                 self.last_checked = ''           # reset for next iteration
                                 self.already_chunked += chunk    # add chunk to already chunked
-                                apply_extensions(chunk)     # trigger TTS response / possibly other extension behavior
+                                await apply_tts_and_extensions(chunk) # trigger TTS response / possibly other extension behavior
 
                                 return chunk
 
@@ -1884,6 +1888,13 @@ class TaskProcessing(TaskAttributes):
 
             # Easier to manage this as a class
             stream_replies = StreamReplies(self)
+
+            async def apply_tts_and_extensions(chunk_text:str, was_streamed=True):
+                # If TTS API is online and available, TGWUI TTS extensions will be disabled
+                if tgwui_enabled:
+                    apply_extensions(chunk_text, was_streamed=was_streamed)
+                if tts_is_enabled(and_online=True, for_mode='api'):
+                    audio_file = await api.ttsgen.post_generate.call()
 
             def apply_extensions(chunk_text:str, was_streamed=True):
                 vis_resp_chunk:str = extensions_module.apply_extensions('output', chunk_text, state=self.llm_payload['state'], is_chat=True)
