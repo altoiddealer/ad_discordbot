@@ -233,6 +233,27 @@ class APIClient:
             except KeyError as e:
                 log.warning(f"[APIClient:{self.name}] Skipping endpoint due to missing key: {e}")
 
+    def _bind_main_ep_values(config_entry:dict):
+        pass
+
+    def _bind_main_endpoints(self, config: dict, endpoint_keys: dict):
+        missing = []
+        for config_key, attr_name in endpoint_keys.items():
+            config_entry = config.get(config_key)
+            if not isinstance(config_entry, dict):
+                missing.append((config_key, "not a dict"))
+                continue
+
+            endpoint_name = config_entry.get("endpoint_name")
+            if not endpoint_name or endpoint_name not in self.endpoints:
+                missing.append((config_key, f"endpoint '{endpoint_name}' not found"))
+                continue
+            
+            self._bind_main_ep_values(config_entry)
+
+            setattr(self, attr_name, self.endpoints[endpoint_name])
+        return missing
+
     async def _fetch_openapi_schema(self):
         try:
             def dereference_schema(schema: dict) -> dict:
@@ -468,9 +489,8 @@ class ImgGenClient(APIClient):
                          'get_controlnet_models_endpoint_name': 'get_controlnet_models',
                          'get_controlnet_control_types_endpoint_name': 'get_controlnet_control_types',
                          'post_server_restart': 'post_server_restart'}
-        for config_key, attr_name in endpoint_keys.items():
-            ep_name = imggen_config.get(config_key)
-            setattr(self, attr_name, self.endpoints.get(ep_name) if ep_name else None)       
+        
+        self._bind_main_endpoints(imggen_config, endpoint_keys) 
 
     # class override to subclass Endpoint()
     def _get_self_ep_class():
@@ -559,6 +579,8 @@ class TextGenClient(APIClient):
         super().__init__(*args, **kwargs)
         # TODO Main TextGen API support
 
+        self._bind_main_endpoints(textgen_config, endpoint_keys)
+
     # class override to subclass Endpoint()
     def _get_self_ep_class():
         return TextGenEndpoint
@@ -577,18 +599,32 @@ class TTSGenClient(APIClient):
         endpoint_keys = {'get_voices_endpoint_name': 'get_voices',
                          'get_languages_endpoint_name': 'get_languages',
                          'post_generate_endpoint_name': 'post_generate'}
-        # Collect endpoints used for main TTSGen functions
-        for config_key, attr_name in endpoint_keys.items():
-            config_entry = ttsgen_config.get(config_key)
-            if isinstance(config_entry, dict):
-                endpoint_name = config_entry.get("endpoint_name")
-                if endpoint_name:
-                    setattr(self, attr_name, self.endpoints.get(endpoint_name))
+
+        self._bind_main_endpoints(ttsgen_config, endpoint_keys)
 
     # class override to subclass Endpoint()
     def _get_self_ep_class():
         return TTSGenEndpoint
 
+    def _bind_main_ep_values(self, config_entry: dict):
+        endpoint_name = config_entry.get("endpoint_name")
+        endpoint = self.endpoints.get(endpoint_name)
+
+        if not endpoint:
+            return
+
+        custom_keys = []
+        for key, value in config_entry.items():
+            if key == "endpoint_name":
+                continue
+            if hasattr(endpoint, key):
+                setattr(endpoint, key, value)
+            else:
+                # Allow setting, but track as custom
+                setattr(endpoint, key, value)
+                custom_keys.append(key)
+        if custom_keys:
+            log.info(f"[{self.name}] Endpoint '{endpoint_name}' received custom user-defined config keys: {custom_keys}")
 
 class Endpoint:
     def __init__(self,
