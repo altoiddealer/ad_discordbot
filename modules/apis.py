@@ -205,18 +205,25 @@ class APIClient:
         self._assign_endpoint_schemas()
         await self._resolve_deferred_payloads()
 
+    def _create_endpoint(self, EPClass:"Endpoint", ep_dict:dict):
+        return EPClass(name=ep_dict["name"],
+                        path=ep_dict["path"],
+                        method=ep_dict.get("method", "GET"),
+                        response_type=ep_dict.get("response_type", "json"),
+                        payload_config=ep_dict.get("payload"),
+                        rh_config=ep_dict.get("response_handling"),
+                        headers=ep_dict.get("headers", self.default_headers),
+                        timeout=ep_dict.get("timeout", self.default_timeout),
+                        retry=ep_dict.get("retry", 3))
+    
+    def _get_self_ep_class():
+        return Endpoint
+
     def _collect_endpoints(self, endpoints_config:list[dict]):
-        for ep in endpoints_config:
+        for ep_dict in endpoints_config:
             try:
-                endpoint = Endpoint(name=ep["name"],
-                                    path=ep["path"],
-                                    method=ep.get("method", "GET"),
-                                    response_type=ep.get("response_type", "json"),
-                                    payload_config=ep.get("payload"),
-                                    rh_config=ep.get("response_handling"),
-                                    headers=ep.get("headers", self.default_headers),
-                                    timeout=ep.get("timeout", self.default_timeout),
-                                    retry=ep.get("retry", 3))
+                ep_class:Endpoint = self._get_self_ep_class()
+                endpoint:Endpoint = self._create_endpoint(ep_class, ep_dict)
                 # link APIClient to Endpoint
                 endpoint.client = self
                 # get deferred payloads after collecting all endpoints
@@ -440,16 +447,16 @@ class ImgGenClient(APIClient):
         self.last_img_payload = {}
         self.session_id = None
 
-        self.post_txt2img: Optional[Endpoint] = None
-        self.post_img2img: Optional[Endpoint] = None
-        self.get_progress: Optional[Endpoint] = None
-        self.post_pnginfo: Optional[Endpoint] = None
-        self.post_options: Optional[Endpoint] = None
-        self.get_imgmodels: Optional[Endpoint] = None
-        self.get_imgmodels: Optional[Endpoint] = None
-        self.get_controlnet_models: Optional[Endpoint] = None
-        self.get_controlnet_control_types: Optional[Endpoint] = None
-        self.post_server_restart: Optional[Endpoint] = None
+        self.post_txt2img: Optional[ImgGenEndpoint] = None
+        self.post_img2img: Optional[ImgGenEndpoint] = None
+        self.get_progress: Optional[ImgGenEndpoint] = None
+        self.post_pnginfo: Optional[ImgGenEndpoint] = None
+        self.post_options: Optional[ImgGenEndpoint] = None
+        self.get_imgmodels: Optional[ImgGenEndpoint] = None
+        self.get_imgmodels: Optional[ImgGenEndpoint] = None
+        self.get_controlnet_models: Optional[ImgGenEndpoint] = None
+        self.get_controlnet_control_types: Optional[ImgGenEndpoint] = None
+        self.post_server_restart: Optional[ImgGenEndpoint] = None
 
         # Collect endpoints used for main ImgGen functions
         endpoint_keys = {'post_txt2img_endpoint_name': 'post_txt2img',
@@ -464,6 +471,10 @@ class ImgGenClient(APIClient):
         for config_key, attr_name in endpoint_keys.items():
             ep_name = imggen_config.get(config_key)
             setattr(self, attr_name, self.endpoints.get(ep_name) if ep_name else None)       
+
+    # class override to subclass Endpoint()
+    def _get_self_ep_class():
+        return ImgGenEndpoint
 
     async def get_imggen_progress(self, session: Optional[aiohttp.ClientSession] = None) -> Optional[Dict[str, Any]]:
         if self.get_progress:
@@ -483,7 +494,7 @@ class ImgGenClient(APIClient):
         images = []
         pnginfo = None
         try:
-            ep_for_mode:Endpoint = getattr(self, f'post_{mode}')
+            ep_for_mode:ImgGenEndpoint = getattr(self, f'post_{mode}')
             response = await ep_for_mode.call(json=image_payload, session=session)
 
             if not isinstance(response, dict):
@@ -548,15 +559,19 @@ class TextGenClient(APIClient):
         super().__init__(*args, **kwargs)
         # TODO Main TextGen API support
 
+    # class override to subclass Endpoint()
+    def _get_self_ep_class():
+        return TextGenEndpoint
+
 
 class TTSGenClient(APIClient):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         ttsgen_config:dict = apisettings.get_config_for("ttsgen")
 
-        self.get_voices: Optional[Endpoint] = None
-        self.get_languages: Optional[Endpoint] = None
-        self.post_generate: Optional[Endpoint] = None
+        self.get_voices: Optional[TTSGenEndpoint] = None
+        self.get_languages: Optional[TTSGenEndpoint] = None
+        self.post_generate: Optional[TTSGenEndpoint] = None
 
         # Collect endpoints used for main TTSGen functions
         endpoint_keys = {'get_voices_endpoint_name': 'get_voices',
@@ -570,26 +585,10 @@ class TTSGenClient(APIClient):
                 if endpoint_name:
                     setattr(self, attr_name, self.endpoints.get(endpoint_name))
 
-    # def _collect_endpoints(self, endpoints_config: list[dict]): # class override
-    #     for ep in endpoints_config:
-    #         try:
-    #             endpoint = TTSGenEndpoint(name=ep["name"],
-    #                                       path=ep["path"],
-    #                                       method=ep.get("method", "GET"),
-    #                                       response_type=ep.get("response_type", "json"),
-    #                                       payload_config=ep.get("payload"),
-    #                                       rh_config=ep.get("response_handling"),
-    #                                       headers=ep.get("headers", self.default_headers),
-    #                                       timeout=ep.get("timeout", self.default_timeout),
-    #                                       retry=ep.get("retry", 3))
-    #             # link TTSGenClient to Endpoint
-    #             endpoint.client = self
-    #             # get deferred payloads after collecting all endpoints
-    #             if hasattr(endpoint, "_deferred_payload_source"):
-    #                 self._endpoint_fetch_payloads.append(endpoint)
-    #             self.endpoints[endpoint.name] = endpoint
-    #         except KeyError as e:
-    #             log.warning(f"[TTSGenClient:{self.name}] Skipping endpoint due to missing key: {e}")
+    # class override to subclass Endpoint()
+    def _get_self_ep_class():
+        return TTSGenEndpoint
+
 
 class Endpoint:
     def __init__(self,
@@ -873,9 +872,17 @@ class Endpoint:
     #         return {k: response.get(k) for k in rh.get("extract_keys", [])}
     #     return response  # fallback
 
-# class TTSGenEndpoint(Endpoint):
-#     def __init__(self, *args, **kwargs):
-#         super().__init__(*args, **kwargs)
+class TextGenEndpoint(Endpoint):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+class TTSGenEndpoint(Endpoint):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+class ImgGenEndpoint(Endpoint):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
 
 
 class WorkflowExecutor:

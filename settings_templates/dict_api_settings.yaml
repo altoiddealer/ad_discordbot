@@ -4,6 +4,7 @@ bot_api_functions:
   # Note: Main API names / endpoint names are case sensitive!
   imggen:
     api_name: Stable Diffusion WebUI
+    enabled: True
     post_txt2img: {endpoint_name: Post txt2img}
     post_img2img: {endpoint_name: Post img2img}
     get_progress: {endpoint_name: Get Progress}
@@ -13,8 +14,10 @@ bot_api_functions:
     get_controlnet_models: {endpoint_name: Get Cnet Models}
     get_controlnet_control_types: {endpoint_name: Get Cnet Control Types}
     post_server_restart: {endpoint_name: Post Server Restart}
-  # API for Text Gen is WIP. Bot currently cannot use textgen API for main functions.
-  textgen: {} # placeholder.
+  # Bot currently cannot use textgen APIs for main functions (support is coming!)
+  textgen:
+    api_name: Text Generation WebUI
+    enabled: False
   # API for TTS is WIP. These settings are currently limited to the '/speak' command (will not work for message requests)
   ttsgen:
     api_name: AllTalk TTS v2
