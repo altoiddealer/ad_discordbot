@@ -21,9 +21,9 @@ bot_api_functions:
   # API for TTS is WIP. These settings are currently limited to the '/speak' command (will not work for message requests)
   ttsgen:
     api_name: AllTalk TTS v2
-    get_voices: {endpoint_name: Get TTS Voices}
-    get_languages: {endpoint_name: null}
-    post_generate: {endpoint_name: Post TTS Generate, text_key: text_input}
+    get_voices: {endpoint_name: Get TTS Voices, get_voices_key: voices}
+    get_languages: {endpoint_name: null, get_languages_key: languages}
+    post_generate: {endpoint_name: Post TTS Generate, post_text_key: text_input}
 
 
 # Define any APIs to use with the bot

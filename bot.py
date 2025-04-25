@@ -691,6 +691,8 @@ def tts_is_enabled(and_online:bool=False, for_mode:str='any') -> bool | Tuple[bo
     - for_mode (str): One of 'api', 'tgwui', 'both', or 'any'. Determines which TTS mode(s) to check.
     """
     if not config.tts_enabled():
+        if for_mode == 'both':
+            return False, False
         return False
 
     api_tts_ready = api.is_api_object('ttsgen') and (not and_online or api.ttsgen.enabled)
@@ -1894,7 +1896,7 @@ class TaskProcessing(TaskAttributes):
                 if tgwui_enabled:
                     apply_extensions(chunk_text, was_streamed=was_streamed)
                 if tts_is_enabled(and_online=True, for_mode='api'):
-                    audio_file = await api.ttsgen.post_generate.call()
+                    audio_file = await api.ttsgen.post_generate.main_call(ep_key='post_text_key')
 
             def apply_extensions(chunk_text:str, was_streamed=True):
                 vis_resp_chunk:str = extensions_module.apply_extensions('output', chunk_text, state=self.llm_payload['state'], is_chat=True)
@@ -4499,8 +4501,10 @@ if imggen_enabled:
 
     use_llm_status = 'Whether to send your prompt to LLM. Results may vary!' if tgwui_enabled else '**option disabled** (LLM is not integrated)'
 
+    using_imggen_client_name = f' using {api.imggen.name}' if api.is_api_object('imggen') else ''
+
     if cnet_enabled and reactor_enabled:
-        @client.hybrid_command(name="image", description=f'Generate an image using {api.imggen.name}')
+        @client.hybrid_command(name="image", description=f"Generate an image{using_imggen_client_name}")
         @app_commands.describe(use_llm=use_llm_status)
         @app_commands.describe(style='Applies a positive/negative prompt preset')
         @app_commands.describe(img2img='Diffuses from an input image instead of pure latent noise.')
@@ -4519,7 +4523,7 @@ if imggen_enabled:
                                "face_swap": face_swap if face_swap else None, "cnet": controlnet if controlnet else None}
             await process_image(ctx, user_selections)
     elif cnet_enabled and not reactor_enabled:
-        @client.hybrid_command(name="image", description=f'Generate an image using {api.imggen.name}')
+        @client.hybrid_command(name="image", description=f'Generate an image{using_imggen_client_name}')
         @app_commands.describe(use_llm=use_llm_status)
         @app_commands.describe(style='Applies a positive/negative prompt preset')
         @app_commands.describe(img2img='Diffuses from an input image instead of pure latent noise.')
@@ -4535,7 +4539,7 @@ if imggen_enabled:
                                "img2img": img2img if img2img else None, "img2img_mask": img2img_mask if img2img_mask else None, "cnet": controlnet if controlnet else None}
             await process_image(ctx, user_selections)
     elif reactor_enabled and not cnet_enabled:
-        @client.hybrid_command(name="image", description=f'Generate an image using {api.imggen.name}')
+        @client.hybrid_command(name="image", description=f'Generate an image{using_imggen_client_name}')
         @app_commands.describe(use_llm=use_llm_status)
         @app_commands.describe(style='Applies a positive/negative prompt preset')
         @app_commands.describe(img2img='Diffuses from an input image instead of pure latent noise.')
@@ -4551,7 +4555,7 @@ if imggen_enabled:
                                "img2img": img2img if img2img else None, "img2img_mask": img2img_mask if img2img_mask else None, "face_swap": face_swap if face_swap else None}
             await process_image(ctx, user_selections)
     else:
-        @client.hybrid_command(name="image", description=f'Generate an image using {api.imggen.name}')
+        @client.hybrid_command(name="image", description=f'Generate an image{using_imggen_client_name}')
         @app_commands.describe(use_llm=use_llm_status)
         @app_commands.describe(style='Applies a positive/negative prompt preset')
         @app_commands.describe(img2img='Diffuses from an input image instead of pure latent noise.')
@@ -5144,8 +5148,8 @@ async def character_loader(char_name, settings:"Settings", guild_id:int|None=Non
         char_llmcontext = {}
         use_voice_channels = True
         for key, value in char_data.items():
-            if tgwui_enabled and key == 'extensions' and isinstance(value, dict):
-                if not tts.enabled:
+            if tgwui_enabled and key == 'extensions' and value and isinstance(value, dict):
+                if not config.tts_enabled():
                     for subkey, _ in value.items():
                         if subkey in tgwui.tts.supported_extensions and char_data[key][subkey].get('activate'):
                             char_data[key][subkey]['activate'] = False

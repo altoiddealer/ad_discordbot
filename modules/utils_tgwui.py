@@ -316,9 +316,9 @@ class TGWUI():
             log.error(f"An error occurred while loading LLM Model: {e}")
 
     async def update_extensions(self, params):
-        if self.tts.api_mode == True:
-            return
         try:
+            print("self.last_extension_params:", self.last_extension_params)
+            print("params:", params)
             if self.last_extension_params or params:
                 if self.last_extension_params == params:
                     return # Nothing needs updating

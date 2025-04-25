@@ -9,7 +9,7 @@ import base64
 import copy
 from typing import Any, Dict, Tuple, List, Optional, Union
 from modules.utils_shared import shared_path, load_file, get_api
-import utils_processing
+import modules.utils_processing
 
 from modules.logs import import_track, get_logger; import_track(__file__, fp=True); log = get_logger(__name__)  # noqa: E702
 logging = log
@@ -57,13 +57,14 @@ class APISettings():
             name = workflow.get('name')
             if name:
                 self.workflows[name] = workflow
-                workflow_steps = workflow.get('steps')
-                if workflow_steps:
-                    expanded_steps = []
-                    for step in workflow:
-                        expanded = apisettings.apply_preset(step)
-                        expanded_steps.append(expanded)
-                    self.workflows[name]['steps'] = expanded_steps
+                # TODO Fix Presets for Workflow Steps
+                # workflow_steps = workflow.get('steps')
+                # if workflow_steps:
+                #     expanded_steps = []
+                #     for step in workflow:
+                #         expanded = apisettings.apply_preset(step)
+                #         expanded_steps.append(expanded)
+                #     self.workflows[name]['steps'] = expanded_steps
 
     def get_workflow(self, workflow_name: str, default=None) -> dict:
         return self.workflows.get(workflow_name, default or {})
@@ -216,7 +217,7 @@ class APIClient:
                         timeout=ep_dict.get("timeout", self.default_timeout),
                         retry=ep_dict.get("retry", 3))
     
-    def _get_self_ep_class():
+    def _get_self_ep_class(self):
         return Endpoint
 
     def _collect_endpoints(self, endpoints_config:list[dict]):
@@ -233,7 +234,7 @@ class APIClient:
             except KeyError as e:
                 log.warning(f"[APIClient:{self.name}] Skipping endpoint due to missing key: {e}")
 
-    def _bind_main_ep_values(config_entry:dict):
+    def _bind_main_ep_values(self, config_entry:dict):
         pass
 
     def _bind_main_endpoints(self, config: dict, endpoint_keys: dict):
@@ -493,7 +494,7 @@ class ImgGenClient(APIClient):
         self._bind_main_endpoints(imggen_config, endpoint_keys) 
 
     # class override to subclass Endpoint()
-    def _get_self_ep_class():
+    def _get_self_ep_class(self):
         return ImgGenEndpoint
 
     async def get_imggen_progress(self, session: Optional[aiohttp.ClientSession] = None) -> Optional[Dict[str, Any]]:
@@ -577,12 +578,15 @@ class ImgGenClient(APIClient):
 class TextGenClient(APIClient):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        textgen_config:dict = apisettings.get_config_for("textgen")
         # TODO Main TextGen API support
 
+        # Collect endpoints used for main TextGen functions
+        endpoint_keys = {}
         self._bind_main_endpoints(textgen_config, endpoint_keys)
 
     # class override to subclass Endpoint()
-    def _get_self_ep_class():
+    def _get_self_ep_class(self):
         return TextGenEndpoint
 
 
@@ -603,7 +607,7 @@ class TTSGenClient(APIClient):
         self._bind_main_endpoints(ttsgen_config, endpoint_keys)
 
     # class override to subclass Endpoint()
-    def _get_self_ep_class():
+    def _get_self_ep_class(self):
         return TTSGenEndpoint
 
     def _bind_main_ep_values(self, config_entry: dict):
@@ -915,6 +919,18 @@ class TextGenEndpoint(Endpoint):
 class TTSGenEndpoint(Endpoint):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        self.get_voices_key: 'speaker'
+        self.get_languages_key: 'languages'
+        self.post_text_key = 'text_input'
+
+    async def main_call(self, ep_key=None, input_data: dict = None, payload_type: str = "json", payload_map: dict = None, sanitize:bool=False, **kwargs):
+        response = self.call(input_data=input_data, payload_type=payload_type, payload_map=payload_map, sanitize=sanitize, **kwargs)
+        item_key = getattr(self, ep_key, None)
+        if item_key:
+            result = response.get(item_key)
+            return result
+            
+
 
 class ImgGenEndpoint(Endpoint):
     def __init__(self, *args, **kwargs):
