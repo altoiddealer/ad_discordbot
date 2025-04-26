@@ -198,10 +198,11 @@ class TGWUI():
         extensions_module.available_extensions = utils.get_available_extensions()
 
         # Initialize shared args extensions
-        for extension in shared.settings['default_extensions']:
-            shared.args.extensions = shared.args.extensions or []
-            if extension not in shared.args.extensions:
-                shared.args.extensions.append(extension)
+        if shared.settings.get('default_extensions'):
+            for extension in shared.settings['default_extensions']:
+                shared.args.extensions = shared.args.extensions or []
+                if extension not in shared.args.extensions:
+                    shared.args.extensions.append(extension)
 
     def init_tts_extensions(self):
         # If any TTS extension defined in config.yaml, set tts bot vars and add extension to shared.args.extensions
