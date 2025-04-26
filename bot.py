@@ -1895,7 +1895,7 @@ class TaskProcessing(TaskAttributes):
                 # If TTS API is online and available, TGWUI TTS extensions will be disabled
                 if tgwui_enabled:
                     apply_extensions(chunk_text, was_streamed=was_streamed)
-                if tts_is_enabled(and_online=True, for_mode='api'):
+                if tts_is_enabled(and_online=True, for_mode='api') and api.is_api_object('ttsgen', 'post_generate'):
                     ep = api.ttsgen.post_generate
                     tts_payload:dict = ep.get_payload()
                     tts_payload[ep.text_input_key] = chunk_text
@@ -3539,6 +3539,8 @@ class Tasks(TaskProcessing):
             await self.create_user_hmessage()
 
             if api_tts_on:
+                if not api.is_api_object('ttsgen', 'post_generate'):
+                    log.error(f"No 'post_generate' endpoint available for TTS Client {api.ttsgen.name}")
                 ep = api.ttsgen.post_generate
                 tts_payload:dict = ep.get_payload()
                 tts_payload.update(tts_args) # update with selected voice and lang
@@ -3582,7 +3584,11 @@ class Tasks(TaskProcessing):
                 self.user_name = 'Automatically'
 
             if not await api_online(api_type='imggen', ictx=self.ictx): # Can't change Img model if not online!
-                log.warning('Bot tried to change Img Model, but SD API is offline.')
+                log.error('Bot tried to change Img Model, but SD API is offline.')
+                return
+                
+            if not api.is_api_object('imggen', 'post_options'):
+                log.error(f"No 'post_options' endpoint available for ImgGen Client {api.imggen.name}")
                 return
 
             imgmodel_params = self.params.imgmodel
