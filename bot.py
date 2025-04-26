@@ -3519,40 +3519,35 @@ class Tasks(TaskProcessing):
     #################################################################
     async def speak_task(self:"Task"):
         try:
-            if tts.api_mode == False and shared.model_name == 'None':
+            api_tts_on, tgwui_tts_on = tts_is_enabled(and_online=True, for_mode='both')
+            if tgwui_tts_on and shared.model_name == 'None':
                 await self.channel.send('Cannot process "/speak" request: No LLM model is currently loaded. Use "/llmmodel" to load a model.)', delete_after=5)
                 log.warning(f'Bot tried to generate tts for {self.user_name}, but no LLM model was loaded')
                 return
             await self.embeds.send('system', f'{self.user_name} requested tts ... ', '')
+            
             await self.init_llm_payload()
-
             self.llm_payload['state']['history'] = {'internal': [[self.text, self.text]], 'visible': [[self.text, self.text]]}
             self.params.save_to_history = False
             tts_args = self.params.tts_args
-            await tgwui.update_extensions(tts_args)
+            if tgwui_tts_on:
+                await tgwui.update_extensions(tts_args)
 
             # Check to apply Server Mode
             self.apply_server_mode()
             # Get history for interaction channel
             await self.create_user_hmessage()
 
-            loop = asyncio.get_event_loop()
-            if tts.api_mode == True:
-                request = {'text_input': self.text}
-                client_args:dict = tts_args.get(tgwui.tts.extension, {})
-                if client_args.get(tgwui.tts.lang_key):
-                    selected_language = tts_args[tgwui.tts.extension][tgwui.tts.lang_key]
-                    # TODO: Improve language handling
-                    if len(selected_language) > 2:
-                        selected_language = 'en'
-                    request['language'] = tts_args[tgwui.tts.extension][tgwui.tts.lang_key]
-                if client_args.get(tgwui.tts.voice_key):
-                    request['character_voice_gen'] = tts_args[tgwui.tts.extension][tgwui.tts.voice_key]
-                response = await tts.api(endpoint=tts.api_generate_endpoint, method='post', data=request, headers={'Content-Type': 'application/x-www-form-urlencoded'})
-                audio_fp = response.get('output_file_path')
-                if audio_fp:
-                    self.tts_resp.append(audio_fp)
-            else:
+            if api_tts_on:
+                ep = api.ttsgen.post_generate
+                tts_payload:dict = ep.get_payload()
+                tts_payload.update(tts_args) # update with selected voice and lang
+                tts_payload[ep.text_input_key] = self.text # update with input text
+                audio_file = await api.ttsgen.post_generate.call(input_data=tts_payload, extract_keys='output_file_path_key')
+                if audio_file:
+                    self.tts_resp.append(audio_file)
+            elif tgwui_tts_on:
+                loop = asyncio.get_event_loop()
                 vis_resp_chunk:str = await loop.run_in_executor(None, extensions_module.apply_extensions, 'output', self.text, self.llm_payload['state'], True)
                 audio_format_match = patterns.audio_src.search(vis_resp_chunk)
                 if audio_format_match:
@@ -3569,7 +3564,8 @@ class Tasks(TaskProcessing):
                 if 'api_key' in sub_dict:
                     sub_dict.pop('api_key')
             await self.embeds.send('system', f'{self.user_name} requested tts:', f"**Params:** {tts_args}\n**Text:** {self.text}")
-            await tgwui.update_extensions(self.settings.llmcontext.extensions) # Restore character specific extension settings
+            if tgwui_tts_on:
+                await tgwui.update_extensions(self.settings.llmcontext.extensions) # Restore character specific extension settings
             if self.params.user_voice:
                 os.remove(self.params.user_voice)
         except Exception as e:
@@ -5717,31 +5713,40 @@ async def process_speak_silero_non_eng(ctx: commands.Context, lang):
     return tts_args
 
 async def process_speak_args(ctx: commands.Context, selected_voice=None, lang=None, user_voice=None):
+    api_tts_on, tgwui_tts_on = tts_is_enabled(and_online=True, for_mode='both')
+    tts_args = {}
     try:
-        tts_args = {}
-        if lang:
-            if tgwui.tts.extension == 'elevenlabs_tts':
+        if api_tts_on:
+            api_voice_key = api.ttsgen.post_generate.speaker_input_key
+            api_lang_key = api.ttsgen.post_generate.language_input_key
+            if selected_voice and api_voice_key:
+                tts_args[api_voice_key] = selected_voice
+            if lang and api_lang_key:
+                tts_args[api_lang_key] = lang
+        elif tgwui_tts_on:
+            if lang:
+                if tgwui.tts.extension == 'elevenlabs_tts':
+                    if lang != 'English':
+                        tts_args.setdefault(tgwui.tts.extension, {}).setdefault('model', 'eleven_multilingual_v1')
+                        # Currently no language parameter for elevenlabs_tts
+                else:
+                    tts_args.setdefault(tgwui.tts.extension, {}).setdefault(tgwui.tts.lang_key, lang)
+                    tts_args[tgwui.tts.extension][tgwui.tts.lang_key] = lang
+            if selected_voice or user_voice:
+                tts_args.setdefault(tgwui.tts.extension, {}).setdefault(tgwui.tts.voice_key, 'temp_voice.wav' if user_voice else selected_voice)
+            elif tgwui.tts.extension == 'silero_tts' and lang:
                 if lang != 'English':
-                    tts_args.setdefault(tgwui.tts.extension, {}).setdefault('model', 'eleven_multilingual_v1')
-                    # Currently no language parameter for elevenlabs_tts
-            else:
-                tts_args.setdefault(tgwui.tts.extension, {}).setdefault(tgwui.tts.lang_key, lang)
-                tts_args[tgwui.tts.extension][tgwui.tts.lang_key] = lang
-        if selected_voice or user_voice:
-            tts_args.setdefault(tgwui.tts.extension, {}).setdefault(tgwui.tts.voice_key, 'temp_voice.wav' if user_voice else selected_voice)
-        elif tgwui.tts.extension == 'silero_tts' and lang:
-            if lang != 'English':
-                tts_args = await process_speak_silero_non_eng(ctx, lang) # returns complete args for silero_tts
-                if selected_voice: 
-                    await ctx.send(f'Currently, non-English languages will use a default voice (not using "{selected_voice}")', ephemeral=True)
-        elif tgwui.tts.extension in tgwui.last_extension_params and tgwui.tts.voice_key in tgwui.last_extension_params[tgwui.tts.extension]:
-            pass # Default to voice in last_extension_params
-        elif f'{tgwui.tts.extension}-{tgwui.tts.voice_key}' in shared.settings:
-            pass # Default to voice in shared.settings
-        return tts_args
+                    tts_args = await process_speak_silero_non_eng(ctx, lang) # returns complete args for silero_tts
+                    if selected_voice: 
+                        await ctx.send(f'Currently, non-English languages will use a default voice (not using "{selected_voice}")', ephemeral=True)
+            elif tgwui.tts.extension in tgwui.last_extension_params and tgwui.tts.voice_key in tgwui.last_extension_params[tgwui.tts.extension]:
+                pass # Default to voice in last_extension_params
+            elif f'{tgwui.tts.extension}-{tgwui.tts.voice_key}' in shared.settings:
+                pass # Default to voice in shared.settings
     except Exception as e:
         log.error(f"Error processing tts options: {e}")
         await ctx.send(f"Error processing tts options: {e}", ephemeral=True)
+    return tts_args
 
 async def convert_and_resample_mp3(ctx, mp3_file, output_directory=None):
     try:
@@ -5764,6 +5769,10 @@ async def convert_and_resample_mp3(ctx, mp3_file, output_directory=None):
             os.remove(mp3_file)
 
 async def process_user_voice(ctx: commands.Context, voice_input=None):
+    api_tts_on, tgwui_tts_on = tts_is_enabled(and_online=True, for_mode='both')
+    if api_tts_on:
+        await ctx.send("Sorry, the bot's configured TTS method does not currently support user voice file input.", ephemeral=True)
+        return ''
     try:
         if not (voice_input and getattr(voice_input, 'content_type', '').startswith("audio/")):
             return ''

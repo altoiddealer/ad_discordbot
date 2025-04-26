@@ -977,6 +977,8 @@ class TTSGenEndpoint(Endpoint):
         self.get_languages_key: 'languages'
         self.text_input_key = 'text_input'
         self.output_file_path_key = 'output_file_path_key'
+        self.language_input_key = 'language'
+        self.speaker_input_key = 'character_voice_gen'
 
 class ImgGenEndpoint(Endpoint):
     def __init__(self, *args, **kwargs):
