@@ -215,7 +215,7 @@ class APIClient:
                         rh_config=ep_dict.get("response_handling"),
                         headers=ep_dict.get("headers", self.default_headers),
                         timeout=ep_dict.get("timeout", self.default_timeout),
-                        retry=ep_dict.get("retry", 3))
+                        retry=ep_dict.get("retry", 0))
     
     def _get_self_ep_class(self):
         return Endpoint
@@ -344,7 +344,7 @@ class APIClient:
         headers: Optional[Dict[str, str]] = None,
         files: Optional[Dict[str, Any]] = None,
         auth: Optional[aiohttp.BasicAuth] = None,
-        retry: int = 3,
+        retry: int = 0,
         return_text: bool = False,  # still here if used manually
         return_raw: bool = False,
         timeout: Optional[int] = None,
@@ -637,7 +637,7 @@ class Endpoint:
                  rh_config: Optional[dict[str, Any]] = None,
                  headers: Optional[Dict[str, str]] = None,
                  timeout: int = 10,
-                 retry: int = 3):
+                 retry: int = 0):
         self.client: Optional["APIClient"] = None
         self.name = name
         self.path = path
