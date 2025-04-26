@@ -2,6 +2,8 @@
 bot_api_functions:
   # Special endpoints which the bot can use in main functions. To disable any, use value null or comment out the line.
   # Note: Main API names / endpoint names are case sensitive!
+  # Important: Endpoints will often return the relavent data under a dictionary key (or keys).
+  #            You'll need to check the endpoint response in order to set the 'key string' or ['list.of', 'key', 'strings']. (dot notation to get deeper dict values)
   imggen:
     api_name: Stable Diffusion WebUI
     enabled: True
@@ -23,7 +25,7 @@ bot_api_functions:
     api_name: AllTalk TTS v2
     get_voices: {endpoint_name: Get TTS Voices, get_voices_key: voices}
     get_languages: {endpoint_name: null, get_languages_key: languages}
-    post_generate: {endpoint_name: Post TTS Generate, post_text_key: text_input}
+    post_generate: {endpoint_name: Post TTS Generate, text_input_key: text_input, output_file_path_key: output_file_path}
 
 
 # Define any APIs to use with the bot
@@ -62,7 +64,7 @@ all_apis:
     enabled: false
     default_headers:
       Content-Type: application/x-www-form-urlencoded
-    default_timeout: 60
+    default_timeout: 120
     auth: null
     endpoints:
       - {name: Get TTS Voices, path: /api/voices, method: GET, timeout: 10}

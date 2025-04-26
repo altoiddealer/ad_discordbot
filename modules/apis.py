@@ -237,22 +237,24 @@ class APIClient:
     def _bind_main_ep_values(self, config_entry:dict):
         pass
 
-    def _bind_main_endpoints(self, config: dict, endpoint_keys: dict):
+    def _bind_main_endpoints(self, config: dict):
         missing = []
-        for config_key, attr_name in endpoint_keys.items():
-            config_entry = config.get(config_key)
+        # match key names against self attributes
+        for key, config_entry in config.items():
+            if not hasattr(self, key):
+                continue
+
             if not isinstance(config_entry, dict):
-                missing.append((config_key, "not a dict"))
+                missing.append((key, "not a dict"))
                 continue
 
             endpoint_name = config_entry.get("endpoint_name")
             if not endpoint_name or endpoint_name not in self.endpoints:
-                missing.append((config_key, f"endpoint '{endpoint_name}' not found"))
+                missing.append((key, f"endpoint '{endpoint_name}' not found"))
                 continue
-            
-            self._bind_main_ep_values(config_entry)
 
-            setattr(self, attr_name, self.endpoints[endpoint_name])
+            self._bind_main_ep_values(config_entry)
+            setattr(self, key, self.endpoints[endpoint_name])
         return missing
 
     async def _fetch_openapi_schema(self):
@@ -382,7 +384,7 @@ class APIClient:
                     # Create a session for standalone request
                     async with aiohttp.ClientSession() as temp_session:
                         return await self._make_request(
-                            session=session, method=method, url=url, params=params, data=data,
+                            session=temp_session, method=method, url=url, params=params, data=data,
                             json=json, files=files, headers=headers, auth=auth, timeout=timeout,
                             return_text=return_text, return_raw=return_raw, response_type=response_type
                         )
@@ -479,19 +481,8 @@ class ImgGenClient(APIClient):
         self.get_controlnet_models: Optional[ImgGenEndpoint] = None
         self.get_controlnet_control_types: Optional[ImgGenEndpoint] = None
         self.post_server_restart: Optional[ImgGenEndpoint] = None
-
-        # Collect endpoints used for main ImgGen functions
-        endpoint_keys = {'post_txt2img_endpoint_name': 'post_txt2img',
-                         'post_img2img_endpoint_name': 'post_img2img',
-                         'get_progress_endpoint_name': 'get_progress',
-                         'post_pnginfo_endpoint_name': 'post_pnginfo',
-                         'post_options_endpoint_name': 'post_options',
-                         'get_imgmodels_endpoint_name': 'get_imgmodels',
-                         'get_controlnet_models_endpoint_name': 'get_controlnet_models',
-                         'get_controlnet_control_types_endpoint_name': 'get_controlnet_control_types',
-                         'post_server_restart': 'post_server_restart'}
         
-        self._bind_main_endpoints(imggen_config, endpoint_keys) 
+        self._bind_main_endpoints(imggen_config) 
 
     # class override to subclass Endpoint()
     def _get_self_ep_class(self):
@@ -582,8 +573,7 @@ class TextGenClient(APIClient):
         # TODO Main TextGen API support
 
         # Collect endpoints used for main TextGen functions
-        endpoint_keys = {}
-        self._bind_main_endpoints(textgen_config, endpoint_keys)
+        self._bind_main_endpoints(textgen_config)
 
     # class override to subclass Endpoint()
     def _get_self_ep_class(self):
@@ -599,12 +589,7 @@ class TTSGenClient(APIClient):
         self.get_languages: Optional[TTSGenEndpoint] = None
         self.post_generate: Optional[TTSGenEndpoint] = None
 
-        # Collect endpoints used for main TTSGen functions
-        endpoint_keys = {'get_voices_endpoint_name': 'get_voices',
-                         'get_languages_endpoint_name': 'get_languages',
-                         'post_generate_endpoint_name': 'post_generate'}
-
-        self._bind_main_endpoints(ttsgen_config, endpoint_keys)
+        self._bind_main_endpoints(ttsgen_config)
 
     # class override to subclass Endpoint()
     def _get_self_ep_class(self):
@@ -629,6 +614,18 @@ class TTSGenClient(APIClient):
                 custom_keys.append(key)
         if custom_keys:
             log.info(f"[{self.name}] Endpoint '{endpoint_name}' received custom user-defined config keys: {custom_keys}")
+
+    async def fetch_speak_options(self):
+        lang_list, all_voices = [], []
+        try:
+            if self.get_languages:
+                lang_list = await self.get_languages.call(retry=0, extract_keys="get_languages_key")
+            if self.get_voices:
+                all_voices = await self.get_voices.call(retry=0, extract_keys="get_voices_key")
+            return lang_list, all_voices
+        except Exception as e:
+            log.error(f'Error fetching options for "/speak" command via API: {e}')
+            return None, None
 
 class Endpoint:
     def __init__(self,
@@ -684,6 +681,9 @@ class Endpoint:
             # any other string should be a 'get' endpoint. Need to get payload after client init.
             else:
                 setattr(self, '_deferred_payload_source', payload_config)
+
+    def get_payload(self):
+        return copy.deepcopy(self.payload)
 
     def get_preferred_content_type(self) -> Optional[str]:
         content_type = None
@@ -820,7 +820,14 @@ class Endpoint:
         return final_cleaned
 
 
-    async def call(self, input_data: dict = None, payload_type: str = "json", payload_map: dict = None, sanitize:bool=False, **kwargs):
+    async def call(self,
+                   input_data: dict = None,
+                   payload_type: str = "any",
+                   payload_map: dict = None,
+                   sanitize:bool=False,
+                   extract_keys:str|List[str]|None=None,
+                   **kwargs
+                   ):
         if self.client is None:
             raise ValueError("Endpoint not bound to an APIClient")
 
@@ -888,7 +895,7 @@ class Endpoint:
             if data_payload and isinstance(data_payload, dict):
                 data_payload = self.sanitize_payload(data_payload, self.client.openapi_schema)
 
-        return await self.client.request(
+        response = await self.client.request(
             endpoint=self.path,
             method=self.method,
             json=json_payload,
@@ -901,6 +908,53 @@ class Endpoint:
             response_type=response_type,
             **kwargs
         )
+        if not extract_keys:
+            return response
+        
+        return self.extract_main_keys(response, extract_keys)
+
+    # Extracts the key values from the API response, for the Endpoint's key names defined in user API settings
+    def extract_main_keys(self, response, ep_keys: str|List[str] = None):
+        if not ep_keys or not isinstance(response, dict):
+            return response
+        
+        if isinstance(ep_keys, str):
+            key_paths = getattr(self, ep_keys, None)
+            return try_paths(response, key_paths)
+
+        elif isinstance(ep_keys, list):
+            results = []
+            for key_attr in ep_keys:
+                key_paths = getattr(self, key_attr, None)
+                value = try_paths(response, key_paths)
+                results.append(value)
+            return tuple(results)
+
+        return response
+
+# Utility function to get a key value like 'data.voices'
+def deep_get(d: dict, path: str) -> Any:
+    """Safely navigate dot-separated path in a dict."""
+    keys = path.split(".")
+    for key in keys:
+        if isinstance(d, dict):
+            d = d.get(key)
+        else:
+            return None
+    return d
+
+def try_paths(response: dict, paths: Union[str, List[str]]) -> Any:
+    """Try one or more deep key paths and return the first match."""
+    if isinstance(paths, str):
+        return deep_get(response, paths)
+
+    if isinstance(paths, list):
+        for path in paths:
+            val = deep_get(response, path)
+            if val is not None:
+                return val
+    return None
+
 
     # def handle_response(self, response):
     #     rh = self.response_handling
@@ -921,16 +975,8 @@ class TTSGenEndpoint(Endpoint):
         super().__init__(*args, **kwargs)
         self.get_voices_key: 'speaker'
         self.get_languages_key: 'languages'
-        self.post_text_key = 'text_input'
-
-    async def main_call(self, ep_key=None, input_data: dict = None, payload_type: str = "json", payload_map: dict = None, sanitize:bool=False, **kwargs):
-        response = self.call(input_data=input_data, payload_type=payload_type, payload_map=payload_map, sanitize=sanitize, **kwargs)
-        item_key = getattr(self, ep_key, None)
-        if item_key:
-            result = response.get(item_key)
-            return result
-            
-
+        self.text_input_key = 'text_input'
+        self.output_file_path_key = 'output_file_path_key'
 
 class ImgGenEndpoint(Endpoint):
     def __init__(self, *args, **kwargs):

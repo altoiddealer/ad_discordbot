@@ -1896,7 +1896,14 @@ class TaskProcessing(TaskAttributes):
                 if tgwui_enabled:
                     apply_extensions(chunk_text, was_streamed=was_streamed)
                 if tts_is_enabled(and_online=True, for_mode='api'):
-                    audio_file = await api.ttsgen.post_generate.main_call(ep_key='post_text_key')
+                    ep = api.ttsgen.post_generate
+                    tts_payload:dict = ep.get_payload()
+                    tts_payload[ep.text_input_key] = chunk_text
+                    audio_file = await api.ttsgen.post_generate.call(input_data=tts_payload, extract_keys='output_file_path_key')
+                    if audio_file:
+                        stream_replies.streamed_tts = was_streamed
+                        setattr(self.params, 'streamed_tts', was_streamed)
+                        self.tts_resp.append(audio_file)
 
             def apply_extensions(chunk_text:str, was_streamed=True):
                 vis_resp_chunk:str = extensions_module.apply_extensions('output', chunk_text, state=self.llm_payload['state'], is_chat=True)
@@ -1957,7 +1964,7 @@ class TaskProcessing(TaskAttributes):
                         # Check last reply chunk for censored text
                         await check_censored(last_chunk)
                         # trigger TTS response / possibly other extension behavior
-                        apply_extensions(last_chunk)
+                        await apply_tts_and_extensions(last_chunk)
                         yield last_chunk
                 # Check complete response for censored text
                 else:
@@ -1966,7 +1973,7 @@ class TaskProcessing(TaskAttributes):
                 # look for unprocessed tts response after all text generated
                 if not stream_replies.streamed_tts:
                     # trigger TTS response / possibly other extension behavior
-                    apply_extensions(resp['visible'][-1][1], was_streamed=False)
+                    await apply_tts_and_extensions(resp['visible'][-1][1], was_streamed=False)
 
                 # Save the complete response
                 self.last_resp = i_resp
@@ -5818,15 +5825,8 @@ if tgwui_enabled:
     if tgwui.tts.extension and tgwui.tts.extension in tgwui.tts.supported_extensions:
         lang_list, all_voices = asyncio.run(tgwui.tts.fetch_speak_options())
     # API mode
-    elif api.ttsgen:
-        try:
-            if api.is_api_object(client_name='ttsgen', ep_name='get_voices'):
-                all_voices = asyncio.run(api.ttsgen.get_voices.call(retry=0))
-            if api.is_api_object(client_name='ttsgen', ep_name='get_languages'):
-                lang_list = asyncio.run(api.ttsgen.get_languages.call(retry=0))
-        except Exception as e:
-            log.error(f'Error fetching options for "/speak" command via API: {e}')
-            all_voices, lang_list = None, None
+    elif api.is_api_object(client_name='ttsgen'):
+        lang_list, all_voices = asyncio.run(api.ttsgen.fetch_speak_options())
 
     if all_voices:
         _voice_hash_dict = {str(hash(voice_name)):voice_name for voice_name in all_voices}
