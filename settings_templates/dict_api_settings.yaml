@@ -14,7 +14,7 @@ bot_api_functions:
     post_options: {endpoint_name: Post Options}
     get_imgmodels: {endpoint_name: Get ImgModels}
     get_controlnet_models: {endpoint_name: Get Cnet Models}
-    get_controlnet_control_types: {endpoint_name: Get Cnet Control Types}
+    get_controlnet_control_types: {endpoint_name: Get Cnet Control Types, control_types_key: control_types}
     post_server_restart: {endpoint_name: Post Server Restart}
   # Bot currently cannot use textgen APIs for main functions (support is coming!)
   textgen:
@@ -91,9 +91,9 @@ all_apis:
 response_handling_presets:
   - name: Decode base64 and save
     type: base64
-    output_key: images      # key in JSON to extract from
+    output_key: images      # key in JSON to extract from. Use dot.notation to get a nested key.
     output_format: png      # only used if type is base64
-    save_to: images         # where to save files if media_file or base64
+    save_to: images
     filename_prefix: img_gen
   
   - name: Extract metadata

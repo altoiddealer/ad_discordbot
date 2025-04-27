@@ -4438,7 +4438,7 @@ if imggen_enabled:
                                 app_commands.Choice(name="Yes, send my prompt to the LLM", value="Yes"),
                                 app_commands.Choice(name="Yes, auto-prefixed: 'Provide a detailed image prompt description for: '", value="YesWithPrefix")]
             else:
-                use_llm_choices = [app_commands.Choice(name="**disabled** (LLM not available)", value="None")]
+                use_llm_choices = [app_commands.Choice(name="**disabled** (LLM not available)", value="disabled")]
             return size_choices, style_choices, use_llm_choices
 
         except Exception as e:
@@ -4482,8 +4482,7 @@ if imggen_enabled:
         filtered_cnet_data = {}
         if config.imggen['extensions'].get('controlnet_enabled', False):
             try:
-                all_cnet_data:dict = await api.imggen.get_controlnet_control_types.call(retry=0)
-                all_control_types:dict = all_cnet_data.get('control_types', {})
+                all_control_types:dict = await api.imggen.get_controlnet_control_types.call(retry=0, extract_keys='control_types')
                 for key, value in all_control_types.items():
                     if key == "All":
                         continue
@@ -4504,80 +4503,35 @@ if imggen_enabled:
     size_options, style_options = asyncio.run(get_imgcmd_options())
     size_choices, style_choices, use_llm_choices = asyncio.run(get_imgcmd_choices(size_options, style_options))
 
-    # Check if extensions enabled in config
+    # Check if ControlNet enabled in config
     cnet_enabled = config.imggen['extensions'].get('controlnet_enabled', False)
+    cnet_status = 'Guides image diffusion using an input image or map.' if cnet_enabled else '**option disabled** (ControlNet not available)'
+    # Check if ReActor enabled in config
     reactor_enabled = config.imggen['extensions'].get('reactor_enabled', False)
+    reactor_status = 'For best results, attach a square (1:1) cropped image of a face, to swap into the output.' if reactor_enabled else '**option disabled** (ReActor not available)'
 
     use_llm_status = 'Whether to send your prompt to LLM. Results may vary!' if tgwui_enabled else '**option disabled** (LLM is not integrated)'
 
     using_imggen_client_name = f' using {api.imggen.name}' if api.is_api_object('imggen') else ''
 
-    if cnet_enabled and reactor_enabled:
-        @client.hybrid_command(name="image", description=f"Generate an image{using_imggen_client_name}")
-        @app_commands.describe(use_llm=use_llm_status)
-        @app_commands.describe(style='Applies a positive/negative prompt preset')
-        @app_commands.describe(img2img='Diffuses from an input image instead of pure latent noise.')
-        @app_commands.describe(img2img_mask='Masks the diffusion strength for the img2img input. Requires img2img.')
-        @app_commands.describe(face_swap='For best results, attach a square (1:1) cropped image of a face, to swap into the output.')
-        @app_commands.describe(controlnet='Guides image diffusion using an input image or map.')
-        @app_commands.choices(use_llm=use_llm_choices)
-        @app_commands.choices(size=size_choices)
-        @app_commands.choices(style=style_choices)
-        @configurable_for_dm_if(lambda ctx: 'image' in config.discord_dm_setting('allowed_commands', []))
-        async def image(ctx: commands.Context, prompt: str, use_llm: typing.Optional[app_commands.Choice[str]], size: typing.Optional[app_commands.Choice[str]], style: typing.Optional[app_commands.Choice[str]], 
-                        neg_prompt: typing.Optional[str], img2img: typing.Optional[discord.Attachment], img2img_mask: typing.Optional[discord.Attachment], 
-                        face_swap: typing.Optional[discord.Attachment], controlnet: typing.Optional[discord.Attachment]):
-            user_selections = {"prompt": prompt, "use_llm": use_llm.value if use_llm else None, "size": size.value if size else None, "style": style.value if style else {}, "neg_prompt": neg_prompt if neg_prompt else '',
-                               "img2img": img2img if img2img else None, "img2img_mask": img2img_mask if img2img_mask else None,
-                               "face_swap": face_swap if face_swap else None, "cnet": controlnet if controlnet else None}
-            await process_image(ctx, user_selections)
-    elif cnet_enabled and not reactor_enabled:
-        @client.hybrid_command(name="image", description=f'Generate an image{using_imggen_client_name}')
-        @app_commands.describe(use_llm=use_llm_status)
-        @app_commands.describe(style='Applies a positive/negative prompt preset')
-        @app_commands.describe(img2img='Diffuses from an input image instead of pure latent noise.')
-        @app_commands.describe(img2img_mask='Masks the diffusion strength for the img2img input. Requires img2img.')
-        @app_commands.describe(controlnet='Guides image diffusion using an input image or map.')
-        @app_commands.choices(use_llm=use_llm_choices)
-        @app_commands.choices(size=size_choices)
-        @app_commands.choices(style=style_choices)
-        @configurable_for_dm_if(lambda ctx: 'image' in config.discord_dm_setting('allowed_commands', []))
-        async def image(ctx: commands.Context, prompt: str, use_llm: typing.Optional[app_commands.Choice[str]], size: typing.Optional[app_commands.Choice[str]], style: typing.Optional[app_commands.Choice[str]],
-                        neg_prompt: typing.Optional[str], img2img: typing.Optional[discord.Attachment], img2img_mask: typing.Optional[discord.Attachment], controlnet: typing.Optional[discord.Attachment]):
-            user_selections = {"prompt": prompt, "use_llm": use_llm.value if use_llm else None, "size": size.value if size else None, "style": style.value if style else {}, "neg_prompt": neg_prompt if neg_prompt else '',
-                               "img2img": img2img if img2img else None, "img2img_mask": img2img_mask if img2img_mask else None, "cnet": controlnet if controlnet else None}
-            await process_image(ctx, user_selections)
-    elif reactor_enabled and not cnet_enabled:
-        @client.hybrid_command(name="image", description=f'Generate an image{using_imggen_client_name}')
-        @app_commands.describe(use_llm=use_llm_status)
-        @app_commands.describe(style='Applies a positive/negative prompt preset')
-        @app_commands.describe(img2img='Diffuses from an input image instead of pure latent noise.')
-        @app_commands.describe(img2img_mask='Masks the diffusion strength for the img2img input. Requires img2img.')
-        @app_commands.describe(face_swap='For best results, attach a square (1:1) cropped image of a face, to swap into the output.')
-        @app_commands.choices(use_llm=use_llm_choices)
-        @app_commands.choices(size=size_choices)
-        @app_commands.choices(style=style_choices)
-        @configurable_for_dm_if(lambda ctx: 'image' in config.discord_dm_setting('allowed_commands', []))
-        async def image(ctx: commands.Context, prompt: str, use_llm: typing.Optional[app_commands.Choice[str]], size: typing.Optional[app_commands.Choice[str]], style: typing.Optional[app_commands.Choice[str]],
-                        neg_prompt: typing.Optional[str], img2img: typing.Optional[discord.Attachment], img2img_mask: typing.Optional[discord.Attachment], face_swap: typing.Optional[discord.Attachment]):
-            user_selections = {"prompt": prompt, "use_llm": use_llm.value if use_llm else None, "size": size.value if size else None, "style": style.value if style else {}, "neg_prompt": neg_prompt if neg_prompt else '',
-                               "img2img": img2img if img2img else None, "img2img_mask": img2img_mask if img2img_mask else None, "face_swap": face_swap if face_swap else None}
-            await process_image(ctx, user_selections)
-    else:
-        @client.hybrid_command(name="image", description=f'Generate an image{using_imggen_client_name}')
-        @app_commands.describe(use_llm=use_llm_status)
-        @app_commands.describe(style='Applies a positive/negative prompt preset')
-        @app_commands.describe(img2img='Diffuses from an input image instead of pure latent noise.')
-        @app_commands.describe(img2img_mask='Masks the diffusion strength for the img2img input. Requires img2img.')
-        @app_commands.choices(use_llm=use_llm_choices)
-        @app_commands.choices(size=size_choices)
-        @app_commands.choices(style=style_choices)
-        @configurable_for_dm_if(lambda ctx: 'image' in config.discord_dm_setting('allowed_commands', []))
-        async def image(ctx: commands.Context, prompt: str, use_llm: typing.Optional[app_commands.Choice[str]], size: typing.Optional[app_commands.Choice[str]], style: typing.Optional[app_commands.Choice[str]],
-                        neg_prompt: typing.Optional[str], img2img: typing.Optional[discord.Attachment], img2img_mask: typing.Optional[discord.Attachment]):
-            user_selections = {"prompt": prompt, "use_llm": use_llm.value if use_llm else None, "size": size.value if size else None, "style": style.value if style else {}, "neg_prompt": neg_prompt if neg_prompt else '',
-                               "img2img": img2img if img2img else None, "img2img_mask": img2img_mask if img2img_mask else None}
-            await process_image(ctx, user_selections)
+    @client.hybrid_command(name="image", description=f"Generate an image{using_imggen_client_name}")
+    @app_commands.describe(use_llm=use_llm_status)
+    @app_commands.describe(style='Applies a positive/negative prompt preset')
+    @app_commands.describe(img2img='Diffuses from an input image instead of pure latent noise.')
+    @app_commands.describe(img2img_mask='Masks the diffusion strength for the img2img input. Requires img2img.')
+    @app_commands.describe(face_swap=reactor_status)
+    @app_commands.describe(controlnet=reactor_status)
+    @app_commands.choices(use_llm=use_llm_choices)
+    @app_commands.choices(size=size_choices)
+    @app_commands.choices(style=style_choices)
+    @configurable_for_dm_if(lambda ctx: 'image' in config.discord_dm_setting('allowed_commands', []))
+    async def image(ctx: commands.Context, prompt: str, use_llm: typing.Optional[app_commands.Choice[str]], size: typing.Optional[app_commands.Choice[str]], style: typing.Optional[app_commands.Choice[str]], 
+                    neg_prompt: typing.Optional[str], img2img: typing.Optional[discord.Attachment], img2img_mask: typing.Optional[discord.Attachment], 
+                    face_swap: typing.Optional[discord.Attachment], controlnet: typing.Optional[discord.Attachment]):
+        user_selections = {"prompt": prompt, "use_llm": use_llm.value if use_llm else None, "size": size.value if size else None, "style": style.value if style else {}, "neg_prompt": neg_prompt if neg_prompt else '',
+                            "img2img": img2img if img2img else None, "img2img_mask": img2img_mask if img2img_mask else None,
+                            "face_swap": face_swap if face_swap else None, "cnet": controlnet if controlnet else None}
+        await process_image(ctx, user_selections)
 
     async def process_image(ctx: commands.Context, selections):
         # CREATE TASK - CHECK IF ONLINE
@@ -4589,16 +4543,15 @@ if imggen_enabled:
             return
         # User inputs from /image command
         pos_prompt = selections.get('prompt', '')
-        use_llm = selections.get('use_llm', None)
-        if not tgwui_enabled:
-            use_llm = None
+        use_llm = selections.get('use_llm', None) if tgwui_enabled else None
         size = selections.get('size', None)
         style = selections.get('style', {})
         neg_prompt = selections.get('neg_prompt', '')
         img2img = selections.get('img2img', None)
         img2img_mask = selections.get('img2img_mask', None)
-        face_swap = selections.get('face_swap', None)
-        cnet = selections.get('cnet', None)
+        face_swap = selections.get('face_swap', None) if reactor_enabled else None
+        cnet = selections.get('cnet', None) if cnet_enabled else None
+
         # Defaults
         mode = 'txt2img'
         size_dict = {}
@@ -5158,7 +5111,7 @@ async def character_loader(char_name, settings:"Settings", guild_id:int|None=Non
         use_voice_channels = True
         for key, value in char_data.items():
             if tgwui_enabled and key == 'extensions' and value and isinstance(value, dict):
-                if not config.tts_enabled():
+                if not tts_is_enabled(for_mode='tgwui'):
                     for subkey, _ in value.items():
                         if subkey in tgwui.tts.supported_extensions and char_data[key][subkey].get('activate'):
                             char_data[key][subkey]['activate'] = False
@@ -5722,6 +5675,7 @@ async def process_speak_args(ctx: commands.Context, selected_voice=None, lang=No
     api_tts_on, tgwui_tts_on = tts_is_enabled(and_online=True, for_mode='both')
     tts_args = {}
     try:
+        # API handling
         if api_tts_on:
             api_voice_key = api.ttsgen.post_generate.speaker_input_key
             api_lang_key = api.ttsgen.post_generate.language_input_key
@@ -5729,6 +5683,7 @@ async def process_speak_args(ctx: commands.Context, selected_voice=None, lang=No
                 tts_args[api_voice_key] = selected_voice
             if lang and api_lang_key:
                 tts_args[api_lang_key] = lang
+        # TGWUI TTS extension handling
         elif tgwui_tts_on:
             if lang:
                 if tgwui.tts.extension == 'elevenlabs_tts':
@@ -5864,7 +5819,7 @@ if tgwui_enabled:
         if lang_list: 
             lang_options = [app_commands.Choice(name=lang, value=lang) for lang in lang_list]
         else: 
-            lang_options = [app_commands.Choice(name='English', value='English')] # Default to English
+            lang_options = [app_commands.Choice(name='**disabled option', value='disabled')] # Default to English
 
         if len(all_voices) <= 25:
             @client.hybrid_command(name="speak", description='AI will speak your text using a selected voice')
@@ -5878,7 +5833,7 @@ if tgwui_enabled:
                 if selected_voice:
                     selected_voice = _voice_hash_dict[selected_voice]
                 voice_input = voice_input if voice_input is not None else ''
-                lang = lang.value if lang is not None else ''
+                lang = lang.value if (lang is not None and lang != 'disabled') else ''
                 await process_speak(ctx, input_text, selected_voice, lang, voice_input)
 
         elif 25 < len(all_voices) <= 50:
@@ -5898,7 +5853,7 @@ if tgwui_enabled:
                 if selected_voice:
                     selected_voice = _voice_hash_dict[selected_voice]
                 voice_input = voice_input if voice_input is not None else ''
-                lang = lang.value if lang is not None else ''
+                lang = lang.value if (lang is not None and lang != 'disabled') else ''
                 await process_speak(ctx, input_text, selected_voice, lang, voice_input)
 
         elif 50 < len(all_voices) <= 75:
@@ -5921,7 +5876,7 @@ if tgwui_enabled:
                 if selected_voice:
                     selected_voice = _voice_hash_dict[selected_voice]
                 voice_input = voice_input if voice_input is not None else ''
-                lang = lang.value if lang is not None else ''
+                lang = lang.value if (lang is not None and lang != 'disabled') else ''
                 await process_speak(ctx, input_text, selected_voice, lang, voice_input)
 
 #################################################################
