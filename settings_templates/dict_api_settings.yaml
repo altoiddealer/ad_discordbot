@@ -28,10 +28,9 @@ bot_api_functions:
     post_generate: {endpoint_name: Post TTS Generate, text_input_key: text_input, output_file_path_key: output_file_path, language_input_key: language, speaker_input_key: character_voice_gen}
 
 
-# Define any APIs to use with the bot
 all_apis:
   # You may define any number of APIs and Endpoints here (a list of dictionaries), making them available to use for various bot functions,
-  #   including the "main" apis above, the Tags system (dict_tags.yaml), user defined commands (dict_commands.yaml), etc.
+  #   including the "main" apis above, the Tags system (dict_tags.yaml), user defined commands (dict_commands.yaml *WIP feature*), etc.
   - name: Stable Diffusion WebUI
     url: http://127.0.0.1:7860
     enabled: true
