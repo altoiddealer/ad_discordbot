@@ -777,6 +777,43 @@ class Endpoint:
 
         return None
 
+    def sanitize_payload(self, payload: Dict[str, Any], openapi_schema: dict) -> Dict[str, Any]:
+        cleaned = {}
+        schema_props = openapi_schema.get("properties", {})
+        required_fields = openapi_schema.get("required", [])
+        missing_fields = []
+
+        for k, v in payload.items():
+            if k not in schema_props:
+                log.debug(f"Sanitize: removed unknown key '{k}'")
+                continue
+
+            prop_schema = schema_props[k]
+
+            if prop_schema.get("type") == "array" and isinstance(v, list):
+                item_schema = prop_schema.get("items", {})
+                if "properties" in item_schema:
+                    cleaned[k] = [
+                        _sanitize(item, item_schema["properties"], item_schema.get("required", [])) if isinstance(item, dict) else item
+                        for item in v
+                    ]
+                else:
+                    cleaned[k] = v
+            elif isinstance(v, dict) and "properties" in prop_schema:
+                cleaned[k] = _sanitize(v, prop_schema["properties"], prop_schema.get("required", []))
+            else:
+                cleaned[k] = v
+
+        # After processing all items, check for missing required fields
+        for field in required_fields:
+            if field not in cleaned:
+                missing_fields.append(field)
+
+        if missing_fields:
+            raise ValueError(f"Missing required fields during sanitization for endpoint {self.name}: {missing_fields}")
+
+        return cleaned
+
 
     def sanitize_payload(self, payload: Dict[str, Any], openapi_schema: dict) -> Dict[str, Any]:
         """
@@ -787,8 +824,11 @@ class Endpoint:
             log.debug(f"No schema found for {self.method} {self.path} — skipping sanitization")
             return payload
 
-        def _sanitize(data: dict, schema_props: dict) -> dict:
+        def _sanitize(data: dict, schema_props: dict, required_fields: list = None) -> dict:
             cleaned = {}
+            required_fields = required_fields or []
+            missing_fields = []
+
             for k, v in data.items():
                 if k not in schema_props:
                     log.debug(f"Sanitize: removed unknown key '{k}'")
@@ -799,59 +839,47 @@ class Endpoint:
                 if prop_schema.get("type") == "array" and isinstance(v, list):
                     item_schema = prop_schema.get("items", {})
                     if "properties" in item_schema:
-                        cleaned[k] = [
-                            _sanitize(item, item_schema["properties"]) if isinstance(item, dict) else item
-                            for item in v
-                        ]
+                        cleaned[k] = [_sanitize(item, item_schema["properties"], item_schema.get("required", [])) if isinstance(item, dict) else item for item in v]
                     else:
                         cleaned[k] = v
                 elif isinstance(v, dict) and "properties" in prop_schema:
-                    cleaned[k] = _sanitize(v, prop_schema["properties"])
+                    cleaned[k] = _sanitize(v, prop_schema["properties"], prop_schema.get("required", []))
                 else:
                     cleaned[k] = v
+
+            # After processing all items, check for missing required fields
+            for field in required_fields:
+                if field not in cleaned:
+                    missing_fields.append(field)
+
+            if missing_fields:
+                raise ValueError(f"Missing required fields during sanitization for endpoint {self.name}: {missing_fields}")
 
             return cleaned
 
         schema_props = schema.get("properties", {})
-        final_cleaned = _sanitize(payload, schema_props)
+        required_fields = schema.get("required", [])
+        final_cleaned = _sanitize(payload, schema_props, required_fields)
+
         if not final_cleaned:
             raise ValueError(f"All keys in payload were removed during sanitization for endpoint {self.name}")
 
         return final_cleaned
 
-
-    async def call(self,
-                   input_data: dict = None,
-                   payload_type: str = "any",
-                   payload_map: dict = None,
-                   sanitize:bool=False,
-                   extract_keys:str|List[str]|None=None,
-                   **kwargs
-                   ):
-        if self.client is None:
-            raise ValueError("Endpoint not bound to an APIClient")
-
-        headers = kwargs.pop('headers', self.headers)
-        timeout = kwargs.pop('timeout', self.timeout)
-        retry = kwargs.pop('retry', self.retry)
-        response_type = kwargs.pop('response_type', self.response_type)
-        explicit_type = payload_type in ["json", "form", "multipart", "query"]
-        preferred_content = self.get_preferred_content_type()
-
+    def resolve_input_data(self, input_data, payload_type, payload_map):
         json_payload = None
         data_payload = None
         params_payload = None
         files_payload = None
-
         input_data = input_data or {}
-
+        explicit_type = payload_type in ["json", "form", "multipart", "query"]
+        preferred_content = self.get_preferred_content_type()
         # Use explicit payload map if given
         if payload_map:
             json_payload = {k: input_data[k] for k in payload_map.get("json", []) if k in input_data}
             data_payload = {k: input_data[k] for k in payload_map.get("data", []) if k in input_data}
             params_payload = {k: input_data[k] for k in payload_map.get("params", []) if k in input_data}
             files_payload = {k: input_data[k] for k in payload_map.get("files", []) if k in input_data}
-        
         else:
             if explicit_type:
                 if payload_type == "json":
@@ -888,6 +916,25 @@ class Endpoint:
                 else:
                     log.warning(f"Cannot infer payload type from Content-Type: {preferred_content}. Defaulting to json.")
                     json_payload = input_data
+        return json_payload, data_payload, params_payload, files_payload
+
+    async def call(self,
+                   input_data: dict = None,
+                   payload_type: str = "any",
+                   payload_map: dict = None,
+                   sanitize:bool=False,
+                   extract_keys:str|List[str]|None=None,
+                   **kwargs
+                   ):
+        if self.client is None:
+            raise ValueError("Endpoint not bound to an APIClient")
+
+        headers = kwargs.pop('headers', self.headers)
+        timeout = kwargs.pop('timeout', self.timeout)
+        retry = kwargs.pop('retry', self.retry)
+        response_type = kwargs.pop('response_type', self.response_type)
+
+        json_payload, data_payload, params_payload, files_payload = self.resolve_input_data(input_data, payload_type, payload_map)
 
         if sanitize:
             if json_payload and isinstance(json_payload, dict):
