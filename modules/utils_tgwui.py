@@ -318,8 +318,6 @@ class TGWUI():
 
     async def update_extensions(self, params):
         try:
-            print("self.last_extension_params:", self.last_extension_params)
-            print("params:", params)
             if self.last_extension_params or params:
                 if self.last_extension_params == params:
                     return # Nothing needs updating
