@@ -778,44 +778,6 @@ class Endpoint:
         return None
 
     def sanitize_payload(self, payload: Dict[str, Any], openapi_schema: dict) -> Dict[str, Any]:
-        cleaned = {}
-        schema_props = openapi_schema.get("properties", {})
-        required_fields = openapi_schema.get("required", [])
-        missing_fields = []
-
-        for k, v in payload.items():
-            if k not in schema_props:
-                log.debug(f"Sanitize: removed unknown key '{k}'")
-                continue
-
-            prop_schema = schema_props[k]
-
-            if prop_schema.get("type") == "array" and isinstance(v, list):
-                item_schema = prop_schema.get("items", {})
-                if "properties" in item_schema:
-                    cleaned[k] = [
-                        _sanitize(item, item_schema["properties"], item_schema.get("required", [])) if isinstance(item, dict) else item
-                        for item in v
-                    ]
-                else:
-                    cleaned[k] = v
-            elif isinstance(v, dict) and "properties" in prop_schema:
-                cleaned[k] = _sanitize(v, prop_schema["properties"], prop_schema.get("required", []))
-            else:
-                cleaned[k] = v
-
-        # After processing all items, check for missing required fields
-        for field in required_fields:
-            if field not in cleaned:
-                missing_fields.append(field)
-
-        if missing_fields:
-            raise ValueError(f"Missing required fields during sanitization for endpoint {self.name}: {missing_fields}")
-
-        return cleaned
-
-
-    def sanitize_payload(self, payload: Dict[str, Any], openapi_schema: dict) -> Dict[str, Any]:
         """
         Recursively sanitizes the payload using the OpenAPI schema by removing unknown keys.
         """
