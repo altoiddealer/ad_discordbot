@@ -98,9 +98,6 @@ class API:
         # Reverse lookup for matching API names to their function type
         main_api_name_map = {v.get("api_name"): k for k, v in apisettings.main_settings.items()
                              if isinstance(v, dict) and v.get("api_name")}
-        # Transport class lookup
-        transport_map = {"http": HTTPAPIClient,
-                         "websocket": WebSocketAPIClient}
         # Map function type to specialized client class
         client_type_map = {"imggen": ImgGenClient,
                            "textgen": TextGenClient,
@@ -121,19 +118,11 @@ class API:
             if not enabled:
                 continue
 
-            transport_type = api_config.get('transport', 'http').lower()
-            TransportClass = transport_map.get(transport_type, HTTPAPIClient)
-            
+            # Determine if this API is a "main" one
             api_func_type = main_api_name_map.get(name)
             is_main = api_func_type is not None
-            MainClientClass = client_type_map.get(api_func_type)
-
-            # Determine the final class
-            if is_main and MainClientClass:
-                # Specialized main clients (e.g., ImgGenClient) should inherit from TransportClass
-                ClientClass = MainClientClass
-            else:
-                ClientClass = TransportClass
+            # Determine which client class to use
+            ClientClass = client_type_map.get(api_func_type, APIClient)
 
             # Collect all valid user APIs
             try:
@@ -148,7 +137,6 @@ class API:
                     auth=api_config.get('auth'),
                     endpoints_config=api_config.get('endpoints', [])
                 )
-
                 # Capture all clients
                 self.clients[name] = api_client
                 # Capture main clients
@@ -228,10 +216,33 @@ class APIClient:
             self._collect_endpoints(endpoints_config)
 
     async def setup(self):
-        pass
+        if self.transport == 'websocket':
+            await self._connect_websocket()
+        else:
+            await self._fetch_openapi_schema()
+            self._assign_endpoint_schemas()
+            await self._resolve_deferred_payloads()
+
+    async def _connect_websocket(self):
+        # Auto-generate client_id if needed
+        self.client_id = str(uuid.uuid4())
+        url = self.websocket_url or self.url.replace("http", "ws") + "/ws"
+        if '?' not in url:
+            url = f"{url}?clientId={self.client_id}"
+        try:
+            self.ws = await websockets.connect(url)
+            log.info(f"[APIClient:{self.name}] WebSocket connection established.")
+        except Exception as e:
+            log.error(f"[APIClient:{self.name}] Failed to connect to WebSocket: {e}")
+            self.ws = None
 
     async def close(self):
-        pass
+        if self.ws:
+            try:
+                await self.ws.close()
+                log.info(f"[APIClient:{self.name}] WebSocket connection closed.")
+            except Exception as e:
+                log.warning(f"[APIClient:{self.name}] Error closing WebSocket: {e}")
 
     def _create_endpoint(self, EPClass:"Endpoint", ep_dict:dict):
         return EPClass(name=ep_dict["name"],
@@ -260,13 +271,6 @@ class APIClient:
                 self.endpoints[endpoint.name] = endpoint
             except KeyError as e:
                 log.warning(f"[APIClient:{self.name}] Skipping endpoint due to missing key: {e}")
-
-
-class HTTPAPIClient(APIClient):
-    async def setup(self):
-        await self._fetch_openapi_schema()
-        self._assign_endpoint_schemas()
-        await self._resolve_deferred_payloads()
 
     def _bind_main_ep_values(self, config_entry:dict):
         pass
@@ -496,34 +500,6 @@ class HTTPAPIClient(APIClient):
                 response_text = await response.text()
                 log.error(f"HTTP {response.status} Error: {response_text}")
                 response.raise_for_status()
-
-
-class WebSocketAPIClient(APIClient):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.ws = None
-        self.client_id = str(uuid.uuid4())
-
-    async def setup(self):
-        await self._connect_websocket()
-
-    async def _connect_websocket(self):
-        url = self.websocket_url or (self.url + "/ws")
-        ws_url = f"{url}?clientId={self.client_id}"
-        self.ws = await websockets.connect(ws_url)
-        log.info(f"[{self.name}] Connected to WebSocket: {ws_url}")
-
-    async def send_message(self, message: dict):
-        await self.ws.send(json.dumps(message))
-
-    async def receive_message(self) -> dict:
-        msg = await self.ws.recv()
-        return json.loads(msg)
-
-    async def close(self):
-        if self.ws:
-            await self.ws.close()
-            log.info(f"[{self.name}] WebSocket closed.")
 
 
 class ImgGenClient(APIClient):
