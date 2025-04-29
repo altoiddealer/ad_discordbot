@@ -32,6 +32,7 @@ all_apis:
   # You may define any number of APIs and Endpoints here (a list of dictionaries), making them available to use for various bot functions,
   #   including the "main" apis above, the Tags system (dict_tags.yaml), user defined commands (dict_commands.yaml *WIP feature*), etc.
   - name: Stable Diffusion WebUI
+    transport: http # "http" or "websocket". Defaults to "http" if not included.
     url: http://127.0.0.1:7860
     enabled: true
     default_headers: {Content-Type: application/json}
@@ -69,23 +70,29 @@ all_apis:
       - {name: Get TTS Voices, path: /api/voices, method: GET, timeout: 10}
       - {name: Post TTS Generate, path: /api/tts-generate, method: POST}
 
-  - name: Example image gen API
+  - name: ComfyUI
+    transport: websocket # For stateful APIs like ComfyUI
     url: http://127.0.0.1:7869
     enabled: false
+    websocket_url: ws://127.0.0.1:8188/ws
+    client_id_required: true  # Generates client ID
     default_headers: {Content-Type: application/json}
     default_timeout: 60
     auth: null
     endpoints:
+      - {name: Queue Prompt, path: prompt, method: POST}
+      - {name: View, path: view, method: POST}
       - name: Generate image
-        path: /api/imggen
-        method: POST
-        response_handling:
-          preset: Decode base64 and save # from preset below
-          post_process:
-            - preset: Extract metadata
-          filename_prefix: ex_gen # overrides value in the preset
-
-
+        send_type: json       # NEW: instead of HTTP method, how to send: json / text / bytes
+        payload:
+          action: "ping"
+        expect_response: true # Expects a response
+      - name: Upload Image
+        send_type: binary
+        payload:
+          file_path: "/path/to/image.png"
+        expect_response: false
+  
 # Define a list of processing presets here, which can be injected in 'response_handling' or in any 'post_process' steps.
 response_handling_presets:
   - name: Decode base64 and save

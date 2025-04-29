@@ -1,4 +1,7 @@
 import aiohttp
+import json
+import websockets
+import uuid
 import asyncio
 import os
 import jsonschema
@@ -95,6 +98,9 @@ class API:
         # Reverse lookup for matching API names to their function type
         main_api_name_map = {v.get("api_name"): k for k, v in apisettings.main_settings.items()
                              if isinstance(v, dict) and v.get("api_name")}
+        # Transport class lookup
+        transport_map = {"http": HTTPAPIClient,
+                         "websocket": WebSocketAPIClient}
         # Map function type to specialized client class
         client_type_map = {"imggen": ImgGenClient,
                            "textgen": TextGenClient,
@@ -115,21 +121,34 @@ class API:
             if not enabled:
                 continue
 
-            # Determine if this API is a "main" one
+            transport_type = api_config.get('transport', 'http').lower()
+            TransportClass = transport_map.get(transport_type, HTTPAPIClient)
+            
             api_func_type = main_api_name_map.get(name)
             is_main = api_func_type is not None
-            # Determine which client class to use
-            ClientClass = client_type_map.get(api_func_type, APIClient)
+            MainClientClass = client_type_map.get(api_func_type)
+
+            # Determine the final class
+            if is_main and MainClientClass:
+                # Specialized main clients (e.g., ImgGenClient) should inherit from TransportClass
+                ClientClass = MainClientClass
+            else:
+                ClientClass = TransportClass
 
             # Collect all valid user APIs
             try:
-                api_client = ClientClass(name=api_config['name'],
-                                         url=api_config['url'],
-                                         enabled=api_config.get(enabled, True),
-                                         default_headers=api_config.get('default_headers'),
-                                         default_timeout=api_config.get('default_timeout', 60),
-                                         auth=api_config.get('auth'),
-                                         endpoints_config=api_config.get('endpoints', []))
+                api_client = ClientClass(
+                    name=name,
+                    url=api_config['url'],
+                    enabled=enabled,
+                    transport=api_config.get('transport', 'http'),
+                    websocket_url=api_config.get('websocket_url'),
+                    default_headers=api_config.get('default_headers'),
+                    default_timeout=api_config.get('default_timeout', 60),
+                    auth=api_config.get('auth'),
+                    endpoints_config=api_config.get('endpoints', [])
+                )
+
                 # Capture all clients
                 self.clients[name] = api_client
                 # Capture main clients
@@ -176,7 +195,9 @@ class APIClient:
                  name: str,
                  enabled: bool,
                  url: str,
-                 default_headers: Optional[Dict[str,str]] = None,
+                 transport: str = 'http',
+                 websocket_url: Optional[str] = None,
+                 default_headers: Optional[Dict[str, str]] = None,
                  default_timeout: int = 60,
                  auth: Optional[dict] = None,
                  endpoints_config=None):
@@ -184,12 +205,17 @@ class APIClient:
         self.name = name
         self.enabled = enabled
         self.url = url.rstrip("/")
+        self.transport = transport.lower()
+        self.websocket_url = websocket_url
         self.default_headers = default_headers or {}
         self.default_timeout = default_timeout
         self.auth = auth
         self.endpoints: dict[str, Endpoint] = {}
         self.openapi_schema = None
-        self._endpoint_fetch_payloads = [] # to execute after endpoints are collected
+        self._endpoint_fetch_payloads = []
+        # WebSocket connection
+        self.ws = None
+        self.client_id = None
         # set auth
         if auth:
             try:
@@ -202,9 +228,10 @@ class APIClient:
             self._collect_endpoints(endpoints_config)
 
     async def setup(self):
-        await self._fetch_openapi_schema()
-        self._assign_endpoint_schemas()
-        await self._resolve_deferred_payloads()
+        pass
+
+    async def close(self):
+        pass
 
     def _create_endpoint(self, EPClass:"Endpoint", ep_dict:dict):
         return EPClass(name=ep_dict["name"],
@@ -233,6 +260,13 @@ class APIClient:
                 self.endpoints[endpoint.name] = endpoint
             except KeyError as e:
                 log.warning(f"[APIClient:{self.name}] Skipping endpoint due to missing key: {e}")
+
+
+class HTTPAPIClient(APIClient):
+    async def setup(self):
+        await self._fetch_openapi_schema()
+        self._assign_endpoint_schemas()
+        await self._resolve_deferred_payloads()
 
     def _bind_main_ep_values(self, config_entry:dict):
         pass
@@ -464,12 +498,39 @@ class APIClient:
                 response.raise_for_status()
 
 
+class WebSocketAPIClient(APIClient):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.ws = None
+        self.client_id = str(uuid.uuid4())
+
+    async def setup(self):
+        await self._connect_websocket()
+
+    async def _connect_websocket(self):
+        url = self.websocket_url or (self.url + "/ws")
+        ws_url = f"{url}?clientId={self.client_id}"
+        self.ws = await websockets.connect(ws_url)
+        log.info(f"[{self.name}] Connected to WebSocket: {ws_url}")
+
+    async def send_message(self, message: dict):
+        await self.ws.send(json.dumps(message))
+
+    async def receive_message(self) -> dict:
+        msg = await self.ws.recv()
+        return json.loads(msg)
+
+    async def close(self):
+        if self.ws:
+            await self.ws.close()
+            log.info(f"[{self.name}] WebSocket closed.")
+
+
 class ImgGenClient(APIClient):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         imggen_config:dict = apisettings.get_config_for("imggen")
         self.last_img_payload = {}
-        self.session_id = None
 
         self.post_txt2img: Optional[ImgGenEndpoint] = None
         self.post_img2img: Optional[ImgGenEndpoint] = None
@@ -618,10 +679,11 @@ class TTSGenClient(APIClient):
     async def fetch_speak_options(self):
         lang_list, all_voices = [], []
         try:
-            if self.get_languages:
-                lang_list = await self.get_languages.call(retry=0, extract_keys="get_languages_key")
-            if self.get_voices:
-                all_voices = await self.get_voices.call(retry=0, extract_keys="get_voices_key")
+            async with aiohttp.ClientSession() as session:
+                if self.get_languages:
+                    lang_list = await self.get_languages.call(retry=0, extract_keys="get_languages_key", session=session)
+                if self.get_voices:
+                    all_voices = await self.get_voices.call(retry=0, extract_keys="get_voices_key", session=session)
             return lang_list, all_voices
         except Exception as e:
             log.error(f'Error fetching options for "/speak" command via API: {e}')
