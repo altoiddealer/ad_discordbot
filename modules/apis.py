@@ -80,9 +80,9 @@ class API:
         # ALL API clients
         self.clients:dict[str, APIClient] = {}
         # Main API clients
-        self.imggen:Optional[ImgGenClient] = None
-        self.textgen:Optional[TextGenClient] = None
-        self.ttsgen:Optional[TTSGenClient] = None
+        self.imggen:Union[ImgGenClient, DummyClient] = DummyClient(ImgGenClient)
+        self.textgen:Union[TextGenClient, DummyClient] = DummyClient(TextGenClient)
+        self.ttsgen:Union[TTSGenClient, DummyClient] = DummyClient(TTSGenClient)
 
     async def init(self):
         # Load API Settings yaml
@@ -501,6 +501,13 @@ class APIClient:
                 log.error(f"HTTP {response.status} Error: {response_text}")
                 response.raise_for_status()
 
+class DummyClient:
+    def __init__(self, target_cls: type):
+        annotations = getattr(target_cls, '__annotations__', {})
+        for attr_name in annotations:
+            setattr(self, attr_name, None)
+    def __bool__(self):
+        return False  # Makes instances evaluate False
 
 class ImgGenClient(APIClient):
     def __init__(self, *args, **kwargs):

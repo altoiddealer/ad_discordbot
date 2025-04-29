@@ -126,9 +126,9 @@ async def api_online(api_type:str|None=None, api_name:str='', ictx:CtxInteractio
         await bot_embeds.send('system', f"{api_client.name} is not running at: {api_client.url}", emsg, channel=ictx.channel, delete_after=10)
 
 
-imggen_enabled = config.imggen.get('enabled', False)
+imggen_enabled = config.imggen.get('enabled', True)
 
-if imggen_enabled and api.is_api_object('imggen', 'post_server_restart'):
+if imggen_enabled and api.imggen.post_server_restart:
     # Function to attempt restarting the SD WebUI Client in the event it gets stuck
     @client.hybrid_command(description=f"Immediately restarts the main media generation server.")
     @guild_or_owner_only()
@@ -137,7 +137,7 @@ if imggen_enabled and api.is_api_object('imggen', 'post_server_restart'):
             await ctx.send(f"**`/restart_sd_client` __will not work__ unless {api.imggen.name} was launched with flag: `--api-server-stop`**", delete_after=10)
         await api.imggen.post_server_restart.call(retry=0)
         title = f"{ctx.author.display_name} used '/restart_sd_client'. Restarting {api.imggen.name} ..."
-        if api.is_api_object('imggen', 'get_progress'):
+        if api.imggen.get_progress:
             await bot_embeds.send('system', title=title, description='Attempting to re-establish connection in 5 seconds (Attempt 1 of 10)', channel=ctx.channel)
             log.info(title)
             response = None
@@ -695,7 +695,7 @@ def tts_is_enabled(and_online:bool=False, for_mode:str='any') -> bool | Tuple[bo
             return False, False
         return False
 
-    api_tts_ready = api.is_api_object('ttsgen') and (not and_online or api.ttsgen.enabled)
+    api_tts_ready = api.ttsgen and (not and_online or api.ttsgen.enabled)
     tgwui_tts_ready = tgwui_enabled and tgwui.tts.extension and (not and_online or tgwui.tts.enabled)
 
     if for_mode == 'api':
@@ -1895,7 +1895,7 @@ class TaskProcessing(TaskAttributes):
                 # If TTS API is online and available, TGWUI TTS extensions will be disabled
                 if tgwui_enabled:
                     apply_extensions(chunk_text, was_streamed=was_streamed)
-                if tts_is_enabled(and_online=True, for_mode='api') and api.is_api_object('ttsgen', 'post_generate'):
+                if tts_is_enabled(and_online=True, for_mode='api') and api.ttsgen.post_generate:
                     ep = api.ttsgen.post_generate
                     tts_payload:dict = ep.get_payload()
                     tts_payload[ep.text_input_key] = chunk_text
@@ -3539,7 +3539,7 @@ class Tasks(TaskProcessing):
             await self.create_user_hmessage()
 
             if api_tts_on:
-                if not api.is_api_object('ttsgen', 'post_generate'):
+                if not api.ttsgen.post_generate:
                     log.error(f"No 'post_generate' endpoint available for TTS Client {api.ttsgen.name}")
                 ep = api.ttsgen.post_generate
                 tts_payload:dict = ep.get_payload()
@@ -3587,7 +3587,7 @@ class Tasks(TaskProcessing):
                 log.error('Bot tried to change Img Model, but SD API is offline.')
                 return
                 
-            if not api.is_api_object('imggen', 'post_options'):
+            if not api.imggen.post_options:
                 log.error(f"No 'post_options' endpoint available for ImgGen Client {api.imggen.name}")
                 return
 
@@ -4467,6 +4467,7 @@ if imggen_enabled:
             return None, None
 
     async def get_cnet_data() -> dict:
+        filtered_cnet_data = {}
 
         async def check_cnet_online():
             try:
@@ -4479,7 +4480,6 @@ if imggen_enabled:
                 log.warning(f"ControlNet is enabled in config.yaml, but was not responsive from {api.imggen.name} API.")
             return False
 
-        filtered_cnet_data = {}
         if config.imggen['extensions'].get('controlnet_enabled', False):
             try:
                 all_control_types:dict = await api.imggen.get_controlnet_control_types.call(retry=0, extract_keys='control_types')
@@ -4512,7 +4512,7 @@ if imggen_enabled:
 
     use_llm_status = 'Whether to send your prompt to LLM. Results may vary!' if tgwui_enabled else '**option disabled** (LLM is not integrated)'
 
-    using_imggen_client_name = f' using {api.imggen.name}' if api.is_api_object('imggen') else ''
+    using_imggen_client_name = f' using {api.imggen.name}' if api.imggen else ''
 
     @client.hybrid_command(name="image", description=f"Generate an image{using_imggen_client_name}")
     @app_commands.describe(use_llm=use_llm_status)
@@ -5795,7 +5795,7 @@ if tgwui_enabled:
     if tgwui.tts.extension and tgwui.tts.extension in tgwui.tts.supported_extensions:
         lang_list, all_voices = asyncio.run(tgwui.tts.fetch_speak_options())
     # API mode
-    elif api.is_api_object(client_name='ttsgen'):
+    elif api.ttsgen:
         lang_list, all_voices = asyncio.run(api.ttsgen.fetch_speak_options())
 
     if all_voices:
