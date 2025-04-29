@@ -121,7 +121,7 @@ async def api_online(api_type:str|None=None, api_name:str='', ictx:CtxInteractio
         log.debug(f"API client not found: {api_name}")
         return
 
-    api_client_online, emsg = api_client.is_online()
+    api_client_online, emsg = await api_client.is_online()
     if not api_client_online and emsg and ictx:
         await bot_embeds.send('system', f"{api_client.name} is not running at: {api_client.url}", emsg, channel=ictx.channel, delete_after=10)
 
