@@ -67,12 +67,8 @@ class APISettings():
                     for step in workflow_steps:
                         if not isinstance(step, dict):
                             log.error(f"Workflow {name} has improper structure for a 'step' (steps should be lists of dictionaries)")
-                        step_preset = step.get('prefix')
-                        if step_preset:
-                            expanded = apisettings.apply_preset(step)
-                            expanded_steps.append(expanded)
-                        else:
-                            expanded_steps.append(step)
+                        expanded = apisettings.apply_preset(step)
+                        expanded_steps.append(expanded)
                     self.workflows[name]['steps'] = expanded_steps
 
     def get_workflow(self, workflow_name: str, default=None) -> dict:
