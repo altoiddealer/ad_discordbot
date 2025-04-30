@@ -358,14 +358,12 @@ class APIClient:
             response = await self.request(endpoint='',
                                           method='GET',
                                           retry=0,
-                                          return_text=True,
+                                          return_raw=True,
                                           timeout=5)
-            if 200 <= response.status < 300:
+            if response:
                 return True, ''
             else:
-                emsg = f'Non-200 status code received: {response.status}'
-                log.warning(emsg)
-            return False, emsg
+                return False, ''
            
         except aiohttp.ClientError as e:
             emsg = f"[APIClient:{self.name}] is offline at url {self.url}: {e}"
@@ -484,7 +482,6 @@ class APIClient:
             if return_text:
                 return await response.text()
 
-            # Decide response type based on endpoint config
             if 200 <= response.status < 300:
                 if response_type == "bytes":
                     return await response.read()
