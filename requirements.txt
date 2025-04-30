@@ -3,10 +3,12 @@ colorama
 dataclasses-json
 pynacl
 pyyaml
-Pillow>=9.5.0
+Pillow==10.4.0
 requests
 pydub
 jsonschema
 jsonref
+aiofiles==23.2.1
+websockets==11.0.3
 
 pywin32; platform_system == "Windows"
