@@ -109,7 +109,7 @@ client.is_first_on_ready = True # type: ignore
 #################################################################
 ################### Stable Diffusion Startup ####################
 #################################################################
-async def api_online(api_type:str|None=None, api_name:str='', ictx:CtxInteraction|None=None):
+async def api_online(api_type:str|None=None, api_name:str='', ictx:CtxInteraction|None=None) -> bool:
     api_client:Optional[APIClient] = None
 
     main_api_client:Optional[APIClient] = getattr(api, api_type)
@@ -119,11 +119,16 @@ async def api_online(api_type:str|None=None, api_name:str='', ictx:CtxInteractio
         api_client = api.clients.get(api_name)
     if not api_client:
         log.debug(f"API client not found: {api_name}")
-        return
+        return False
 
     api_client_online, emsg = await api_client.is_online()
     if not api_client_online and emsg and ictx:
         await bot_embeds.send('system', f"{api_client.name} is not running at: {api_client.url}", emsg, channel=ictx.channel, delete_after=10)
+        return False
+    elif not api_client_online:
+        return False
+    else:
+        return True
 
 
 imggen_enabled = config.imggen.get('enabled', True)
@@ -3583,9 +3588,9 @@ class Tasks(TaskProcessing):
             if not self.ictx:
                 self.user_name = 'Automatically'
 
-            # if not await api_online(api_type='imggen', ictx=self.ictx): # Can't change Img model if not online!
-            #     log.error('Bot tried to change Img Model, but SD API is offline.')
-            #     return
+            if not await api_online(api_type='imggen', ictx=self.ictx): # Can't change Img model if not online!
+                log.error('Bot tried to change Img Model, but SD API is offline.')
+                return
                 
             if not api.imggen.post_options:
                 log.error(f"No 'post_options' endpoint available for ImgGen Client {api.imggen.name}")
@@ -3607,7 +3612,7 @@ class Tasks(TaskProcessing):
             if mode == 'swap' or mode == 'swap_back':
                 new_model_settings = {'sd_model_checkpoint': imgmodel_params['sd_model_checkpoint']}
                 if not config.is_per_server_imgmodels():
-                    await api.imggen.post_options.call(input_data=new_model_settings, payload_type=json)
+                    await api.imggen.post_options.call(json=new_model_settings)
                 await self.embeds.delete('change') # delete embed
                 return True
 
@@ -5513,7 +5518,7 @@ async def change_imgmodel(selected_imgmodel_params:dict, ictx:CtxInteraction=Non
 
             # load the model
             if not config.is_per_server_imgmodels():
-                await api.imggen.post_options.call(input_data=load_new_model, payload_type=json)
+                await api.imggen.post_options.call(json=load_new_model)
 
             # Check if old/new average resolution is different
             new_avg = avg_from_dims(settings.imgmodel.payload['width'], settings.imgmodel.payload['height'])

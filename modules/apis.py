@@ -576,7 +576,7 @@ class ImgGenClient(APIClient):
         pnginfo = None
         try:
             ep_for_mode:ImgGenEndpoint = getattr(self, f'post_{mode}')
-            response = await ep_for_mode.call(json=image_payload, session=session)
+            response = await ep_for_mode.call(input_data=image_payload, session=session)
 
             if not isinstance(response, dict):
                 return [], response
@@ -588,7 +588,7 @@ class ImgGenClient(APIClient):
                 # Get PNG info
                 if self.post_pnginfo:
                     png_payload = {"image": "data:image/png;base64," + img_data}
-                    r2 = await self.post_pnginfo.call(json=png_payload, session=session)
+                    r2 = await self.post_pnginfo.call(input_data=png_payload, session=session)
                     if not isinstance(r2, dict):
                         return [], r2
                     png_info_data = r2.get("info")
