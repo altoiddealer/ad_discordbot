@@ -2474,11 +2474,17 @@ class TaskProcessing(TaskAttributes):
                 self.img_payload['mask'] = img2img_mask
             if size:
                 self.img_payload.update(size)
-            if face_swap:
-                self.img_payload['alwayson_scripts']['reactor']['args']['image'] = face_swap # image in base64 format
-                self.img_payload['alwayson_scripts']['reactor']['args']['enabled'] = True # Enable
+            if face_swap or controlnet:
+                alwayson_scripts:dict = self.img_payload.setdefault('alwayson_scripts', {})
+                if face_swap:
+                    alwayson_scripts.setdefault('reactor', {}).setdefault('args', {})['image'] = face_swap # image in base64 format
+                    alwayson_scripts['reactor']['args']['enabled'] = True # Enable
             if controlnet:
-                self.img_payload['alwayson_scripts']['controlnet']['args'][0].update(controlnet)
+                cnet_dict = alwayson_scripts.setdefault('controlnet', {})
+                cnet_args = cnet_dict.setdefault('args', [])
+                if len(cnet_args) == 0:
+                    cnet_args.append({})
+                cnet_args[0].update(controlnet)
         except Exception as e:
             log.error(f"Error initializing imgcmd params: {e}")
 
@@ -2937,6 +2943,8 @@ class TaskProcessing(TaskAttributes):
 
     def init_img_payload(self:Union["Task","Tasks"]):
         try:
+            self.img_payload = {}
+
             # Apply values set by /image command (Additional /image cmd values are applied later)
             imgcmd_params   = self.params.imgcmd
             neg_prompt: str = imgcmd_params['neg_prompt']
@@ -2945,9 +2953,21 @@ class TaskProcessing(TaskAttributes):
             negative_style  = style.get('negative', '')
             self.img_prompt = positive_style.format(self.img_prompt)
             neg_prompt = f"{neg_prompt}, {negative_style}" if negative_style else neg_prompt
+            mode = imgcmd_params.get('img2img', 'txt2img')
+
+            prompt_key = 'prompt'
+            neg_prompt_key = 'negative_prompt'
+            seed_key = 'seed'
 
             # Initialize img_payload settings
-            self.img_payload = {"prompt": self.img_prompt, "negative_prompt": neg_prompt, "seed": -1}
+            if mode == 'txt2img' and api.imggen.post_txt2img:
+                self.img_payload = api.imggen.post_txt2img.get_payload()
+                prompt_key, neg_prompt_key = api.imggen.post_txt2img.prompt_key, api.imggen.post_txt2img.neg_prompt_key
+            elif mode == 'img2img' and api.imggen.post_img2img:
+                self.img_payload = api.imggen.post_img2img.get_payload()
+                prompt_key, neg_prompt_key = api.imggen.post_img2img.prompt_key, api.imggen.post_img2img.neg_prompt_key
+            # Update with prompt, neg prompt, and randomize seed
+            self.img_payload.update({prompt_key: self.img_prompt, neg_prompt_key: neg_prompt, seed_key: -1})
 
             # Apply settings from imgmodel configuration
             imgmodel_img_payload = copy.deepcopy(self.settings.imgmodel.payload_mods)
@@ -4477,7 +4497,7 @@ if imggen_enabled:
         async def check_cnet_online():
             try:
                 online = await api.imggen.get_controlnet_models.call(retry=0)
-                if online: 
+                if online:
                     return True
                 else: 
                     return False
@@ -4487,7 +4507,7 @@ if imggen_enabled:
 
         if config.imggen['extensions'].get('controlnet_enabled', False):
             try:
-                all_control_types:dict = await api.imggen.get_controlnet_control_types.call(retry=0, extract_keys='control_types')
+                all_control_types:dict = await api.imggen.get_controlnet_control_types.call(retry=0, extract_keys='control_types_key')
                 for key, value in all_control_types.items():
                     if key == "All":
                         continue

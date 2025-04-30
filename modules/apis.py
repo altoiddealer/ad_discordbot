@@ -1030,10 +1030,12 @@ def try_paths(response: dict, paths: Union[str, List[str]]) -> Any:
 class TextGenEndpoint(Endpoint):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        # Defaults
 
 class TTSGenEndpoint(Endpoint):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        # Defaults
         self.get_voices_key = 'speaker'
         self.get_languages_key = 'languages'
         self.text_input_key = 'text_input'
@@ -1044,7 +1046,11 @@ class TTSGenEndpoint(Endpoint):
 class ImgGenEndpoint(Endpoint):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        # Defaults
         self.control_types_key = 'control_types'
+        self.prompt_key = 'prompt'
+        self.neg_prompt_key = 'negative_prompt'
+        self.seed_key = 'seed'
 
 
 class WorkflowExecutor:
