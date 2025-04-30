@@ -278,8 +278,27 @@ class APIClient:
             except KeyError as e:
                 log.warning(f"[APIClient:{self.name}] Skipping endpoint due to missing key: {e}")
 
-    def _bind_main_ep_values(self, config_entry:dict):
-        pass
+    def _bind_main_ep_values(self, config_entry: dict):
+        if not type(self) in [TextGenClient, TTSGenClient, ImgGenClient]:
+            return
+
+        endpoint_name = config_entry.get("endpoint_name")
+        endpoint = self.endpoints.get(endpoint_name)
+        if not endpoint:
+            return
+
+        custom_keys = []
+        for key, value in config_entry.items():
+            if key == "endpoint_name":
+                continue
+            if hasattr(endpoint, key):
+                setattr(endpoint, key, value)
+            else:
+                # Allow setting, but track as custom
+                setattr(endpoint, key, value)
+                custom_keys.append(key)
+        if custom_keys:
+            log.info(f"[{self.name}] Endpoint '{endpoint_name}' received custom user-defined config keys: {custom_keys}")
 
     def _bind_main_endpoints(self, config: dict):
         missing = []
@@ -642,25 +661,6 @@ class TTSGenClient(APIClient):
     def _get_self_ep_class(self):
         return TTSGenEndpoint
 
-    def _bind_main_ep_values(self, config_entry: dict):
-        endpoint_name = config_entry.get("endpoint_name")
-        endpoint = self.endpoints.get(endpoint_name)
-
-        if not endpoint:
-            return
-
-        custom_keys = []
-        for key, value in config_entry.items():
-            if key == "endpoint_name":
-                continue
-            if hasattr(endpoint, key):
-                setattr(endpoint, key, value)
-            else:
-                # Allow setting, but track as custom
-                setattr(endpoint, key, value)
-                custom_keys.append(key)
-        if custom_keys:
-            log.info(f"[{self.name}] Endpoint '{endpoint_name}' received custom user-defined config keys: {custom_keys}")
 
     async def fetch_speak_options(self):
         lang_list, all_voices = [], []
@@ -674,6 +674,7 @@ class TTSGenClient(APIClient):
         except Exception as e:
             log.error(f'Error fetching options for "/speak" command via API: {e}')
             return None, None
+
 
 class Endpoint:
     def __init__(self,
@@ -1040,6 +1041,7 @@ class TTSGenEndpoint(Endpoint):
 class ImgGenEndpoint(Endpoint):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        self.control_types_key = 'control_types'
 
 
 class WorkflowExecutor:
