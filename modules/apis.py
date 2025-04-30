@@ -223,6 +223,12 @@ class APIClient:
             self._assign_endpoint_schemas()
             await self._resolve_deferred_payloads()
 
+    async def come_online(self):
+        if self.enabled:
+            return
+        await self.setup()
+        self.enabled = True
+
     async def _connect_websocket(self):
         # Auto-generate client_id if needed
         self.client_id = str(uuid.uuid4())
@@ -307,7 +313,7 @@ class APIClient:
                     else:
                         log.debug(f"No OpenAPI schema available at {self.name}")
         except Exception as e:
-            log.error(f"Failed to load OpenAPI schema from {self.url} for {self.name}: {e}")
+            log.debug(f"Failed to load OpenAPI schema from {self.url} for {self.name}: {e}")
 
     def _assign_endpoint_schemas(self):
         if not self.openapi_schema:
@@ -1024,8 +1030,8 @@ class TextGenEndpoint(Endpoint):
 class TTSGenEndpoint(Endpoint):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.get_voices_key: 'speaker'
-        self.get_languages_key: 'languages'
+        self.get_voices_key = 'speaker'
+        self.get_languages_key = 'languages'
         self.text_input_key = 'text_input'
         self.output_file_path_key = 'output_file_path_key'
         self.language_input_key = 'language'
