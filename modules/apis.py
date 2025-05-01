@@ -1,7 +1,6 @@
 import aiohttp
 import aiofiles
 import json
-import websockets
 import uuid
 import asyncio
 import os
@@ -129,7 +128,7 @@ class API:
 
             # Collect all valid user APIs
             try:
-                api_client = ClientClass(
+                api_client:APIClient = ClientClass(
                     name=name,
                     url=api_config['url'],
                     enabled=enabled,
@@ -194,6 +193,7 @@ class APIClient:
                  endpoints_config=None):
 
         self.name = name
+        self.session:Optional[aiohttp.ClientSession] = None
         self.enabled = enabled
         self.url = url.rstrip("/")
         self.transport = transport.lower()
@@ -219,27 +219,41 @@ class APIClient:
             self._collect_endpoints(endpoints_config)
 
     async def setup(self):
+        self.session = aiohttp.ClientSession()
         if self.transport == 'websocket':
             await self._connect_websocket()
         else:
+            await self.is_online()
             await self._fetch_openapi_schema()
             self._assign_endpoint_schemas()
             await self._resolve_deferred_payloads()
+
+    async def go_offline(self):
+        if not self.enabled:
+            return
+        log.info(f"API Client '{self.name}' disabled. Use '/toggle_api' to try enabling it when available.")
+        self.enabled = False
+        if self.session is not None:
+            await self.close()
 
     async def come_online(self):
         if self.enabled:
             return
         await self.setup()
         self.enabled = True
+        log.info(f"API Client {self.name} enabled. Use '/toggle_api' to disable.")
 
     async def _connect_websocket(self):
-        # Auto-generate client_id if needed
+        if not self.session:
+            log.warning(f"[APIClient:{self.name}] Cannot connect websocket — session is not initialized.")
+            return
+
         self.client_id = str(uuid.uuid4())
         url = self.websocket_url or self.url.replace("http", "ws") + "/ws"
         if '?' not in url:
             url = f"{url}?clientId={self.client_id}"
         try:
-            self.ws = await websockets.connect(url)
+            self.ws = await self.session.ws_connect(url)
             log.info(f"[APIClient:{self.name}] WebSocket connection established.")
         except Exception as e:
             log.error(f"[APIClient:{self.name}] Failed to connect to WebSocket: {e}")
@@ -252,6 +266,13 @@ class APIClient:
                 log.info(f"[APIClient:{self.name}] WebSocket connection closed.")
             except Exception as e:
                 log.warning(f"[APIClient:{self.name}] Error closing WebSocket: {e}")
+            finally:
+                self.ws = None  # ✅ Prevent future use of closed connection
+
+        if self.session:
+            await self.session.close()
+            self.session = None
+
 
     def _create_endpoint(self, EPClass:"Endpoint", ep_dict:dict):
         return EPClass(name=ep_dict["name"],
@@ -335,7 +356,8 @@ class APIClient:
                     else:
                         log.debug(f"No OpenAPI schema available at {self.name}")
         except Exception as e:
-            log.debug(f"Failed to load OpenAPI schema from {self.url} for {self.name}: {e}")
+            log.warning(f"Failed to load OpenAPI schema from {self.url} for {self.name}: {e}")
+            await self.go_offline()
 
     def _assign_endpoint_schemas(self):
         if not self.openapi_schema:
@@ -383,11 +405,7 @@ class APIClient:
 
     async def is_online(self) -> Tuple[bool, str]:
         try:
-            response = await self.request(endpoint='',
-                                          method='GET',
-                                          retry=0,
-                                          return_raw=True,
-                                          timeout=5)
+            response = await self.request(endpoint='', method='GET', retry=0, return_raw=True, timeout=5)
             if response:
                 return True, ''
             else:
@@ -395,7 +413,7 @@ class APIClient:
            
         except aiohttp.ClientError as e:
             emsg = f"[APIClient:{self.name}] is offline at url {self.url}: {e}"
-            log.warning(e)
+            await self.go_offline()
             return False, emsg
 
     async def request(
@@ -437,21 +455,20 @@ class APIClient:
 
         for attempt in range(retry + 1):
             try:
-                if session is not None:
-                    # Reuse session if passed
-                    return await self._make_request(
-                        session=session, method=method, url=url, params=params, data=data,
-                        json=json, files=files, headers=headers, auth=auth, timeout=timeout,
-                        return_text=return_text, return_raw=return_raw, response_type=response_type
-                    )
-                else:
-                    # Create a session for standalone request
+                active_session = session or self.session
+                if active_session is None:
                     async with aiohttp.ClientSession() as temp_session:
                         return await self._make_request(
                             session=temp_session, method=method, url=url, params=params, data=data,
                             json=json, files=files, headers=headers, auth=auth, timeout=timeout,
                             return_text=return_text, return_raw=return_raw, response_type=response_type
                         )
+                else:
+                    return await self._make_request(
+                        session=active_session, method=method, url=url, params=params, data=data,
+                        json=json, files=files, headers=headers, auth=auth, timeout=timeout,
+                        return_text=return_text, return_raw=return_raw, response_type=response_type
+                    )
 
             except aiohttp.ClientConnectionError:
                 log.warning(f"Connection error to {url}, attempt {attempt + 1}/{retry + 1}")
@@ -942,6 +959,8 @@ class Endpoint:
                    ):
         if self.client is None:
             raise ValueError("Endpoint not bound to an APIClient")
+        if not self.client.enabled:
+            raise RuntimeError(f"Endpoint {self.name} was called, but API Client '{self.client.name}' is currently disabled. Use '/toggle_api' to enable the client when available.")
 
         headers = kwargs.pop('headers', self.headers)
         timeout = kwargs.pop('timeout', self.timeout)

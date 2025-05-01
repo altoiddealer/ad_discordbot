@@ -9,6 +9,5 @@ pydub
 jsonschema
 jsonref
 aiofiles==23.2.1
-websockets==11.0.3
 
 pywin32; platform_system == "Windows"
