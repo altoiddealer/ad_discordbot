@@ -3865,14 +3865,20 @@ class Tasks(TaskProcessing):
                     await bg_task_queue.put(post_active_settings(self.ictx.guild, settings_keys))
                 else:
                     await bg_task_queue.put(post_active_settings_to_all(settings_keys))
-                
+
+            # Reset Spontaneous Messaging tasks
+            if config.is_per_character():
+                await spontaneous_messaging.reset_for_server(self.ictx)
+            else:
+                await spontaneous_messaging.reset_all()
 
         except Exception as e:
             log.error(f'An error occurred while loading character for "{self.name}": {e}')
             await self.embeds.edit_or_send('change', "An error occurred while loading character", e)
 
     async def reset_task(self:"Task"):
-        shared.stop_everything = True
+        if tgwui_enabled:
+            shared.stop_everything = True
         # Create a new instance of the history and set it to active
         history_char, history_mode = get_char_mode_for_history(self.ictx)
         bot_history.get_history_for(self.channel.id, history_char, history_mode).fresh().replace()
@@ -6435,6 +6441,28 @@ class SpontaneousMessaging():
                 if not task.done():
                     task.cancel()
                 self.tasks.pop(ictx.channel.id)
+
+    async def reset_for_server(self, ictx:CtxInteraction):
+        if not hasattr(ictx, 'guild'):
+            return
+        guild_channel_ids = {channel.id for channel in ictx.guild.channels}
+        to_remove = []
+        for chan_id, (task, _) in self.tasks.items():
+            if chan_id in guild_channel_ids:
+                if task and not task.done():
+                    task.cancel()
+                to_remove.append(chan_id)
+        for chan_id in to_remove:
+            self.tasks.pop(chan_id, None)
+
+    async def reset_all(self):
+        to_remove = []
+        for chan_id, (task, _) in self.tasks.items():
+            if task and not task.done():
+                task.cancel()
+            to_remove.append(chan_id)
+        for chan_id in to_remove:
+            self.tasks.pop(chan_id, None)
 
     async def run_task(self, ictx:CtxInteraction, prompt:str, wait:int):
         await asyncio.sleep(wait)
