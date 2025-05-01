@@ -3632,7 +3632,7 @@ class Tasks(TaskProcessing):
             if mode == 'swap' or mode == 'swap_back':
                 new_model_settings = {'sd_model_checkpoint': imgmodel_params['sd_model_checkpoint']}
                 if not config.is_per_server_imgmodels():
-                    await api.imggen.post_options.call(json=new_model_settings)
+                    await api.imggen.post_options.call(input_data=new_model_settings)
                 await self.embeds.delete('change') # delete embed
                 return True
 
@@ -5538,7 +5538,7 @@ async def change_imgmodel(selected_imgmodel_params:dict, ictx:CtxInteraction=Non
 
             # load the model
             if not config.is_per_server_imgmodels():
-                await api.imggen.post_options.call(json=load_new_model)
+                await api.imggen.post_options.call(input_data=load_new_model)
 
             # Check if old/new average resolution is different
             new_avg = avg_from_dims(settings.imgmodel.payload['width'], settings.imgmodel.payload['height'])
