@@ -4988,6 +4988,34 @@ async def main(ctx: commands.Context, channel:Optional[discord.TextChannel]=None
     bot_database.save()
     await ctx.reply(action_message, delete_after=15)
 
+@client.hybrid_command(description="Toggle available API Clients on/off")
+@guild_or_owner_only()
+async def toggle_api(ctx: commands.Context):
+    all_apis = api.clients or {}
+    if all_apis:
+        display_name_to_key = {(f"{key} (online)" if client.enabled else f"{key} (offline)"): key
+                               for key, client in all_apis.items()}
+        # Use the display names for the menu
+        items_for_api_menus = list(display_name_to_key.keys()).sort()
+        apis_view = SelectOptionsView(items_for_api_menus,
+                                        custom_id_prefix='apis',
+                                        placeholder_prefix='APIs: ',
+                                        unload_item=None)
+        view_message = await ctx.send('### Select an API.', view=apis_view, ephemeral=True)
+        await apis_view.wait()
+
+        selected_item = apis_view.get_selected()
+        await view_message.delete()
+
+        # Lookup the real key and get the APIClient
+        original_key = display_name_to_key.get(selected_item)
+        selected_api:APIClient = all_apis.get(original_key)
+
+        api_status = await selected_api.toggle()
+        await ctx.reply(f"Toggled **{original_key}** to **{api_status}**", delete_after=5)
+    else:
+        await ctx.send('There are no APIs available', ephemeral=True)
+
 @client.hybrid_command(description="Update dropdown menus without restarting bot script.")
 @guild_or_owner_only()
 async def sync(ctx: commands.Context):
@@ -5824,11 +5852,11 @@ class SpeakCmdOptions:
         self._voice_hash_dict:dict = {}
         self.lang_options = [app_commands.Choice(name='**disabled option', value='disabled')]
         self.voice_options = [app_commands.Choice(name='**disabled option', value='disabled')]
-        self.voice_options_label:str = 'empty'
+        self.voice_options_label:str = 'empty_0'
         self.voice_options1 = [app_commands.Choice(name='**disabled option', value='disabled')]
-        self.voice_options1_label:str = 'empty'
+        self.voice_options1_label:str = 'empty_1'
         self.voice_options2 = [app_commands.Choice(name='**disabled option', value='disabled')]
-        self.voice_options2_label:str = 'empty'
+        self.voice_options2_label:str = 'empty_2'
 
     def split_options(self, all_voices:list, lang_list:list):
         self.voice_options.clear()

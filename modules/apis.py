@@ -227,6 +227,13 @@ class APIClient:
             self._assign_endpoint_schemas()
             await self._resolve_deferred_payloads()
 
+    async def toggle(self):
+        if self.enabled:
+            await self.go_offline()
+            return 'offline'
+        else:
+            await self.come_online()
+            return 'online'
 
     async def go_offline(self):
         if not self.enabled:
