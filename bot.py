@@ -6986,21 +6986,18 @@ class CustomHistoryManager(HistoryManager):
 
 bot_history = CustomHistoryManager(class_builder_history=CustomHistory, **config.textgen.get('chat_history', {}))
 
-async def async_cleanup(client):
-    pass
-    # for guild_id in voice_clients.guild_vcs:
-    #     print("guild_id:", guild_id)
-    #     if voice_clients.is_connected(guild_id):
-    #         await voice_clients.guild_vcs[guild_id].disconnect()
+async def async_cleanup():
+    for guild_id in voice_clients.guild_vcs:
+        if voice_clients.is_connected(guild_id):
+            await voice_clients.guild_vcs[guild_id].disconnect()
 
 def exit_handler():
     log.info('Running cleanup tasks:')
     bot_history.save_all_sync()
-    # Run async cleanup
-    # try:
-    #     asyncio.run(async_cleanup(client))
-    # except Exception as e:
-    #     log.error(f"Error during async cleanup: {e}")
+    try:
+        asyncio.run(async_cleanup())
+    except Exception as e:
+        log.error(f"Error during async cleanup: {e}")
     log.info('Done')
 
 
