@@ -106,6 +106,8 @@ class API:
         client_type_map = {"imggen": ImgGenClient,
                            "textgen": TextGenClient,
                            "ttsgen": TTSGenClient}
+        
+        check_clients_online = []
 
         # Iterate over all APIs data
         apis:dict = data.get('all_apis', {})
@@ -146,6 +148,8 @@ class API:
                 if is_main:
                     setattr(self, api_func_type, api_client)
                     log.info(f"Registered main {api_func_type} client: {name}")
+                if hasattr(api_client, 'is_online'):
+                    check_clients_online.append(api_client.is_online())
                 # Collect setup tasks
                 if hasattr(api_client, 'setup'):
                     self.setup_tasks.append(api_client.setup())
@@ -154,11 +158,16 @@ class API:
             except TypeError as e:
                 log.warning(f"Failed to create API client '{name}': {e}")
 
-    async def setup_clients(self):
+        await asyncio.gather(*check_clients_online)
+
+    async def setup_all_clients(self):
         if not self.setup_tasks:
             return
-        await asyncio.gather(*self.setup_tasks)
-        self.setup_tasks = []  # Clear after use
+        try:
+            await asyncio.gather(*self.setup_tasks)
+            self.setup_tasks = []  # Clear after use
+        except Exception as e:
+            pass
 
     def is_api_object(self, client_name:str|None=None, ep_name:str|None=None, log_missing:bool=False) -> bool:
         client = getattr(self, client_name, None)
@@ -217,13 +226,16 @@ class APIClient:
             try:
                 self.auth = aiohttp.BasicAuth(auth["username"], auth["password"])
             except KeyError:
-                log.warning(f"[APIClient:{self.name}] Invalid auth dict: 'username' or 'password' missing.")
+                log.warning(f"[{self.name}] Invalid auth dict: 'username' or 'password' missing.")
                 self.auth = None
         # collect endpoints
         if endpoints_config:
             self._collect_endpoints(endpoints_config)
 
     async def setup(self):
+        if not self.enabled:
+            return
+        # Create and retain reusable session per API
         self.session = aiohttp.ClientSession()
         if self.transport == 'websocket':
             await self._connect_websocket()
@@ -231,33 +243,41 @@ class APIClient:
             await self._fetch_openapi_schema()
             self._assign_endpoint_schemas()
             await self._resolve_deferred_payloads()
+        await self.main_setup_tasks()
 
-    async def toggle(self):
-        if self.enabled:
-            await self.go_offline()
-            return 'offline'
-        else:
-            await self.come_online()
-            return 'online'
+    async def main_setup_tasks(self):
+        pass
 
-    async def go_offline(self):
+    async def toggle(self) -> str | None:
+        try:
+            if self.enabled:
+                await self.go_offline()
+                return 'disabled'
+            else:
+                await self.come_online()
+                return 'enabled'
+        except Exception as e:
+            log.error(f"[{self.name}] toggle() failed: {e}")
+            return None
+
+    async def go_offline(self) -> bool:
         if not self.enabled:
             return
-        log.info(f"API Client '{self.name}' disabled. Use '/toggle_api' to try enabling it when available.")
+        log.warning(f"[{self.name}] disabled. Use '/toggle_api' to try enabling it when available.")
         self.enabled = False
         if self.session is not None:
             await self.close()
 
-    async def come_online(self):
+    async def come_online(self) -> bool:
         if self.enabled:
             return
-        await self.setup()
         self.enabled = True
-        log.info(f"API Client {self.name} enabled. Use '/toggle_api' to disable.")
+        await self.setup()
+        log.info(f"[{self.name}] enabled. Use '/toggle_api' to disable.")
 
     async def _connect_websocket(self):
         if not self.session:
-            log.warning(f"[APIClient:{self.name}] Cannot connect websocket — session is not initialized.")
+            log.warning(f"[{self.name}] Cannot connect websocket — session is not initialized.")
             return
 
         self.client_id = str(uuid.uuid4())
@@ -266,20 +286,21 @@ class APIClient:
             url = f"{url}?clientId={self.client_id}"
         try:
             self.ws = await self.session.ws_connect(url)
-            log.info(f"[APIClient:{self.name}] WebSocket connection established.")
+            log.info(f"[{self.name}] WebSocket connection established.")
         except Exception as e:
-            log.error(f"[APIClient:{self.name}] Failed to connect to WebSocket: {e}")
+            log.error(f"[{self.name}] failed to connect to WebSocket: {e}")
             self.ws = None
+            raise
 
     async def close(self):
         if self.ws:
             try:
                 await self.ws.close()
-                log.info(f"[APIClient:{self.name}] WebSocket connection closed.")
+                log.info(f"[{self.name}] WebSocket connection closed.")
             except Exception as e:
-                log.warning(f"[APIClient:{self.name}] Error closing WebSocket: {e}")
+                log.warning(f"[{self.name}] Error closing WebSocket: {e}")
             finally:
-                self.ws = None  # ✅ Prevent future use of closed connection
+                self.ws = None
 
         if self.session:
             await self.session.close()
@@ -312,7 +333,7 @@ class APIClient:
                     self._endpoint_fetch_payloads.append(endpoint)
                 self.endpoints[endpoint.name] = endpoint
             except KeyError as e:
-                log.warning(f"[APIClient:{self.name}] Skipping endpoint due to missing key: {e}")
+                log.warning(f"[{self.name}] Skipping endpoint due to missing key: {e}")
 
     def _bind_main_ep_values(self, config_entry: dict):
         if not type(self) in [TextGenClient, TTSGenClient, ImgGenClient]:
@@ -357,6 +378,8 @@ class APIClient:
         return missing
 
     async def _fetch_openapi_schema(self):
+        if self.openapi_schema:
+            return
         try:
             def dereference_schema(schema: dict) -> dict:
                 return jsonref.JsonRef.replace_refs(schema)
@@ -364,12 +387,13 @@ class APIClient:
                 async with session.get(f"{self.url}/openapi.json") as response:
                     if 200 <= response.status < 300:
                         self.openapi_schema = dereference_schema(await response.json())
-                        log.debug(f"Loaded OpenAPI schema for {self.name}")
+                        log.debug(f"[{self.name}] Loaded OpenAPI schema.")
                     else:
-                        log.debug(f"No OpenAPI schema available at {self.name}")
+                        log.debug(f"[{self.name}] No OpenAPI schema available.")
         except Exception as e:
-            log.warning(f"Failed to load OpenAPI schema from {self.url} for {self.name}: {e}")
+            log.warning(f"[{self.name}] Failed to load OpenAPI schema from {self.url}: {e}")
             await self.go_offline()
+            raise
 
     def _assign_endpoint_schemas(self):
         if not self.openapi_schema:
@@ -383,26 +407,30 @@ class APIClient:
                 log.debug(f"[{self.name}] No schema found for endpoint '{endpoint.name}'")
 
     async def _resolve_deferred_payloads(self):
+        resolved_endpoints = []
         for ep in self._endpoint_fetch_payloads:
             ep:Endpoint
+            if ep.payload:
+                continue
             ref = ep._deferred_payload_source
             ref_ep = self.endpoints.get(ref)
 
             if ref_ep is None:
-                log.warning(f"[APIClient:{self.name}] Endpoint '{ep.name}' references unknown payload source: '{ref}'")
+                log.warning(f"[{self.name}] Endpoint '{ep.name}' references unknown payload source: '{ref}'")
                 continue
 
-            log.debug(f"[APIClient:{self.name}] Fetching payload for '{ep.name}' using endpoint '{ref}'")
-
+            log.debug(f"[{self.name}] Fetching payload for '{ep.name}' using endpoint '{ref}'")
             try:
                 data = await ref_ep.call()
                 if isinstance(data, dict):
                     ep.payload = data
+                    resolved_endpoints.append(ep)
                 else:
-                    log.warning(f"[APIClient:{self.name}] Endpoint '{ref}' returned non-dict data for '{ep.name}'")
-
+                    log.warning(f"[{self.name}] Endpoint '{ref}' returned non-dict data for '{ep.name}'")
             except Exception as e:
-                log.error(f"[APIClient:{self.name}] Failed to fetch payload from '{ref}' for '{ep.name}': {e}")
+                log.error(f"[{self.name}] Failed to fetch payload from '{ref}' for '{ep.name}': {e}")
+        # Remove resolved endpoints from the fetch list
+        self._endpoint_fetch_payloads = [ep for ep in self._endpoint_fetch_payloads if ep not in resolved_endpoints]
 
     def validate_payload(self, method:str, endpoint:str, json:str|None=None, data:str|None=None):
         if self.openapi_schema:
@@ -412,10 +440,12 @@ class APIClient:
                 elif data and isinstance(data, dict):
                     jsonschema.validate(instance=data, schema=self.openapi_schema)
             except jsonschema.ValidationError as e:
-                log.error(f"Schema validation failed for {method} {endpoint}: {e.message}")
+                log.error(f"[{self.name}] Schema validation failed for {method} {endpoint}: {e.message}")
                 raise
 
     async def is_online(self) -> Tuple[bool, str]:
+        if not self.enabled:
+            return False
         try:
             response = await self.request(endpoint='', method='GET', retry=0, return_raw=True, timeout=5)
             if response:
@@ -424,7 +454,7 @@ class APIClient:
                 return False, ''
            
         except aiohttp.ClientError as e:
-            emsg = f"[APIClient:{self.name}] is offline at url {self.url}: {e}"
+            emsg = f"[{self.name}] is enabled but unresponsive at url {self.url}: {e}"
             await self.go_offline()
             return False, emsg
 
@@ -454,17 +484,6 @@ class APIClient:
         # Validate payload
         self.validate_payload(method, endpoint, json, data)
 
-        # Optional OpenAPI schema validation
-        if self.openapi_schema:
-            try:
-                if json:
-                    jsonschema.validate(instance=json, schema=self.openapi_schema)
-                elif data and isinstance(data, dict):
-                    jsonschema.validate(instance=data, schema=self.openapi_schema)
-            except jsonschema.ValidationError as e:
-                log.error(f"Schema validation failed for {method} {endpoint}: {e.message}")
-                raise
-
         for attempt in range(retry + 1):
             try:
                 active_session = session or self.session
@@ -482,14 +501,16 @@ class APIClient:
                         return_text=return_text, return_raw=return_raw, response_type=response_type
                     )
 
-            except aiohttp.ClientConnectionError:
-                log.warning(f"Connection error to {url}, attempt {attempt + 1}/{retry + 1}")
-            except aiohttp.ClientResponseError as e:
-                log.error(f"HTTP Error {e.status} on {url}: {e.message}")
-            except asyncio.TimeoutError:
-                log.error(f"Request to {url} timed out.")
-            except Exception as e:
-                log.error(f"Unexpected error with {url}: {e}")
+            except (aiohttp.ClientConnectionError, aiohttp.ClientResponseError, asyncio.TimeoutError, Exception) as e:
+                if isinstance(e, aiohttp.ClientConnectionError):
+                    log.warning(f"[{self.name}] Connection error to {url}, attempt {attempt + 1}/{retry + 1}")
+                elif isinstance(e, aiohttp.ClientResponseError):
+                    log.error(f"[{self.name}] HTTP Error {e.status} on {url}: {e.message}")
+                elif isinstance(e, asyncio.TimeoutError):
+                    log.error(f"[{self.name}] Request to {url} timed out.")
+                else:
+                    log.exception(f"[{self.name}] Unexpected error with {url}")
+                raise
 
             if attempt < retry:
                 await asyncio.sleep(2 ** attempt)
@@ -692,7 +713,6 @@ class TTSGenClient(APIClient):
     # class override to subclass Endpoint()
     def _get_self_ep_class(self):
         return TTSGenEndpoint
-
 
     async def fetch_speak_options(self):
         lang_list, all_voices = [], []

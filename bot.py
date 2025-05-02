@@ -404,7 +404,7 @@ async def on_ready():
         client.is_first_on_ready = False # type: ignore
 
         # Setup API clients
-        await api.setup_clients()
+        await api.setup_all_clients()
 
         # Enforce only one TTS method enabled
         enforce_one_tts_method()
@@ -718,7 +718,8 @@ def tts_is_enabled(and_online:bool=False, for_mode:str='any') -> bool | Tuple[bo
 def enforce_one_tts_method():
     api_tts_on, tgwui_tts_on = tts_is_enabled(and_online=True, for_mode='both')
     if api_tts_on and tgwui_tts_on:
-        log.warning("Bot was initialized with both API and TGWUI extension TTS methods enabled. Disabling TGWUI extension.")
+        if client.is_first_on_ready:
+            log.warning("Bot was initialized with both API and TGWUI extension TTS methods enabled. Disabling TGWUI extension.")
         toggle_any_tts(bot_settings, 'tgwui', force='off')
         tgwui.tts.enabled = False
 
@@ -4995,30 +4996,58 @@ async def main(ctx: commands.Context, channel:Optional[discord.TextChannel]=None
 @guild_or_owner_only()
 async def toggle_api(ctx: commands.Context):
     all_apis = api.clients or {}
-    if all_apis:
-        display_name_to_key = {(f"{key} (online)" if client.enabled else f"{key} (offline)"): key
-                               for key, client in all_apis.items()}
-        # Use the display names for the menu
-        items_for_api_menus = list(display_name_to_key.keys())
-        items_for_api_menus.sort()
-        apis_view = SelectOptionsView(items_for_api_menus,
-                                        custom_id_prefix='apis',
-                                        placeholder_prefix='APIs: ',
-                                        unload_item=None)
-        view_message = await ctx.send('### Select an API.', view=apis_view, ephemeral=True)
-        await apis_view.wait()
-
-        selected_item = apis_view.get_selected()
-        await view_message.delete()
-
-        # Lookup the real key and get the APIClient
-        original_key = display_name_to_key.get(selected_item)
-        selected_api:APIClient = all_apis.get(original_key)
-
-        api_status = await selected_api.toggle()
-        await ctx.reply(f"Toggled **{original_key}** to **{api_status}**", delete_after=5)
-    else:
+    if not all_apis:
         await ctx.send('There are no APIs available', ephemeral=True)
+        return
+    # Map the api dict keys to display names for discord menus
+    display_name_to_key = {(f"{key} (enabled)" if client.enabled else f"{key} (disabled)"): key
+                            for key, client in all_apis.items()}
+    # Use the display names for the menu
+    items_for_api_menus = list(display_name_to_key.keys())
+    items_for_api_menus.sort()
+    apis_view = SelectOptionsView(items_for_api_menus,
+                                    custom_id_prefix='apis',
+                                    placeholder_prefix='APIs: ',
+                                    unload_item=None)
+    view_message = await ctx.send('### Select an API.', view=apis_view, ephemeral=True)
+    await apis_view.wait()
+
+    selected_item = apis_view.get_selected()
+    await view_message.delete()
+
+    # Lookup the real key and get the APIClient
+    original_key = display_name_to_key.get(selected_item)
+    selected_api:APIClient = all_apis.get(original_key)
+    # Typicallly if command timed out
+    if not selected_api:
+        return
+    
+    # Apply Toggle
+    new_status_str = await selected_api.toggle()
+    if new_status_str is None:
+        await ctx.reply(f"Failed to toggle **{original_key}**.", delete_after=5)
+        return
+    await ctx.reply(f"**{original_key}** is now **{new_status_str}**", delete_after=5)
+    
+    # Process TTSGen changes
+    if selected_api == api.ttsgen:
+        # Enforce only one TTS method enabled
+        enforce_one_tts_method()
+        # Process Voice Clients
+        vc_guild_ids = [ctx.guild.id] if config.is_per_server() else [guild.id for guild in client.guilds]
+        for vc_guild_id in vc_guild_ids:
+            await voice_clients.toggle_voice_client(vc_guild_id, new_status_str)
+        if bot_embeds.enabled('change'):
+            # Send change embed to interaction channel
+            await bot_embeds.send('change', f"{ctx.author.display_name} {new_status_str} API", f'**{original_key}**', channel=ctx.channel)
+            if bot_database.announce_channels:
+                # Send embeds to announcement channels
+                await bg_task_queue.put(announce_changes(f'{new_status_str} API', f'**{original_key}**', ctx))
+        if new_status_str == 'enabled':
+            # Build '/speak' options if TTS client was not online during intialization
+            if not speak_cmd_options.voice_hash_dict:
+                await speak_cmd_options.build_options()
+
 
 @client.hybrid_command(description="Update dropdown menus without restarting bot script.")
 @guild_or_owner_only()
@@ -5187,7 +5216,7 @@ async def character_loader(char_name, settings:"Settings", guild_id:int|None=Non
                 value = base_tags.update_tags(value) # Unpack any tag presets
                 char_llmcontext['tags'] = value
         # Connect to voice channels
-        if tgwui_enabled:
+        if tts_is_enabled(and_online=True):
             if guild_id:
                 await voice_clients.voice_channel(guild_id, use_voice_channels)
             else:
@@ -5853,14 +5882,15 @@ async def process_speak(ctx: commands.Context, input_text, selected_voice=None, 
 
 class SpeakCmdOptions:
     def __init__(self):
-        self._voice_hash_dict:dict = {}
+        self.voice_hash_dict:dict = {}
         self.lang_options = [app_commands.Choice(name='**disabled option', value='disabled')]
+        self.lang_options_label:str = 'languages'
         self.voice_options = [app_commands.Choice(name='**disabled option', value='disabled')]
-        self.voice_options_label:str = 'empty_0'
+        self.voice_options_label:str = 'voices'
         self.voice_options1 = [app_commands.Choice(name='**disabled option', value='disabled')]
-        self.voice_options1_label:str = 'empty_1'
+        self.voice_options1_label:str = 'voices1'
         self.voice_options2 = [app_commands.Choice(name='**disabled option', value='disabled')]
-        self.voice_options2_label:str = 'empty_2'
+        self.voice_options2_label:str = 'voices2'
 
     def split_options(self, all_voices:list, lang_list:list):
         self.voice_options.clear()
@@ -5883,6 +5913,7 @@ class SpeakCmdOptions:
         if lang_list:
             self.lang_options.clear()
             self.lang_options.extend(app_commands.Choice(name=lang, value=lang) for lang in lang_list)
+            self.lang_options_label = 'languages'
 
     async def get_options(self):
         lang_list, all_voices = [], []
@@ -5901,10 +5932,10 @@ class SpeakCmdOptions:
         lang_list, all_voices = await self.get_options()
         # Rebuild options
         if all_voices:
-            self._voice_hash_dict = {str(hash(voice_name)):voice_name for voice_name in all_voices}
+            self.voice_hash_dict = {str(hash(voice_name)):voice_name for voice_name in all_voices}
             self.split_options(all_voices, lang_list)
         if not client.is_first_on_ready:
-            client.tree.sync()
+            await client.tree.sync()
 
 speak_cmd_options = SpeakCmdOptions()
 
@@ -5920,6 +5951,7 @@ asyncio.run(speak_cmd_options.build_options())
 @app_commands.rename(voice_3 = speak_cmd_options.voice_options2_label)
 @app_commands.describe(voice_3 = speak_cmd_options.voice_options2_label.upper())
 @app_commands.choices(voice_3 = speak_cmd_options.voice_options2)
+@app_commands.rename(lang = speak_cmd_options.lang_options_label)
 @app_commands.choices(lang = speak_cmd_options.lang_options)
 @configurable_for_dm_if(lambda ctx: 'speak' in config.discord_dm_setting('allowed_commands', []))
 async def speak(ctx: commands.Context, input_text: str, voice_1: typing.Optional[app_commands.Choice[str]], 
@@ -5929,7 +5961,7 @@ async def speak(ctx: commands.Context, input_text: str, voice_1: typing.Optional
         await ctx.send("A voice was picked from two separate menus. Using the first selection.", ephemeral=True)
     selected_voice = ((voice_1 or voice_2 or voice_3) and (voice_1 or voice_2 or voice_3).value) or ''
     if selected_voice:
-        selected_voice = speak_cmd_options._voice_hash_dict[selected_voice]
+        selected_voice = speak_cmd_options.voice_hash_dict[selected_voice]
     voice_input = voice_input if voice_input is not None else ''
     lang = lang.value if (lang is not None and lang != 'disabled') else ''
     await process_speak(ctx, input_text, selected_voice, lang, voice_input)
@@ -6954,10 +6986,21 @@ class CustomHistoryManager(HistoryManager):
 
 bot_history = CustomHistoryManager(class_builder_history=CustomHistory, **config.textgen.get('chat_history', {}))
 
+async def async_cleanup(client):
+    pass
+    # for guild_id in voice_clients.guild_vcs:
+    #     print("guild_id:", guild_id)
+    #     if voice_clients.is_connected(guild_id):
+    #         await voice_clients.guild_vcs[guild_id].disconnect()
 
 def exit_handler():
     log.info('Running cleanup tasks:')
     bot_history.save_all_sync()
+    # Run async cleanup
+    # try:
+    #     asyncio.run(async_cleanup(client))
+    # except Exception as e:
+    #     log.error(f"Error during async cleanup: {e}")
     log.info('Done')
 
 
