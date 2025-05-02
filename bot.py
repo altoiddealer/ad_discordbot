@@ -4996,7 +4996,8 @@ async def toggle_api(ctx: commands.Context):
         display_name_to_key = {(f"{key} (online)" if client.enabled else f"{key} (offline)"): key
                                for key, client in all_apis.items()}
         # Use the display names for the menu
-        items_for_api_menus = list(display_name_to_key.keys()).sort()
+        items_for_api_menus = list(display_name_to_key.keys())
+        items_for_api_menus.sort()
         apis_view = SelectOptionsView(items_for_api_menus,
                                         custom_id_prefix='apis',
                                         placeholder_prefix='APIs: ',
