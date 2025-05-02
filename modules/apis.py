@@ -223,10 +223,10 @@ class APIClient:
         if self.transport == 'websocket':
             await self._connect_websocket()
         else:
-            await self.is_online()
             await self._fetch_openapi_schema()
             self._assign_endpoint_schemas()
             await self._resolve_deferred_payloads()
+
 
     async def go_offline(self):
         if not self.enabled:
