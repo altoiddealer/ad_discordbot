@@ -85,6 +85,8 @@ class API:
         self.imggen:Union[ImgGenClient, DummyClient] = DummyClient(ImgGenClient)
         self.textgen:Union[TextGenClient, DummyClient] = DummyClient(TextGenClient)
         self.ttsgen:Union[TTSGenClient, DummyClient] = DummyClient(TTSGenClient)
+        # Collect setup tasks
+        self.setup_tasks:list = []
 
     async def init(self):
         # Load API Settings yaml
@@ -107,7 +109,6 @@ class API:
 
         # Iterate over all APIs data
         apis:dict = data.get('all_apis', {})
-        setup_tasks = []
         for api_config in apis:
             if not isinstance(api_config, dict):
                 log.warning('An API definition was not formatted as a dictionary. Ignoring.')
@@ -147,13 +148,17 @@ class API:
                     log.info(f"Registered main {api_func_type} client: {name}")
                 # Collect setup tasks
                 if hasattr(api_client, 'setup'):
-                    setup_tasks.append(api_client.setup())
+                    self.setup_tasks.append(api_client.setup())
             except KeyError as e:
                 log.warning(f"Skipping API Client due to missing key: {e}")
             except TypeError as e:
                 log.warning(f"Failed to create API client '{name}': {e}")
 
-        await asyncio.gather(*setup_tasks)
+    async def setup_clients(self):
+        if not self.setup_tasks:
+            return
+        await asyncio.gather(*self.setup_tasks)
+        self.setup_tasks = []  # Clear after use
 
     def is_api_object(self, client_name:str|None=None, ep_name:str|None=None, log_missing:bool=False) -> bool:
         client = getattr(self, client_name, None)
@@ -692,11 +697,10 @@ class TTSGenClient(APIClient):
     async def fetch_speak_options(self):
         lang_list, all_voices = [], []
         try:
-            async with aiohttp.ClientSession() as session:
-                if self.get_languages:
-                    lang_list = await self.get_languages.call(retry=0, extract_keys="get_languages_key", session=session)
-                if self.get_voices:
-                    all_voices = await self.get_voices.call(retry=0, extract_keys="get_voices_key", session=session)
+            if self.get_languages:
+                lang_list = await self.get_languages.call(retry=0, extract_keys="get_languages_key")
+            if self.get_voices:
+                all_voices = await self.get_voices.call(retry=0, extract_keys="get_voices_key")
             return lang_list, all_voices
         except Exception as e:
             log.error(f'Error fetching options for "/speak" command via API: {e}')

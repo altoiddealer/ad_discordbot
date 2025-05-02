@@ -403,6 +403,9 @@ async def on_ready():
     if client.is_first_on_ready: # type: ignore
         client.is_first_on_ready = False # type: ignore
 
+        # Setup API clients
+        await api.setup_clients()
+
         # Enforce only one TTS method enabled
         enforce_one_tts_method()
 
