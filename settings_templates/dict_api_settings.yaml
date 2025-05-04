@@ -71,27 +71,65 @@ all_apis:
       - {name: Post TTS Generate, path: /api/tts-generate, method: POST}
 
   - name: ComfyUI
-    transport: websocket # For stateful APIs like ComfyUI
-    url: http://127.0.0.1:7869
+    url: http://127.0.0.1:8188
     enabled: false
-    websocket_url: ws://127.0.0.1:8188/ws
-    client_id_required: true  # Generates client ID
     default_headers: {Content-Type: application/json}
     default_timeout: 60
     auth: null
+    websocket:
+      url: ws://127.0.0.1:8188/ws
+      client_id_required: true
+      client_id_format: uuid
+      query_params:
+        clientId: "{client_id}"
+      reconnect_on_failure: true
+      retry: 1
     endpoints:
-      - {name: Queue Prompt, path: prompt, method: POST}
-      - {name: View, path: view, method: POST}
-      - name: Generate image
-        send_type: json       # NEW: instead of HTTP method, how to send: json / text / bytes
-        payload:
-          action: "ping"
-        expect_response: true # Expects a response
-      - name: Upload Image
-        send_type: binary
-        payload:
-          file_path: "/path/to/image.png"
-        expect_response: false
+      - name: Queue Prompt
+        path: prompt
+        method: POST
+      - name: View
+        path: view
+        method: POST
+
+# websocket:
+#   url: "ws://127.0.0.1:8188/ws"        # (str) Full WebSocket URL; fallback to HTTP-based conversion if not provided
+#   client_id_required: true             # (bool) Whether a client_id must be added to the connection URL
+#   client_id_format: "uuid"             # (str) Format for generated client_id: "uuid", "short", "timestamp", "hex", "opaque", "int", "machine", "env_user"
+  
+#   token_required: false                # (bool) Whether a token is required in the URL
+#   token_name: "token"                  # (str) The query parameter name used to pass the token (e.g., "token", "auth")
+
+#   session_id_required: false           # (bool) Whether a session ID is required for reconnect/resume
+#   session_id_name: "session_id"        # (str) The query parameter name for session ID
+
+#   channel_required: false              # (bool) Whether the connection must specify a channel/room name
+#   channel_name: "channel"              # (str) The query parameter name for channel (e.g., chat room, pub/sub topic)
+
+#   version_required: false              # (bool) Whether a version must be passed in the URL
+#   version_name: "version"              # (str) The query parameter name for the version (e.g., "v", "api_version")
+
+#   headers:                             # (dict[str, str]) Optional headers to send during WebSocket connection (e.g., for Auth)
+#     Authorization: "Bearer {token}"   # Example: Replace `{token}` at runtime
+
+#   query_params:                        # (dict[str, str]) Key-value pairs to convert into ?key=value&key2=value2...
+#     client_id: "{client_id}"           # Placeholders will be dynamically resolved at runtime
+#     token: "{token}"
+#     channel: "{channel}"
+#     version: "v2"
+#     app_name: "MyApp"
+#     debug: "1"
+
+#   reconnect_on_failure: true           # (bool) If true, the client will auto-reconnect on failure
+#   retry_attempts: 3                    # (int) Number of retry attempts for reconnecting
+#   retry_interval: 5                    # (int) Seconds to wait between retry attempts
+
+# More dynamic values for query_params:
+# "{client_id}"
+# "{token}"
+# "{session_id}"
+# "{channel}"
+# "{version}"
   
 # Define a list of processing presets here, which can be injected in 'response_handling' or in any 'post_process' steps.
 response_handling_presets:

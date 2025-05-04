@@ -1,11 +1,11 @@
 import aiohttp
 import aiofiles
 import json
-import uuid
 import asyncio
 import os
 import jsonschema
 import jsonref
+from urllib.parse import urlencode, urlparse, urlunparse, parse_qs
 from PIL import Image, PngImagePlugin
 import io
 import base64
@@ -193,14 +193,134 @@ class API:
 
         return True
 
+class WebSocketConnectionConfig:
+    def __init__(self, **kwargs):
+        self.url: Optional[str] = kwargs.get("url")
+        self.query_params: dict = kwargs.get("query_params", {})
+
+        # ID / session / channel support
+        self.client_id_required: bool = kwargs.get("client_id_required", False)
+        self.client_id_format: str = kwargs.get("client_id_format", "uuid")
+        self.token_required: bool = kwargs.get("token_required", False)
+        self.token_name: str = kwargs.get("token_name", "token")
+        self.auth_token: Optional[str] = kwargs.get("auth_token")
+
+        self.session_id_required: bool = kwargs.get("session_id_required", False)
+        self.session_id_name: str = kwargs.get("session_id_name", "session_id")
+        self.session_id: Optional[str] = kwargs.get("session_id")
+
+        self.channel_required: bool = kwargs.get("channel_required", False)
+        self.channel_name: str = kwargs.get("channel_name", "channel")
+        self.channel: Optional[str] = kwargs.get("channel")
+
+        self.version_required: bool = kwargs.get("version_required", False)
+        self.version_name: str = kwargs.get("version_name", "version")
+        self.version: Optional[str] = kwargs.get("version")
+
+        self.headers: dict = kwargs.get("headers", {})
+
+        self.client_id: Optional[str] = None
+
+    def resolve_placeholders(self, data: dict[str, str]) -> dict[str, str]:
+        context = {
+            "token": self.auth_token or "",
+            "client_id": self.client_id or "",
+            "session_id": self.session_id or "",
+            "channel": self.channel or "",
+            "version": self.version or "",
+        }
+        return {key: (value.format(**context) if isinstance(value, str) else value)
+                for key, value in data.items()}
+
+    def build_headers(self) -> dict[str, str]:
+        return self.resolve_placeholders(self.headers)
+
+    def generate_client_id(self, format: str) -> str:
+        import secrets
+        if format == "uuid":
+            import uuid
+            return str(uuid.uuid4())
+        elif format == "short":
+            import string
+            return ''.join(secrets.choice(string.ascii_letters + string.digits) for _ in range(8))
+        elif format == "timestamp":
+            import time
+            return str(int(time.time()))
+        elif format == "hex":
+            return secrets.token_hex(8)
+        elif format == "opaque":
+            return secrets.token_urlsafe(16)
+        elif format == "int":
+            return str(secrets.randbelow(10**8))
+        elif format == "machine":
+            import socket
+            return socket.gethostname()
+        elif format == "env_user":
+            return os.getenv("USER", "unknown_user")
+        else:
+            return "client"  # fallback/default
+
+    def build_url(self, fallback_http_url: str) -> str:
+        # Generate client_id if needed
+        if self.client_id_required and not self.client_id:
+            self.client_id = self.generate_client_id(self.client_id_format)
+
+        # Start with configured URL or fallback from HTTP
+        if self.url:
+            parsed = urlparse(self.url)
+        else:
+            scheme = "wss" if fallback_http_url.startswith("https") else "ws"
+            base = fallback_http_url.replace("http://", "").replace("https://", "").rstrip("/")
+            parsed = urlparse(f"{scheme}://{base}/ws")
+
+        # Build query dictionary from:
+        # - Explicit query_params with placeholder replacements
+        # - Additional required params like client_id, token, etc.
+        final_params = dict(self.query_params)
+
+        if self.client_id_required:
+            final_params.setdefault("clientId", self.client_id)
+
+        if self.token_required and self.auth_token:
+            final_params[self.token_name] = self.auth_token
+
+        if self.session_id_required and self.session_id:
+            final_params[self.session_id_name] = self.session_id
+
+        if self.channel_required and self.channel:
+            final_params[self.channel_name] = self.channel
+
+        if self.version_required and self.version:
+            final_params[self.version_name] = self.version
+
+        # Replace placeholders (e.g., {client_id}) in query_params
+        for key, val in final_params.items():
+            if isinstance(val, str):
+                final_params[key] = val.format(
+                    client_id=self.client_id or "",
+                    token=self.auth_token or "",
+                    session_id=self.session_id or "",
+                    channel=self.channel or "",
+                    version=self.version or "",
+                )
+
+        # Merge with existing query string in URL (if any)
+        original_params = parse_qs(parsed.query)
+        for k, v in final_params.items():
+            original_params[k] = [v]
+
+        final_query = urlencode({k: v[0] for k, v in original_params.items()})
+        rebuilt = parsed._replace(query=final_query)
+
+        return urlunparse(rebuilt)
 
 class APIClient:
     def __init__(self,
                  name: str,
                  enabled: bool,
                  url: str,
-                 transport: str = 'http',
-                 websocket_url: Optional[str] = None,
+                 websocket_config = None,
+                 default_transport: str = 'http',
                  default_headers: Optional[Dict[str, str]] = None,
                  default_timeout: int = 60,
                  auth: Optional[dict] = None,
@@ -210,8 +330,7 @@ class APIClient:
         self.session:Optional[aiohttp.ClientSession] = None
         self.enabled = enabled
         self.url = url.rstrip("/")
-        self.transport = transport.lower()
-        self.websocket_url = websocket_url
+        self.default_transport = default_transport.lower()
         self.default_headers = default_headers or {}
         self.default_timeout = default_timeout
         self.auth = auth
@@ -219,8 +338,11 @@ class APIClient:
         self.openapi_schema = None
         self._endpoint_fetch_payloads = []
         # WebSocket connection
+        self.ws_config: Optional[WebSocketConnectionConfig] = None
         self.ws = None
         self.client_id = None
+        if websocket_config:
+            self.ws_config = WebSocketConnectionConfig(websocket_config)
         # set auth
         if auth:
             try:
@@ -237,7 +359,7 @@ class APIClient:
             return
         # Create and retain reusable session per API
         self.session = aiohttp.ClientSession()
-        if self.transport == 'websocket':
+        if self.ws_config:
             await self._connect_websocket()
         else:
             await self._fetch_openapi_schema()
@@ -279,13 +401,10 @@ class APIClient:
         if not self.session:
             log.warning(f"[{self.name}] Cannot connect websocket — session is not initialized.")
             return
-
-        self.client_id = str(uuid.uuid4())
-        url = self.websocket_url or self.url.replace("http", "ws") + "/ws"
-        if '?' not in url:
-            url = f"{url}?clientId={self.client_id}"
+        url = self.ws_config.build_url(self.url)
+        headers = self.ws_config.build_headers()
         try:
-            self.ws = await self.session.ws_connect(url)
+            self.ws = await self.session.ws_connect(url, headers=headers)
             log.info(f"[{self.name}] WebSocket connection established.")
         except Exception as e:
             log.error(f"[{self.name}] failed to connect to WebSocket: {e}")
@@ -309,7 +428,7 @@ class APIClient:
 
     def _create_endpoint(self, EPClass:"Endpoint", ep_dict:dict):
         return EPClass(name=ep_dict["name"],
-                        path=ep_dict["path"],
+                        path=ep_dict.get("path", ""),
                         method=ep_dict.get("method", "GET"),
                         response_type=ep_dict.get("response_type", "json"),
                         payload_config=ep_dict.get("payload"),
@@ -447,12 +566,17 @@ class APIClient:
         if not self.enabled:
             return False
         try:
-            response = await self.request(endpoint='', method='GET', retry=0, return_raw=True, timeout=5)
-            if response:
-                return True, ''
-            else:
-                return False, ''
-           
+            if self.transport == 'http':
+                response = await self.request(endpoint='', method='GET', retry=0, return_raw=True, timeout=5)
+                if response:
+                    return True, ''
+                else:
+                    return False, ''
+            elif self.transport == 'websocket':
+                session = aiohttp.ClientSession()
+                url = self.make_ws_client_url()
+                ws = await session.ws_connect(url)
+                await ws.close()
         except aiohttp.ClientError as e:
             emsg = f"[{self.name}] is enabled but unresponsive at url {self.url}: {e}"
             await self.go_offline()
@@ -576,6 +700,45 @@ class APIClient:
                 log.error(f"HTTP {response.status} Error: {response_text}")
                 response.raise_for_status()
 
+    async def _send_ws_message(
+        self,
+        json: Optional[Dict[str, Any]],
+        headers: Optional[Dict[str, str]],
+        timeout: Optional[int],
+        expect_response: bool,
+        response_type: Optional[str],
+    ) -> Union[Dict[str, Any], str, bytes, None]:
+        if not json:
+            raise ValueError("WebSocket messages must be JSON serializable.")
+
+        ws_url = self.url.replace("http", "ws")
+        timeout = timeout or self.default_timeout
+
+        if not self.ws or self.ws.closed:
+            await self._connect_websocket()
+
+        try:
+            await self.ws.send_json(json)
+
+            if expect_response:
+                msg = await self.ws.receive(timeout=timeout)
+
+                if msg.type == aiohttp.WSMsgType.TEXT:
+                    if response_type == "text":
+                        return msg.data
+                    try:
+                        return jsonlib.loads(msg.data)
+                    except Exception:
+                        log.warning("Failed to parse WebSocket text as JSON.")
+                        return msg.data
+                elif msg.type == aiohttp.WSMsgType.BINARY:
+                    return msg.data if response_type == "bytes" else msg.data.decode("utf-8")
+                elif msg.type == aiohttp.WSMsgType.ERROR:
+                    raise RuntimeError(f"WebSocket error: {msg}")
+        except Exception as e:
+            log.exception(f"[{self.name}] WebSocket message failed: {e}")
+            raise
+
 class DummyClient:
     def __init__(self, target_cls: type):
         annotations = getattr(target_cls, '__annotations__', {})
@@ -583,6 +746,7 @@ class DummyClient:
             setattr(self, attr_name, None)
     def __bool__(self):
         return False  # Makes instances evaluate False
+
 
 class ImgGenClient(APIClient):
     def __init__(self, *args, **kwargs):
@@ -684,7 +848,6 @@ class ImgGenClient(APIClient):
     #         log.error(f"Error getting SwarmUI session: {e}")
     #     return False
 
-
 class TextGenClient(APIClient):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -697,7 +860,6 @@ class TextGenClient(APIClient):
     # class override to subclass Endpoint()
     def _get_self_ep_class(self):
         return TextGenEndpoint
-
 
 class TTSGenClient(APIClient):
     def __init__(self, *args, **kwargs):
@@ -727,6 +889,19 @@ class TTSGenClient(APIClient):
             return None, None
 
 
+class WebSocketEndpointConfig:
+    def __init__(
+        self,
+        message_type: str,
+        expects_response: bool = True,
+        channel: Optional[str] = None,
+        static_payload: Optional[dict] = None
+    ):
+        self.message_type = message_type
+        self.expects_response = expects_response
+        self.channel = channel
+        self.static_payload = static_payload or {}
+
 class Endpoint:
     def __init__(self,
                  name: str,
@@ -737,7 +912,9 @@ class Endpoint:
                  rh_config: Optional[dict[str, Any]] = None,
                  headers: Optional[Dict[str, str]] = None,
                  timeout: int = 10,
-                 retry: int = 0):
+                 retry: int = 0,
+                 send_type: str = "json",       # WebSocket
+                 expect_response: bool = True): # WebSocket
         self.client: Optional["APIClient"] = None
         self.name = name
         self.path = path
@@ -749,6 +926,9 @@ class Endpoint:
         self.headers = headers or {}
         self.timeout = timeout
         self.retry = retry
+        self.send_type = send_type # Websocket
+        self.expect_response = expect_response # Websocket
+        # Collect response handling config
         if rh_config:
             self.init_response_handling(rh_config)
         if payload_config:
@@ -786,6 +966,9 @@ class Endpoint:
         return copy.deepcopy(self.payload)
 
     def get_preferred_content_type(self) -> Optional[str]:
+        if self.client.transport == 'websocket':
+            return None
+
         content_type = None
         if isinstance(self.headers, dict):
             content_type = self.headers.get("Content-Type")
@@ -844,6 +1027,7 @@ class Endpoint:
             return self.path  # Direct match
 
         for defined_path in paths:
+            import re
             # Convert OpenAPI-style path to regex
             path_regex = re.sub(r"\{[^/]+\}", "[^/]+", defined_path)
             if re.fullmatch(path_regex, self.path):
@@ -993,11 +1177,6 @@ class Endpoint:
         if not self.client.enabled:
             raise RuntimeError(f"Endpoint {self.name} was called, but API Client '{self.client.name}' is currently disabled. Use '/toggle_api' to enable the client when available.")
 
-        headers = kwargs.pop('headers', self.headers)
-        timeout = kwargs.pop('timeout', self.timeout)
-        retry = kwargs.pop('retry', self.retry)
-        response_type = kwargs.pop('response_type', self.response_type)
-
         json_payload, data_payload, params_payload, files_payload = self.resolve_input_data(input_data, payload_type, payload_map)
 
         if sanitize:
@@ -1006,7 +1185,26 @@ class Endpoint:
             if data_payload and isinstance(data_payload, dict):
                 data_payload = self.sanitize_payload(data_payload, self.client.openapi_schema)
 
-        response = await self.client.request(
+        response = None
+        # Routing based on transport
+        if self.client.transport == "websocket":
+            response = await self.process_ws_request(json_payload, data_payload, input_data, **kwargs)
+        elif self.client.transport == "http":
+            response = await self.process_http_request(json_payload, data_payload, params_payload, files_payload, **kwargs)
+
+        if not extract_keys:
+            return response
+        
+        return self.extract_main_keys(response, extract_keys)
+
+
+    async def process_http_request(self, json_payload, data_payload, params_payload, files_payload, **kwargs):
+        headers = kwargs.pop('headers', self.headers)
+        timeout = kwargs.pop('timeout', self.timeout)
+        retry = kwargs.pop('retry', self.retry)
+        response_type = kwargs.pop('response_type', self.response_type)
+
+        return await self.client.request(
             endpoint=self.path,
             method=self.method,
             json=json_payload,
@@ -1019,10 +1217,41 @@ class Endpoint:
             response_type=response_type,
             **kwargs
         )
-        if not extract_keys:
-            return response
-        
-        return self.extract_main_keys(response, extract_keys)
+
+    async def process_ws_request(self, json_payload, data_payload, input_data, **kwargs):
+        # Compose WebSocket message
+        message = {}
+
+        headers = kwargs.pop('headers', self.headers)
+        timeout = kwargs.pop('timeout', self.timeout)
+        retry = kwargs.pop('retry', self.retry)
+        response_type = kwargs.pop('response_type', self.response_type)
+        expect_response = kwargs.pop('expect_response', self.expect_response)
+
+        if isinstance(self.payload, dict):
+            message.update(self.payload)
+
+        # Merge input_data or processed payloads
+        if json_payload:
+            message.update(json_payload)
+        elif data_payload:
+            message.update(data_payload)
+        elif input_data:
+            message.update(input_data)
+
+        # Optionally include client ID
+        if self.client.ws_config.client_id:
+            message["client_id"] = self.client.ws_config.client_id
+
+        return await self.client.request(
+            endpoint="",  # WebSockets ignore path
+            json=message,
+            timeout=timeout,
+            headers=headers,
+            expect_response=expect_response,
+            response_type=response_type,
+            **kwargs
+        )
 
     # Extracts the key values from the API response, for the Endpoint's key names defined in user API settings
     def extract_main_keys(self, response, ep_keys: str|List[str] = None):
