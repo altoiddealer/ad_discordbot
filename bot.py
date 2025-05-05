@@ -2192,96 +2192,14 @@ class TaskProcessing(TaskAttributes):
         except Exception as e:
             log.error(f'Error masking ReActor output images: {e}')
 
-    def progress_bar(self, value, length=15):
-        try:
-            filled_length = int(length * value)
-            bar = ':black_square_button:' * filled_length + ':black_large_square:' * (length - filled_length)
-            return f'{bar}'
-        except Exception:
-            return 0
-
-    async def fetch_progress(self: Union["Task", "Tasks"], session):
-        return await api.imggen.get_imggen_progress(session=session)
-
-    async def check_sd_progress(self: Union["Task", "Tasks"], session: aiohttp.ClientSession):
-        try:
-            eta_message = 'Not yet available'
-            await self.embeds.send('img_gen', f'Waiting for {api.imggen.name} ...', f'{self.progress_bar(0)}\n**ETA**: {eta_message}')
-            await asyncio.sleep(1)
-
-            retry_count = 0
-            while retry_count < 5:
-                progress_data = await self.fetch_progress(session)
-                if progress_data and progress_data.get('progress', 0) > 0:
-                    break
-                log.warning(f'Waiting for progress response from {api.imggen.name}, retrying in 1 second (attempt {retry_count + 1}/5)')
-                await asyncio.sleep(1)
-                retry_count += 1
-            else:
-                log.error('Reached maximum retry limit')
-                await self.embeds.edit_or_send('img_gen', f'Error getting progress response from {api.imggen.name}.', 'Image generation will continue, but progress will not be tracked.')
-                return
-
-            last_progress = 0
-            stall_count = 0
-            progress = progress_data.get('progress', 0)
-            percent_complete = progress * 100
-
-            while percent_complete < 100 and retry_count < 5:
-                progress_data = await self.fetch_progress(session)
-                if progress_data:
-                    progress = progress_data.get('progress', 0)
-                    percent_complete = progress * 100
-                    eta = progress_data.get('eta_relative', 0)
-
-                    if eta == 0:
-                        progress = 1.0
-                        percent_complete = 100
-
-                    if progress <= 0.01:
-                        title = f'Preparing to generate image ...'
-                    else:
-                        eta_message = f'{round(eta, 2)} seconds'
-                        comment = ''
-                        if progress == last_progress:
-                            stall_count += 1
-                            if stall_count > 2:
-                                comment = ' (Stalled)'
-                        else:
-                            stall_count = 0
-                        title = f'Generating image: {percent_complete:.0f}%{comment}'
-
-                    description = f"{self.progress_bar(progress)}\n**ETA**: {eta_message}"
-                    await self.embeds.edit('img_gen', title, description)
-
-                    last_progress = progress
-                    await asyncio.sleep(1)
-                else:
-                    log.warning(f'Connection closed with {api.imggen.name}, retrying in 1 second (attempt {retry_count + 1}/5)')
-                    await asyncio.sleep(1)
-                    retry_count += 1
-
-            await self.embeds.delete('img_gen')
-
-        except Exception as e:
-            log.error(f'Error tracking {api.imggen.name} image generation progress: {e}')
-
-    async def track_progress(self: Union["Task", "Tasks"]):
-        if self.embeds.enabled('img_gen'):
-            async with aiohttp.ClientSession() as session:
-                await self.check_sd_progress(session)
-
-    async def save_images_and_return(self: Union["Task", "Tasks"]):
-        return await api.imggen.get_image_data(image_payload=self.img_payload)
-
     async def sd_img_gen(self:Union["Task","Tasks"]):
         try:
             reactor_args = self.img_payload.get('alwayson_scripts', {}).get('reactor', {}).get('args', [])
             last_reactor_index = reactor_args[-1] if reactor_args else None
             reactor_mask = reactor_args.pop() if isinstance(last_reactor_index, dict) else None
             # Start progress task and generation task concurrently
-            images_task = asyncio.create_task(self.save_images_and_return())
-            progress_task = asyncio.create_task(self.track_progress())
+            images_task = asyncio.create_task(api.imggen.save_images_and_return(self.img_payload, self.params.mode))
+            progress_task = asyncio.create_task(api.imggen.track_progress(discord_embeds=self.embeds))
             # Wait for both tasks to complete
             await asyncio.gather(images_task, progress_task)
             # Get the list of images and copy of pnginfo after both tasks are done

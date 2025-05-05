@@ -624,6 +624,7 @@ class APIClient:
                 raise ValueError("Invalid data URL format")
 
             elif response_type == "csv":
+                import csv
                 text = await response.text()
                 return list(csv.reader(io.StringIO(text)))
 
@@ -631,6 +632,7 @@ class APIClient:
                 return await response.read()  # treat as bytes
 
             elif response_type == "yaml":
+                import yaml
                 text = await response.text()
                 return yaml.safe_load(text)
 
@@ -671,7 +673,6 @@ class APIClient:
         return_text: bool = False,  # still here if used manually
         return_raw: bool = False,
         timeout: Optional[int] = None,
-        session: Optional[aiohttp.ClientSession] = None,
         response_type: Optional[str] = None,
         stream: bool = False,
     ) -> Union[Dict[str, Any], str, bytes, None]:
@@ -684,22 +685,16 @@ class APIClient:
         # Validate payload
         self.validate_payload(method, endpoint, json, data)
 
+        if not self.session:
+            self.session = aiohttp.ClientSession()
+
         for attempt in range(retry + 1):
             try:
-                active_session = session or self.session
-                if active_session is None:
-                    async with aiohttp.ClientSession() as temp_session:
-                        return await self._make_request(
-                            session=temp_session, method=method, url=url, params=params, data=data, json=json,
-                            files=files, headers=headers, auth=auth, timeout=timeout, return_text=return_text,
-                            return_raw=return_raw, response_type=response_type, stream=stream
-                        )
-                else:
-                    return await self._make_request(
-                        session=active_session, method=method, url=url, params=params, data=data, json=json,
-                        files=files, headers=headers, auth=auth, timeout=timeout, return_text=return_text,
-                        return_raw=return_raw, response_type=response_type, stream=stream
-                    )
+                return await self._make_request(
+                    session=self.session, method=method, url=url, params=params, data=data, json=json,
+                    files=files, headers=headers, auth=auth, timeout=timeout, return_text=return_text,
+                    return_raw=return_raw, response_type=response_type, stream=stream
+                )
 
             except (aiohttp.ClientConnectionError, aiohttp.ClientResponseError, asyncio.TimeoutError, Exception) as e:
                 if isinstance(e, aiohttp.ClientConnectionError):
@@ -849,26 +844,85 @@ class ImgGenClient(APIClient):
     def _get_self_ep_class(self):
         return ImgGenEndpoint
 
-    async def get_imggen_progress(self, session: Optional[aiohttp.ClientSession] = None) -> Optional[Dict[str, Any]]:
+    
+    def progress_bar(self, value, length=15):
+        try:
+            filled_length = int(length * value)
+            bar = ':black_square_button:' * filled_length + ':black_large_square:' * (length - filled_length)
+            return f'{bar}'
+        except Exception:
+            return 0
+
+    async def track_progress(self, discord_embeds):
         if self.get_progress:
             try:
-                return await self.get_progress.call(session=session)
+                eta_message = 'Not yet available'
+                await discord_embeds.send('img_gen', f'Waiting for {self.name} ...', f'{self.progress_bar(0)}\n**ETA**: {eta_message}')
+                await asyncio.sleep(1)
+
+                retry_count = 0
+                while retry_count < 5:
+                    progress_data = await self.get_progress.call()
+                    if progress_data and progress_data.get('progress', 0) > 0:
+                        break
+                    log.warning(f'Waiting for progress response from {self.name}, retrying in 1 second (attempt {retry_count + 1}/5)')
+                    await asyncio.sleep(1)
+                    retry_count += 1
+                else:
+                    log.error('Reached maximum retry limit')
+                    await discord_embeds.edit_or_send('img_gen', f'Error getting progress response from {self.name}.', 'Image generation will continue, but progress will not be tracked.')
+                    return
+
+                last_progress = 0
+                stall_count = 0
+                progress = progress_data.get('progress', 0)
+                percent_complete = progress * 100
+
+                while percent_complete < 100 and retry_count < 5:
+                    progress_data = await self.get_progress.call()
+                    if progress_data:
+                        progress = progress_data.get('progress', 0)
+                        percent_complete = progress * 100
+                        eta = progress_data.get('eta_relative', 0)
+
+                        if eta == 0:
+                            progress = 1.0
+                            percent_complete = 100
+
+                        if progress <= 0.01:
+                            title = f'Preparing to generate image ...'
+                        else:
+                            eta_message = f'{round(eta, 2)} seconds'
+                            comment = ''
+                            if progress == last_progress:
+                                stall_count += 1
+                                if stall_count > 2:
+                                    comment = ' (Stalled)'
+                            else:
+                                stall_count = 0
+                            title = f'Generating image: {percent_complete:.0f}%{comment}'
+
+                        description = f"{self.progress_bar(progress)}\n**ETA**: {eta_message}"
+                        await discord_embeds.edit('img_gen', title, description)
+
+                        last_progress = progress
+                        await asyncio.sleep(1)
+                    else:
+                        log.warning(f'Connection closed with {self.name}, retrying in 1 second (attempt {retry_count + 1}/5)')
+                        await asyncio.sleep(1)
+                        retry_count += 1
+
+                await discord_embeds.delete('img_gen')
+
             except Exception as e:
-                log.warning(f"Progress fetch failed from {self.name}: {e}")
-        return None
+                log.error(f'Error tracking {self.name} image generation progress: {e}')
 
-    async def get_image_data(
-            self,
-            image_payload: Dict[str, Any],
-            mode: str = "txt2img",
-            session: Optional[aiohttp.ClientSession] = None
-        ) -> Tuple[List[Image.Image], Optional[PngImagePlugin.PngInfo]]:
-
+    async def save_images_and_return(self, img_payload:dict, mode:str="txt2img") -> Tuple[List[Image.Image], Optional[PngImagePlugin.PngInfo]]:
         images = []
         pnginfo = None
         try:
             ep_for_mode:ImgGenEndpoint = getattr(self, f'post_{mode}')
-            response = await ep_for_mode.call(input_data=image_payload, session=session)
+            response = await ep_for_mode.call(input_data=img_payload)
 
             if not isinstance(response, dict):
                 return [], response
@@ -880,7 +934,7 @@ class ImgGenClient(APIClient):
                 # Get PNG info
                 if self.post_pnginfo:
                     png_payload = {"image": "data:image/png;base64," + img_data}
-                    r2 = await self.post_pnginfo.call(input_data=png_payload, session=session)
+                    r2 = await self.post_pnginfo.call(input_data=png_payload)
                     if not isinstance(r2, dict):
                         return [], r2
                     png_info_data = r2.get("info")
@@ -898,7 +952,8 @@ class ImgGenClient(APIClient):
             return [], e
 
         return images, pnginfo
-    
+
+
     def is_sdwebui(self) -> bool:
         return any(substring in self.name.lower() for substring in ['stable', 'a1111', 'sdwebui'])
     
