@@ -6,7 +6,6 @@ bot_api_functions:
   #            You may need to check the input/output structure for API endpoints to set the 'key string' or ['list.of', 'key', 'strings']. (dot notation for deeper dict values)
   imggen:
     api_name: Stable Diffusion WebUI
-    enabled: True
     post_txt2img: {endpoint_name: Post txt2img, prompt_key: prompt, neg_prompt_key: negative_prompt, seed_key: seed}
     post_img2img: {endpoint_name: Post img2img, prompt_key: prompt, neg_prompt_key: negative_prompt, seed_key: seed}
     get_progress: {endpoint_name: Get Progress}
@@ -19,7 +18,6 @@ bot_api_functions:
   # Bot currently cannot use textgen APIs for main functions (support is coming!)
   textgen:
     api_name: Text Generation WebUI
-    enabled: False
   # API for TTS is WIP. These settings are currently limited to the '/speak' command (will not work for message requests)
   ttsgen:
     api_name: AllTalk TTS v2
@@ -32,15 +30,26 @@ all_apis:
   # You may define any number of APIs and Endpoints here (a list of dictionaries), making them available to use for various bot functions,
   #   including the "main" apis above, the Tags system (dict_tags.yaml), user defined commands (dict_commands.yaml *WIP feature*), etc.
   - name: Stable Diffusion WebUI
-    transport: http # "http" or "websocket". Defaults to "http" if not included.
     url: http://127.0.0.1:7860
     enabled: true
-    default_headers: {Content-Type: application/json}
+    default_headers: {Content-Type: application/json} # will apply to all endpoints unless 'headers' defined in endpoint.
     default_timeout: 10 # seconds to wait before aborting api call
     auth: null # {username: myuser, password: mypass} # dict format with keys 'username' and 'password'
     # Add any endpoints that you may use for bot functions (Tags system, user commands, etc)
     endpoints:
-      - {name: Post txt2img, path: /sdapi/v1/txt2img, method: POST, payload_type: json, response_type: json, retry: 1, payload: sd-webui.yaml, timeout: 120}
+      - name: Post txt2img
+        path: /sdapi/v1/txt2img
+        method: POST
+        payload_type: json # json / form / multipart / query
+        retry: 1
+        payload: sd-webui.yaml
+        timeout: 120
+        response_handling:
+          type: base64
+          output_key: images # key in JSON to extract from. Use dot.notation to get a nested key.
+          save: true
+          file_format: png
+          file_path: images
       - {name: Post img2img, path: /sdapi/v1/img2img, method: POST, payload: sd-webui.yaml, timeout: 120}
       - {name: Get Progress, path: /sdapi/v1/progress, method: GET}
       - {name: Post PNG Info, path: /sdapi/v1/png-info, method: POST}
@@ -121,8 +130,7 @@ all_apis:
 #     debug: "1"
 
 #   reconnect_on_failure: true           # (bool) If true, the client will auto-reconnect on failure
-#   retry_attempts: 3                    # (int) Number of retry attempts for reconnecting
-#   retry_interval: 5                    # (int) Seconds to wait between retry attempts
+#   retry: 1                             # (int) Number of retry attempts for reconnecting
 
 # More dynamic values for query_params:
 # "{client_id}"
@@ -131,14 +139,13 @@ all_apis:
 # "{channel}"
 # "{version}"
   
-# Define a list of processing presets here, which can be injected in 'response_handling' or in any 'post_process' steps.
-response_handling_presets:
+# Create presets here which can be injected in 'response_handling', 'workflow' steps, or in any 'post_process' steps.
+processing_presets:
   - name: Decode base64 and save
     type: base64
     output_key: images      # key in JSON to extract from. Use dot.notation to get a nested key.
     output_format: png      # only used if type is base64
     save_to: images
-    filename_prefix: img_gen
   
   - name: Extract metadata
     endpoint_name: Post PNG Info

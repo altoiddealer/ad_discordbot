@@ -5,14 +5,13 @@ import asyncio
 import os
 import jsonschema
 import jsonref
-from urllib.parse import urlencode, urlparse, urlunparse, parse_qs
 from PIL import Image, PngImagePlugin
 import io
 import base64
 import copy
-from typing import Any, Dict, Tuple, List, Optional, Union
+from typing import Any, Dict, Tuple, List, Optional, Union, Type
 from modules.utils_shared import shared_path, load_file, get_api
-import modules.utils_processing
+import modules.utils_processing as processing
 
 from modules.logs import import_track, get_logger; import_track(__file__, fp=True); log = get_logger(__name__)  # noqa: E702
 logging = log
@@ -20,10 +19,15 @@ logging = log
 class APISettings():
     def __init__(self):
         self.main_settings:dict = {}
-        self.response_handling_presets:dict = {}
+        self.processing_presets:dict = {}
         self.workflows:dict = {}
+
     def get_config_for(self, section: str, default=None) -> dict:
         return self.main_settings.get(section, default or {})
+
+    def get_workflow(self, workflow_name: str, default=None) -> dict:
+        return self.workflows.get(workflow_name, default or {})
+
     def collect_presets(self, presets_list):
         for preset in presets_list:
             if not isinstance(preset, dict):
@@ -31,7 +35,8 @@ class APISettings():
                 continue
             name = preset.get('name')
             if name:
-                self.response_handling_presets[name] = preset
+                self.processing_presets[name] = preset
+
     def apply_preset(self, rh_config: dict) -> dict:
         """
         Merge a config dictionary with its referenced preset (if any),
@@ -50,8 +55,10 @@ class APISettings():
         merged = {**preset, **rh_config}
         merged.pop("preset", None)
         return merged
+
     def get_preset(self, preset_name: str, default=None) -> dict:
-        return self.response_handling_presets.get(preset_name, default or {})
+        return self.processing_presets.get(preset_name, default or {})
+
     def collect_workflows(self, workflows_list):
         for workflow in workflows_list:
             if not isinstance(workflow, dict):
@@ -71,8 +78,13 @@ class APISettings():
                         expanded_steps.append(expanded)
                     self.workflows[name]['steps'] = expanded_steps
 
-    def get_workflow(self, workflow_name: str, default=None) -> dict:
-        return self.workflows.get(workflow_name, default or {})
+    def collect_settings(self, data:dict):
+        # Collect Main APIs
+        self.main_settings = data.get('bot_api_functions', {})
+        # Collect Response Handling Presets
+        self.collect_presets(data.get('processing_presets', {}))
+        # Collect Workflows
+        self.collect_workflows(data.get('workflows', {}))
 
 apisettings = APISettings()
 
@@ -92,12 +104,8 @@ class API:
         # Load API Settings yaml
         data = load_file(shared_path.api_settings)
 
-        # Collect Main APIs
-        apisettings.main_settings = data.get('bot_api_functions', {})
-        # Collect Response Handling Presets
-        apisettings.collect_presets(data.get('response_handling_presets', {}))
-        # Collect Workflows
-        apisettings.collect_workflows(data.get('workflows', {}))
+        # Main APIs / Presets / Workflows
+        apisettings.collect_settings(data)
 
         # Reverse lookup for matching API names to their function type
         main_api_name_map = {v.get("api_name"): k for k, v in apisettings.main_settings.items()
@@ -131,11 +139,10 @@ class API:
 
             # Collect all valid user APIs
             try:
-                api_client:APIClient = ClientClass(
+                api_client: APIClient = ClientClass(
                     name=name,
                     url=api_config['url'],
                     enabled=enabled,
-                    transport=api_config.get('transport', 'http'),
                     websocket_url=api_config.get('websocket_url'),
                     default_headers=api_config.get('default_headers'),
                     default_timeout=api_config.get('default_timeout', 60),
@@ -261,10 +268,10 @@ class WebSocketConnectionConfig:
             return "client"  # fallback/default
 
     def build_url(self, fallback_http_url: str) -> str:
+        from urllib.parse import urlencode, urlparse, urlunparse, parse_qs
         # Generate client_id if needed
         if self.client_id_required and not self.client_id:
             self.client_id = self.generate_client_id(self.client_id_format)
-
         # Start with configured URL or fallback from HTTP
         if self.url:
             parsed = urlparse(self.url)
@@ -272,7 +279,6 @@ class WebSocketConnectionConfig:
             scheme = "wss" if fallback_http_url.startswith("https") else "ws"
             base = fallback_http_url.replace("http://", "").replace("https://", "").rstrip("/")
             parsed = urlparse(f"{scheme}://{base}/ws")
-
         # Build query dictionary from:
         # - Explicit query_params with placeholder replacements
         # - Additional required params like client_id, token, etc.
@@ -280,33 +286,20 @@ class WebSocketConnectionConfig:
 
         if self.client_id_required:
             final_params.setdefault("clientId", self.client_id)
-
         if self.token_required and self.auth_token:
             final_params[self.token_name] = self.auth_token
-
         if self.session_id_required and self.session_id:
             final_params[self.session_id_name] = self.session_id
-
         if self.channel_required and self.channel:
             final_params[self.channel_name] = self.channel
-
         if self.version_required and self.version:
             final_params[self.version_name] = self.version
 
         # Replace placeholders (e.g., {client_id}) in query_params
-        for key, val in final_params.items():
-            if isinstance(val, str):
-                final_params[key] = val.format(
-                    client_id=self.client_id or "",
-                    token=self.auth_token or "",
-                    session_id=self.session_id or "",
-                    channel=self.channel or "",
-                    version=self.version or "",
-                )
+        resolved_query = self.resolve_placeholders(final_params)
 
-        # Merge with existing query string in URL (if any)
         original_params = parse_qs(parsed.query)
-        for k, v in final_params.items():
+        for k, v in resolved_query.items():
             original_params[k] = [v]
 
         final_query = urlencode({k: v[0] for k, v in original_params.items()})
@@ -314,13 +307,13 @@ class WebSocketConnectionConfig:
 
         return urlunparse(rebuilt)
 
+
 class APIClient:
     def __init__(self,
                  name: str,
                  enabled: bool,
                  url: str,
                  websocket_config = None,
-                 default_transport: str = 'http',
                  default_headers: Optional[Dict[str, str]] = None,
                  default_timeout: int = 60,
                  auth: Optional[dict] = None,
@@ -330,7 +323,6 @@ class APIClient:
         self.session:Optional[aiohttp.ClientSession] = None
         self.enabled = enabled
         self.url = url.rstrip("/")
-        self.default_transport = default_transport.lower()
         self.default_headers = default_headers or {}
         self.default_timeout = default_timeout
         self.auth = auth
@@ -338,9 +330,8 @@ class APIClient:
         self.openapi_schema = None
         self._endpoint_fetch_payloads = []
         # WebSocket connection
-        self.ws_config: Optional[WebSocketConnectionConfig] = None
         self.ws = None
-        self.client_id = None
+        self.ws_config: Optional[WebSocketConnectionConfig] = None
         if websocket_config:
             self.ws_config = WebSocketConnectionConfig(websocket_config)
         # set auth
@@ -361,10 +352,9 @@ class APIClient:
         self.session = aiohttp.ClientSession()
         if self.ws_config:
             await self._connect_websocket()
-        else:
-            await self._fetch_openapi_schema()
-            self._assign_endpoint_schemas()
-            await self._resolve_deferred_payloads()
+        await self._fetch_openapi_schema()
+        self._assign_endpoint_schemas()
+        await self._resolve_deferred_payloads()
         await self.main_setup_tasks()
 
     async def main_setup_tasks(self):
@@ -388,7 +378,7 @@ class APIClient:
         log.warning(f"[{self.name}] disabled. Use '/toggle_api' to try enabling it when available.")
         self.enabled = False
         if self.session is not None:
-            await self.close()
+            await self.close() # also closes websocket
 
     async def come_online(self) -> bool:
         if self.enabled:
@@ -399,8 +389,7 @@ class APIClient:
 
     async def _connect_websocket(self):
         if not self.session:
-            log.warning(f"[{self.name}] Cannot connect websocket — session is not initialized.")
-            return
+            self.session = aiohttp.ClientSession()
         url = self.ws_config.build_url(self.url)
         headers = self.ws_config.build_headers()
         try:
@@ -415,7 +404,6 @@ class APIClient:
         if self.ws:
             try:
                 await self.ws.close()
-                log.info(f"[{self.name}] WebSocket connection closed.")
             except Exception as e:
                 log.warning(f"[{self.name}] Error closing WebSocket: {e}")
             finally:
@@ -426,7 +414,7 @@ class APIClient:
             self.session = None
 
 
-    def _create_endpoint(self, EPClass:"Endpoint", ep_dict:dict):
+    def _create_endpoint(self, EPClass: Type[Union["Endpoint", "TextGenEndpoint", "ImgGenEndpoint", "TTSGenEndpoint"]], ep_dict: dict):
         return EPClass(name=ep_dict["name"],
                         path=ep_dict.get("path", ""),
                         method=ep_dict.get("method", "GET"),
@@ -434,6 +422,7 @@ class APIClient:
                         payload_config=ep_dict.get("payload"),
                         rh_config=ep_dict.get("response_handling"),
                         headers=ep_dict.get("headers", self.default_headers),
+                        stream=ep_dict.get("stream", False),
                         timeout=ep_dict.get("timeout", self.default_timeout),
                         retry=ep_dict.get("retry", 0))
     
@@ -500,12 +489,11 @@ class APIClient:
         if self.openapi_schema:
             return
         try:
-            def dereference_schema(schema: dict) -> dict:
-                return jsonref.JsonRef.replace_refs(schema)
             async with aiohttp.ClientSession() as session:
                 async with session.get(f"{self.url}/openapi.json") as response:
                     if 200 <= response.status < 300:
-                        self.openapi_schema = dereference_schema(await response.json())
+                        raw_schema = await response.json()
+                        self.openapi_schema = jsonref.JsonRef.replace_refs(raw_schema)
                         log.debug(f"[{self.name}] Loaded OpenAPI schema.")
                     else:
                         log.debug(f"[{self.name}] No OpenAPI schema available.")
@@ -519,7 +507,7 @@ class APIClient:
             return
 
         for endpoint in self.endpoints.values():
-            endpoint.set_schema_from_openapi(self.openapi_schema)
+            endpoint.set_openapi_schema(self.openapi_schema)
             if endpoint.schema:
                 log.debug(f"[{self.name}] Schema assigned to endpoint '{endpoint.name}'")
             else:
@@ -566,21 +554,108 @@ class APIClient:
         if not self.enabled:
             return False
         try:
-            if self.transport == 'http':
-                response = await self.request(endpoint='', method='GET', retry=0, return_raw=True, timeout=5)
-                if response:
-                    return True, ''
-                else:
-                    return False, ''
-            elif self.transport == 'websocket':
-                session = aiohttp.ClientSession()
-                url = self.make_ws_client_url()
-                ws = await session.ws_connect(url)
-                await ws.close()
+            response = await self.request(endpoint='', method='GET', retry=0, return_raw=True, timeout=5)
+            if response:
+                return True, ''
+            else:
+                return False, ''
         except aiohttp.ClientError as e:
             emsg = f"[{self.name}] is enabled but unresponsive at url {self.url}: {e}"
             await self.go_offline()
             return False, emsg
+
+    async def _stream_response(self, response: aiohttp.ClientResponse, response_type: str, url: str):
+        try:
+            if response_type == "text" or response_type == "json":
+                async for line in response.content:
+                    if not line:
+                        continue
+                    try:
+                        decoded = line.decode("utf-8").strip()
+                        if response_type == "json":
+                            yield json.loads(decoded)
+                        else:
+                            yield decoded
+                    except Exception as e:
+                        log.warning(f"Streaming parse error on line from {url}: {e}")
+                        continue
+            else:
+                log.warning(f"Streaming mode not supported for response_type '{response_type}' — returning raw bytes")
+                async for chunk in response.content.iter_chunked(1024):
+                    yield chunk
+        except Exception as e:
+            log.exception(f"Error while streaming from {url}: {e}")
+
+    async def _process_response(self, response: aiohttp.ClientResponse, response_type: Optional[str], url: str):
+        try:
+            # Default to JSON if not specified
+            if response_type == "json" or not response_type:
+                return await response.json()
+
+            elif response_type == "text":
+                return await response.text()
+
+            elif response_type in ("bytes", "binary"):
+                return await response.read()
+
+            elif response_type == "image":
+                # Returns raw image bytes — caller can process further
+                return await response.read()
+
+            elif response_type == "base64":
+                # Base64-encoded plain text body
+                encoded = await response.text()
+                return base64.b64decode(encoded)
+
+            elif response_type == "base64_json":
+                # Common format: {"data": "<base64string>"}
+                data = await response.json()
+                b64_str = data.get("data")
+                if not b64_str:
+                    raise ValueError("Missing 'data' field for base64_json response")
+                return base64.b64decode(b64_str)
+
+            elif response_type == "data_url":
+                # Handle data URL format: data:image/png;base64,....
+                data_url = await response.text()
+                if "base64," in data_url:
+                    base64_part = data_url.split("base64,", 1)[1]
+                    return base64.b64decode(base64_part)
+                raise ValueError("Invalid data URL format")
+
+            elif response_type == "csv":
+                text = await response.text()
+                return list(csv.reader(io.StringIO(text)))
+
+            elif response_type == "pdf":
+                return await response.read()  # treat as bytes
+
+            elif response_type == "yaml":
+                text = await response.text()
+                return yaml.safe_load(text)
+
+            elif response_type == "html" or response_type == "html_fragment":
+                return await response.text()
+
+            elif response_type == "markdown":
+                return await response.text()
+
+            elif response_type == "javascript":
+                return await response.text()
+
+            elif response_type == "none":
+                return None
+
+            else:
+                log.warning(f"[{self.name}] Unknown response_type '{response_type}' for {url}, falling back to raw bytes")
+                return await response.read()
+
+        except Exception as e:
+            log.exception(f"Error processing response from {url} with response_type={response_type}: {e}")
+            try:
+                return await response.text()
+            except Exception:
+                return await response.read()
 
     async def request(
         self,
@@ -598,6 +673,7 @@ class APIClient:
         timeout: Optional[int] = None,
         session: Optional[aiohttp.ClientSession] = None,
         response_type: Optional[str] = None,
+        stream: bool = False,
     ) -> Union[Dict[str, Any], str, bytes, None]:
 
         url = f"{self.url}{endpoint}" if endpoint.startswith("/") else f"{self.url}/{endpoint}"
@@ -614,15 +690,15 @@ class APIClient:
                 if active_session is None:
                     async with aiohttp.ClientSession() as temp_session:
                         return await self._make_request(
-                            session=temp_session, method=method, url=url, params=params, data=data,
-                            json=json, files=files, headers=headers, auth=auth, timeout=timeout,
-                            return_text=return_text, return_raw=return_raw, response_type=response_type
+                            session=temp_session, method=method, url=url, params=params, data=data, json=json,
+                            files=files, headers=headers, auth=auth, timeout=timeout, return_text=return_text,
+                            return_raw=return_raw, response_type=response_type, stream=stream
                         )
                 else:
                     return await self._make_request(
-                        session=active_session, method=method, url=url, params=params, data=data,
-                        json=json, files=files, headers=headers, auth=auth, timeout=timeout,
-                        return_text=return_text, return_raw=return_raw, response_type=response_type
+                        session=active_session, method=method, url=url, params=params, data=data, json=json,
+                        files=files, headers=headers, auth=auth, timeout=timeout, return_text=return_text,
+                        return_raw=return_raw, response_type=response_type, stream=stream
                     )
 
             except (aiohttp.ClientConnectionError, aiohttp.ClientResponseError, asyncio.TimeoutError, Exception) as e:
@@ -656,6 +732,7 @@ class APIClient:
         return_text: bool,
         return_raw: bool,
         response_type: Optional[str],
+        stream: bool,
     ):
         request_kwargs = {
             "method": method.upper(),
@@ -685,16 +762,19 @@ class APIClient:
                 return await response.text()
 
             if 200 <= response.status < 300:
-                if response_type == "bytes":
-                    return await response.read()
-                elif response_type == "text":
-                    return await response.text()
-                else:  # default to json
-                    try:
-                        return await response.json()
-                    except aiohttp.ContentTypeError:
-                        log.warning(f"Non-JSON response received from {url}")
+                if stream:
+                    return self._stream_response(response, response_type, url)
+                else:
+                    if response_type == "bytes":
+                        return await response.read()
+                    elif response_type == "text":
                         return await response.text()
+                    else:
+                        try:
+                            return await response.json()
+                        except aiohttp.ContentTypeError:
+                            log.warning(f"Non-JSON response received from {url}")
+                            return await response.text()
             else:
                 response_text = await response.text()
                 log.error(f"HTTP {response.status} Error: {response_text}")
@@ -703,7 +783,6 @@ class APIClient:
     async def _send_ws_message(
         self,
         json: Optional[Dict[str, Any]],
-        headers: Optional[Dict[str, str]],
         timeout: Optional[int],
         expect_response: bool,
         response_type: Optional[str],
@@ -711,7 +790,6 @@ class APIClient:
         if not json:
             raise ValueError("WebSocket messages must be JSON serializable.")
 
-        ws_url = self.url.replace("http", "ws")
         timeout = timeout or self.default_timeout
 
         if not self.ws or self.ws.closed:
@@ -889,19 +967,6 @@ class TTSGenClient(APIClient):
             return None, None
 
 
-class WebSocketEndpointConfig:
-    def __init__(
-        self,
-        message_type: str,
-        expects_response: bool = True,
-        channel: Optional[str] = None,
-        static_payload: Optional[dict] = None
-    ):
-        self.message_type = message_type
-        self.expects_response = expects_response
-        self.channel = channel
-        self.static_payload = static_payload or {}
-
 class Endpoint:
     def __init__(self,
                  name: str,
@@ -911,10 +976,9 @@ class Endpoint:
                  payload_config: Optional[str|dict] = None,
                  rh_config: Optional[dict[str, Any]] = None,
                  headers: Optional[Dict[str, str]] = None,
+                 stream: bool = False,
                  timeout: int = 10,
-                 retry: int = 0,
-                 send_type: str = "json",       # WebSocket
-                 expect_response: bool = True): # WebSocket
+                 retry: int = 0):
         self.client: Optional["APIClient"] = None
         self.name = name
         self.path = path
@@ -924,10 +988,9 @@ class Endpoint:
         self.payload = {}
         self.schema: Optional[dict] = None
         self.headers = headers or {}
+        self.stream = stream
         self.timeout = timeout
         self.retry = retry
-        self.send_type = send_type # Websocket
-        self.expect_response = expect_response # Websocket
         # Collect response handling config
         if rh_config:
             self.init_response_handling(rh_config)
@@ -966,9 +1029,6 @@ class Endpoint:
         return copy.deepcopy(self.payload)
 
     def get_preferred_content_type(self) -> Optional[str]:
-        if self.client.transport == 'websocket':
-            return None
-
         content_type = None
         if isinstance(self.headers, dict):
             content_type = self.headers.get("Content-Type")
@@ -980,7 +1040,7 @@ class Endpoint:
 
         return None
 
-    def set_schema_from_openapi(self, openapi_schema: dict, force: bool = False):
+    def set_openapi_schema(self, openapi_schema: dict, force: bool = False):
         if not openapi_schema or (self.schema and not force):
             return
 
@@ -1035,7 +1095,8 @@ class Endpoint:
 
         return None
 
-    def get_schema(self, openapi_schema: dict, preferred_content_type: Optional[str] = None) -> Optional[dict]:
+    def get_schema(self, preferred_content_type: Optional[str] = None) -> Optional[dict]:
+        openapi_schema = self.client.openapi_schema
         if not openapi_schema:
             return None
 
@@ -1061,12 +1122,12 @@ class Endpoint:
 
         return None
 
-    def sanitize_payload(self, payload: Dict[str, Any], openapi_schema: dict) -> Dict[str, Any]:
+    def sanitize_payload(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         """
         Recursively sanitizes the payload using the OpenAPI schema by removing unknown keys.
         """
-        schema = self.schema or self.get_schema(openapi_schema, )
-        if not schema:
+        ep_schema = self.schema or self.get_schema()
+        if not ep_schema:
             log.debug(f"No schema found for {self.method} {self.path} — skipping sanitization")
             return payload
 
@@ -1103,8 +1164,8 @@ class Endpoint:
 
             return cleaned
 
-        schema_props = schema.get("properties", {})
-        required_fields = schema.get("required", [])
+        schema_props = ep_schema.get("properties", {})
+        required_fields = ep_schema.get("required", [])
         final_cleaned = _sanitize(payload, schema_props, required_fields)
 
         if not final_cleaned:
@@ -1177,34 +1238,20 @@ class Endpoint:
         if not self.client.enabled:
             raise RuntimeError(f"Endpoint {self.name} was called, but API Client '{self.client.name}' is currently disabled. Use '/toggle_api' to enable the client when available.")
 
-        json_payload, data_payload, params_payload, files_payload = self.resolve_input_data(input_data, payload_type, payload_map)
-
-        if sanitize:
-            if json_payload and isinstance(json_payload, dict):
-                json_payload = self.sanitize_payload(json_payload, self.client.openapi_schema)
-            if data_payload and isinstance(data_payload, dict):
-                data_payload = self.sanitize_payload(data_payload, self.client.openapi_schema)
-
-        response = None
-        # Routing based on transport
-        if self.client.transport == "websocket":
-            response = await self.process_ws_request(json_payload, data_payload, input_data, **kwargs)
-        elif self.client.transport == "http":
-            response = await self.process_http_request(json_payload, data_payload, params_payload, files_payload, **kwargs)
-
-        if not extract_keys:
-            return response
-        
-        return self.extract_main_keys(response, extract_keys)
-
-
-    async def process_http_request(self, json_payload, data_payload, params_payload, files_payload, **kwargs):
         headers = kwargs.pop('headers', self.headers)
         timeout = kwargs.pop('timeout', self.timeout)
         retry = kwargs.pop('retry', self.retry)
         response_type = kwargs.pop('response_type', self.response_type)
 
-        return await self.client.request(
+        json_payload, data_payload, params_payload, files_payload = self.resolve_input_data(input_data, payload_type, payload_map)
+
+        if sanitize:
+            if json_payload and isinstance(json_payload, dict):
+                json_payload = self.sanitize_payload(json_payload)
+            if data_payload and isinstance(data_payload, dict):
+                data_payload = self.sanitize_payload(data_payload)
+
+        response =  await self.client.request(
             endpoint=self.path,
             method=self.method,
             json=json_payload,
@@ -1218,15 +1265,90 @@ class Endpoint:
             **kwargs
         )
 
-    async def process_ws_request(self, json_payload, data_payload, input_data, **kwargs):
+        if not extract_keys:
+            return response
+        
+        return self.extract_main_keys(response, extract_keys)
+
+        # ws_response = await self.process_ws_request(json_payload, data_payload, input_data, **kwargs)
+
+        # if self.response_handling:
+        #     response = self.apply_response_handling(response)
+
+
+    def apply_response_handling(self, response: Any) -> Any:
+        rh:dict = self.response_handling
+        original = response
+        try:
+            # Extract nested keys if specified
+            if 'extract_keys' in rh:
+                response = processing.extract_nested_value(response, rh['extract_keys'])
+
+            # Regex processing
+            if 'regex' in rh:
+                import re
+                pattern = rh['regex']
+                match = re.search(pattern, response)
+                if match:
+                    response = match.group(1) if match.lastindex else match.group(0)
+                else:
+                    raise ValueError(f"Regex pattern '{pattern}' did not match response")
+
+            # Base64 decode
+            if rh.get("decode_base64", False):
+                if isinstance(response, str):
+                    response = base64.b64decode(response)
+                else:
+                    raise TypeError("Expected base64 string to decode")
+
+            # String formatting
+            if 'format' in rh:
+                response = rh['format'].format(response=response)
+
+            # Coerce to specific type
+            if 'type' in rh:
+                type_map = {"str": str, "int": int, "float": float, "bool": bool}
+                response = type_map[rh['type']](response)
+
+            # Optional eval (advanced, use safely!)
+            if 'eval' in rh:
+                # You may use asteval or safe eval context here
+                response = eval(rh['eval'], {"response": response})
+
+            if rh.get("save"):
+                content_to_save = original if rh.get("save_raw") else response
+                file_format = rh.get("file_format", "txt")
+                file_name = rh.get("file_name", f"response_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}")
+                file_path = Path(rh.get("file_path", "./responses"))
+                file_path.mkdir(parents=True, exist_ok=True)
+                full_path = file_path / f"{file_name}.{file_format}"
+
+                mode = "wb" if isinstance(content_to_save, bytes) else "w"
+                with open(full_path, mode, encoding=None if mode == "wb" else "utf-8") as f:
+                    if file_format in ("json", "yaml") and isinstance(content_to_save, dict):
+                        if file_format == "json":
+                            json.dump(content_to_save, f, indent=2)
+                        else:
+                            yaml.dump(content_to_save, f)
+                    else:
+                        f.write(content_to_save)
+
+                log.info(f"[{self.name}] Response saved to {full_path}")
+
+        except Exception as e:
+            log.exception(f"Error applying response_handling: {e}")
+            return response  # Return original if error during handling
+
+        return response
+
+
+    async def process_ws_request(self, json_payload, data_payload, **kwargs):
         # Compose WebSocket message
         message = {}
 
-        headers = kwargs.pop('headers', self.headers)
         timeout = kwargs.pop('timeout', self.timeout)
-        retry = kwargs.pop('retry', self.retry)
         response_type = kwargs.pop('response_type', self.response_type)
-        expect_response = kwargs.pop('expect_response', self.expect_response)
+        expect_response = kwargs.pop('expect_response', False)
 
         if isinstance(self.payload, dict):
             message.update(self.payload)
@@ -1234,20 +1356,16 @@ class Endpoint:
         # Merge input_data or processed payloads
         if json_payload:
             message.update(json_payload)
-        elif data_payload:
+        if data_payload:
             message.update(data_payload)
-        elif input_data:
-            message.update(input_data)
 
         # Optionally include client ID
         if self.client.ws_config.client_id:
             message["client_id"] = self.client.ws_config.client_id
 
-        return await self.client.request(
-            endpoint="",  # WebSockets ignore path
+        return await self.client._send_ws_message(
             json=message,
             timeout=timeout,
-            headers=headers,
             expect_response=expect_response,
             response_type=response_type,
             **kwargs
@@ -1255,13 +1373,17 @@ class Endpoint:
 
     # Extracts the key values from the API response, for the Endpoint's key names defined in user API settings
     def extract_main_keys(self, response, ep_keys: str|List[str] = None):
-        if not ep_keys or not isinstance(response, dict):
+        # No keys to check or invalid response type for this operation
+        if not ep_keys:
             return response
-        
+        if not isinstance(response, dict):
+            log.warning(f'[{self.client.name}] tried to extract value(s) for "{ep_keys}" from the response, but response was non-dict format.')
+            return response
+        # Try to extract and return one key value        
         if isinstance(ep_keys, str):
             key_paths = getattr(self, ep_keys, None)
             return try_paths(response, key_paths)
-
+        # Try to extract and return multiple key values as a tuple
         elif isinstance(ep_keys, list):
             results = []
             for key_attr in ep_keys:
@@ -1269,7 +1391,7 @@ class Endpoint:
                 value = try_paths(response, key_paths)
                 results.append(value)
             return tuple(results)
-
+        # Key not matched, return original dict
         return response
 
 # Utility function to get a key value like 'data.voices'
@@ -1294,7 +1416,6 @@ def try_paths(response: dict, paths: Union[str, List[str]]) -> Any:
             if val is not None:
                 return val
     return None
-
 
     # def handle_response(self, response):
     #     rh = self.response_handling
