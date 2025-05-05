@@ -143,7 +143,7 @@ class API:
                     name=name,
                     url=api_config['url'],
                     enabled=enabled,
-                    websocket_url=api_config.get('websocket_url'),
+                    websocket_config=api_config.get('websocket'),
                     default_headers=api_config.get('default_headers'),
                     default_timeout=api_config.get('default_timeout', 60),
                     auth=api_config.get('auth'),
