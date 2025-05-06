@@ -4,6 +4,9 @@ import uuid
 import aiofiles
 import re
 from datetime import datetime
+from pathlib import Path
+from pydub import AudioSegment
+import io
 from modules.typing import Any
 
 from modules.logs import import_track, get_logger; import_track(__file__, fp=True); log = get_logger(__name__)  # noqa: E702
@@ -36,6 +39,41 @@ def extract_nested_value(data: Any, path: str | list[str]) -> Any:
                 raise KeyError(f"Expected list at '{key}', got {type(current)}")
 
     return current
+
+def detect_audio_format(data: bytes) -> str:
+    if data.startswith(b'ID3') or (len(data) > 1 and data[0] == 0xFF and (data[1] & 0xE0) == 0xE0):
+        return "mp3"
+    elif data.startswith(b'RIFF') and b'WAVE' in data[8:16]:
+        return "wav"
+    else:
+        return "unknown"
+
+def save_audio_bytes(
+    audio_bytes: bytes,
+    output_path: str,
+    input_format: str = "mp3",  # or "wav", "ogg", etc.
+    output_format: str = "mp3",  # or "wav", etc.
+) -> str:
+    """
+    Save raw audio bytes to a file, optionally converting format.
+
+    Args:
+        audio_bytes: The raw audio bytes.
+        output_path: Path to save the output file (without extension).
+        input_format: Format of the input bytes (e.g. 'mp3', 'wav').
+        output_format: Desired output format.
+
+    Returns:
+        The final file path.
+    """
+    try:
+        audio = AudioSegment.from_file(io.BytesIO(audio_bytes), format=input_format)
+        output_file = Path(f"{output_path}.{output_format}")
+        audio.export(output_file, format=output_format)
+        return str(output_file)
+    except Exception as e:
+        log.exception(f"Failed to save audio to {output_format}: {e}")
+        raise
 
 async def encode_to_base64(path):
     async with aiofiles.open(path, mode='rb') as f:

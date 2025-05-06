@@ -940,21 +940,7 @@ class ImgGenClient(APIClient):
     
     def supports_loractrl(self) -> bool:
         return (self.is_sdwebui() or self.is_reforge()) and not self.is_forge()
-    
-    # async def try_swarmui(self):
-    #     try:
-    #         log.info("Checking if SD Client is SwarmUI.")
-    #         r = await self.api(endpoint='/API/GetNewSession', method='post', warn=False)
-    #         if r is None:
-    #             return False  # Early return if the response is None or the API call failed
 
-    #         self.session_id = r.get('session_id', None)
-    #         if self.session_id:
-    #             self.client = 'SwarmUI'
-    #             return True
-    #     except aiohttp.ClientError as e:
-    #         log.error(f"Error getting SwarmUI session: {e}")
-    #     return False
 
 class TextGenClient(APIClient):
     def __init__(self, *args, **kwargs):
@@ -1295,21 +1281,29 @@ class Endpoint:
             **kwargs
         )
 
-        if extract_keys:        
-            return self.extract_main_keys(response, extract_keys)
+        main_ep_response = self.return_main_data(response)
+        if main_ep_response:
+            return main_ep_response
+
+        if extract_keys:
+            response = self.extract_main_keys(response, extract_keys)
 
         # ws_response = await self.process_ws_request(json_payload, data_payload, input_data, **kwargs)
 
         if self.response_handling:
             response = self.apply_response_handling(response)
 
+        return response
+    
+    async def return_main_data(self, response):
+        pass
 
     def apply_response_handling(self, response: Any) -> Any:
         rh:dict = self.response_handling
         original = response
         try:
             # Extract nested keys if specified
-            if 'extract_keys' in rh:
+            if 'extract_keys' in rh and isinstance(response, dict):
                 response = processing.extract_nested_value(response, rh['extract_keys'])
 
             # Regex processing
@@ -1343,25 +1337,25 @@ class Endpoint:
                 # You may use asteval or safe eval context here
                 response = eval(rh['eval'], {"response": response})
 
-            if rh.get("save"):
-                content_to_save = original if rh.get("save_raw") else response
-                file_format = rh.get("file_format", "txt")
-                file_name = rh.get("file_name", f"response_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}")
-                file_path = Path(rh.get("file_path", "./responses"))
-                file_path.mkdir(parents=True, exist_ok=True)
-                full_path = file_path / f"{file_name}.{file_format}"
+            # if rh.get("save"):
+            #     content_to_save = original if rh.get("save_raw") else response
+            #     file_format = rh.get("file_format", "txt")
+            #     file_name = rh.get("file_name", f"response_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}")
+            #     file_path = Path(rh.get("file_path", "./responses"))
+            #     file_path.mkdir(parents=True, exist_ok=True)
+            #     full_path = file_path / f"{file_name}.{file_format}"
 
-                mode = "wb" if isinstance(content_to_save, bytes) else "w"
-                with open(full_path, mode, encoding=None if mode == "wb" else "utf-8") as f:
-                    if file_format in ("json", "yaml") and isinstance(content_to_save, dict):
-                        if file_format == "json":
-                            json.dump(content_to_save, f, indent=2)
-                        else:
-                            yaml.dump(content_to_save, f)
-                    else:
-                        f.write(content_to_save)
+            #     mode = "wb" if isinstance(content_to_save, bytes) else "w"
+            #     with open(full_path, mode, encoding=None if mode == "wb" else "utf-8") as f:
+            #         if file_format in ("json", "yaml") and isinstance(content_to_save, dict):
+            #             if file_format == "json":
+            #                 json.dump(content_to_save, f, indent=2)
+            #             else:
+            #                 yaml.dump(content_to_save, f)
+            #         else:
+            #             f.write(content_to_save)
 
-                log.info(f"[{self.name}] Response saved to {full_path}")
+            #     log.info(f"[{self.name}] Response saved to {full_path}")
 
         except Exception as e:
             log.exception(f"Error applying response_handling: {e}")
@@ -1448,20 +1442,14 @@ def try_paths(response: dict, paths: Union[str, List[str]]) -> Any:
                 return val
     return None
 
-    # def handle_response(self, response):
-    #     rh = self.response_handling
-    #     if rh["type"] == "media_file":
-    #         return utils_processing.save_from_path(response)
-    #     elif rh["type"] == "base64":
-    #         return utils_processing.save_base64(response)
-    #     elif rh["type"] == "dict":
-    #         return {k: response.get(k) for k in rh.get("extract_keys", [])}
-    #     return response  # fallback
 
 class TextGenEndpoint(Endpoint):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         # Defaults
+
+    async def return_main_data(self, response):
+        pass
 
 class TTSGenEndpoint(Endpoint):
     def __init__(self, *args, **kwargs):
@@ -1474,6 +1462,17 @@ class TTSGenEndpoint(Endpoint):
         self.speaker_input_key:str = 'speaker'
         self.output_file_path_key:Optional[str] = None
 
+    async def return_main_data(self, response):
+        if self == self.client.post_generate:
+            if self.response_type == 'bytes':
+                audio_format = processing.detect_audio_format(response)
+                if audio_format == 'unknown':
+                    log.error(f'[{self.name}] Expected response to be mp3 or wav (bytes), but received an unexpected format.')
+                    return None
+                audio_fp:str = processing.save_audio_bytes(response, shared_path.output_dir, input_format=audio_format, output_format=audio_format)
+                return audio_fp
+        return None
+
 class ImgGenEndpoint(Endpoint):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -1482,6 +1481,9 @@ class ImgGenEndpoint(Endpoint):
         self.neg_prompt_key:str = 'negative_prompt'
         self.seed_key:str = 'seed'
         self.control_types_key:Optional[str] = None
+
+    async def return_main_data(self, response):
+        pass
 
 class WorkflowExecutor:
     def __init__(self, workflow_name: str):
