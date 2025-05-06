@@ -1061,7 +1061,7 @@ class Endpoint:
             return
 
         preferred_content_type = self.get_preferred_content_type()
-        self.schema = self.get_schema(openapi_schema, preferred_content_type=preferred_content_type)
+        self.schema = self.get_schema(preferred_content_type)
 
 
     def generate_payload_from_schema(self) -> dict:
