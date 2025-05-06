@@ -680,21 +680,59 @@ class APIClient:
         url = f"{self.url}{endpoint}" if endpoint.startswith("/") else f"{self.url}/{endpoint}"
         headers = {**self.default_headers, **(headers or {})}
         timeout = timeout or self.default_timeout
-        auth = auth or self.auth
 
         # Validate payload
         self.validate_payload(method, endpoint, json, data)
+        
+        # Finalize request
+        request_kwargs = {"method": method.upper(),
+                          "url": url,
+                          "params": params,
+                          "headers": headers,
+                          "auth": auth or self.auth,
+                          "timeout": aiohttp.ClientTimeout(total=timeout)}
+        if files:
+            form_data = aiohttp.FormData()
+            for key, val in files.items():
+                form_data.add_field(key, val, filename=getattr(val, "name", key))
+            request_kwargs["data"] = form_data
+        else:
+            if data is not None:
+                request_kwargs["data"] = data
+            if json is not None:
+                request_kwargs["json"] = json
 
+        # Ensure session exists
         if not self.session:
             self.session = aiohttp.ClientSession()
 
         for attempt in range(retry + 1):
             try:
-                return await self._make_request(
-                    session=self.session, method=method, url=url, params=params, data=data, json=json,
-                    files=files, headers=headers, auth=auth, timeout=timeout, return_text=return_text,
-                    return_raw=return_raw, response_type=response_type, stream=stream
-                )
+                async with self.session.request(**request_kwargs) as response:
+
+                    if return_raw:
+                        return await response.read()
+                    if return_text:
+                        return await response.text()
+
+                    if 200 <= response.status < 300:
+                        if stream:
+                            return self._stream_response(response, response_type, url)
+                        else:
+                            if response_type == "bytes":
+                                return await response.read()
+                            elif response_type == "text":
+                                return await response.text()
+                            else:
+                                try:
+                                    return await response.json()
+                                except aiohttp.ContentTypeError:
+                                    log.warning(f"Non-JSON response received from {url}")
+                                    return await response.text()
+                    else:
+                        response_text = await response.text()
+                        log.error(f"HTTP {response.status} Error: {response_text}")
+                        response.raise_for_status()
 
             except (aiohttp.ClientConnectionError, aiohttp.ClientResponseError, asyncio.TimeoutError, Exception) as e:
                 if isinstance(e, aiohttp.ClientConnectionError):
@@ -711,69 +749,6 @@ class APIClient:
                 await asyncio.sleep(2 ** attempt)
 
         return None
-
-    async def _make_request(
-        self,
-        session: aiohttp.ClientSession,
-        url: str,
-        method: str,
-        json: Optional[Dict[str, Any]],
-        data: Optional[Union[Dict[str, Any], str, bytes]],
-        params: Optional[Dict[str, Any]],
-        files: Optional[Dict[str, Any]],
-        headers: Dict[str, str],
-        auth: Optional[aiohttp.BasicAuth],
-        timeout: int,
-        return_text: bool,
-        return_raw: bool,
-        response_type: Optional[str],
-        stream: bool,
-    ):
-        request_kwargs = {
-            "method": method.upper(),
-            "url": url,
-            "params": params,
-            "headers": headers,
-            "auth": auth,
-            "timeout": aiohttp.ClientTimeout(total=timeout),
-        }
-
-        if files:
-            form_data = aiohttp.FormData()
-            for key, val in files.items():
-                form_data.add_field(key, val, filename=getattr(val, "name", key))
-            request_kwargs["data"] = form_data
-        else:
-            if data is not None:
-                request_kwargs["data"] = data
-            if json is not None:
-                request_kwargs["json"] = json
-
-        async with session.request(**request_kwargs) as response:
-
-            if return_raw:
-                return await response.read()
-            if return_text:
-                return await response.text()
-
-            if 200 <= response.status < 300:
-                if stream:
-                    return self._stream_response(response, response_type, url)
-                else:
-                    if response_type == "bytes":
-                        return await response.read()
-                    elif response_type == "text":
-                        return await response.text()
-                    else:
-                        try:
-                            return await response.json()
-                        except aiohttp.ContentTypeError:
-                            log.warning(f"Non-JSON response received from {url}")
-                            return await response.text()
-            else:
-                response_text = await response.text()
-                log.error(f"HTTP {response.status} Error: {response_text}")
-                response.raise_for_status()
 
     async def _send_ws_message(
         self,
@@ -1320,15 +1295,13 @@ class Endpoint:
             **kwargs
         )
 
-        if not extract_keys:
-            return response
-        
-        return self.extract_main_keys(response, extract_keys)
+        if extract_keys:        
+            return self.extract_main_keys(response, extract_keys)
 
         # ws_response = await self.process_ws_request(json_payload, data_payload, input_data, **kwargs)
 
-        # if self.response_handling:
-        #     response = self.apply_response_handling(response)
+        if self.response_handling:
+            response = self.apply_response_handling(response)
 
 
     def apply_response_handling(self, response: Any) -> Any:
@@ -1437,15 +1410,18 @@ class Endpoint:
         # Try to extract and return one key value        
         if isinstance(ep_keys, str):
             key_paths = getattr(self, ep_keys, None)
-            return try_paths(response, key_paths)
+            if key_paths:
+                return try_paths(response, key_paths)
         # Try to extract and return multiple key values as a tuple
         elif isinstance(ep_keys, list):
             results = []
             for key_attr in ep_keys:
                 key_paths = getattr(self, key_attr, None)
-                value = try_paths(response, key_paths)
-                results.append(value)
-            return tuple(results)
+                if key_paths:
+                    value = try_paths(response, key_paths)
+                    results.append(value)
+            if results:
+                return tuple(results)
         # Key not matched, return original dict
         return response
 
@@ -1491,22 +1467,21 @@ class TTSGenEndpoint(Endpoint):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         # Defaults
-        self.get_voices_key = 'speaker'
-        self.get_languages_key = 'languages'
-        self.text_input_key = 'text_input'
-        self.output_file_path_key = 'output_file_path_key'
-        self.language_input_key = 'language'
-        self.speaker_input_key = 'character_voice_gen'
+        self.get_voices_key:Optional[str] = None
+        self.get_languages_key:Optional[str] = None
+        self.text_input_key:str = 'text_input'
+        self.language_input_key:str = 'language'
+        self.speaker_input_key:str = 'speaker'
+        self.output_file_path_key:Optional[str] = None
 
 class ImgGenEndpoint(Endpoint):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         # Defaults
-        self.control_types_key = 'control_types'
-        self.prompt_key = 'prompt'
-        self.neg_prompt_key = 'negative_prompt'
-        self.seed_key = 'seed'
-
+        self.prompt_key:str = 'prompt'
+        self.neg_prompt_key:str = 'negative_prompt'
+        self.seed_key:str = 'seed'
+        self.control_types_key:Optional[str] = None
 
 class WorkflowExecutor:
     def __init__(self, workflow_name: str):

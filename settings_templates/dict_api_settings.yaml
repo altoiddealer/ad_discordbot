@@ -18,7 +18,6 @@ bot_api_functions:
   # Bot currently cannot use textgen APIs for main functions (support is coming!)
   textgen:
     api_name: Text Generation WebUI
-  # API for TTS is WIP. These settings are currently limited to the '/speak' command (will not work for message requests)
   ttsgen:
     api_name: AllTalk TTS v2
     get_voices: {endpoint_name: Get TTS Voices, get_voices_key: voices}
