@@ -1281,7 +1281,7 @@ class Endpoint:
             **kwargs
         )
 
-        main_ep_response = self.return_main_data(response)
+        main_ep_response = await self.return_main_data(response)
         if main_ep_response:
             return main_ep_response
 
