@@ -658,6 +658,33 @@ class APIClient:
                 return await response.text()
             except Exception:
                 return await response.read()
+            
+    async def guess_response_type(self, response: aiohttp.ClientResponse):
+        content_type = response.headers.get("Content-Type", "").split(";")[0].strip().lower()
+        try:
+            if content_type == "application/json":
+                return await response.json()
+            elif content_type.startswith("text/") or content_type in ("application/xml", "text/xml", "text/csv"):
+                return await response.text()
+            elif content_type.startswith("image/") or content_type in (
+                "application/octet-stream",
+                "application/pdf",
+                "application/zip",
+                "application/x-gzip"
+            ):
+                return await response.read()
+            else:
+                # Unknown content type — try JSON, then text, then bytes
+                try:
+                    return await response.json()
+                except aiohttp.ContentTypeError:
+                    try:
+                        return await response.text()
+                    except Exception:
+                        return await response.read()
+        except Exception as e:
+            log.warning(f"Failed to decode response (Content-Type: {content_type}): {e}")
+            return await response.read()
 
     async def request(
         self,
@@ -723,12 +750,10 @@ class APIClient:
                                 return await response.read()
                             elif response_type == "text":
                                 return await response.text()
+                            elif response_type == 'json':
+                                return await response.json()
                             else:
-                                try:
-                                    return await response.json()
-                                except aiohttp.ContentTypeError:
-                                    log.warning(f"Non-JSON response received from {url}")
-                                    return await response.text()
+                                return await self.guess_response_type(response)
                     else:
                         response_text = await response.text()
                         log.error(f"HTTP {response.status} Error: {response_text}")
@@ -1464,7 +1489,7 @@ class TTSGenEndpoint(Endpoint):
 
     async def return_main_data(self, response):
         if self == self.client.post_generate:
-            if self.response_type == 'bytes':
+            if isinstance(response, bytes):
                 audio_format = processing.detect_audio_format(response)
                 if audio_format == 'unknown':
                     log.error(f'[{self.name}] Expected response to be mp3 or wav (bytes), but received an unexpected format.')
