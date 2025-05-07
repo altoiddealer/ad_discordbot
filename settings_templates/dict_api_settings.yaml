@@ -38,23 +38,15 @@ all_apis:
     endpoints:
       - name: Post txt2img
         path: /sdapi/v1/txt2img
-        method: POST
-        payload_type: json # json / form / multipart / query
-        retry: 1
-        payload: sd-webui.yaml
-        timeout: 120
-        response_handling:
-          type: base64
-          output_key: images # key in JSON to extract from. Use dot.notation to get a nested key.
-          save: true
-          file_format: png
-          file_path: images
-      - {name: Post img2img, path: /sdapi/v1/img2img, method: POST, payload: sd-webui.yaml, timeout: 120}
+        preset: sd-txt2img-img2img-endpoints # See 'presets' further down
+      - name: Post img2img
+        path: /sdapi/v1/img2img
+        preset: sd-txt2img-img2img-endpoints
       - {name: Get Progress, path: /sdapi/v1/progress, method: GET}
       - {name: Post PNG Info, path: /sdapi/v1/png-info, method: POST}
       - {name: Get ImgModels, path: /sdapi/v1/sd-models, method: GET}
       - {name: Get Options, path: /sdapi/v1/options, method: GET}
-      - {name: Post Options, path: /sdapi/v1/options, method: POST}
+      - {name: Post Options, path: /sdapi/v1/options, method: POST, payload_type: json}
       - {name: Get Cnet Models, path: /controlnet/model_list, method: GET}
       - {name: Get Cnet Control Types, path: /controlnet/control_types, method: GET}
       - {name: Post Server Restart, path: /sdapi/v1/server-restart, method: POST, retry: 0}
@@ -100,46 +92,24 @@ all_apis:
         path: view
         method: POST
 
-# websocket:
-#   url: "ws://127.0.0.1:8188/ws"        # (str) Full WebSocket URL; fallback to HTTP-based conversion if not provided
-#   client_id_required: true             # (bool) Whether a client_id must be added to the connection URL
-#   client_id_format: "uuid"             # (str) Format for generated client_id: "uuid", "short", "timestamp", "hex", "opaque", "int", "machine", "env_user"
-  
-#   token_required: false                # (bool) Whether a token is required in the URL
-#   token_name: "token"                  # (str) The query parameter name used to pass the token (e.g., "token", "auth")
 
-#   session_id_required: false           # (bool) Whether a session ID is required for reconnect/resume
-#   session_id_name: "session_id"        # (str) The query parameter name for session ID
+# Create presets here which can be injected in 'endpoint', 'response_handling', 'workflow' steps, or in any 'post_process' steps.
+presets:
+  - name: sd-txt2img-img2img-endpoints
+    method: POST
+    retry: 1
+    payload_type: json
+    payload_base: sd-webui.yaml
+    input: {prompt: "{text}"}
+    timeout: 120
+    response_handling:
+      type: base64
+      output_key: images # key in JSON to extract from. Use dot.notation to get a nested key.
+      save: true
+      file_format: png
+      file_path: images
+      save_to: images
 
-#   channel_required: false              # (bool) Whether the connection must specify a channel/room name
-#   channel_name: "channel"              # (str) The query parameter name for channel (e.g., chat room, pub/sub topic)
-
-#   version_required: false              # (bool) Whether a version must be passed in the URL
-#   version_name: "version"              # (str) The query parameter name for the version (e.g., "v", "api_version")
-
-#   headers:                             # (dict[str, str]) Optional headers to send during WebSocket connection (e.g., for Auth)
-#     Authorization: "Bearer {token}"   # Example: Replace `{token}` at runtime
-
-#   query_params:                        # (dict[str, str]) Key-value pairs to convert into ?key=value&key2=value2...
-#     client_id: "{client_id}"           # Placeholders will be dynamically resolved at runtime
-#     token: "{token}"
-#     channel: "{channel}"
-#     version: "v2"
-#     app_name: "MyApp"
-#     debug: "1"
-
-#   reconnect_on_failure: true           # (bool) If true, the client will auto-reconnect on failure
-#   retry: 1                             # (int) Number of retry attempts for reconnecting
-
-# More dynamic values for query_params:
-# "{client_id}"
-# "{token}"
-# "{session_id}"
-# "{channel}"
-# "{version}"
-  
-# Create presets here which can be injected in 'response_handling', 'workflow' steps, or in any 'post_process' steps.
-processing_presets:
   - name: Decode base64 and save
     type: base64
     output_key: images      # key in JSON to extract from. Use dot.notation to get a nested key.
@@ -221,3 +191,46 @@ workflows:
 # base64   | Read file, encode in base64          | json or data
 # raw      | Read file bytes, send as request body| data
 # url      | User provides a direct URL string    | json, params, etc.
+
+
+
+## Schemas
+
+
+# websocket:
+#   url: "ws://127.0.0.1:8188/ws"        # (str) Full WebSocket URL; fallback to HTTP-based conversion if not provided
+#   client_id_required: true             # (bool) Whether a client_id must be added to the connection URL
+#   client_id_format: "uuid"             # (str) Format for generated client_id: "uuid", "short", "timestamp", "hex", "opaque", "int", "machine", "env_user"
+  
+#   token_required: false                # (bool) Whether a token is required in the URL
+#   token_name: "token"                  # (str) The query parameter name used to pass the token (e.g., "token", "auth")
+
+#   session_id_required: false           # (bool) Whether a session ID is required for reconnect/resume
+#   session_id_name: "session_id"        # (str) The query parameter name for session ID
+
+#   channel_required: false              # (bool) Whether the connection must specify a channel/room name
+#   channel_name: "channel"              # (str) The query parameter name for channel (e.g., chat room, pub/sub topic)
+
+#   version_required: false              # (bool) Whether a version must be passed in the URL
+#   version_name: "version"              # (str) The query parameter name for the version (e.g., "v", "api_version")
+
+#   headers:                             # (dict[str, str]) Optional headers to send during WebSocket connection (e.g., for Auth)
+#     Authorization: "Bearer {token}"   # Example: Replace `{token}` at runtime
+
+#   query_params:                        # (dict[str, str]) Key-value pairs to convert into ?key=value&key2=value2...
+#     client_id: "{client_id}"           # Placeholders will be dynamically resolved at runtime
+#     token: "{token}"
+#     channel: "{channel}"
+#     version: "v2"
+#     app_name: "MyApp"
+#     debug: "1"
+
+#   reconnect_on_failure: true           # (bool) If true, the client will auto-reconnect on failure
+#   retry: 1                             # (int) Number of retry attempts for reconnecting
+
+# More dynamic values for query_params:
+# "{client_id}"
+# "{token}"
+# "{session_id}"
+# "{channel}"
+# "{version}"

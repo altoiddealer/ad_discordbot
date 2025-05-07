@@ -4,6 +4,7 @@ logging = log
 from datetime import datetime, timedelta
 import math
 import random
+import copy
 
 def check_probability(probability) -> bool:
     probability = max(0.0, min(1.0, probability))
@@ -25,8 +26,24 @@ def fix_dict(set, req, src: str | None = None, warned: bool = False, path=""):
             was_warned = was_warned or child_warned  # Update was_warned if any child call was warned
     return set, was_warned
 
+# Safer version of update_dict
+def deep_merge(base: dict, override: dict) -> dict:
+    '''merge 2 dicts. "override" dict has priority'''
+    result = copy.deepcopy(base)
+    for k, v in override.items():
+        if (
+            k in result
+            and isinstance(result[k], dict)
+            and isinstance(v, dict)
+        ):
+            result[k] = deep_merge(result[k], v)
+        else:
+            result[k] = v
+    return result
+
 # Updates matched keys, AND adds missing keys
 def update_dict(d, u):
+    '''dict "u" has priority'''
     for k, v in u.items():
         if isinstance(v, dict):
             d[k] = update_dict(d.get(k, {}), v)

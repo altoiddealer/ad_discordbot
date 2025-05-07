@@ -11,6 +11,7 @@ import base64
 import copy
 from typing import Any, Dict, Tuple, List, Optional, Union, Type
 from modules.utils_shared import shared_path, load_file, get_api
+from modules.utils_misc import deep_merge
 import modules.utils_processing as processing
 
 from modules.logs import import_track, get_logger; import_track(__file__, fp=True); log = get_logger(__name__)  # noqa: E702
@@ -19,7 +20,7 @@ logging = log
 class APISettings():
     def __init__(self):
         self.main_settings:dict = {}
-        self.processing_presets:dict = {}
+        self.presets:dict = {}
         self.workflows:dict = {}
 
     def get_config_for(self, section: str, default=None) -> dict:
@@ -35,29 +36,27 @@ class APISettings():
                 continue
             name = preset.get('name')
             if name:
-                self.processing_presets[name] = preset
+                self.presets[name] = preset
 
-    def apply_preset(self, rh_config: dict) -> dict:
+    def apply_preset(self, config: dict) -> dict:
         """
         Merge a config dictionary with its referenced preset (if any),
         giving priority to explicitly defined values in config.
         """
-        preset_name = rh_config.get("preset")
+        preset_name = config.get("preset")
         if not preset_name:
-            return rh_config
-
-        preset = copy.deepcopy(self.get_preset(preset_name))
+            return config
+        preset = self.get_preset(preset_name)
         if not preset:
-            log.warning(f"Response handling preset '{preset_name}' not found.")
-            return rh_config
-
+            log.warning(f"Preset '{preset_name}' not found.")
+            return config
         # Merge preset with overrides (config wins)
-        merged = {**preset, **rh_config}
+        merged = deep_merge(preset, config)
         merged.pop("preset", None)
         return merged
 
     def get_preset(self, preset_name: str, default=None) -> dict:
-        return self.processing_presets.get(preset_name, default or {})
+        return self.presets.get(preset_name, default or {})
 
     def collect_workflows(self, workflows_list):
         for workflow in workflows_list:
@@ -82,7 +81,7 @@ class APISettings():
         # Collect Main APIs
         self.main_settings = data.get('bot_api_functions', {})
         # Collect Response Handling Presets
-        self.collect_presets(data.get('processing_presets', {}))
+        self.collect_presets(data.get('presets', {}))
         # Collect Workflows
         self.collect_workflows(data.get('workflows', {}))
 
@@ -419,7 +418,7 @@ class APIClient:
                         path=ep_dict.get("path", ""),
                         method=ep_dict.get("method", "GET"),
                         response_type=ep_dict.get("response_type", "json"),
-                        payload_config=ep_dict.get("payload"),
+                        payload_config=ep_dict.get("payload_base"),
                         rh_config=ep_dict.get("response_handling"),
                         headers=ep_dict.get("headers", self.default_headers),
                         stream=ep_dict.get("stream", False),
@@ -431,6 +430,8 @@ class APIClient:
 
     def _collect_endpoints(self, endpoints_config:list[dict]):
         for ep_dict in endpoints_config:
+            # Expand top-level response_handling preset
+            ep_dict = apisettings.apply_preset(ep_dict)
             try:
                 ep_class:Endpoint = self._get_self_ep_class()
                 endpoint:Endpoint = self._create_endpoint(ep_class, ep_dict)
