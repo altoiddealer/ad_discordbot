@@ -5297,7 +5297,14 @@ def get_all_characters():
     filtered_characters = []
     character_paths = [shared_path.dir_user_characters]
     if tgwui_enabled:
-        character_paths.append(os.path.join(shared_path.dir_tgwui, "characters"))
+        # Check for new nested location first
+        new_tgwui_chars = os.path.join(shared_path.dir_tgwui, "user_data", "characters")
+        if os.path.exists(new_tgwui_chars):
+            character_paths.append(new_tgwui_chars)
+        else:
+            # Fallback to old path
+            old_tgwui_chars = os.path.join(shared_path.dir_tgwui, "characters")
+            character_paths.append(old_tgwui_chars)
     try:
         for character_path in character_paths:
             for file in sorted(Path(character_path).glob("*")):
@@ -6497,7 +6504,7 @@ class LLMState(SettingsBase):
             'preset': '',
             'grammar_string': '',
             'add_bos_token': True,
-            'auto_max_new_tokens': False,
+            'auto_max_new_tokens': True,
             'ban_eos_token': False,
             'character_menu': '',
             'chat_generation_attempts': 1,
@@ -6514,6 +6521,7 @@ class LLMState(SettingsBase):
             'dynatemp_low': 1,
             'dynatemp_high': 1,
             'dynatemp_exponent': 1,
+            'enable_thinking': True,
             'encoder_repetition_penalty': 1,
             'epsilon_cutoff': 0,
             'eta_cutoff': 0,
@@ -6523,7 +6531,7 @@ class LLMState(SettingsBase):
             'history': {'internal': [], 'visible': []},
             'max_new_tokens': 512,
             'max_tokens_second': 0,
-            'max_updates_second': 0,
+            'max_updates_second': 12,
             'min_p': 0.00,
             'mirostat_eta': 0.1,
             'mirostat_mode': 0,
@@ -6542,6 +6550,7 @@ class LLMState(SettingsBase):
             'repetition_penalty_range': 1024,
             'sampler_priority': [],
             'seed': -1.0,
+            'show_after': '',
             'skip_special_tokens': True,
             'smoothing_curve': 1,
             'smoothing_factor': 0,
@@ -6554,6 +6563,7 @@ class LLMState(SettingsBase):
             'tfs': 1,
             'top_a': 0,
             'top_k': 100,
+            'top_n_sigma': 0,
             'top_p': 0.37,
             'truncation_length': 2048,
             'turn_template': '',

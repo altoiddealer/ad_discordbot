@@ -57,7 +57,14 @@ async def load_character_data(char_name, try_tgwui=False):
     char_data = {}
     char_dirs = [shared_path.dir_user_characters]
     if try_tgwui:
-        char_dirs.append(os.path.join(shared_path.dir_tgwui, "characters"))
+        # Check for new nested location first
+        new_tgwui_chars = os.path.join(shared_path.dir_tgwui, "user_data", "characters")
+        if os.path.exists(new_tgwui_chars):
+            char_dirs.append(new_tgwui_chars)
+        else:
+            # Fallback to old path
+            old_tgwui_chars = os.path.join(shared_path.dir_tgwui, "characters")
+            char_dirs.append(old_tgwui_chars)
     for ext in ['.yaml', '.yml', '.json']:
         for char_dir in char_dirs:
             character_file = os.path.join(char_dir, f"{char_name}{ext}")
