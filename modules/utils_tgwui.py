@@ -7,6 +7,7 @@ import re
 import sys
 import yaml
 import aiohttp
+import importlib
 from pathlib import Path
 from threading import Lock
 from modules.typing import CtxInteraction
@@ -193,13 +194,13 @@ class TGWUI():
                         log.info(f'Loading {"your configured TTS extension" if name == tts.client else "the extension"} "{name}"')
                 try:
                     try:
-                        exec(f"import extensions.{name}.script")
+                        extension = importlib.import_module(f"extensions.{name}.script")
                     except ModuleNotFoundError:
                         log.error(f"Could not import the requirements for '{name}'. Make sure to install the requirements for the extension.\n\n \
                                   Linux / Mac:\n\npip install -r extensions/{name}/requirements.txt --upgrade\n\nWindows:\n\npip install -r extensions\\{name}\\requirements.txt --upgrade\n\n \
                                   If you used the one-click installer, paste the command above in the terminal window opened after launching the cmd script for your OS.")
                         raise
-                    extension = getattr(extensions, name).script
+
                     extensions_module.apply_settings(extension, name)
                     setup_name = f"{name}_setup"
                     if hasattr(extension, "setup") and not bot_database.was_warned(setup_name):
