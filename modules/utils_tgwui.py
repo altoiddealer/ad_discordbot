@@ -147,20 +147,33 @@ class TGWUI():
         shared.settings['character'] = bot_database.last_character
         # Loading custom settings
         settings_file = None
+
+        # Paths to check
+        tgwui_user_data_dir = os.path.join(shared_path.dir_tgwui, "user_data")
+        tgwui_user_data_settings_json = os.path.join(tgwui_user_data_dir, "settings.json")
+        tgwui_user_data_settings_yaml = os.path.join(tgwui_user_data_dir, "settings.yaml")
         tgwui_settings_json = os.path.join(shared_path.dir_tgwui, "settings.json")
         tgwui_settings_yaml = os.path.join(shared_path.dir_tgwui, "settings.yaml")
+
         # Check if a settings file is provided and exists
         if shared.args.settings is not None and Path(shared.args.settings).exists():
             settings_file = Path(shared.args.settings)
-        # Check if settings file exists
+        # Check if settings exist in user_data directory
+        elif Path(tgwui_user_data_settings_json).exists():
+            settings_file = Path(tgwui_user_data_settings_json)
+        elif Path(tgwui_user_data_settings_yaml).exists():
+            settings_file = Path(tgwui_user_data_settings_yaml)
+        # Fall back to the original location
         elif Path(tgwui_settings_json).exists():
             settings_file = Path(tgwui_settings_json)
         elif Path(tgwui_settings_yaml).exists():
             settings_file = Path(tgwui_settings_yaml)
+
+        # Load the settings
         if settings_file is not None:
             log.info(f"Loading text-generation-webui settings from {settings_file}...")
             file_contents = open(settings_file, 'r', encoding='utf-8').read()
-            new_settings = json.loads(file_contents) if settings_file.suffix == "json" else yaml.safe_load(file_contents)
+            new_settings = json.loads(file_contents) if settings_file.suffix == ".json" else yaml.safe_load(file_contents)
             shared.settings.update(new_settings)
 
         # Fallback settings for models
