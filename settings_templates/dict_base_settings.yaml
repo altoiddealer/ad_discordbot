@@ -204,6 +204,7 @@ llmstate:
     repetition_penalty_range: 1024
     sampler_priority: []
     seed: -1.0
+    show_after: ''
     skip_special_tokens: true
     smoothing_curve: 1
     smoothing_factor: 0
@@ -216,6 +217,7 @@ llmstate:
     tfs: 1
     top_a: 0
     top_k: 100
+    top_n_sigma: 0
     top_p: 0.37
     truncation_length: 2048
     turn_template: ''
