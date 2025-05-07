@@ -103,12 +103,12 @@ presets:
     input: {prompt: "{text}"}
     timeout: 120
     response_handling:
-      type: base64
       output_key: images # key in JSON to extract from. Use dot.notation to get a nested key.
+      type: base64 # the type of the response (or the extracted value if paired with 'output_key')
       save: true
-      file_format: png
-      file_path: images
-      save_to: images
+      save_dir: images # relative to '/output/'
+      save_prefix: image
+      save_format: png
 
   - name: Decode base64 and save
     type: base64

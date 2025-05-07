@@ -1491,11 +1491,16 @@ class TTSGenEndpoint(Endpoint):
     async def return_main_data(self, response):
         if self == self.client.post_generate:
             if isinstance(response, bytes):
-                audio_format = processing.detect_audio_format(response)
-                if audio_format == 'unknown':
-                    log.error(f'[{self.name}] Expected response to be mp3 or wav (bytes), but received an unexpected format.')
-                    return None
-                audio_fp:str = processing.save_audio_bytes(response, shared_path.output_dir, input_format=audio_format, output_format=audio_format)
+                resp_format = self.response_handling.get('type', 'unknown')
+                if resp_format == 'unknown':
+                    resp_format = processing.detect_audio_format(response)
+                    if resp_format == 'unknown':
+                        log.error(f'[{self.name}] Expected response to be mp3 or wav (bytes), but received an unexpected format.')
+                        return None
+                output_dir = os.path.join(shared_path.output_dir, self.response_handling.get('save_dir', ''))
+                save_prefix = os.path.join(shared_path.output_dir, self.response_handling.get('save_prefix', ''))
+                save_format = self.response_handling.get('save_format', resp_format)         
+                audio_fp:str = processing.save_audio_bytes(response, output_dir, input_format=resp_format, file_prefix=save_prefix, output_format=save_format)
                 return audio_fp
         return None
 

@@ -51,6 +51,7 @@ def detect_audio_format(data: bytes) -> str:
 def save_audio_bytes(
     audio_bytes: bytes,
     output_path: str,
+    file_prefix: str|None = '',
     input_format: str = "mp3",  # or "wav", "ogg", etc.
     output_format: str = "mp3",  # or "wav", etc.
 ) -> str:
@@ -68,7 +69,11 @@ def save_audio_bytes(
     """
     try:
         audio = AudioSegment.from_file(io.BytesIO(audio_bytes), format=input_format)
-        output_file = Path(f"{output_path}.{output_format}")
+        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        file_prefix = file_prefix or "audio"
+        output_dir = Path(output_path)
+        output_dir.mkdir(parents=True, exist_ok=True)  # Ensure directory exists
+        output_file = output_dir / f"{file_prefix}_{timestamp}.{output_format}"
         audio.export(output_file, format=output_format)
         return str(output_file)
     except Exception as e:
