@@ -6803,7 +6803,7 @@ class LLMState(SettingsBase):
             'history': {'internal': [], 'visible': []},
             'max_new_tokens': 512,
             'max_tokens_second': 0,
-            'max_updates_second': 0,
+            'max_updates_second': 12,
             'min_p': 0.00,
             'mirostat_eta': 0.1,
             'mirostat_mode': 0,
