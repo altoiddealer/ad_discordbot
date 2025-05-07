@@ -6821,6 +6821,7 @@ class LLMState(SettingsBase):
             'repetition_penalty_range': 1024,
             'sampler_priority': [],
             'seed': -1.0,
+            'show_after': '',
             'skip_special_tokens': True,
             'smoothing_curve': 1,
             'smoothing_factor': 0,
