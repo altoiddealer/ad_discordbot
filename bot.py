@@ -6834,6 +6834,7 @@ class LLMState(SettingsBase):
             'tfs': 1,
             'top_a': 0,
             'top_k': 100,
+            'top_n_sigma': 0,
             'top_p': 0.37,
             'truncation_length': 2048,
             'turn_template': '',
