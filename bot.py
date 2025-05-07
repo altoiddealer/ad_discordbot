@@ -5476,7 +5476,14 @@ def get_all_characters():
     filtered_characters = []
     character_paths = [shared_path.dir_user_characters]
     if tgwui_enabled:
-        character_paths.append(os.path.join(shared_path.dir_tgwui, "characters"))
+        # Check for new nested location first
+        new_tgwui_chars = os.path.join(shared_path.dir_tgwui, "user_data", "characters")
+        if os.path.exists(new_tgwui_chars):
+            character_paths.append(new_tgwui_chars)
+        else:
+            # Fallback to old path
+            old_tgwui_chars = os.path.join(shared_path.dir_tgwui, "characters")
+            character_paths.append(old_tgwui_chars)
     try:
         for character_path in character_paths:
             for file in sorted(Path(character_path).glob("*")):
