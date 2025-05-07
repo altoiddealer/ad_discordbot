@@ -248,7 +248,7 @@ class TGWUI():
         user_model_settings = {}
         settings = shared.user_config
         for pat in settings:
-            if re.match(pat.lower(), model.lower()):
+            if re.match(pat.lower(), Path(model).name.lower()):
                 for k in settings[pat]:
                     user_model_settings[k] = settings[pat][k]
         if 'loader' in user_model_settings:
