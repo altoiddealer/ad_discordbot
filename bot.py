@@ -6776,7 +6776,7 @@ class LLMState(SettingsBase):
             'preset': '',
             'grammar_string': '',
             'add_bos_token': True,
-            'auto_max_new_tokens': False,
+            'auto_max_new_tokens': True,
             'ban_eos_token': False,
             'character_menu': '',
             'chat_generation_attempts': 1,
