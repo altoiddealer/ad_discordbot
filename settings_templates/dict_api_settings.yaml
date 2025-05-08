@@ -103,6 +103,13 @@ presets:
     input: {prompt: "{text}"}
     timeout: 120
     response_handling:
+      - extract_keys: "data.image"
+      - decode_base64: true
+      - save:
+          file_format: "png"
+          file_path: "./downloads"
+          file_name: "result"
+
       output_key: images # key in JSON to extract from. Use dot.notation to get a nested key.
       type: base64 # the type of the response (or the extracted value if paired with 'output_key')
       save: true

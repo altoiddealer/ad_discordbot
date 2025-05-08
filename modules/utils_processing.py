@@ -40,6 +40,54 @@ def extract_nested_value(data: Any, path: str | list[str]) -> Any:
 
     return current
 
+async def save(data, config):
+    path = Path(config.get("file_path", "./saved"))
+    path.mkdir(parents=True, exist_ok=True)
+    file_name = config.get("file_name", "output")
+    ext = config.get("file_format", "txt")
+    full_path = path / f"{file_name}.{ext}"
+    mode = "wb" if isinstance(data, bytes) else "w"
+
+    async with aiofiles.open(full_path, mode) as f:
+        await f.write(data if isinstance(data, str) else data.decode())
+    log.info(f"Saved response to {full_path}")
+    return data
+
+def extract_keys(data, keys):
+    keys = keys.split(".") if isinstance(keys, str) else keys
+    for key in keys:
+        if isinstance(data, dict):
+            data = data.get(key)
+        else:
+            raise ValueError("Cannot extract key from non-dict response")
+    return data
+
+def decode_base64(data, _config=None):
+    return base64.b64decode(data) if isinstance(data, str) else data
+
+async def encode_to_base64(path):
+    async with aiofiles.open(path, mode='rb') as f:
+        raw = await f.read()
+        return base64.b64encode(raw).decode('utf-8')
+
+def save_base64(base64_str, output_format="png", save_to="./", prefix="file"):
+    binary_data = base64.b64decode(base64_str)
+    filename = f"{prefix}_{uuid.uuid4().hex[:8]}.{output_format}"
+    filepath = os.path.join(save_to, filename)
+    with open(filepath, "wb") as f:
+        f.write(binary_data)
+    return filepath
+
+def extract_and_save_base64(response_json, key, output_format, save_to, prefix="file"):
+    base64_str = response_json.get(key)
+    if base64_str:
+        return save_base64(base64_str, output_format, save_to, prefix)
+    return None
+
+def type(data, to_type):
+    type_map = {"int": int, "float": float, "str": str, "bool": bool}
+    return type_map[to_type](data)
+
 def detect_audio_format(data: bytes) -> str:
     if data.startswith(b'ID3') or (len(data) > 1 and data[0] == 0xFF and (data[1] & 0xE0) == 0xE0):
         return "mp3"
@@ -79,25 +127,6 @@ def save_audio_bytes(
     except Exception as e:
         log.exception(f"Failed to save audio to {output_format}: {e}")
         raise
-
-async def encode_to_base64(path):
-    async with aiofiles.open(path, mode='rb') as f:
-        raw = await f.read()
-        return base64.b64encode(raw).decode('utf-8')
-
-def save_base64(base64_str, output_format="png", save_to="./", prefix="file"):
-    binary_data = base64.b64decode(base64_str)
-    filename = f"{prefix}_{uuid.uuid4().hex[:8]}.{output_format}"
-    filepath = os.path.join(save_to, filename)
-    with open(filepath, "wb") as f:
-        f.write(binary_data)
-    return filepath
-
-def extract_and_save_base64(response_json, key, output_format, save_to, prefix="file"):
-    base64_str = response_json.get(key)
-    if base64_str:
-        return save_base64(base64_str, output_format, save_to, prefix)
-    return None
 
 def extract_filepath(response_json, key):
     return response_json.get(key)  # for APIs that return file path directly

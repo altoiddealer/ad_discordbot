@@ -1316,8 +1316,9 @@ class Endpoint:
 
         # ws_response = await self.process_ws_request(json_payload, data_payload, input_data, **kwargs)
 
-        if self.response_handling:
-            response = self.apply_response_handling(response)
+        # if isinstance(self.response_handling, list):
+        #     handler = StepExecutor(self.response_handling)
+        #     response = await handler.run(response)
 
         return response
     
@@ -1515,6 +1516,76 @@ class ImgGenEndpoint(Endpoint):
 
     async def return_main_data(self, response):
         pass
+
+
+class StepExecutor:
+    def __init__(self, steps: List[dict]):
+        self.steps = steps
+
+    async def run(self, input_data: Any) -> Any:
+        result = input_data
+        for step in self.steps:
+            if not isinstance(step, dict) or len(step) != 1:
+                raise ValueError(f"Invalid step: {step}")
+            step_name, config = next(iter(step.items()))
+            method = getattr(self, f"_step_{step_name}", None)
+            if not method:
+                raise NotImplementedError(f"Unsupported step: {step_name}")
+            result = await method(result, config) if asyncio.iscoroutinefunction(method) else method(result, config)
+        return result
+
+    def _step_extract_keys(self, data, keys):
+        keys = keys.split(".") if isinstance(keys, str) else keys
+        for key in keys:
+            if isinstance(data, dict):
+                data = data.get(key)
+            else:
+                raise ValueError("Cannot extract key from non-dict response")
+        return data
+
+    def _step_decode_base64(self, data, config):
+        if isinstance(data, str):
+            return base64.b64decode(data)
+        raise TypeError("Expected base64 string for decode_base64 step")
+
+    def _step_type(self, data, to_type):
+        type_map = {"int": int, "float": float, "str": str, "bool": bool}
+        return type_map[to_type](data)
+
+    async def _step_save(self, data, config:dict):
+        file_format = config.get("file_format", "txt")
+        file_name = config.get("file_name", f"data_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}")
+        file_path = Path(config.get("file_path", "./data"))
+        file_path.mkdir(parents=True, exist_ok=True)
+
+        full_path = file_path / f"{file_name}.{file_format}"
+        mode = "wb" if isinstance(data, bytes) else "w"
+
+        async with aiofiles.open(full_path, mode) as f:
+            if file_format in ("json", "yaml") and isinstance(data, dict):
+                if file_format == "json":
+                    await f.write(json.dumps(data, indent=2))
+                else:
+                    await f.write(yaml.dump(data))
+            else:
+                await f.write(data if isinstance(data, str) else data.decode())
+
+        log.info(f"Saved data to {full_path}")
+        return data
+
+    def _step_regex(self, data, pattern):
+        match = re.search(pattern, data)
+        if not match:
+            raise ValueError("No regex match found")
+        return match.group(1) if match.lastindex else match.group(0)
+
+    def _step_format(self, data, fmt):
+        return fmt.format(data=data)
+
+    def _step_eval(self, data, expression):
+        return eval(expression, {"data": data})
+
+
 
 class WorkflowExecutor:
     def __init__(self, workflow_name: str):
