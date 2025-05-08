@@ -1096,7 +1096,7 @@ class Params:
         save_to_history, should_gen_text, should_send_text, should_gen_image, should_send_image,
         imgcmd, img_censoring, endpoint, sd_output_dir, ref_message, regenerated,
         skip_create_user_hmsg, skip_create_bot_hmsg, bot_hmsg_hidden, bot_hmessage_to_update,
-        target_discord_msg_id, character, llmmodel, imgmodel, tts_args, user_voice, send_user_image
+        target_discord_msg_id, character, llmmodel, imgmodel, tts_args, user_voice
         '''
         self.save_to_history: bool      = kwargs.get('save_to_history', True)
 
@@ -1141,8 +1141,6 @@ class Params:
         # /Speak cmd
         self.tts_args: dict        = kwargs.get('tts_args', {})
         self.user_voice: str       = kwargs.get('user_voice', None)
-
-        self.send_user_image: list = kwargs.get('send_user_image', [])
 
     def update_bot_should_do(self, tags:Tags):
         actions = ['should_gen_text', 'should_send_text', 'should_gen_image', 'should_send_image']
@@ -1269,9 +1267,9 @@ class TaskProcessing(TaskAttributes):
             if config.discord['history_reactions'].get('enabled', True):
                 await bg_task_queue.put(apply_reactions_to_messages(client.user, self.ictx, self.bot_hmessage, msg_ids_to_react))
         # send any user images
-        send_user_image = self.params.send_user_image
-        if send_user_image:
-            await self.channel.send(file=send_user_image) if len(send_user_image) == 1 else await self.channel.send(files=send_user_image)
+        files_to_send = self.files_to_send
+        if files_to_send:
+            await self.channel.send(file=files_to_send) if len(files_to_send) == 1 else await self.channel.send(files=files_to_send)
 
     async def fix_llm_payload(self:Union["Task","Tasks"]):
         # Fix llm_payload by adding any missing required settings
@@ -1481,7 +1479,7 @@ class TaskProcessing(TaskAttributes):
             log.error(f"Error collecting LLM tag values: {e}")
         return llm_payload_mods, formatting
     
-    async def apply_generic_tag_matches(self, phase='llm'):
+    async def apply_generic_tag_matches(self:Union["Task","Tasks"], phase='llm'):
         prevent_multiple = []
         try:
             for tag in self.tags.matches:
@@ -1507,7 +1505,7 @@ class TaskProcessing(TaskAttributes):
                     user_image_file = str(tag_dict.pop('send_user_image'))
                     user_image_args = self.get_image_tag_args('User image', user_image_file, key=None, set_dir=None)
                     user_image = discord.File(user_image_args)
-                    self.params.send_user_image.append(user_image)
+                    self.files_to_send.append(user_image)
                     log.info(f'[TAGS] Sending user image for matched {tag_print}')
                 if 'persist' in tag_dict:
                     if not tag_name:
@@ -3744,9 +3742,9 @@ class Tasks(TaskProcessing):
                     await self.embeds.send('img_send', f"{self.user_name} requested an image:", '', footer=imgcmd_message, nonembed_text=original_prompt)
                 else:
                     await self.channel.send(original_prompt)
-            send_user_image = self.params.send_user_image
-            if send_user_image:
-                await self.channel.send(file=send_user_image) if len(send_user_image) == 1 else await self.channel.send(files=send_user_image)
+            files_to_send = self.files_to_send
+            if files_to_send:
+                await self.channel.send(file=files_to_send) if len(files_to_send) == 1 else await self.channel.send(files=files_to_send)
             # If switching back to original Img model
             if should_swap:
                 swap_params.imgmodel['mode'] = 'swap_back'
@@ -3961,6 +3959,7 @@ class Task(Tasks):
         self.settings: Settings      = kwargs.pop('settings', None)
         self.istyping:IsTyping       = kwargs.pop('istyping', None)
         self.message:Message         = kwargs.pop('message', None)
+        self.files_to_send:list      = kwargs.pop('files_to_send', None)
 
         # Dynamically assign custom keyword arguments as attributes
         for key, value in kwargs.items():
@@ -4012,6 +4011,7 @@ class Task(Tasks):
         self.istyping:IsTyping       = self.istyping if self.istyping else None
         # Extra attributes/methods for regular message requests
         self.message:Message         = self.message if self.message else None
+        self.files_to_send:list      = self.files_to_send if self.files_to_send else []
 
 
     def init_typing(self, start_time=None, end_time=None):
