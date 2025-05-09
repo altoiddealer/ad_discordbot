@@ -15,7 +15,7 @@ import base64
 import copy
 from typing import Any, Dict, Tuple, List, Optional, Union, Type
 from modules.utils_shared import shared_path, load_file, get_api
-from modules.utils_misc import deep_merge, is_base64, guess_format_from_headers, guess_format_from_data, detect_audio_format
+from modules.utils_misc import valueparser, deep_merge, is_base64, guess_format_from_headers, guess_format_from_data, detect_audio_format
 import modules.utils_processing as processing
 
 from modules.logs import import_track, get_logger; import_track(__file__, fp=True); log = get_logger(__name__)  # noqa: E702
@@ -62,6 +62,16 @@ class APISettings():
     def get_preset(self, preset_name: str, default=None) -> dict:
         return self.presets.get(preset_name, default or {})
 
+    def expand_steps_with_presets(self, steps: list) -> list:
+        expanded_steps = []
+        for step in steps:
+            if not isinstance(step, dict):
+                log.error("Encountered a non-dict step. Steps should be dictionaries.")
+                continue
+            expanded = self.apply_preset(step)
+            expanded_steps.append(expanded)
+        return expanded_steps
+
     def collect_workflows(self, workflows_list):
         for workflow in workflows_list:
             if not isinstance(workflow, dict):
@@ -70,15 +80,9 @@ class APISettings():
             name = workflow.get('name')
             if name:
                 self.workflows[name] = workflow
-                # TODO Fix Presets for Workflow Steps
                 workflow_steps = workflow.get('steps')
                 if workflow_steps:
-                    expanded_steps = []
-                    for step in workflow_steps:
-                        if not isinstance(step, dict):
-                            log.error(f"Workflow {name} has improper structure for a 'step' (steps should be lists of dictionaries)")
-                        expanded = apisettings.apply_preset(step)
-                        expanded_steps.append(expanded)
+                    expanded_steps = self.expand_steps_with_presets(workflow_steps)
                     self.workflows[name]['steps'] = expanded_steps
 
     def collect_settings(self, data:dict):
@@ -423,7 +427,7 @@ class APIClient:
                         method=ep_dict.get("method", "GET"),
                         response_type=ep_dict.get("response_type", "json"),
                         payload_config=ep_dict.get("payload_base"),
-                        rh_config=ep_dict.get("response_handling"),
+                        response_handling=ep_dict.get("response_handling"),
                         headers=ep_dict.get("headers", self.default_headers),
                         stream=ep_dict.get("stream", False),
                         timeout=ep_dict.get("timeout", self.default_timeout),
@@ -434,7 +438,7 @@ class APIClient:
 
     def _collect_endpoints(self, endpoints_config:list[dict]):
         for ep_dict in endpoints_config:
-            # Expand top-level response_handling preset
+            # Expand any presets
             ep_dict = apisettings.apply_preset(ep_dict)
             try:
                 ep_class:Endpoint = self._get_self_ep_class()
@@ -1020,7 +1024,7 @@ class Endpoint:
                  method: str = "GET",
                  response_type: str = "json",
                  payload_config: Optional[str|dict] = None,
-                 rh_config: Optional[dict[str, Any]] = None,
+                 response_handling: Optional[list] = None,
                  headers: Optional[Dict[str, str]] = None,
                  stream: bool = False,
                  timeout: int = 10,
@@ -1030,32 +1034,15 @@ class Endpoint:
         self.path = path
         self.method = method.upper()
         self.response_type = response_type
-        self.response_handling = None
+        self.response_handling = response_handling
         self.payload = {}
         self.schema: Optional[dict] = None
         self.headers = headers or {}
         self.stream = stream
         self.timeout = timeout
         self.retry = retry
-        # Collect response handling config
-        if rh_config:
-            self.init_response_handling(rh_config)
         if payload_config:
             self.init_payload(payload_config)
-
-    def init_response_handling(self, rh_config: dict):
-        # Expand top-level response_handling preset
-        final_rh = apisettings.apply_preset(rh_config)
-
-        # Expand each post_process step if defined
-        post_process_steps = final_rh.get("post_process", [])
-        expanded_steps = []
-        for step in post_process_steps:
-            expanded = apisettings.apply_preset(step)
-            expanded_steps.append(expanded)
-        final_rh["post_process"] = expanded_steps
-
-        self.response_handling = final_rh
 
     def init_payload(self, payload_config):
         # dictionary value
@@ -1593,11 +1580,11 @@ class StepExecutor:
 
     def step_returns(*allowed: str, default: str = "data"):
         def decorator(func):
-            async def async_wrapper(self:StepExecutor, data, config):
+            async def async_wrapper(self:"StepExecutor", data, config):
                 raw_result = await func(self, data, config)
                 return self._apply_returns(raw_result, data, config, allowed, default)
 
-            def sync_wrapper(self:StepExecutor, data, config):
+            def sync_wrapper(self:"StepExecutor", data, config):
                 raw_result = func(self, data, config)
                 return self._apply_returns(raw_result, data, config, allowed, default)
 
@@ -1619,6 +1606,42 @@ class StepExecutor:
         if isinstance(value, str) and "{" in value:
             return value.format(**self.context)
         return value
+
+    @step_returns("data", "input", default="data")
+    async def _step_for_each(self, data: Any, config: dict) -> list:
+        """
+        Executes the same steps for each Inits a StepExecutor for each item in a Context list.
+
+        Returns:
+            list: A list of results, one per item processed.
+        """
+        source = config.get("in")
+        alias = config.get("as", "item")
+        steps = config.get("steps")
+
+        if not steps or not isinstance(steps, list):
+            raise ValueError("for_each step requires a 'steps' list.")
+
+        # Determine iterable: from context (by string) or directly as list
+        items = self.context.get(source) if isinstance(source, str) else source
+
+        if not isinstance(items, list):
+            raise TypeError(f"'for_each' expected a list but got {type(items).__name__}")
+
+        results = []
+
+        for index, item in enumerate(items):
+            sub_executor = StepExecutor(steps)
+            sub_executor.response = self.response
+            sub_executor.context = {
+                **self.context,
+                alias: item,
+                f"{alias}_index": index,
+            }
+            result = await sub_executor.run(item)
+            results.append(result)
+
+        return results
 
     @step_returns("data", "input", default="data")
     def _step_extract_key(self, data: Any, config: Union[str, dict]) -> Any:
@@ -1666,9 +1689,10 @@ class StepExecutor:
         raise TypeError("Expected base64 string for decode_base64 step")
 
     @step_returns("data", "input", default="data")
-    def _step_type(self, data, to_type):
-        type_map = {"int": int, "float": float, "str": str, "bool": bool}
-        return type_map[to_type](data)
+    def _step_evaluate(self, data, value: str) -> Any:
+        if not isinstance(value, str):
+            raise ValueError("The evaluate step requires a string input.")
+        return valueparser.parse_value(value)
 
     @step_returns("path", "dict", "data", default="path")
     async def _step_save(self, data: Any, config: dict):

@@ -8,6 +8,7 @@ import copy
 import base64
 import mimetypes
 import re
+from typing import Union, Optional
 
 def check_probability(probability) -> bool:
     probability = max(0.0, min(1.0, probability))
@@ -213,3 +214,108 @@ def detect_audio_format(data: bytes) -> str:
         return "wav"
     else:
         return "unknown"
+
+class ValueParser:
+    """
+    Utility to convert loosely formatted string inputs into structured Python values:
+    - Handles primitives: int, float, bool, str
+    - Parses list and dict syntax with nested support
+    """
+
+    def parse_value(self, value_str: str) -> Optional[Union[bool, int, float, str, list, dict]]:
+        """Main entry point to parse any string value into a Python object."""
+        try:
+            value_str = value_str.strip()
+
+            if value_str.startswith('{') and value_str.endswith('}'):
+                return self._parse_dict(value_str)
+            elif value_str.startswith('[') and value_str.endswith(']'):
+                return self._parse_list(value_str)
+            else:
+                return self._parse_scalar(value_str)
+        except Exception as e:
+            log.error(f"Error parsing value: '{value_str}' — {e}")
+            return None
+
+    def _parse_scalar(self, value_str: str) -> Union[bool, int, float, str]:
+        """Attempts to convert a string to bool, int, float, or falls back to str."""
+        if value_str.lower() == 'true':
+            return True
+        if value_str.lower() == 'false':
+            return False
+
+        # Try int
+        try:
+            return int(value_str)
+        except ValueError:
+            pass
+
+        # Try float
+        try:
+            return float(value_str)
+        except ValueError:
+            pass
+
+        # Unquote if needed
+        if (value_str.startswith('"') and value_str.endswith('"')) or \
+           (value_str.startswith("'") and value_str.endswith("'")):
+            return value_str[1:-1]
+
+        return value_str
+
+    def _parse_list(self, value_str: str) -> list:
+        """Parses a list from a string like '[1, 2, {a: 1}, "text"]'."""
+        inner = value_str[1:-1].strip()
+
+        # Handle nested lists or dicts
+        items = self._split_top_level(inner, sep=',')
+
+        return [self.parse_value(item.strip()) for item in items if item.strip()]
+
+    def _parse_dict(self, value_str: str) -> dict:
+        """Parses a dictionary from a string like '{a: 1, b: "text"}'."""
+        inner = value_str[1:-1].strip()
+        result = {}
+
+        pairs = self._split_top_level(inner, sep=',')
+
+        for pair in pairs:
+            if ':' not in pair:
+                log.warning(f"Skipping invalid dict pair: '{pair}'")
+                continue
+            key_str, value_str = pair.split(':', 1)
+            key = key_str.strip()
+            value = self.parse_value(value_str.strip())
+            result[key] = value
+
+        return result
+
+    def _split_top_level(self, s: str, sep: str = ',') -> list[str]:
+        """
+        Splits a string by `sep` but ignores separators inside brackets/braces.
+        Example: "1, [2, 3], {a: 4, b: 5}" → ['1', '[2, 3]', '{a: 4, b: 5}']
+        """
+        result = []
+        depth = 0
+        current = []
+        bracket_pairs = {'{': '}', '[': ']'}
+        opening = bracket_pairs.keys()
+        closing = bracket_pairs.values()
+
+        for char in s:
+            if char in opening:
+                depth += 1
+            elif char in closing:
+                depth -= 1
+            if char == sep and depth == 0:
+                result.append(''.join(current))
+                current = []
+            else:
+                current.append(char)
+
+        if current:
+            result.append(''.join(current))
+
+        return result
+
+valueparser = ValueParser()

@@ -13,7 +13,7 @@ bot_api_functions:
     post_options: {endpoint_name: Post Options}
     get_imgmodels: {endpoint_name: Get ImgModels}
     get_controlnet_models: {endpoint_name: Get Cnet Models}
-    get_controlnet_control_types: {endpoint_name: Get Cnet Control Types, control_types_key: control_types}
+    get_controlnet_control_types: {endpoint_name: Get Cnet Control Types} #, control_types_key: control_types}
     post_server_restart: {endpoint_name: Post Server Restart}
   # Bot currently cannot use textgen APIs for main functions (support is coming!)
   textgen:
@@ -48,7 +48,7 @@ all_apis:
       - {name: Get Options, path: /sdapi/v1/options, method: GET}
       - {name: Post Options, path: /sdapi/v1/options, method: POST, payload_type: json}
       - {name: Get Cnet Models, path: /controlnet/model_list, method: GET}
-      - {name: Get Cnet Control Types, path: /controlnet/control_types, method: GET}
+      - {name: Get Cnet Control Types, path: /controlnet/control_types, method: GET, response_handling: [extract_key: control_types]}
       - {name: Post Server Restart, path: /sdapi/v1/server-restart, method: POST, retry: 0}
 
   - name: Text Generation WebUI
@@ -103,19 +103,19 @@ presets:
     input: {prompt: "{text}"}
     timeout: 120
     response_handling:
-      - extract_keys: "data.image"
-      - decode_base64: true
-      - save:
-          file_format: "png"
-          file_path: "./downloads"
-          file_name: "result"
-
-      output_key: images # key in JSON to extract from. Use dot.notation to get a nested key.
-      type: base64 # the type of the response (or the extracted value if paired with 'output_key')
-      save: true
-      save_dir: images # relative to '/output/'
-      save_prefix: image
-      save_format: png
+      # Capture 'images' list as context variable "image_list"
+      - extract_key: images
+        save_as: image_list
+      # Execute a 'for loop' of steps on each value in 'image_list' (**EXPERIMENTAL - PLEASE REPORT ISSUES**)
+      - for_each:
+          in: image_list
+          as: image
+          steps:
+            - decode_base64: true
+            - save:
+                file_format: png
+                file_path: "images"
+                file_name: "img_{image_index}"
 
   - name: Decode base64 and save
     type: base64

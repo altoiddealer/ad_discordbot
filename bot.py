@@ -120,6 +120,9 @@ async def api_online(api_type:str|None=None, api_name:str='', ictx:CtxInteractio
     if not api_client:
         log.debug(f"API client not found: {api_name}")
         return False
+    elif not api_client.enabled:
+        log.debug(f"API client offline: {api_name}")
+        return False
 
     api_client_online, emsg = await api_client.is_online()
     if not api_client_online and emsg and ictx:
@@ -4435,7 +4438,7 @@ if imggen_enabled:
 
         if config.imggen['extensions'].get('controlnet_enabled', False):
             try:
-                all_control_types:dict = await api.imggen.get_controlnet_control_types.call(retry=0, extract_keys='control_types_key')
+                all_control_types:dict = await api.imggen.get_controlnet_control_types.call()
                 for key, value in all_control_types.items():
                     if key == "All":
                         continue

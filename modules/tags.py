@@ -5,11 +5,12 @@ from itertools import product
 import random
 import re
 import traceback
-from typing import Any, Optional
 from modules.database import BaseFileMemory
 from modules.utils_discord import get_user_ctx_inter, is_direct_message
 from modules.typing import TAG, TAG_LIST, TAG_LIST_DICT, CtxInteraction, Union
 from modules.utils_shared import shared_path, flows_queue, patterns
+from typing import Any, Optional, Tuple
+from modules.utils_misc import valueparser
 
 from modules.logs import import_track, get_logger; import_track(__file__, fp=True); log = get_logger(__name__)  # noqa: E702
 logging = log
@@ -230,105 +231,54 @@ class Tags():
                     log.warning(f"Ignoring unknown search_mode: {search_mode}")
 
 
-    # Function to convert string values to bool/int/float
-    def extract_value(self, value_str:str) -> Optional[Union[bool, int, float, str]]:
+    def get_tags_from_text(self, text: str, phase: str = 'llm') -> Tuple[str, TAG_LIST]:
+        """
+        Extracts embedded tags from the input text and parses them into structured dictionaries.
+
+        Returns:
+            - Modified text with tags removed
+            - List of parsed tag dictionaries
+        """
+        tags_from_text = []
+        matches = patterns.instant_tags.findall(text)
+
+        # Remove tags from text
+        cleaned_text = patterns.instant_tags.sub('', text).strip()
+
+        if phase == 'llm':
+            self.text = cleaned_text
+        elif phase == 'img':
+            self.img_prompt = cleaned_text
+        else:
+            raise ValueError(f"Invalid phase for get_tags_from_text: '{phase}'")
+
+        for match in matches:
+            tag_dict = {}
+            tag_pairs = match.split('|')
+
+            for pair in tag_pairs:
+                key, value = self._parse_key_value(pair)
+                if key is not None:
+                    tag_dict[key] = value
+
+            if tag_dict:
+                tags_from_text.append(tag_dict)
+
+        return tags_from_text
+
+    def _parse_key_value(self, pair: str) -> Tuple[str, Any]:
+        """Splits 'key:value' string and parses the value using the ValueParser."""
         try:
-            value_str = value_str.strip()
-            if value_str.lower() == 'true':
-                return True
-            elif value_str.lower() == 'false':
-                return False
-            elif '.' in value_str:
-                try:
-                    return float(value_str)
-                except ValueError:
-                    return value_str
-            else:
-                try:
-                    return int(value_str)
-                except ValueError:
-                    return value_str
-
-        except Exception as e:
-            log.error(f"Error converting string to bool/int/float: {e}")
-
-    def parse_tag_from_text_value(self, value_str:str) -> Any:
-        try:
-            if value_str.startswith('{') and value_str.endswith('}'):
-                inner_text = value_str[1:-1]  # Remove outer curly brackets
-                key_value_pairs = inner_text.split(',')
-                result_dict = {}
-                for pair in key_value_pairs:
-                    key, value = self.parse_key_pair_from_text(pair)
-                    result_dict[key] = value
-                return result_dict
-            elif value_str.startswith('[') and value_str.endswith(']'):
-                inner_text = value_str[1:-1]
-                result_list = []
-                # if list of lists
-                if inner_text.startswith('[') and inner_text.endswith(']'):
-                    sublist_strings = patterns.brackets.findall(inner_text)
-                    for sublist_string in sublist_strings:
-                        sublist_string = sublist_string.strip()
-                        sublist_values = self.parse_tag_from_text_value(sublist_string)
-                        result_list.append(sublist_values)
-                # if single list
-                else:
-                    list_strings = inner_text.split(',')
-                    for list_str in list_strings:
-                        list_str = list_str.strip()
-                        list_value = self.parse_tag_from_text_value(list_str)
-                        result_list.append(list_value)
-                return result_list
-            else:
-                if (value_str.startswith("'") and value_str.endswith("'")):
-                    return value_str.strip("'")
-                elif (value_str.startswith('"') and value_str.endswith('"')):
-                    return value_str.strip('"')
-                else:
-                    return self.extract_value(value_str)
-
-        except Exception as e:
-            log.error(f"Error parsing nested value: {e}")
-
-    def parse_key_pair_from_text(self, kv_pair):
-        try:
-            key_value = kv_pair.split(':')
+            key_value = pair.split(':', 1)
+            if len(key_value) != 2:
+                return None, None
             key = key_value[0].strip()
-            value_str = ':'.join(key_value[1:]).strip()
-            value = self.parse_tag_from_text_value(value_str)
+            value_str = key_value[1].strip()
+            value = valueparser.parse_value(value_str)
             return key, value
         except Exception as e:
-            log.error(f"Error parsing nested value: {e}")
+            print(f"Error parsing key-value pair '{pair}': {e}")
             return None, None
-
-    # Matches [[this:syntax]] and creates 'tags' from matches
-    # Can handle any structure including dictionaries, lists, even nested sublists.
-    def get_tags_from_text(self, text:str, phase:str='llm') -> tuple[str, list[dict]]:
-        try:
-            tags_from_text = []
-            matches = patterns.instant_tags.findall(text)
-
-            if phase == 'llm':
-                self.text = patterns.instant_tags.sub('', text).strip()
-            elif phase == 'img':
-                self.img_prompt = patterns.instant_tags.sub('', text).strip()
-            else:
-                log.error("invalid 'phase' for 'get_tags_from_text':", phase)
-
-            for match in matches:
-                tag_dict = {}
-                tag_pairs = match.split('|')
-                for pair in tag_pairs:
-                    key, value = self.parse_key_pair_from_text(pair)
-                    tag_dict[key] = value
-                tags_from_text.append(tag_dict)
-            if tags_from_text:
-                log.info(f"[TAGS] Tags from text: '{tags_from_text}'")
-            return tags_from_text
-        except Exception as e:
-            log.error(f"Error getting tags from text: {e}")
-            return []
 
     async def match_img_tags(self, img_prompt:str, settings:dict):
         try:
