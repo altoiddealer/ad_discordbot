@@ -5,13 +5,18 @@ import asyncio
 import os
 import jsonschema
 import jsonref
+import mimetypes
+import yaml
+from datetime import datetime
+from pathlib import Path
+import re
 from PIL import Image, PngImagePlugin
 import io
 import base64
 import copy
 from typing import Any, Dict, Tuple, List, Optional, Union, Type
 from modules.utils_shared import shared_path, load_file, get_api
-from modules.utils_misc import deep_merge
+from modules.utils_misc import deep_merge, is_base64, guess_format_from_data, detect_audio_format
 import modules.utils_processing as processing
 
 from modules.logs import import_track, get_logger; import_track(__file__, fp=True); log = get_logger(__name__)  # noqa: E702
@@ -744,17 +749,24 @@ class APIClient:
                         return await response.text()
 
                     if 200 <= response.status < 300:
+                        content_type = response.headers.get("Content-Type", "")
+                        response_headers = dict(response.headers)
+
                         if stream:
                             return self._stream_response(response, response_type, url)
                         else:
                             if response_type == "bytes":
-                                return await response.read()
+                                raw = await response.read()
+                                return APIResponse(body=raw, headers=headers, status=response.status, content_type=content_type, raw=raw)
                             elif response_type == "text":
-                                return await response.text()
-                            elif response_type == 'json':
-                                return await response.json()
+                                text = await response.text()
+                                return APIResponse(body=text, headers=headers, status=response.status, content_type=content_type)
+                            elif response_type == "json":
+                                json_body = await response.json()
+                                return APIResponse(body=json_body, headers=headers, status=response.status, content_type=content_type)
                             else:
-                                return await self.guess_response_type(response)
+                                guessed = await self.guess_response_type(response)
+                                return APIResponse(body=guessed, headers=headers, status=response.status, content_type=content_type)
                     else:
                         response_text = await response.text()
                         log.error(f"HTTP {response.status} Error: {response_text}")
@@ -1293,7 +1305,7 @@ class Endpoint:
             if data_payload and isinstance(data_payload, dict):
                 data_payload = self.sanitize_payload(data_payload)
 
-        response =  await self.client.request(
+        response:APIResponse = await self.client.request(
             endpoint=self.path,
             method=self.method,
             json=json_payload,
@@ -1306,89 +1318,28 @@ class Endpoint:
             response_type=response_type,
             **kwargs
         )
-
-        main_ep_response = await self.return_main_data(response)
+        # Legacy compatibility step (uses only the response body)
+        main_ep_response = await self.return_main_data(response.body)
         if main_ep_response:
             return main_ep_response
+        
+        results = response.body
 
+        # Optional key extraction for now (could migrate this into StepExecutor)
         if extract_keys:
-            response = self.extract_main_keys(response, extract_keys)
+            results = self.extract_main_keys(response.body, extract_keys)
 
         # ws_response = await self.process_ws_request(json_payload, data_payload, input_data, **kwargs)
 
-        # if isinstance(self.response_handling, list):
-        #     handler = StepExecutor(self.response_handling)
-        #     response = await handler.run(response)
+        # Hand off full response to StepExecutor
+        if isinstance(self.response_handling, list):
+            handler = StepExecutor(self.response_handling)
+            results = await handler.run(response)
 
-        return response
+        return results
     
     async def return_main_data(self, response):
         pass
-
-    def apply_response_handling(self, response: Any) -> Any:
-        rh:dict = self.response_handling
-        original = response
-        try:
-            # Extract nested keys if specified
-            if 'extract_keys' in rh and isinstance(response, dict):
-                response = processing.extract_nested_value(response, rh['extract_keys'])
-
-            # Regex processing
-            if 'regex' in rh:
-                import re
-                pattern = rh['regex']
-                match = re.search(pattern, response)
-                if match:
-                    response = match.group(1) if match.lastindex else match.group(0)
-                else:
-                    raise ValueError(f"Regex pattern '{pattern}' did not match response")
-
-            # Base64 decode
-            if rh.get("decode_base64", False):
-                if isinstance(response, str):
-                    response = base64.b64decode(response)
-                else:
-                    raise TypeError("Expected base64 string to decode")
-
-            # String formatting
-            if 'format' in rh:
-                response = rh['format'].format(response=response)
-
-            # Coerce to specific type
-            if 'type' in rh:
-                type_map = {"str": str, "int": int, "float": float, "bool": bool}
-                response = type_map[rh['type']](response)
-
-            # Optional eval (advanced, use safely!)
-            if 'eval' in rh:
-                # You may use asteval or safe eval context here
-                response = eval(rh['eval'], {"response": response})
-
-            # if rh.get("save"):
-            #     content_to_save = original if rh.get("save_raw") else response
-            #     file_format = rh.get("file_format", "txt")
-            #     file_name = rh.get("file_name", f"response_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}")
-            #     file_path = Path(rh.get("file_path", "./responses"))
-            #     file_path.mkdir(parents=True, exist_ok=True)
-            #     full_path = file_path / f"{file_name}.{file_format}"
-
-            #     mode = "wb" if isinstance(content_to_save, bytes) else "w"
-            #     with open(full_path, mode, encoding=None if mode == "wb" else "utf-8") as f:
-            #         if file_format in ("json", "yaml") and isinstance(content_to_save, dict):
-            #             if file_format == "json":
-            #                 json.dump(content_to_save, f, indent=2)
-            #             else:
-            #                 yaml.dump(content_to_save, f)
-            #         else:
-            #             f.write(content_to_save)
-
-            #     log.info(f"[{self.name}] Response saved to {full_path}")
-
-        except Exception as e:
-            log.exception(f"Error applying response_handling: {e}")
-            return response  # Return original if error during handling
-
-        return response
 
 
     async def process_ws_request(self, json_payload, data_payload, **kwargs):
@@ -1518,30 +1469,152 @@ class ImgGenEndpoint(Endpoint):
         pass
 
 
+class APIResponse:
+    def __init__(
+        self,
+        body: Union[str, bytes, dict, list],
+        headers: Dict[str, str],
+        status: int,
+        content_type: str = None,
+        raw: bytes = None,
+    ):
+        self.body = body
+        self.headers = headers
+        self.status = status
+        self.content_type = content_type or headers.get("Content-Type", "")
+        self.raw = raw  # Optional raw bytes for full fidelity saving
+
+    def json(self) -> dict:
+        if isinstance(self.body, dict):
+            return self.body
+        raise TypeError("Response body is not a JSON object")
+
+    def text(self) -> str:
+        if isinstance(self.body, str):
+            return self.body
+        elif isinstance(self.body, bytes):
+            return self.body.decode()
+        raise TypeError("Response body is not text or bytes")
+
+    def bytes(self) -> bytes:
+        if isinstance(self.body, bytes):
+            return self.body
+        elif isinstance(self.body, str):
+            return self.body.encode()
+        raise TypeError("Response body is not text or bytes")
+
+
 class StepExecutor:
-    def __init__(self, steps: List[dict]):
+    def __init__(self, steps: List[dict], input_response: Any = None):
+        """
+        Executes a sequence of data transformation steps with optional context storage.
+
+        Steps are defined as a list of single-key dictionaries, where each key is the step type
+        (e.g., "extract_values") and the value is the configuration for that step.
+
+        Each step can optionally include a `save_as` key to store intermediate results in context
+        without affecting the main result passed to the next step.
+        """
         self.steps = steps
+        self.context: Dict[str, Any] = {}
+        self.original_input = input_response
+        self.response = input_response if isinstance(input_response, APIResponse) else None
+
+        # Store full response in context for access by steps (e.g. headers)
+        if self.response:
+            self.context["_response"] = self.response
+            self.context["_headers"] = self.response.headers
+            self.context["_status"] = self.response.status
+            self.context["_content_type"] = self.response.content_type
 
     async def run(self, input_data: Any) -> Any:
         result = input_data
+
         for step in self.steps:
-            if not isinstance(step, dict) or len(step) != 1:
+            if not isinstance(step, dict):
                 raise ValueError(f"Invalid step: {step}")
+
+            step = step.copy()
+            save_as = step.pop("save_as", None)
+
+            if len(step) != 1:
+                raise ValueError(f"Invalid step format: {step}")
+
             step_name, config = next(iter(step.items()))
             method = getattr(self, f"_step_{step_name}", None)
             if not method:
                 raise NotImplementedError(f"Unsupported step: {step_name}")
-            result = await method(result, config) if asyncio.iscoroutinefunction(method) else method(result, config)
+
+            # Resolve any placeholders using the current context
+            config = self._resolve_context_placeholders(config)
+
+            # Run the step and determine where to store the result
+            step_result = await method(result, config) if asyncio.iscoroutinefunction(method) else method(result, config)
+
+            if save_as:
+                self.context[save_as] = step_result
+            else:
+                result = step_result  # Only update result if not storing to context
+
         return result
 
-    def _step_extract_keys(self, data, keys):
-        keys = keys.split(".") if isinstance(keys, str) else keys
-        for key in keys:
-            if isinstance(data, dict):
-                data = data.get(key)
-            else:
-                raise ValueError("Cannot extract key from non-dict response")
-        return data
+    def _initial_data(self):
+        if isinstance(self.response, APIResponse):
+            return self.response.body
+        return self.original_input
+
+    def _resolve_context_placeholders(self, config: Any) -> Any:
+        if not self.context:
+            return config
+        if isinstance(config, str):
+            return config.format(**self.context)
+        elif isinstance(config, dict):
+            return {k: self._resolve_context_placeholders(v) for k, v in config.items()}
+        elif isinstance(config, list):
+            return [self._resolve_context_placeholders(i) for i in config]
+        return config
+    
+    def _substitute(self, value):
+        if isinstance(value, str) and "{" in value:
+            return value.format(**self.context)
+        return value
+
+    def _step_extract_key(self, data: Any, config: Union[str, dict]) -> Any:
+        if isinstance(config, dict):
+            path = config.get("path")
+            default = config.get("default", None)
+        else:
+            path = config
+            default = None
+
+        if not isinstance(path, str):
+            raise ValueError("Path must be a string.")
+
+        try:
+            parts = re.findall(r'[^.\[\]]+|\[\d+\]', path)
+            for part in parts:
+                if re.fullmatch(r'\[\d+\]', part):  # list index
+                    idx = int(part[1:-1])
+                    if isinstance(data, list):
+                        data = data[idx]
+                    else:
+                        raise TypeError(f"Expected list for index access but got {type(data).__name__}")
+                else:  # dict key
+                    if isinstance(data, dict):
+                        data = data[part]
+                    else:
+                        raise TypeError(f"Expected dict for key '{part}' but got {type(data).__name__}")
+            return data
+        except (KeyError, IndexError, TypeError) as e:
+            if default is not None:
+                return default
+            raise ValueError(f"Failed to extract path '{path}': {e}")
+
+    def _step_extract_values(self, data: Any, config: Dict[str, Union[str, dict]]) -> Dict[str, Any]:
+        result = {}
+        for key, path_config in config.items():
+            result[key] = self._step_extract_key(data, path_config)
+        return result
 
     def _step_decode_base64(self, data, config):
         if isinstance(data, str):
@@ -1552,23 +1625,40 @@ class StepExecutor:
         type_map = {"int": int, "float": float, "str": str, "bool": bool}
         return type_map[to_type](data)
 
-    async def _step_save(self, data, config:dict):
-        file_format = config.get("file_format", "txt")
-        file_name = config.get("file_name", f"data_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}")
-        file_path = Path(config.get("file_path", "./data"))
-        file_path.mkdir(parents=True, exist_ok=True)
+    async def _step_save(self, data, config: dict):
+        file_format = config.get("file_format")
+        file_name = config.get("file_name", f"data_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}")
+        file_path = Path(config.get("file_path", ""))
+        output_path = shared_path.output_dir / file_path
+        output_path.mkdir(parents=True, exist_ok=True)
 
-        full_path = file_path / f"{file_name}.{file_format}"
-        mode = "wb" if isinstance(data, bytes) else "w"
+        # Infer format from content type or file extension
+        if not file_format:
+            file_format = guess_format_from_data(data)
+            if not file_format and self.response:
+                file_format = guess_format_from_data(self.response.content_type)
+
+        full_path = output_path / f"{file_name}.{file_format}"
+        binary_formats = {"jpg", "jpeg", "png", "webp", "gif", "mp3", "wav", "mp4", "webm"}
+        mode = "wb" if file_format in binary_formats else "w"
+
+        # Decode base64 if needed
+        if isinstance(data, str) and is_base64(data):
+            data = base64.b64decode(data)
+            mode = "wb"
 
         async with aiofiles.open(full_path, mode) as f:
-            if file_format in ("json", "yaml") and isinstance(data, dict):
-                if file_format == "json":
-                    await f.write(json.dumps(data, indent=2))
-                else:
-                    await f.write(yaml.dump(data))
-            else:
-                await f.write(data if isinstance(data, str) else data.decode())
+            if file_format == "json" and isinstance(data, dict):
+                await f.write(json.dumps(data, indent=2))
+            elif file_format == "yaml" and isinstance(data, dict):
+                await f.write(yaml.dump(data))
+            elif file_format == "csv" and isinstance(data, list):
+                text = "\n".join([",".join(map(str, row)) for row in data])
+                await f.write(text)
+            elif mode == "w":
+                await f.write(data if isinstance(data, str) else str(data))
+            elif mode == "wb":
+                await f.write(data if isinstance(data, bytes) else data.encode())
 
         log.info(f"Saved data to {full_path}")
         return data

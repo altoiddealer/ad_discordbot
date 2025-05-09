@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 import math
 import random
 import copy
+import base64
 
 def check_probability(probability) -> bool:
     probability = max(0.0, min(1.0, probability))
@@ -162,3 +163,26 @@ def get_normalized_weights(target:float, list_len:int, strength:float=1.0) -> li
     # Normalize weights to sum up to 1.0
     total_weight = sum(weights)
     return [weight / total_weight for weight in weights]
+
+def is_base64(s: str) -> bool:
+    try:
+        return base64.b64encode(base64.b64decode(s)) == s.encode()
+    except Exception:
+        return False
+
+def guess_format_from_data(data) -> str:
+    if isinstance(data, dict):
+        return "json"
+    elif isinstance(data, list):
+        return "csv"
+    elif isinstance(data, bytes):
+        return "bin"
+    return "txt"
+
+def detect_audio_format(data: bytes) -> str:
+    if data.startswith(b'ID3') or (len(data) > 1 and data[0] == 0xFF and (data[1] & 0xE0) == 0xE0):
+        return "mp3"
+    elif data.startswith(b'RIFF') and b'WAVE' in data[8:16]:
+        return "wav"
+    else:
+        return "unknown"
