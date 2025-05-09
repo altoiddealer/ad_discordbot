@@ -6,6 +6,8 @@ import math
 import random
 import copy
 import base64
+import mimetypes
+import re
 
 def check_probability(probability) -> bool:
     probability = max(0.0, min(1.0, probability))
@@ -169,6 +171,31 @@ def is_base64(s: str) -> bool:
         return base64.b64encode(base64.b64decode(s)) == s.encode()
     except Exception:
         return False
+    
+def guess_format_from_headers(headers: dict) -> str|None:
+    """
+    Attempts to infer the file format using HTTP headers.
+    """
+    content_type = headers.get("Content-Type") or headers.get("content-type")
+    content_disposition = headers.get("Content-Disposition") or headers.get("content-disposition")
+
+    # Try inferring from content-type
+    if content_type:
+        mime_type = content_type.split(";")[0].strip()
+        ext = mimetypes.guess_extension(mime_type)
+        if ext:
+            return ext.lstrip(".")  # remove dot from .jpg, .json, etc.
+
+    # Try extracting from content-disposition filename
+    if content_disposition:
+        match = re.search(r'filename="?(?P<name>[^"]+)"?', content_disposition)
+        if match:
+            filename = match.group("name")
+            ext_match = re.search(r"\.([a-zA-Z0-9]+)$", filename)
+            if ext_match:
+                return ext_match.group(1)
+
+    return None  # fallback to guess_format_from_data
 
 def guess_format_from_data(data) -> str:
     if isinstance(data, dict):

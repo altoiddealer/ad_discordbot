@@ -5,7 +5,6 @@ import asyncio
 import os
 import jsonschema
 import jsonref
-import mimetypes
 import yaml
 from datetime import datetime
 from pathlib import Path
@@ -16,7 +15,7 @@ import base64
 import copy
 from typing import Any, Dict, Tuple, List, Optional, Union, Type
 from modules.utils_shared import shared_path, load_file, get_api
-from modules.utils_misc import deep_merge, is_base64, guess_format_from_data, detect_audio_format
+from modules.utils_misc import deep_merge, is_base64, guess_format_from_headers, guess_format_from_data, detect_audio_format
 import modules.utils_processing as processing
 
 from modules.logs import import_track, get_logger; import_track(__file__, fp=True); log = get_logger(__name__)  # noqa: E702
@@ -560,7 +559,7 @@ class APIClient:
         if not self.enabled:
             return False
         try:
-            response = await self.request(endpoint='', method='GET', retry=0, return_raw=True, timeout=5)
+            response = await self.request(endpoint='', method='GET', retry=0, timeout=5)
             if response:
                 return True, ''
             else:
@@ -703,8 +702,6 @@ class APIClient:
         files: Optional[Dict[str, Any]] = None,
         auth: Optional[aiohttp.BasicAuth] = None,
         retry: int = 0,
-        return_text: bool = False,  # still here if used manually
-        return_raw: bool = False,
         timeout: Optional[int] = None,
         response_type: Optional[str] = None,
         stream: bool = False,
@@ -743,11 +740,6 @@ class APIClient:
             try:
                 async with self.session.request(**request_kwargs) as response:
 
-                    if return_raw:
-                        return await response.read()
-                    if return_text:
-                        return await response.text()
-
                     if 200 <= response.status < 300:
                         content_type = response.headers.get("Content-Type", "")
                         response_headers = dict(response.headers)
@@ -757,16 +749,16 @@ class APIClient:
                         else:
                             if response_type == "bytes":
                                 raw = await response.read()
-                                return APIResponse(body=raw, headers=headers, status=response.status, content_type=content_type, raw=raw)
+                                return APIResponse(body=raw, headers=response_headers, status=response.status, content_type=content_type, raw=raw)
                             elif response_type == "text":
                                 text = await response.text()
-                                return APIResponse(body=text, headers=headers, status=response.status, content_type=content_type)
+                                return APIResponse(body=text, headers=response_headers, status=response.status, content_type=content_type)
                             elif response_type == "json":
                                 json_body = await response.json()
-                                return APIResponse(body=json_body, headers=headers, status=response.status, content_type=content_type)
+                                return APIResponse(body=json_body, headers=response_headers, status=response.status, content_type=content_type)
                             else:
                                 guessed = await self.guess_response_type(response)
-                                return APIResponse(body=guessed, headers=headers, status=response.status, content_type=content_type)
+                                return APIResponse(body=guessed, headers=response_headers, status=response.status, content_type=content_type)
                     else:
                         response_text = await response.text()
                         log.error(f"HTTP {response.status} Error: {response_text}")
@@ -1305,7 +1297,7 @@ class Endpoint:
             if data_payload and isinstance(data_payload, dict):
                 data_payload = self.sanitize_payload(data_payload)
 
-        response:APIResponse = await self.client.request(
+        response = await self.client.request(
             endpoint=self.path,
             method=self.method,
             json=json_payload,
@@ -1318,6 +1310,10 @@ class Endpoint:
             response_type=response_type,
             **kwargs
         )
+
+        if not isinstance(response, APIResponse):
+            return response
+
         # Legacy compatibility step (uses only the response body)
         main_ep_response = await self.return_main_data(response.body)
         if main_ep_response:
@@ -1333,8 +1329,8 @@ class Endpoint:
 
         # Hand off full response to StepExecutor
         if isinstance(self.response_handling, list):
-            handler = StepExecutor(self.response_handling)
-            results = await handler.run(response)
+            handler = StepExecutor(steps=self.response_handling, input=response)
+            results = await handler.run()
 
         return results
     
@@ -1505,7 +1501,7 @@ class APIResponse:
 
 
 class StepExecutor:
-    def __init__(self, steps: List[dict], input_response: Any = None):
+    def __init__(self, steps: List[dict], input: Any = None):
         """
         Executes a sequence of data transformation steps with optional context storage.
 
@@ -1517,18 +1513,18 @@ class StepExecutor:
         """
         self.steps = steps
         self.context: Dict[str, Any] = {}
-        self.original_input = input_response
-        self.response = input_response if isinstance(input_response, APIResponse) else None
+        self.original_input = input
+        self.response = input if isinstance(input, APIResponse) else None
 
         # Store full response in context for access by steps (e.g. headers)
-        if self.response:
-            self.context["_response"] = self.response
-            self.context["_headers"] = self.response.headers
-            self.context["_status"] = self.response.status
-            self.context["_content_type"] = self.response.content_type
+        # if self.response:
+        #     self.context["_response"] = self.response
+        #     self.context["_headers"] = self.response.headers
+        #     self.context["_status"] = self.response.status
+        #     self.context["_content_type"] = self.response.content_type
 
-    async def run(self, input_data: Any) -> Any:
-        result = input_data
+    async def run(self, input_data: Any|None = None) -> Any:
+        result = input_data or self._initial_data()
 
         for step in self.steps:
             if not isinstance(step, dict):
@@ -1550,6 +1546,8 @@ class StepExecutor:
 
             # Run the step and determine where to store the result
             step_result = await method(result, config) if asyncio.iscoroutinefunction(method) else method(result, config)
+            # Apply returns logic
+            step_result = self._apply_returns(step_result, result, config)
 
             if save_as:
                 self.context[save_as] = step_result
@@ -1562,6 +1560,49 @@ class StepExecutor:
         if isinstance(self.response, APIResponse):
             return self.response.body
         return self.original_input
+    
+    def _apply_returns(self, result, original_input, config:dict, allowed: List[str], default="data"):
+        returns = config.get("returns", default)
+
+        if returns not in allowed:
+            log.warning(
+                f"Ignoring invalid 'returns' value '{returns}'. "
+                f"Allowed: {allowed}. Falling back to default: '{default}'."
+            )
+            returns = default
+
+        if returns == "data":
+            return result
+        if returns == "input":
+            return original_input
+        if returns == "context":
+            return self.context
+        if returns == "dict":
+            if isinstance(result, dict):
+                return result
+            log.warning(f"'returns': 'dict' requested but result is of type {type(result).__name__}. Falling back to 'data'.")
+            return result
+        if returns == "path":
+            if isinstance(result, str):
+                return result
+            log.warning(f"'returns': 'path' requested but result is of type {type(result).__name__}. Falling back to 'data'.")
+            return result
+
+        log.warning(f"Unhandled 'returns' value: {returns}. Falling back to 'data'.")
+        return result
+
+    def step_returns(*allowed: str, default: str = "data"):
+        def decorator(func):
+            async def async_wrapper(self:StepExecutor, data, config):
+                raw_result = await func(self, data, config)
+                return self._apply_returns(raw_result, data, config, allowed, default)
+
+            def sync_wrapper(self:StepExecutor, data, config):
+                raw_result = func(self, data, config)
+                return self._apply_returns(raw_result, data, config, allowed, default)
+
+            return async_wrapper if asyncio.iscoroutinefunction(func) else sync_wrapper
+        return decorator
 
     def _resolve_context_placeholders(self, config: Any) -> Any:
         if not self.context:
@@ -1579,6 +1620,7 @@ class StepExecutor:
             return value.format(**self.context)
         return value
 
+    @step_returns("data", "input", default="data")
     def _step_extract_key(self, data: Any, config: Union[str, dict]) -> Any:
         if isinstance(config, dict):
             path = config.get("path")
@@ -1610,68 +1652,121 @@ class StepExecutor:
                 return default
             raise ValueError(f"Failed to extract path '{path}': {e}")
 
+    @step_returns("data", "input", default="data")
     def _step_extract_values(self, data: Any, config: Dict[str, Union[str, dict]]) -> Dict[str, Any]:
         result = {}
         for key, path_config in config.items():
             result[key] = self._step_extract_key(data, path_config)
         return result
 
+    @step_returns("data", "input", default="data")
     def _step_decode_base64(self, data, config):
         if isinstance(data, str):
             return base64.b64decode(data)
         raise TypeError("Expected base64 string for decode_base64 step")
 
+    @step_returns("data", "input", default="data")
     def _step_type(self, data, to_type):
         type_map = {"int": int, "float": float, "str": str, "bool": bool}
         return type_map[to_type](data)
 
-    async def _step_save(self, data, config: dict):
-        file_format = config.get("file_format")
+    @step_returns("path", "dict", "data", default="path")
+    async def _step_save(self, data: Any, config: dict):
+        """
+        Save input data to a file and return either path, original data, or metadata.
+
+        Config options:
+        - file_format: Explicit format (e.g. 'json', 'jpg').
+        - file_name: Optional file name (without extension).
+        - file_path: Relative directory inside output_dir.
+        - returns: 'path' (default), 'data', or 'dict'.
+        """
+
+        # 1. Setup file path & naming
         file_name = config.get("file_name", f"data_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}")
         file_path = Path(config.get("file_path", ""))
         output_path = shared_path.output_dir / file_path
         output_path.mkdir(parents=True, exist_ok=True)
 
-        # Infer format from content type or file extension
+        # 2. Guess format: config > headers > data
+        file_format = config.get("file_format")
         if not file_format:
-            file_format = guess_format_from_data(data)
-            if not file_format and self.response:
-                file_format = guess_format_from_data(self.response.content_type)
+            if isinstance(self.response, APIResponse):
+                file_format = guess_format_from_headers(self.response.headers)
+            if not file_format:
+                file_format = guess_format_from_data(data)
+            if file_format:
+                log.info(f'Guessed output file format for "save" step by analyzing headers/data: "{file_format}"')
 
         full_path = output_path / f"{file_name}.{file_format}"
-        binary_formats = {"jpg", "jpeg", "png", "webp", "gif", "mp3", "wav", "mp4", "webm"}
+        binary_formats = {"jpg", "jpeg", "png", "webp", "gif", "mp3", "wav", "mp4", "webm", "bin"}
+
+        # 3. Base64 decoding if applicable
+        if isinstance(data, str) and is_base64(data):
+            try:
+                data = base64.b64decode(data)
+                log.info("Detected base64 input; decoded to binary.")
+            except Exception as e:
+                log.error(f"Failed to decode base64 string: {e}")
+                raise
+
+        # 4. Select write mode
         mode = "wb" if file_format in binary_formats else "w"
 
-        # Decode base64 if needed
-        if isinstance(data, str) and is_base64(data):
-            data = base64.b64decode(data)
-            mode = "wb"
+        # 5. Save logic
+        try:
+            async with aiofiles.open(full_path, mode) as f:
+                if file_format == "json":
+                    if isinstance(data, (dict, list)):
+                        await f.write(json.dumps(data, indent=2))
+                    else:
+                        raise TypeError("JSON format requires dict or list.")
+                elif file_format == "yaml":
+                    if isinstance(data, (dict, list)):
+                        await f.write(yaml.dump(data))
+                    else:
+                        raise TypeError("YAML format requires dict or list.")
+                elif file_format == "csv":
+                    if isinstance(data, list) and all(isinstance(row, (list, tuple)) for row in data):
+                        csv_content = "\n".join([",".join(map(str, row)) for row in data])
+                        await f.write(csv_content)
+                    else:
+                        raise TypeError("CSV format requires list of lists/tuples.")
+                elif mode == "w":
+                    if not isinstance(data, (str, int, float)):
+                        raise TypeError(f"Text format requires str/number, got {type(data).__name__}")
+                    await f.write(str(data))
+                elif mode == "wb":
+                    if isinstance(data, bytes):
+                        await f.write(data)
+                    elif isinstance(data, str):
+                        await f.write(data.encode())
+                    else:
+                        raise TypeError(f"Binary format requires bytes or str, got {type(data).__name__}")
 
-        async with aiofiles.open(full_path, mode) as f:
-            if file_format == "json" and isinstance(data, dict):
-                await f.write(json.dumps(data, indent=2))
-            elif file_format == "yaml" and isinstance(data, dict):
-                await f.write(yaml.dump(data))
-            elif file_format == "csv" and isinstance(data, list):
-                text = "\n".join([",".join(map(str, row)) for row in data])
-                await f.write(text)
-            elif mode == "w":
-                await f.write(data if isinstance(data, str) else str(data))
-            elif mode == "wb":
-                await f.write(data if isinstance(data, bytes) else data.encode())
+        except Exception as e:
+            log.error(f"Failed to save data as {file_format}: {e}")
+            raise
 
         log.info(f"Saved data to {full_path}")
-        return data
 
+        return {"path": str(full_path),
+                "format": file_format,
+                "name": file_name,
+                "data": data}
+
+    @step_returns("data", "input", default="data")
     def _step_regex(self, data, pattern):
         match = re.search(pattern, data)
         if not match:
             raise ValueError("No regex match found")
         return match.group(1) if match.lastindex else match.group(0)
 
+    @step_returns("data", "input", default="data")
     def _step_format(self, data, fmt):
         return fmt.format(data=data)
 
+    @step_returns("data", "input", default="data")
     def _step_eval(self, data, expression):
         return eval(expression, {"data": data})
 
