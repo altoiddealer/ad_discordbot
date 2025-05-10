@@ -957,6 +957,10 @@ class ImgGenClient(APIClient):
                     png_info_data = r2.get("info")
 
                     if i == 0 and png_info_data:
+    #                 # Retain seed
+    #                 seed_match = patterns.seed_value.search(str(png_info_data))
+    #                 if seed_match:
+    #                     sd.last_img_payload['seed'] = int(seed_match.group(1))
                         pnginfo = PngImagePlugin.PngInfo()
                         pnginfo.add_text("parameters", png_info_data)
 
@@ -1323,9 +1327,9 @@ class Endpoint:
         # ws_response = await self.process_ws_request(json_payload, data_payload, input_data, **kwargs)
 
         # Hand off full response to StepExecutor
-        if isinstance(self.response_handling, list):
-            handler = StepExecutor(steps=self.response_handling, input=response)
-            results = await handler.run()
+        # if isinstance(self.response_handling, list):
+        #     handler = StepExecutor(steps=self.response_handling, input=response)
+        #     results = await handler.run()
 
         return results
     

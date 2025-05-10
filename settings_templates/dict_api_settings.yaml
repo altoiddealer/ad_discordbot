@@ -9,7 +9,7 @@ bot_api_functions:
     post_txt2img: {endpoint_name: Post txt2img, prompt_key: prompt, neg_prompt_key: negative_prompt, seed_key: seed}
     post_img2img: {endpoint_name: Post img2img, prompt_key: prompt, neg_prompt_key: negative_prompt, seed_key: seed}
     get_progress: {endpoint_name: Get Progress}
-    post_png_info: {endpoint_name: Post PNG Info}
+    post_pnginfo: {endpoint_name: Post PNG Info}
     post_options: {endpoint_name: Post Options}
     get_imgmodels: {endpoint_name: Get ImgModels}
     get_controlnet_models: {endpoint_name: Get Cnet Models}
