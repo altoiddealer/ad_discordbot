@@ -15,7 +15,7 @@ import base64
 import copy
 from typing import Any, Dict, Tuple, List, Optional, Union, Type
 from modules.utils_shared import shared_path, load_file, get_api
-from modules.utils_misc import valueparser, deep_merge, is_base64, guess_format_from_headers, guess_format_from_data, detect_audio_format
+from modules.utils_misc import valueparser, deep_merge, is_base64, guess_format_from_headers, guess_format_from_data, detect_audio_format, image_bytes_to_data_uri
 import modules.utils_processing as processing
 
 from modules.logs import import_track, get_logger; import_track(__file__, fp=True); log = get_logger(__name__)  # noqa: E702
@@ -937,12 +937,20 @@ class ImgGenClient(APIClient):
                 return [], response
 
             for i, img_data in enumerate(response.get('images', [])):
-                raw_data = base64.b64decode(img_data.split(",", 1)[0])
+                if "," in img_data:
+                    img_data = img_data.split(",", 1)[1]
+                raw_data = base64.b64decode(img_data)
+
+                # Attempt to detect image format
                 image = Image.open(io.BytesIO(raw_data))
-                
-                # Get PNG info
+                mime_type = Image.MIME.get(image.format, "image/png")
+                # Construct proper data URI
+                data_uri = image_bytes_to_data_uri(raw_data, mime_type)
+
+                # Call PNGInfo endpoint if applicable
                 if self.post_pnginfo:
-                    png_payload = {"image": "data:image/png;base64," + img_data}
+                    png_payload = {"image": data_uri}
+
                     r2 = await self.post_pnginfo.call(input_data=png_payload)
                     if not isinstance(r2, dict):
                         return [], r2
@@ -1689,10 +1697,56 @@ class StepExecutor:
         raise TypeError("Expected base64 string for decode_base64 step")
 
     @step_returns("data", "input", default="data")
+    def _step_type(self, data, to_type):
+        type_map = {"int": int, "float": float, "str": str, "bool": bool}
+        return type_map[to_type](data)
+    
+    @step_returns("data", "input", default="data")
+    def _step_cast(self, data, config: dict):
+        type_map = {
+            "int": int,
+            "float": float,
+            "str": str,
+            "bool": lambda x: str(x).lower() in ("true", "1", "yes")
+        }
+
+        if not isinstance(data, dict):
+            raise TypeError(f"'cast' step requires a dict input, got {type(data).__name__}")
+
+        result = data.copy()
+        for key, type_name in config.items():
+            if key not in result:
+                log.warning(f"'cast' step: key '{key}' not found in data")
+                continue
+            if type_name not in type_map:
+                raise ValueError(f"'cast' step: unsupported type '{type_name}'")
+            try:
+                result[key] = type_map[type_name](result[key])
+            except Exception as e:
+                log.warning(f"Failed to cast '{key}' to {type_name}: {e}")
+
+        return result
+
+    @step_returns("data", "input", default="data")
     def _step_evaluate(self, data, value: str) -> Any:
         if not isinstance(value, str):
             raise ValueError("The evaluate step requires a string input.")
         return valueparser.parse_value(value)
+
+    @step_returns("data", "input", default="data")
+    def _step_regex(self, data, pattern):
+        match = re.search(pattern, data)
+        if not match:
+            raise ValueError("No regex match found")
+        return match.group(1) if match.lastindex else match.group(0)
+
+    @step_returns("data", "input", default="data")
+    def _step_format(self, data, fmt):
+        return fmt.format(data=data)
+
+    @step_returns("data", "input", default="data")
+    def _step_eval(self, data, expression):
+        return eval(expression, {"data": data})
 
     @step_returns("path", "dict", "data", default="path")
     async def _step_save(self, data: Any, config: dict):
@@ -1778,22 +1832,6 @@ class StepExecutor:
                 "format": file_format,
                 "name": file_name,
                 "data": data}
-
-    @step_returns("data", "input", default="data")
-    def _step_regex(self, data, pattern):
-        match = re.search(pattern, data)
-        if not match:
-            raise ValueError("No regex match found")
-        return match.group(1) if match.lastindex else match.group(0)
-
-    @step_returns("data", "input", default="data")
-    def _step_format(self, data, fmt):
-        return fmt.format(data=data)
-
-    @step_returns("data", "input", default="data")
-    def _step_eval(self, data, expression):
-        return eval(expression, {"data": data})
-
 
 
 class WorkflowExecutor:

@@ -215,6 +215,10 @@ def detect_audio_format(data: bytes) -> str:
     else:
         return "unknown"
 
+def image_bytes_to_data_uri(image_bytes: bytes, mime_type: str = "image/png") -> str:
+    encoded = base64.b64encode(image_bytes).decode("utf-8")
+    return f"data:{mime_type};base64,{encoded}"
+
 class ValueParser:
     """
     Utility to convert loosely formatted string inputs into structured Python values:
