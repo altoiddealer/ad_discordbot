@@ -14,7 +14,7 @@ import io
 import base64
 import copy
 from typing import Any, Dict, Tuple, List, Optional, Union, Type
-from modules.utils_shared import shared_path, load_file, get_api
+from modules.utils_shared import shared_path, patterns, load_file, get_api
 from modules.utils_misc import valueparser, deep_merge, is_base64, guess_format_from_headers, guess_format_from_data, detect_audio_format, image_bytes_to_data_uri
 import modules.utils_processing as processing
 
@@ -957,10 +957,10 @@ class ImgGenClient(APIClient):
                     png_info_data = r2.get("info")
 
                     if i == 0 and png_info_data:
-    #                 # Retain seed
-    #                 seed_match = patterns.seed_value.search(str(png_info_data))
-    #                 if seed_match:
-    #                     sd.last_img_payload['seed'] = int(seed_match.group(1))
+                        # Retain seed
+                        seed_match = patterns.seed_value.search(str(png_info_data))
+                        if seed_match:
+                            self.last_img_payload['seed'] = int(seed_match.group(1))
                         pnginfo = PngImagePlugin.PngInfo()
                         pnginfo.add_text("parameters", png_info_data)
 
