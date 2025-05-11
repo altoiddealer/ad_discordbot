@@ -2233,7 +2233,7 @@ class TaskProcessing(TaskAttributes):
             # Resolves an edge case scenario when using 'last_img_payload' tag
             stashed_prompt = getattr(self, 'stashed_prompt', None)
             if stashed_prompt:
-                self.payload['prompt'] = self.stashed_prompt
+                self.payload['prompt'] = stashed_prompt
 
             # Remove duplicate negative prompts while preserving original order
             negative_prompt_list = self.payload.get('negative_prompt', '').split(', ')
@@ -2581,7 +2581,7 @@ class TaskProcessing(TaskAttributes):
                     update_dict(self.payload, last_img_payload_dict)
                     log.info("[TAGS] Applying the previous image payload as the starting point (may be modified by other tags). Note: The previous 'prompt' will be identical.")
                 elif isinstance(last_img_payload, list):
-                    # Filter api.imggen.img_payload based on keys in last_img_payload
+                    # Filter api.imggen.payload based on keys in last_img_payload
                     last_img_payload_dict = {key:api.imggen.last_img_payload[key] for key in last_img_payload if key in api.imggen.last_img_payload}
                     if last_img_payload_dict:
                         log.info("[TAGS] Applying the following settings from the previous image payload (may be modified by other tags):")
