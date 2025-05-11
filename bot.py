@@ -5461,7 +5461,7 @@ async def change_imgmodel(selected_imgmodel_params:dict, ictx:CtxInteraction=Non
                 matched_preset = await guess_model_data(selected_imgmodel_params, imgmodel_presets)
                 if matched_preset:
                     imgmodel_tags = matched_preset.pop('tags', None)
-                    imgmodel_settings['payload'] = matched_preset.get('payload', {})
+                    imgmodel_settings['payload_mods'] = matched_preset.get('payload', {})
 
             # Merge the selected imgmodel data with base imgmodel data
             updated_imgmodel_params:dict = merge_base(imgmodel_settings, 'imgmodel')
