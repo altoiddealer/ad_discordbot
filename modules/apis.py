@@ -944,25 +944,25 @@ class ImgGenClient(APIClient):
                 # Attempt to detect image format
                 image = Image.open(io.BytesIO(raw_data))
                 mime_type = Image.MIME.get(image.format, "image/png")
-                # Construct proper data URI
-                data_uri = image_bytes_to_data_uri(raw_data, mime_type)
 
                 # Call PNGInfo endpoint if applicable
-                if self.post_pnginfo:
+                if mime_type == "image/png" and self.post_pnginfo:
+                    # Construct image data with URI
+                    data_uri = image_bytes_to_data_uri(raw_data, mime_type)               
                     png_payload = {"image": data_uri}
 
                     r2 = await self.post_pnginfo.call(input_data=png_payload)
-                    if not isinstance(r2, dict):
-                        return [], r2
-                    png_info_data = r2.get("info")
+                    if isinstance(r2, dict):
 
-                    if i == 0 and png_info_data:
-                        # Retain seed
-                        seed_match = patterns.seed_value.search(str(png_info_data))
-                        if seed_match:
-                            self.last_img_payload['seed'] = int(seed_match.group(1))
-                        pnginfo = PngImagePlugin.PngInfo()
-                        pnginfo.add_text("parameters", png_info_data)
+                        png_info_data = r2.get("info")
+
+                        if i == 0 and png_info_data:
+                            # Retain seed
+                            seed_match = patterns.seed_value.search(str(png_info_data))
+                            if seed_match:
+                                self.last_img_payload['seed'] = int(seed_match.group(1))
+                            pnginfo = PngImagePlugin.PngInfo()
+                            pnginfo.add_text("parameters", png_info_data)
 
                 image.save(f"{shared_path.dir_temp_images}/temp_img_{i}.png", pnginfo=pnginfo)
 
