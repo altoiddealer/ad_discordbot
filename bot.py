@@ -1498,8 +1498,8 @@ class TaskProcessing(TaskAttributes):
                     raise TaskCensored
                 if 'flow' in tag_dict and not 'flow' in prevent_multiple:
                     prevent_multiple.append('flow')
-                    if not flows.event.is_set():
-                        await flows.build_queue(dict(tag_dict.pop('flow')))
+                    if not flows_event.is_set():
+                        await flows.build_queue(tag_dict.pop('flow'))
                 if 'toggle_vc_playback' in tag_dict and not 'toggle_vc_playback' in prevent_multiple:
                     prevent_multiple.append('toggle_vc_playback')
                     if not is_direct_message(self.ictx):
