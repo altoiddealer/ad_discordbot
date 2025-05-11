@@ -1151,7 +1151,8 @@ class Params:
             # iterate through matched tags and update
             matches = getattr(tags, 'matches')
             if matches and isinstance(matches, list):
-                for tag in matches:
+                # in reverse, to maintain tag priority
+                for tag in reversed(matches):
                     tag_dict:TAG = tags.untuple(tag)
                     for key, value in tag_dict.items():
                         if key in actions:
@@ -1196,12 +1197,12 @@ class TaskAttributes():
     settings: "Settings"
     embeds: Embeds
     text: str
+    payload: dict
     llm_prompt: str
-    llm_payload: dict
     params: Params
     tags: Tags
     img_prompt: str
-    img_payload: dict
+    payload: dict
     last_resp: str
     tts_resp: list
     user_hmessage: HMessage
@@ -1275,21 +1276,21 @@ class TaskProcessing(TaskAttributes):
             await self.channel.send(file=files_to_send) if len(files_to_send) == 1 else await self.channel.send(files=files_to_send)
 
     async def fix_llm_payload(self:Union["Task","Tasks"]):
-        # Fix llm_payload by adding any missing required settings
+        # Fix llmgen payload by adding any missing required settings
         default_llmstate = vars(LLMState())
         default_state = default_llmstate['state']
-        current_state = self.llm_payload['state']
-        self.llm_payload['state'], _ = fix_dict(current_state, default_state)
+        current_state = self.payload['state']
+        self.payload['state'], _ = fix_dict(current_state, default_state)
 
     async def swap_llm_character(self:Union["Task","Tasks"], char_name:str):
         try:
             char_data = await load_character_data(char_name, try_tgwui=tgwui_enabled)
             if char_data.get('state', {}):
-                self.llm_payload['state'] = char_data['state']
-                self.llm_payload['state']['name1'] = self.user_name
-            self.llm_payload['state']['name2'] = char_data.get('name', 'AI')
-            self.llm_payload['state']['character_menu'] = char_data.get('name', 'AI')
-            self.llm_payload['state']['context'] = char_data.get('context', '')
+                self.payload['state'] = char_data['state']
+                self.payload['state']['name1'] = self.user_name
+            self.payload['state']['name2'] = char_data.get('name', 'AI')
+            self.payload['state']['character_menu'] = char_data.get('name', 'AI')
+            self.payload['state']['context'] = char_data.get('context', '')
             setattr(self.params, 'impersonated_by', char_name)
             await self.fix_llm_payload() # Add any missing required information
         except Exception as e:
@@ -1368,26 +1369,26 @@ class TaskProcessing(TaskAttributes):
                             i_list, v_list = i_list[-num_to_retain:], v_list[-num_to_retain:]
                             log.info(f'[TAGS] History is being limited to previous {load_history} exchanges')
                     # Apply history changes
-                    self.llm_payload['state']['history']['internal'] = i_list
-                    self.llm_payload['state']['history']['visible'] = v_list
+                    self.payload['state']['history']['internal'] = i_list
+                    self.payload['state']['history']['visible'] = v_list
                 # Payload param variances
                 if param_variances:
                     processed_params = self.process_param_variances(param_variances)
                     log.info(f'[TAGS] LLM Param Variances: {processed_params}')
-                    sum_update_dict(self.llm_payload['state'], processed_params) # Updates dictionary while adding floats + ints
+                    sum_update_dict(self.payload['state'], processed_params) # Updates dictionary while adding floats + ints
                 if state:
-                    update_dict(self.llm_payload['state'], state)
+                    update_dict(self.payload['state'], state)
                     log.info('[TAGS] LLM State was modified')
                 # Context insertions
                 if prefix_context:
                     prefix_str = "\n".join(str(item) for item in prefix_context)
                     if prefix_str:
-                        self.llm_payload['state']['context'] = f"{prefix_str}\n{self.llm_payload['state']['context']}"
+                        self.payload['state']['context'] = f"{prefix_str}\n{self.payload['state']['context']}"
                         log.info('[TAGS] Prefixed context with text.')
                 if suffix_context:
                     suffix_str = "\n".join(str(item) for item in suffix_context)
                     if suffix_str:
-                        self.llm_payload['state']['context'] = f"{self.llm_payload['state']['context']}\n{suffix_str}"
+                        self.payload['state']['context'] = f"{self.payload['state']['context']}\n{suffix_str}"
                         log.info('[TAGS] Suffixed context with text.')
                 # LLM model handling
                 model_change = change_llmmodel or swap_llmmodel or None # 'llmmodel_change' will trump 'llmmodel_swap'
@@ -1528,23 +1529,23 @@ class TaskProcessing(TaskAttributes):
         # Continue from value of 'begin_reply_with'
         begin_reply_with = getattr(self.params, 'begin_reply_with', None)
         if begin_reply_with:
-            self.llm_payload['state']['history']['internal'].append([self.text, begin_reply_with])
-            self.llm_payload['state']['history']['visible'].append([self.text, begin_reply_with])
-            self.llm_payload['_continue'] = True
+            self.payload['state']['history']['internal'].append([self.text, begin_reply_with])
+            self.payload['state']['history']['visible'].append([self.text, begin_reply_with])
+            self.payload['_continue'] = True
             setattr(self.params, "include_continued_text", True)
 
     def apply_prompt_params(self:Union["Task","Tasks"]):
         mode = getattr(self.params, 'mode', None)
         if mode:
-            self.llm_payload['state']['mode'] = mode
+            self.payload['state']['mode'] = mode
         system_message = getattr(self.params, 'system_message', None)
         if system_message:
-            self.llm_payload['state']['system_message'] = system_message
+            self.payload['state']['system_message'] = system_message
         load_history = getattr(self.params, 'prompt_load_history', None)
         if load_history is not None:
             i_list, v_list = load_history
-            self.llm_payload['state']['history']['internal'] = i_list
-            self.llm_payload['state']['history']['visible'] = v_list
+            self.payload['state']['history']['internal'] = i_list
+            self.payload['state']['history']['visible'] = v_list
         save_to_history = getattr(self.params, 'prompt_save_to_history', None)
         if save_to_history is not None:
             self.params.save_to_history = save_to_history
@@ -1556,25 +1557,25 @@ class TaskProcessing(TaskAttributes):
         self.apply_begin_reply_with()
 
     async def init_llm_payload(self:Union["Task","Tasks"]):
-        self.llm_payload = copy.deepcopy(vars(self.settings.llmstate))
-        self.llm_payload['text'] = self.text
-        self.llm_payload['state']['name1'] = self.user_name
-        self.llm_payload['state']['name2'] = self.settings.name
-        self.llm_payload['state']['name1_instruct'] = self.user_name
-        self.llm_payload['state']['name2_instruct'] = self.settings.name
-        self.llm_payload['state']['character_menu'] = self.settings.name
-        self.llm_payload['state']['context'] = self.settings.llmcontext.context
-        self.llm_payload['state']['history'] = self.local_history.render_to_tgwui()
+        self.payload = copy.deepcopy(vars(self.settings.llmstate))
+        self.payload['text'] = self.text
+        self.payload['state']['name1'] = self.user_name
+        self.payload['state']['name2'] = self.settings.name
+        self.payload['state']['name1_instruct'] = self.user_name
+        self.payload['state']['name2_instruct'] = self.settings.name
+        self.payload['state']['character_menu'] = self.settings.name
+        self.payload['state']['context'] = self.settings.llmcontext.context
+        self.payload['state']['history'] = self.local_history.render_to_tgwui()
 
     async def message_img_gen(self:Union["Task","TaskProcessing"]):
-        await self.tags.match_img_tags(self.img_prompt, self.settings.get_vars())
+        await self.tags.match_img_tags(self.prompt, self.settings.get_vars())
         await self.apply_generic_tag_matches(phase='img')
         self.params.update_bot_should_do(self.tags) # check for updates from tags
         if self.params.should_gen_image and await api_online(api_type='imggen', ictx=self.ictx):
             # CLONE CURRENT TASK AND QUEUE IT
             log.info('An image task was triggered, created and queued.')
             await self.embeds.send('system', title='Generating an image', description='An image task was triggered, created and queued.', delete_after=5)
-            img_gen_task = self.clone('img_gen', self.ictx, ignore_list=['llm_payload'])
+            img_gen_task = self.clone('img_gen', self.ictx, ignore_list=['payload']) # Allow payload to be rebuilt. Keep all other task attributes (matched Tags, params, etc)
             await task_manager.task_queue.put(img_gen_task)
 
     async def check_tts_before_llm_gen(self:Union["Task","Tasks"]) -> bool|str:
@@ -1620,52 +1621,52 @@ class TaskProcessing(TaskAttributes):
     async def process_user_prompt(self:Union["Task","Tasks"]):
         # Update an existing LLM payload (Flows), or initialize with defaults
         if tgwui_enabled:
-            if self.llm_payload:
-                self.llm_payload['text'] = self.text
+            if self.payload:
+                self.payload['text'] = self.text
             else:
                 await self.init_llm_payload()
         # apply previously matched tags
         await self.apply_generic_tag_matches(phase='llm')
-        self.tags.process_tag_insertions(self.llm_prompt)
+        self.tags.process_tag_insertions(self.prompt)
         # collect matched tag values
         llm_payload_mods, formatting = await self.collect_llm_tag_values()
         # apply tags relevant to LLM payload
         await self.process_llm_payload_tags(llm_payload_mods)
         # apply formatting tags to LLM prompt
-        self.process_prompt_formatting(self.llm_prompt, formatting)
+        self.process_prompt_formatting(self.prompt, formatting)
         # apply params from /prompt command
         self.apply_prompt_params()
         # assign finalized prompt to payload
-        self.llm_payload['text'] = self.llm_prompt
+        self.payload['text'] = self.prompt
 
     def apply_server_mode(self:Union["Task","Tasks"]):
         if self.ictx and config.textgen.get('server_mode', False):
             try:
                 name1 = f'Server: {self.ictx.guild}'
-                self.llm_payload['state']['name1'] = name1
-                self.llm_payload['state']['name1_instruct'] = name1
+                self.payload['state']['name1'] = name1
+                self.payload['state']['name1_instruct'] = name1
             except Exception as e:
                 log.error(f'An error occurred while applying Server Mode: {e}')
 
     # Add dynamic stopping strings
     def extra_stopping_strings(self:Union["Task","Tasks"]):
         try:
-            name1_value = self.llm_payload['state']['name1']
-            name2_value = self.llm_payload['state']['name2']
+            name1_value = self.payload['state']['name1']
+            name2_value = self.payload['state']['name2']
             # Check and replace in custom_stopping_strings
-            custom_stopping_strings = self.llm_payload['state']['custom_stopping_strings']
+            custom_stopping_strings = self.payload['state']['custom_stopping_strings']
             if "name1" in custom_stopping_strings:
                 custom_stopping_strings = custom_stopping_strings.replace("name1", name1_value)
             if "name2" in custom_stopping_strings:
                 custom_stopping_strings = custom_stopping_strings.replace("name2", name2_value)
-            self.llm_payload['state']['custom_stopping_strings'] = custom_stopping_strings
+            self.payload['state']['custom_stopping_strings'] = custom_stopping_strings
             # Check and replace in stopping_strings
-            stopping_strings = self.llm_payload['state']['stopping_strings']
+            stopping_strings = self.payload['state']['stopping_strings']
             if "name1" in stopping_strings:
                 stopping_strings = stopping_strings.replace("name1", name1_value)
             if "name2" in stopping_strings:
                 stopping_strings = stopping_strings.replace("name2", name2_value)
-            self.llm_payload['state']['stopping_strings'] = stopping_strings
+            self.payload['state']['stopping_strings'] = stopping_strings
         except Exception as e:
             log.error(f'An error occurred while updating stopping strings: {e}')
 
@@ -1703,7 +1704,7 @@ class TaskProcessing(TaskAttributes):
             # Add User HMessage before processing bot reply.
             # this gives time for other messages to accrue before the bot's response, as in realistic chat scenario.
             message = get_message_ctx_inter(self.ictx)
-            self.user_hmessage = self.local_history.new_message(self.llm_payload['state']['name1'], self.llm_payload['text'], 'user', self.user.id)
+            self.user_hmessage = self.local_history.new_message(self.payload['state']['name1'], self.payload['text'], 'user', self.user.id)
             self.user_hmessage.id = message.id if hasattr(message, 'id') else None
             # set history flag
             if self.params.save_to_history == False:
@@ -1916,7 +1917,7 @@ class TaskProcessing(TaskAttributes):
                         self.tts_resp.append(audio_file)
 
             def apply_extensions(chunk_text:str, was_streamed=True):
-                vis_resp_chunk:str = extensions_module.apply_extensions('output', chunk_text, state=self.llm_payload['state'], is_chat=True)
+                vis_resp_chunk:str = extensions_module.apply_extensions('output', chunk_text, state=self.payload['state'], is_chat=True)
                 if vis_resp_chunk:
                     audio_format_match = patterns.audio_src.search(vis_resp_chunk)
                     if audio_format_match:
@@ -1927,19 +1928,19 @@ class TaskProcessing(TaskAttributes):
             # Sends LLM Payload and processes the generated text
             async def process_responses():
 
-                regenerate = self.llm_payload.get('regenerate', False)
+                regenerate = self.payload.get('regenerate', False)
 
                 continued_from = ''
-                _continue = self.llm_payload.get('_continue', False)
+                _continue = self.payload.get('_continue', False)
                 if _continue:
-                    continued_from = self.llm_payload['state']['history']['internal'][-1][-1]
+                    continued_from = self.payload['state']['history']['internal'][-1][-1]
                 include_continued_text = getattr(self.params, "include_continued_text", False)
                 continue_condition = _continue and not include_continued_text
 
                 # Send payload and get responses
                 func = partial(custom_chatbot_wrapper,
-                               text = self.llm_payload['text'],
-                               state = self.llm_payload['state'],
+                               text = self.payload['text'],
+                               state = self.payload['state'],
                                regenerate = regenerate,
                                _continue = _continue,
                                loading_message = True,
@@ -2166,7 +2167,7 @@ class TaskProcessing(TaskAttributes):
                 return images
             temp_dir = shared_path.dir_temp_images
             # Workaround for layerdiffuse PNG infoReActor + layerdiffuse combination
-            reactor = self.img_payload['alwayson_scripts'].get('reactor', {})
+            reactor = self.payload['alwayson_scripts'].get('reactor', {})
             if reactor and reactor['args'][1]:          # if ReActor was enabled:
                 _, _, _, alpha = ld_output.split()      # Extract alpha channel from layerdiffuse output
                 img0 = Image.open(f'{temp_dir}/temp_img_0.png') # Open first image (with ReActor output)
@@ -2195,11 +2196,11 @@ class TaskProcessing(TaskAttributes):
 
     async def sd_img_gen(self:Union["Task","Tasks"]):
         try:
-            reactor_args = self.img_payload.get('alwayson_scripts', {}).get('reactor', {}).get('args', [])
+            reactor_args = self.payload.get('alwayson_scripts', {}).get('reactor', {}).get('args', [])
             last_reactor_index = reactor_args[-1] if reactor_args else None
             reactor_mask = reactor_args.pop() if isinstance(last_reactor_index, dict) else None
             # Start progress task and generation task concurrently
-            images_task = asyncio.create_task(api.imggen.save_images_and_return(self.img_payload, self.params.mode))
+            images_task = asyncio.create_task(api.imggen.save_images_and_return(self.payload, self.params.mode))
             progress_task = asyncio.create_task(api.imggen.track_progress(discord_embeds=self.embeds))
             # Wait for both tasks to complete
             await asyncio.gather(images_task, progress_task)
@@ -2209,11 +2210,11 @@ class TaskProcessing(TaskAttributes):
                 await self.embeds.send('img_send', 'Error processing images.', f'Error: "{str(pnginfo)}"\nIf {api.imggen.name} remains unresponsive, consider using "/restart_sd_client" command.')
                 return None
             # Apply ReActor mask
-            reactor = self.img_payload.get('alwayson_scripts', {}).get('reactor', {})
+            reactor = self.payload.get('alwayson_scripts', {}).get('reactor', {})
             if len(images) > 1 and reactor and reactor_mask:
                 images = await self.apply_reactor_mask(images, pnginfo, reactor_mask['mask'])
             # Workaround for layerdiffuse output
-            layerdiffuse = self.img_payload.get('alwayson_scripts', {}).get('layerdiffuse', {})
+            layerdiffuse = self.payload.get('alwayson_scripts', {}).get('layerdiffuse', {})
             if len(images) > 1 and layerdiffuse and layerdiffuse['args'][0]:
                 images = await self.layerdiffuse_hack(images, pnginfo)
             return images
@@ -2264,10 +2265,10 @@ class TaskProcessing(TaskAttributes):
             # Resolves an edge case scenario when using 'last_img_payload' tag
             stashed_prompt = getattr(self, 'stashed_prompt', None)
             if stashed_prompt:
-                self.img_payload['prompt'] = self.stashed_prompt
+                self.payload['prompt'] = self.stashed_prompt
 
             # Remove duplicate negative prompts while preserving original order
-            negative_prompt_list = self.img_payload.get('negative_prompt', '').split(', ')
+            negative_prompt_list = self.payload.get('negative_prompt', '').split(', ')
             unique_values_set = set()
             unique_values_list = []
             for value in negative_prompt_list:
@@ -2275,12 +2276,12 @@ class TaskProcessing(TaskAttributes):
                     unique_values_set.add(value)
                     unique_values_list.append(value)
             processed_negative_prompt = ', '.join(unique_values_list)
-            self.img_payload['negative_prompt'] = processed_negative_prompt
+            self.payload['negative_prompt'] = processed_negative_prompt
 
             ## Clean up extension keys
             # get alwayson_scripts dict
             extensions = config.imggen['extensions']
-            alwayson_scripts:dict = self.img_payload.get('alwayson_scripts', {})
+            alwayson_scripts:dict = self.payload.get('alwayson_scripts', {})
             # Clean ControlNet
             if alwayson_scripts.get('controlnet'):
                 # Delete all 'controlnet' keys if disabled
@@ -2308,33 +2309,33 @@ class TaskProcessing(TaskAttributes):
             # Clean Forge Couple
             if alwayson_scripts.get('forge_couple'):
                 # Delete all 'forge_couple' keys if disabled by config
-                if not extensions.get('forgecouple_enabled') or self.img_payload.get('init_images'):
+                if not extensions.get('forgecouple_enabled') or self.payload.get('init_images'):
                     del alwayson_scripts['forge_couple']
                 else:
                     # convert dictionary to list
-                    if isinstance(self.img_payload['alwayson_scripts']['forge_couple']['args'], dict):
-                        self.img_payload['alwayson_scripts']['forge_couple']['args'] = list(self.img_payload['alwayson_scripts']['forge_couple']['args'].values())
+                    if isinstance(self.payload['alwayson_scripts']['forge_couple']['args'], dict):
+                        self.payload['alwayson_scripts']['forge_couple']['args'] = list(self.payload['alwayson_scripts']['forge_couple']['args'].values())
                     # Add the required space between "forge" and "couple" ("forge couple")
-                    self.img_payload['alwayson_scripts']['forge couple'] = self.img_payload['alwayson_scripts'].pop('forge_couple')
+                    self.payload['alwayson_scripts']['forge couple'] = self.payload['alwayson_scripts'].pop('forge_couple')
             # Clean layerdiffuse
             if alwayson_scripts.get('layerdiffuse'):
                 # Delete all 'layerdiffuse' keys if disabled by config
                 if not extensions.get('layerdiffuse_enabled'):
                     del alwayson_scripts['layerdiffuse']
                 # convert dictionary to list
-                elif isinstance(self.img_payload['alwayson_scripts']['layerdiffuse']['args'], dict):
-                    self.img_payload['alwayson_scripts']['layerdiffuse']['args'] = list(self.img_payload['alwayson_scripts']['layerdiffuse']['args'].values())
+                elif isinstance(self.payload['alwayson_scripts']['layerdiffuse']['args'], dict):
+                    self.payload['alwayson_scripts']['layerdiffuse']['args'] = list(self.payload['alwayson_scripts']['layerdiffuse']['args'].values())
             # Clean ReActor
             if alwayson_scripts.get('reactor'):
                 # Delete all 'reactor' keys if disabled by config
                 if not extensions.get('reactor_enabled'):
                     del alwayson_scripts['reactor']
                 # convert dictionary to list
-                elif isinstance(self.img_payload['alwayson_scripts']['reactor']['args'], dict):
-                    self.img_payload['alwayson_scripts']['reactor']['args'] = list(self.img_payload['alwayson_scripts']['reactor']['args'].values())
+                elif isinstance(self.payload['alwayson_scripts']['reactor']['args'], dict):
+                    self.payload['alwayson_scripts']['reactor']['args'] = list(self.payload['alwayson_scripts']['reactor']['args'].values())
 
         except Exception as e:
-            log.error(f"An error occurred when cleaning img_payload: {e}")
+            log.error(f"An error occurred when cleaning imggen payload: {e}")
 
     def apply_loractl(self:Union["Task","Tasks"]):
         matched_tags: list = self.tags.matches
@@ -2345,7 +2346,7 @@ class TaskProcessing(TaskAttributes):
                     log.warning(f'loractl integration is enabled in config.yaml, but is not known to be compatible with "{api.imggen.name}".')
                 return
             if api.imggen.is_reforge():
-                self.img_payload.setdefault('alwayson_scripts', {}).setdefault('dynamic lora weights (reforge)', {}).setdefault('args', []).append({'Enable Dynamic Lora Weights': True})
+                self.payload.setdefault('alwayson_scripts', {}).setdefault('dynamic lora weights (reforge)', {}).setdefault('args', []).append({'Enable Dynamic Lora Weights': True})
             scaling_settings = [v for k, v in config.imggen['extensions'].get('lrctl', {}).items() if 'scaling' in k]
             scaling_settings = scaling_settings if scaling_settings else ['']
             # Flatten the matches dictionary values to get a list of all tags (including those within tuples)
@@ -2391,14 +2392,14 @@ class TaskProcessing(TaskAttributes):
             img2img_mask               = img2img.get('mask', '')
 
             if img2img:
-                self.img_payload['init_images'] = [img2img['image']]
-                self.img_payload['denoising_strength'] = img2img['denoising_strength']
+                self.payload['init_images'] = [img2img['image']]
+                self.payload['denoising_strength'] = img2img['denoising_strength']
             if img2img_mask:
-                self.img_payload['mask'] = img2img_mask
+                self.payload['mask'] = img2img_mask
             if size:
-                self.img_payload.update(size)
+                self.payload.update(size)
             if face_swap or controlnet:
-                alwayson_scripts:dict = self.img_payload.setdefault('alwayson_scripts', {})
+                alwayson_scripts:dict = self.payload.setdefault('alwayson_scripts', {})
                 if face_swap:
                     alwayson_scripts.setdefault('reactor', {}).setdefault('args', {})['image'] = face_swap # image in base64 format
                     alwayson_scripts['reactor']['args']['enabled'] = True # Enable
@@ -2413,9 +2414,9 @@ class TaskProcessing(TaskAttributes):
 
     def process_img_prompt_tags(self:Union["Task","Tasks"]):
         try:
-            self.img_prompt = self.tags.process_tag_insertions(self.img_payload['prompt'])
-            updated_positive_prompt = self.img_prompt
-            updated_negative_prompt = self.img_payload['negative_prompt']
+            self.prompt = self.tags.process_tag_insertions(self.payload['prompt'])
+            updated_positive_prompt = self.prompt
+            updated_negative_prompt = self.payload['negative_prompt']
             for tag in self.tags.matches:
                 join = tag.get('img_text_joining', ' ')
                 if 'imgtag_uninserted' in tag: # was flagged as a trigger match but not inserted
@@ -2434,8 +2435,8 @@ class TaskProcessing(TaskAttributes):
                 if 'negative_prompt_suffix' in tag:
                     join = join if updated_negative_prompt else ''
                     updated_negative_prompt = updated_negative_prompt + join + tag['negative_prompt_suffix']
-            self.img_payload['prompt'] = updated_positive_prompt
-            self.img_payload['negative_prompt'] = updated_negative_prompt
+            self.payload['prompt'] = updated_positive_prompt
+            self.payload['negative_prompt'] = updated_negative_prompt
 
         except Exception as e:
             log.error(f"Error processing Img prompt tags: {e}")
@@ -2609,7 +2610,7 @@ class TaskProcessing(TaskAttributes):
                 if isinstance(last_img_payload, bool):
                     last_img_payload_dict = copy.deepcopy(api.imggen.last_img_payload)
                     setattr(self, 'stashed_prompt', last_img_payload_dict.pop('prompt', '')) # Retains the prompt to re-apply later
-                    update_dict(self.img_payload, last_img_payload_dict)
+                    update_dict(self.payload, last_img_payload_dict)
                     log.info("[TAGS] Applying the previous image payload as the starting point (may be modified by other tags). Note: The previous 'prompt' will be identical.")
                 elif isinstance(last_img_payload, list):
                     # Filter api.imggen.img_payload based on keys in last_img_payload
@@ -2617,13 +2618,13 @@ class TaskProcessing(TaskAttributes):
                     if last_img_payload_dict:
                         log.info("[TAGS] Applying the following settings from the previous image payload (may be modified by other tags):")
                         log.info(f"{', '.join(last_img_payload_dict.keys())}")
-                        update_dict(self.img_payload, last_img_payload_dict)
+                        update_dict(self.payload, last_img_payload_dict)
                 else:
                     log.error("[TAGS] A tag was matched with invalid 'last_img_payload'; must be boolean ('true') or a ['list', 'of', 'key_names'].")
             if payload:
                 if isinstance(payload, dict):
                     log.info(f"[TAGS] Updated payload: '{payload}'")
-                    update_dict(self.img_payload, payload)
+                    update_dict(self.payload, payload)
                 else:
                     log.warning("[TAGS] A tag was matched with invalid 'payload'; must be a dictionary.")
             # Aspect Ratio
@@ -2642,7 +2643,7 @@ class TaskProcessing(TaskAttributes):
                     else:
                         n, d = get_aspect_ratio_parts(aspect_ratio)
                     w, h = dims_from_ar(current_avg, n, d)
-                    self.img_payload['width'], self.img_payload['height'] = w, h
+                    self.payload['width'], self.payload['height'] = w, h
                     log.info(f'[TAGS] Applied aspect ratio "{aspect_ratio}" (Width: "{w}", Height: "{h}").')
                 except Exception as e:
                     log.error(f"[TAGS] Error applying aspect ratio: {e}")
@@ -2650,32 +2651,32 @@ class TaskProcessing(TaskAttributes):
             if param_variances:
                 processed_params = self.process_param_variances(param_variances)
                 log.info(f"[TAGS] Applied Param Variances: '{processed_params}'")
-                sum_update_dict(self.img_payload, processed_params)
+                sum_update_dict(self.payload, processed_params)
             # Controlnet handling
             if controlnet and config.imggen['extensions'].get('controlnet_enabled', False):
-                self.img_payload['alwayson_scripts']['controlnet']['args'] = controlnet
+                self.payload['alwayson_scripts']['controlnet']['args'] = controlnet
             # forge_couple handling
             if forge_couple and config.imggen['extensions'].get('forgecouple_enabled', False):
-                self.img_payload['alwayson_scripts']['forge_couple']['args'].update(forge_couple)
-                self.img_payload['alwayson_scripts']['forge_couple']['args']['enable'] = True
+                self.payload['alwayson_scripts']['forge_couple']['args'].update(forge_couple)
+                self.payload['alwayson_scripts']['forge_couple']['args']['enable'] = True
                 log.info(f"[TAGS] Enabled forge_couple: {forge_couple}")
             # layerdiffuse handling
             if layerdiffuse and config.imggen['extensions'].get('layerdiffuse_enabled', False):
-                self.img_payload['alwayson_scripts']['layerdiffuse']['args'].update(layerdiffuse)
-                self.img_payload['alwayson_scripts']['layerdiffuse']['args']['enabled'] = True
+                self.payload['alwayson_scripts']['layerdiffuse']['args'].update(layerdiffuse)
+                self.payload['alwayson_scripts']['layerdiffuse']['args']['enabled'] = True
                 log.info(f"[TAGS] Enabled layerdiffuse: {layerdiffuse}")
             # ReActor face swap handling
             if reactor and config.imggen['extensions'].get('reactor_enabled', False):
-                self.img_payload['alwayson_scripts']['reactor']['args'].update(reactor)
+                self.payload['alwayson_scripts']['reactor']['args'].update(reactor)
                 if reactor.get('mask'):
-                    self.img_payload['alwayson_scripts']['reactor']['args']['save_original'] = True
+                    self.payload['alwayson_scripts']['reactor']['args']['save_original'] = True
             # Img2Img handling
             if img2img:
-                self.img_payload['init_images'] = [str(img2img)]
+                self.payload['init_images'] = [str(img2img)]
                 self.params.mode = 'img2img'
             # Inpaint Mask handling
             if img2img_mask:
-                self.img_payload['mask'] = str(img2img_mask)
+                self.payload['mask'] = str(img2img_mask)
         except Exception as e:
             log.error(f"[TAGS] Error processing Img tags: {e}")
             traceback.print_exc()
@@ -2837,7 +2838,7 @@ class TaskProcessing(TaskAttributes):
             if controlnet_args:
                 img_payload_mods.setdefault('controlnet', [])
                 for index in sorted(set(controlnet_args.keys())):   # This flattens down any gaps between collected ControlNet units (ensures lowest index is 0, next is 1, and so on)
-                    alwayson = self.img_payload.setdefault('alwayson_scripts', {})
+                    alwayson = self.payload.setdefault('alwayson_scripts', {})
                     controlnet = alwayson.setdefault('controlnet', {})
                     args = controlnet.setdefault('args', [])
                     # Ensure at least one element exists
@@ -2866,7 +2867,7 @@ class TaskProcessing(TaskAttributes):
 
     def init_img_payload(self:Union["Task","Tasks"]):
         try:
-            self.img_payload = {}
+            self.payload = {}
 
             # Apply values set by /image command (Additional /image cmd values are applied later)
             imgcmd_params   = self.params.imgcmd
@@ -2874,7 +2875,7 @@ class TaskProcessing(TaskAttributes):
             style: dict     = imgcmd_params['style']
             positive_style  = style.get('positive', "{}")
             negative_style  = style.get('negative', '')
-            self.img_prompt = positive_style.format(self.img_prompt)
+            self.prompt     = positive_style.format(self.prompt)
             neg_prompt = f"{neg_prompt}, {negative_style}" if negative_style else neg_prompt
             mode = imgcmd_params.get('img2img', 'txt2img')
 
@@ -2882,19 +2883,19 @@ class TaskProcessing(TaskAttributes):
             neg_prompt_key = 'negative_prompt'
             seed_key = 'seed'
 
-            # Initialize img_payload settings
+            # Initialize imggen payload settings
             if mode == 'txt2img' and api.imggen.post_txt2img:
-                self.img_payload = api.imggen.post_txt2img.get_payload()
+                self.payload = api.imggen.post_txt2img.get_payload()
                 prompt_key, neg_prompt_key = api.imggen.post_txt2img.prompt_key, api.imggen.post_txt2img.neg_prompt_key
             elif mode == 'img2img' and api.imggen.post_img2img:
-                self.img_payload = api.imggen.post_img2img.get_payload()
+                self.payload = api.imggen.post_img2img.get_payload()
                 prompt_key, neg_prompt_key = api.imggen.post_img2img.prompt_key, api.imggen.post_img2img.neg_prompt_key
             # Update with prompt, neg prompt, and randomize seed
-            self.img_payload.update({prompt_key: self.img_prompt, neg_prompt_key: neg_prompt, seed_key: -1})
+            self.payload.update({prompt_key: self.prompt, neg_prompt_key: neg_prompt, seed_key: -1})
 
             # Apply settings from imgmodel configuration
             imgmodel_img_payload = copy.deepcopy(self.settings.imgmodel.payload_mods)
-            self.img_payload.update(imgmodel_img_payload)
+            self.payload.update(imgmodel_img_payload)
 
         except Exception as e:
             log.error(f"Error initializing img payload: {e}")
@@ -2921,7 +2922,7 @@ class Tasks(TaskProcessing):
     async def message_llm_task(self:"Task"):
         try:
             # make working copy of user's request
-            self.llm_prompt = self.text
+            self.prompt = self.text
 
             # Stop any pending spontaneous message task for current channel
             await spontaneous_messaging.reset_for_channel(self.ictx)
@@ -2961,17 +2962,13 @@ class Tasks(TaskProcessing):
     # Parked Message Task may be resumed from here
     async def message_post_llm_task(self:"Task") -> tuple[HMessage, HMessage]:
         try:
-            # set img_prompt, then pre-process responses
-            if not self.last_resp:
-                # If no text was generated, treat user input at the response
-                if self.params.should_gen_image and imggen_enabled:
-                    self.img_prompt = self.llm_prompt # set image prompt to LLM prompt
-            else:
-                self.img_prompt = self.last_resp      # set the image prompt to LLM response
+            # set response to img_prompt, then pre-process responses
+            if self.last_resp:
+                self.prompt = self.last_resp
 
                 # Log message exchange
-                log.info(f'''{self.user_name}: "{self.llm_payload['text']}"''')
-                log.info(f'''{self.llm_payload['state']['name2']}: "{self.last_resp}"''')
+                log.info(f'''{self.user_name}: "{self.payload['text']}"''')
+                log.info(f'''{self.payload['state']['name2']}: "{self.last_resp}"''')
 
                 # Create messages in History
                 await self.create_hmessages()
@@ -3096,9 +3093,9 @@ class Tasks(TaskProcessing):
             sliced_history = original_bot_hmessage.new_history_end_here()
             sliced_i, _ = sliced_history.render_to_tgwui_tuple()
             # using original 'visible' produces wonky TTS responses combined with "Continue" function. Using 'internal' for both.
-            self.llm_payload['state']['history']['internal'] = copy.deepcopy(sliced_i)
-            self.llm_payload['state']['history']['visible'] = copy.deepcopy(sliced_i)
-            self.llm_payload['_continue'] = True # let TGWUI handle the continue function
+            self.payload['state']['history']['internal'] = copy.deepcopy(sliced_i)
+            self.payload['state']['history']['visible'] = copy.deepcopy(sliced_i)
+            self.payload['_continue'] = True # let TGWUI handle the continue function
             # Restore hidden status
             if temp_reveal_user_hmsg:
                 original_user_hmessage.update(hidden=True)
@@ -3136,9 +3133,9 @@ class Tasks(TaskProcessing):
                 return
 
             # Log message exchange
-            log.info(f'''{self.user_name}: "{self.llm_payload['text']}"''')
+            log.info(f'''{self.user_name}: "{self.payload['text']}"''')
             log.info('Continued text:')
-            log.info(f'''{self.llm_payload['state']['name2']}: "{self.last_resp}"''')
+            log.info(f'''{self.payload['state']['name2']}: "{self.last_resp}"''')
 
             # Update the original message in history manager
             updated_bot_hmessage = original_bot_hmessage
@@ -3246,8 +3243,8 @@ class Tasks(TaskProcessing):
             await self.init_llm_payload()
             sliced_history = hmessage_for_slicing.new_history_end_here(include_self=False) # Exclude the original exchange pair
             sliced_i, _ = sliced_history.render_to_tgwui_tuple()
-            self.llm_payload['state']['history']['internal'] = copy.deepcopy(sliced_i)
-            self.llm_payload['state']['history']['visible'] = copy.deepcopy(sliced_i)
+            self.payload['state']['history']['internal'] = copy.deepcopy(sliced_i)
+            self.payload['state']['history']['visible'] = copy.deepcopy(sliced_i)
 
             self.embeds.create('regenerate', 'Regenerating ... ', f'Regenerating text for {self.user_name}')
             await self.embeds.send('regenerate')
@@ -3475,7 +3472,7 @@ class Tasks(TaskProcessing):
             await self.embeds.send('system', f'{self.user_name} requested tts ... ', '')
             
             await self.init_llm_payload()
-            self.llm_payload['state']['history'] = {'internal': [[self.text, self.text]], 'visible': [[self.text, self.text]]}
+            self.payload['state']['history'] = {'internal': [[self.text, self.text]], 'visible': [[self.text, self.text]]}
             self.params.save_to_history = False
             tts_args = self.params.tts_args
             if tgwui_tts_on:
@@ -3498,7 +3495,7 @@ class Tasks(TaskProcessing):
                     self.tts_resp.append(audio_file)
             elif tgwui_tts_on:
                 loop = asyncio.get_event_loop()
-                vis_resp_chunk:str = await loop.run_in_executor(None, extensions_module.apply_extensions, 'output', self.text, self.llm_payload['state'], True)
+                vis_resp_chunk:str = await loop.run_in_executor(None, extensions_module.apply_extensions, 'output', self.text, self.payload['state'], True)
                 audio_format_match = patterns.audio_src.search(vis_resp_chunk)
                 if audio_format_match:
                     self.tts_resp.append(audio_format_match.group(1))
@@ -3700,10 +3697,10 @@ class Tasks(TaskProcessing):
         try:
             if not self.tags:
                 self.tags = Tags(self.ictx)
-                await self.tags.match_img_tags(self.img_prompt, self.settings.get_vars())
+                await self.tags.match_img_tags(self.prompt, self.settings.get_vars())
                 await self.apply_generic_tag_matches(phase='img')
                 self.params.update_bot_should_do(self.tags)
-            # Initialize img_payload
+            # Initialize imggen payload
             self.init_img_payload()
             # collect matched tag values
             img_payload_mods = await self.collect_img_tag_values()
@@ -3717,7 +3714,7 @@ class Tasks(TaskProcessing):
             # Apply menu selections from /image command
             self.apply_imgcmd_params()
             # Retain last payload before clean_img_payload() - which creates issues when recycling
-            api.imggen.last_img_payload = copy.deepcopy(self.img_payload)
+            api.imggen.last_img_payload = copy.deepcopy(self.payload)
             # Clean anything up that gets messy
             self.clean_img_payload()
             # Change imgmodel if triggered by tags
@@ -3726,7 +3723,7 @@ class Tasks(TaskProcessing):
             if imgmodel_params:
                 # Add checkpoint to image payload (change_imgmodel_task() will change it anyway)
                 sd_model_checkpoint = imgmodel_params.get('sd_model_checkpoint', '')
-                override_settings = self.img_payload['override_settings']
+                override_settings = self.payload['override_settings']
                 override_settings['sd_model_checkpoint'] = sd_model_checkpoint
                 # collect params for event of model swapping
                 swap_params: Params = Params()
@@ -3927,7 +3924,7 @@ class Message:
 ############################# TASK ##############################
 #################################################################
 class Task(Tasks):
-    def __init__(self, name:str, ictx:CtxInteraction|None=None, **kwargs): # text:str='', llm_payload:dict|None=None, params:Params|None=None):
+    def __init__(self, name:str, ictx:CtxInteraction|None=None, **kwargs): # text:str='', payload:dict|None=None, params:Params|None=None):
         '''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
         TaskManager.run() will use the Task() name to dynamically call a Tasks() method.
 
@@ -3937,8 +3934,8 @@ class Task(Tasks):
         'change_imgmodel' / 'change_llmmodel' / 'change_char' / 'img_gen' / 'msg_image_cmd' / 'speak'
 
         Default kwargs:
-        channel, user, user_name, embeds, text, llm_prompt, llm_payload, params,
-        tags, img_prompt, img_payload, user_hmessage, bot_hmessage, local_history
+        channel, user, user_name, embeds, text, payload, llm_prompt, params,
+        tags, img_prompt, user_hmessage, bot_hmessage, local_history
         '''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
         self.name: str = name
         self.ictx: CtxInteraction = ictx
@@ -3948,12 +3945,11 @@ class Task(Tasks):
         self.user_name: str          = kwargs.pop('user_name', None)
         self.embeds: Embeds          = kwargs.pop('embeds', None)
         self.text: str               = kwargs.pop('text', None)
-        self.llm_prompt: str         = kwargs.pop('llm_prompt', None)
-        self.llm_payload: dict       = kwargs.pop('llm_payload', None)
+        self.prompt: str             = kwargs.pop('llm_prompt', None)
+        self.payload: dict           = kwargs.pop('payload', None)
+
         self.params: Params          = kwargs.pop('params', None)
         self.tags: Tags              = kwargs.pop('tags', None)
-        self.img_prompt: str         = kwargs.pop('img_prompt', None)
-        self.img_payload: dict       = kwargs.pop('img_payload', None)
         self.last_resp: str          = kwargs.pop('last_resp', None)
         self.tts_resp: list          = kwargs.pop('tts_resp', None)
         self.user_hmessage: HMessage = kwargs.pop('user_hmessage', None)
@@ -3977,15 +3973,13 @@ class Task(Tasks):
         self.embeds: Embeds          = self.embeds if self.embeds else Embeds(self.ictx)
         # The original input text
         self.text: str               = self.text if self.text else ""
-        # TGWUI specific attributes
-        self.llm_prompt: str         = self.llm_prompt if self.llm_prompt else ''
-        self.llm_payload: dict       = self.llm_payload if self.llm_payload else {}
+        # for updating prompt key in gen tasks
+        self.prompt: str             = self.prompt if self.prompt else ''
+        # payload for TGWUI / API call
+        self.payload: dict           = self.payload if self.payload else {}
         # Misc parameters
         self.params: Params          = self.params if self.params else Params()
         self.tags: Tags              = self.tags if self.tags else Tags(self.ictx)
-        # Image specific attributes
-        self.img_prompt: str         = self.img_prompt if self.img_prompt else ''
-        self.img_payload: dict       = self.img_payload if self.img_payload else {}
         # Bot response attributes
         self.last_resp: str          = self.last_resp if self.last_resp else ''
         self.tts_resp: list          = self.tts_resp if self.tts_resp else []
@@ -4046,7 +4040,7 @@ class Task(Tasks):
         always_ignore = ['name', 'ictx', 'message', 'embeds']
         ignore_list = ignore_list + always_ignore
 
-        deepcopy_list = ['llm_payload', 'img_payload']
+        deepcopy_list = ['payload']
 
         current_attributes = {}
         for key, value in vars(self).items():
@@ -4333,7 +4327,8 @@ class Flows(TaskProcessing):
 
                 # CREATE A SUBTASK AND RUN IT
                 flows_task: Task = Task('flows', self.ictx, text=text)
-                await flows_task.run_subtask()
+                await flows_task.run_subtask('flows')
+                await flows_task.stop_typing() # ensure typing tasks stopped
                 del flows_task # delete finished flows task
 
             descript = descript.replace("**Processing", ":white_check_mark: **")

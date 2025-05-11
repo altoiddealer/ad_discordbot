@@ -138,14 +138,14 @@ class Tags():
         or they may be initialized on demand using 'init()'
         '''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
 
-    async def init_tags(self, text:str, settings:dict, phase:str='llm') -> str:
+    async def init_tags(self, text:str, settings:dict) -> str:
         try:
             self.tags_initialized = True
             base_tags_obj = BaseTags()
             base_tags: TAG_LIST      = getattr(base_tags_obj, "tags", [])
             char_tags: TAG_LIST      = settings['llmcontext'].get('tags', []) # character specific tags
             imgmodel_tags: TAG_LIST  = settings['imgmodel'].get('tags', []) # imgmodel specific tags
-            tags_from_text           = self.get_tags_from_text(text, phase)
+            tags_from_text           = self.get_tags_from_text(text)
             flow_step_tags: TAG_LIST = []
             if flows_queue.qsize() > 0:
                 flow_step_tags = [await flows_queue.get()]
@@ -231,7 +231,7 @@ class Tags():
                     log.warning(f"Ignoring unknown search_mode: {search_mode}")
 
 
-    def get_tags_from_text(self, text: str, phase: str = 'llm') -> Tuple[str, TAG_LIST]:
+    def get_tags_from_text(self, text: str) -> Tuple[str, TAG_LIST]:
         """
         Extracts embedded tags from the input text and parses them into structured dictionaries.
 
@@ -242,15 +242,9 @@ class Tags():
         tags_from_text = []
         matches = patterns.instant_tags.findall(text)
 
-        # Remove tags from text
-        cleaned_text = patterns.instant_tags.sub('', text).strip()
-
-        if phase == 'llm':
-            self.text = cleaned_text
-        elif phase == 'img':
-            self.img_prompt = cleaned_text
-        else:
-            raise ValueError(f"Invalid phase for get_tags_from_text: '{phase}'")
+        # Remove tags from text / prompt
+        self.text = patterns.instant_tags.sub('', text).strip()
+        self.prompt = patterns.instant_tags.sub('', text).strip()
 
         for match in matches:
             tag_dict = {}
@@ -433,7 +427,7 @@ class Tags():
 
     async def match_tags(self, search_text:str, settings:dict, phase:str='llm'):
         if not self.tags_initialized:
-            await self.init_tags(search_text, settings, phase)
+            await self.init_tags(search_text, settings)
         try:
             # Remove 'llm' tags if pre-LLM phase, to be added back to unmatched tags list at the end of function
             if phase == 'llm':
