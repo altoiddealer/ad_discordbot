@@ -57,6 +57,8 @@ logging = log
 from modules.apis import API, APIClient
 api:API = asyncio.run(get_api())
 
+imggen_enabled = config.imggen.get('enabled', True)
+
 # Databases
 starboard = StarBoard()
 bot_statistics = Statistics()
@@ -106,9 +108,7 @@ intents.message_content = True
 client = commands.Bot(command_prefix=".", intents=intents)
 client.is_first_on_ready = True # type: ignore
 
-#################################################################
-################### Stable Diffusion Startup ####################
-#################################################################
+# Method to check if an API is enabled and available
 async def api_online(api_type:str|None=None, api_name:str='', ictx:CtxInteraction|None=None) -> bool:
     api_client:Optional[APIClient] = None
 
@@ -132,38 +132,6 @@ async def api_online(api_type:str|None=None, api_name:str='', ictx:CtxInteractio
         return False
     else:
         return True
-
-
-imggen_enabled = config.imggen.get('enabled', True)
-
-if imggen_enabled and api.imggen.post_server_restart:
-    # Function to attempt restarting the SD WebUI Client in the event it gets stuck
-    @client.hybrid_command(description=f"Immediately restarts the main media generation server.")
-    @guild_or_owner_only()
-    async def restart_sd_client(ctx: commands.Context):
-        if api.imggen.is_sdwebui():
-            await ctx.send(f"**`/restart_sd_client` __will not work__ unless {api.imggen.name} was launched with flag: `--api-server-stop`**", delete_after=10)
-        await api.imggen.post_server_restart.call(retry=0)
-        title = f"{ctx.author.display_name} used '/restart_sd_client'. Restarting {api.imggen.name} ..."
-        if api.imggen.get_progress:
-            await bot_embeds.send('system', title=title, description='Attempting to re-establish connection in 5 seconds (Attempt 1 of 10)', channel=ctx.channel)
-            log.info(title)
-            response = None
-            retry = 1
-            while response is None and retry < 11:
-                await bot_embeds.edit('system', description=f'Attempting to re-establish connection in 5 seconds (Attempt {retry} of 10)')
-                await asyncio.sleep(5)
-                response = await api.imggen.get_progress.call(retry=0)
-                retry += 1
-            if response:
-                title = f"{api.imggen.name} restarted successfully."
-                await bot_embeds.edit('system', title=title, description=f"Connection re-established after {retry} out of 10 attempts.")
-                log.info(title)
-            else:
-                title = f"{api.imggen.name} server unresponsive after Restarting."
-                await bot_embeds.edit('system', title=title, description="Connection was not re-established after 10 attempts.")
-                log.error(title)
-
 
 #################################################################
 ##################### TEXTGENWEBUI STARTUP ######################
@@ -272,15 +240,14 @@ async def start_auto_change_imgmodels(status:str='started'):
         log.error(f"[Auto Change Imgmodels] Error starting task: {e}")
 
 async def init_auto_change_imgmodels():
-    if imggen_enabled:
-        imgmodels_data = load_file(shared_path.img_models, {})
-        if imgmodels_data and imgmodels_data.get('settings', {}).get('auto_change_imgmodels', {}).get('enabled', False):
-            if config.is_per_server() and len(guild_settings) > 1:
-                log.warning('[Auto Change Imgmodels] Main config is set for "per-guild" settings management. Disabling this task.')
-                # Remove the registered command '/toggle_auto_change_imgmodels'
-                client.remove_command("toggle_auto_change_imgmodels")
-            else:
-                await bg_task_queue.put(start_auto_change_imgmodels())
+    imgmodels_data = load_file(shared_path.img_models, {})
+    if imgmodels_data and imgmodels_data.get('settings', {}).get('auto_change_imgmodels', {}).get('enabled', False):
+        if config.is_per_server() and len(guild_settings) > 1:
+            log.warning('[Auto Change Imgmodels] Main config is set for "per-guild" settings management. Disabling this task.')
+            # Remove the registered command '/toggle_auto_change_imgmodels'
+            client.remove_command("toggle_auto_change_imgmodels")
+        else:
+            await bg_task_queue.put(start_auto_change_imgmodels())
 
 # Try getting a valid character file source
 def get_character(guild_id:int|None=None, guild_settings=None):
@@ -424,7 +391,8 @@ async def on_ready():
         await init_characters()
 
         # Start background task to to change image models automatically
-        await init_auto_change_imgmodels()
+        if imggen_enabled:
+            await init_auto_change_imgmodels()
         
         log.info("----------------------------------------------")
         log.info("                Bot is ready")
@@ -4359,10 +4327,40 @@ class Flows(TaskProcessing):
 flows = Flows()
 
 #################################################################
+################ IMGGEN SERVER RESTART COMMAND ##################
+#################################################################
+if imggen_enabled and api.imggen.post_server_restart:
+    # Function to attempt restarting the SD WebUI Client in the event it gets stuck
+    @client.hybrid_command(description=f"Immediately restarts the main media generation server.")
+    @guild_or_owner_only()
+    async def restart_sd_client(ctx: commands.Context):
+        if api.imggen.is_sdwebui():
+            await ctx.send(f"**`/restart_sd_client` __will not work__ unless {api.imggen.name} was launched with flag: `--api-server-stop`**", delete_after=10)
+        await api.imggen.post_server_restart.call(retry=0)
+        title = f"{ctx.author.display_name} used '/restart_sd_client'. Restarting {api.imggen.name} ..."
+        if api.imggen.get_progress:
+            await bot_embeds.send('system', title=title, description='Attempting to re-establish connection in 5 seconds (Attempt 1 of 10)', channel=ctx.channel)
+            log.info(title)
+            response = None
+            retry = 1
+            while response is None and retry < 11:
+                await bot_embeds.edit('system', description=f'Attempting to re-establish connection in 5 seconds (Attempt {retry} of 10)')
+                await asyncio.sleep(5)
+                response = await api.imggen.get_progress.call(retry=0)
+                retry += 1
+            if response:
+                title = f"{api.imggen.name} restarted successfully."
+                await bot_embeds.edit('system', title=title, description=f"Connection re-established after {retry} out of 10 attempts.")
+                log.info(title)
+            else:
+                title = f"{api.imggen.name} server unresponsive after Restarting."
+                await bot_embeds.edit('system', title=title, description="Connection was not re-established after 10 attempts.")
+                log.error(title)
+
+#################################################################
 ######################## /IMAGE COMMAND #########################
 #################################################################
 if imggen_enabled:
-
     # Updates size options for /image command
     async def update_size_options(average):
         global size_choices
