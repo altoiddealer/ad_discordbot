@@ -1277,7 +1277,7 @@ class Endpoint:
                    sanitize:bool=False,
                    extract_keys:str|List[str]|None=None,
                    **kwargs
-                   ):
+                   ) -> Any:
         if self.client is None:
             raise ValueError("Endpoint not bound to an APIClient")
         if not self.client.enabled:
@@ -1654,6 +1654,23 @@ class StepExecutor:
             results.append(result)
 
         return results
+
+    @step_returns("data", "input", default="data")
+    async def _step_call_api(self, data: Any, config: Union[str, dict]) -> Any:
+        api:API = get_api()
+        client_name = config.get("client_name")
+        endpoint_name = config.get("client_name")
+        input_data = config.get("input_data")
+        api_client:APIClient = api.clients.get(client_name)
+        if not api_client:
+            raise ValueError(f'Call API step requires API Client, but could not find "{client_name}"')
+        if not api_client.enabled:
+            raise RuntimeError(f'Call API step failed because "{client_name}" is not enabled.')
+        endpoint:Endpoint = api_client.endpoints.get(endpoint_name)
+        response = await endpoint.call(input_data=input_data)
+        if not isinstance(response, APIResponse):
+            return response
+        return response.body
 
     @step_returns("data", "input", default="data")
     def _step_extract_key(self, data: Any, config: Union[str, dict]) -> Any:
