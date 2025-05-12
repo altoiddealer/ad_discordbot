@@ -38,7 +38,7 @@ from functools import partial
 from modules.utils_files import load_file, merge_base, save_yaml_file  # noqa: F401
 from modules.utils_shared import bot_args, is_tgwui_integrated, shared_path, bg_task_queue, task_event, flows_queue, flows_event, patterns, bot_emojis, config, bot_database, get_api
 from modules.database import StarBoard, Statistics, BaseFileMemory
-from modules.utils_misc import check_probability, fix_dict, update_dict, sum_update_dict, update_dict_matched_keys, random_value_from_range, convert_lists_to_tuples, get_time, format_time, format_time_difference, get_normalized_weights  # noqa: F401
+from modules.utils_misc import check_probability, fix_dict, deep_merge, update_dict, sum_update_dict, update_dict_matched_keys, random_value_from_range, convert_lists_to_tuples, get_time, format_time, format_time_difference, get_normalized_weights  # noqa: F401
 from modules.utils_discord import Embeds, guild_only, guild_or_owner_only, configurable_for_dm_if, is_direct_message, ireply, sleep_delete_message, send_long_message, \
     EditMessageModal, SelectedListItem, SelectOptionsView, get_user_ctx_inter, get_message_ctx_inter, apply_reactions_to_messages, replace_msg_in_history_and_discord, MAX_MESSAGE_LENGTH, muffled_send  # noqa: F401
 from modules.utils_aspect_ratios import ar_parts_from_dims, dims_from_ar, avg_from_dims, get_aspect_ratio_parts, calculate_aspect_ratio_sizes  # noqa: F401
@@ -54,7 +54,7 @@ from discord.app_commands import AppCommandError, CommandInvokeError
 from modules.logs import import_track, get_logger, log_file_handler, log_file_formatter; import_track(__file__, fp=True); log = get_logger(__name__)  # noqa: E702
 logging = log
 
-from modules.apis import API, APIClient
+from modules.apis import API, APIClient, Endpoint, ImgGenEndpoint
 api:API = asyncio.run(get_api())
 
 imggen_enabled = config.imggen.get('enabled', True)
@@ -2841,29 +2841,33 @@ class TaskProcessing(TaskAttributes):
             imgcmd_params   = self.params.imgcmd
             neg_prompt: str = imgcmd_params['neg_prompt']
             style: dict     = imgcmd_params['style']
-            positive_style  = style.get('positive', "{}")
-            negative_style  = style.get('negative', '')
+            positive_style: str = style.get('positive', "{}")
+            negative_style: str = style.get('negative', '')
             self.prompt     = positive_style.format(self.prompt)
             neg_prompt = f"{neg_prompt}, {negative_style}" if negative_style else neg_prompt
-            mode = imgcmd_params.get('img2img', 'txt2img')
 
-            prompt_key = 'prompt'
-            neg_prompt_key = 'negative_prompt'
-            seed_key = 'seed'
+            # Get endpoint for mode
+            is_img2img = imgcmd_params.get('img2img')
+            mode = 'img2img' if is_img2img else 'txt2img'
 
-            # Initialize imggen payload settings
-            if mode == 'txt2img' and api.imggen.post_txt2img:
-                self.payload = api.imggen.post_txt2img.get_payload()
-                prompt_key, neg_prompt_key = api.imggen.post_txt2img.prompt_key, api.imggen.post_txt2img.neg_prompt_key
-            elif mode == 'img2img' and api.imggen.post_img2img:
-                self.payload = api.imggen.post_img2img.get_payload()
-                prompt_key, neg_prompt_key = api.imggen.post_img2img.prompt_key, api.imggen.post_img2img.neg_prompt_key
+            imggen_ep:ImgGenEndpoint = getattr(api.imggen, f'post_{mode}', None)
+
+            if imggen_ep:
+                base_payload = imggen_ep.get_payload()
+                prompt_key, neg_prompt_key, seed_key = imggen_ep.prompt_key, imggen_ep.neg_prompt_key, imggen_ep.seed_key
+            else:
+                raise RuntimeError(f"Error initializing img payload: No valid endpoint available for imggen post_{mode}")
+
             # Update with prompt, neg prompt, and randomize seed
-            self.payload.update({prompt_key: self.prompt, neg_prompt_key: neg_prompt, seed_key: -1})
+            update_data = {k: v for k, v in [(prompt_key, self.prompt),
+                                             (neg_prompt_key, neg_prompt),
+                                             (seed_key, -1)] if k is not None}
+            request_payload = deep_merge(base_payload, update_data)
 
             # Apply settings from imgmodel configuration
-            imgmodel_img_payload = copy.deepcopy(self.settings.imgmodel.payload_mods)
-            self.payload.update(imgmodel_img_payload)
+            imgmodel_payload = copy.deepcopy(self.settings.imgmodel.payload_mods)
+
+            self.payload  = deep_merge(request_payload, imgmodel_payload)
 
         except Exception as e:
             log.error(f"Error initializing img payload: {e}")
@@ -3457,7 +3461,8 @@ class Tasks(TaskProcessing):
                 ep = api.ttsgen.post_generate
                 tts_payload:dict = ep.get_payload()
                 tts_payload.update(tts_args) # update with selected voice and lang
-                tts_payload[ep.text_input_key] = self.text # update with input text
+                if ep.text_input_key:
+                    tts_payload[ep.text_input_key] = self.text # update with input text
                 audio_file = await api.ttsgen.post_generate.call(input_data=tts_payload, extract_keys='output_file_path_key')
                 if audio_file:
                     self.tts_resp.append(audio_file)
@@ -4431,7 +4436,7 @@ if imggen_enabled:
 
         if config.imggen['extensions'].get('controlnet_enabled', False):
             try:
-                all_control_types:dict = await api.imggen.get_controlnet_control_types.call()
+                all_control_types:dict = await api.imggen.get_controlnet_control_types.call(retry=0, extract_keys='control_types_key')
                 for key, value in all_control_types.items():
                     if key == "All":
                         continue

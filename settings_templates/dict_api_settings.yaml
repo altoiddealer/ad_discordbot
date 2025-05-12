@@ -12,7 +12,7 @@ bot_api_functions:
     post_pnginfo: {endpoint_name: Post PNG Info}
     post_options: {endpoint_name: Post Options}
     get_imgmodels: {endpoint_name: Get ImgModels}
-    get_controlnet_models: {endpoint_name: Get Cnet Models}
+    get_controlnet_models: {endpoint_name: Get Cnet Models, control_types_key: control_types}
     get_controlnet_control_types: {endpoint_name: Get Cnet Control Types} #, control_types_key: control_types}
     post_server_restart: {endpoint_name: Post Server Restart}
   # Bot currently cannot use textgen APIs for main functions (support is coming!)
@@ -48,7 +48,7 @@ all_apis:
       - {name: Get Options, path: /sdapi/v1/options, method: GET}
       - {name: Post Options, path: /sdapi/v1/options, method: POST, payload_type: json}
       - {name: Get Cnet Models, path: /controlnet/model_list, method: GET}
-      - {name: Get Cnet Control Types, path: /controlnet/control_types, method: GET, response_handling: [extract_key: control_types]}
+      - {name: Get Cnet Control Types, path: /controlnet/control_types, method: GET}
       - {name: Post Server Restart, path: /sdapi/v1/server-restart, method: POST, retry: 0}
 
   - name: Text Generation WebUI

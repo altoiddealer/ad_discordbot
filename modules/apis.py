@@ -1320,16 +1320,16 @@ class Endpoint:
         
         results = response.body
 
-        # Optional key extraction for now (could migrate this into StepExecutor)
-        if extract_keys:
-            results = self.extract_main_keys(response.body, extract_keys)
+        # Optional key extraction (bypasses StepExecutor)
+        if extract_keys and self.can_extract(extract_keys):
+            return self.extract_main_keys(results, extract_keys)
 
         # ws_response = await self.process_ws_request(json_payload, data_payload, input_data, **kwargs)
 
         # Hand off full response to StepExecutor
-        # if isinstance(self.response_handling, list):
-        #     handler = StepExecutor(steps=self.response_handling, input=response)
-        #     results = await handler.run()
+        if isinstance(self.response_handling, list):
+            handler = StepExecutor(steps=self.response_handling, input=response)
+            results = await handler.run()
 
         return results
     
@@ -1366,13 +1366,19 @@ class Endpoint:
             **kwargs
         )
 
+    def can_extract(self, extract_keys: str | List[str]) -> bool:
+        """Check if all keys in 'extract_keys' are present as self attributes"""
+        if isinstance(extract_keys, str):
+            return getattr(self, extract_keys, None) is not None
+        elif isinstance(extract_keys, list):
+            return all(getattr(self, key_attr, None) is not None for key_attr in extract_keys)
+        return False
+
     # Extracts the key values from the API response, for the Endpoint's key names defined in user API settings
     def extract_main_keys(self, response, ep_keys: str|List[str] = None):
-        # No keys to check or invalid response type for this operation
-        if not ep_keys:
-            return response
-        if not isinstance(response, dict):
-            log.warning(f'[{self.client.name}] tried to extract value(s) for "{ep_keys}" from the response, but response was non-dict format.')
+        if not ep_keys or not isinstance(response, dict):
+            if not isinstance(response, dict):
+                log.warning(f'[{self.client.name}] tried to extract value(s) for "{ep_keys}" from the response, but response was non-dict format.')
             return response
         # Try to extract and return one key value        
         if isinstance(ep_keys, str):
@@ -1430,9 +1436,9 @@ class TTSGenEndpoint(Endpoint):
         # Defaults
         self.get_voices_key:Optional[str] = None
         self.get_languages_key:Optional[str] = None
-        self.text_input_key:str = 'text_input'
-        self.language_input_key:str = 'language'
-        self.speaker_input_key:str = 'speaker'
+        self.text_input_key:Optional[str] = None
+        self.language_input_key:Optional[str] = None
+        self.speaker_input_key:Optional[str] = None
         self.output_file_path_key:Optional[str] = None
 
     async def return_main_data(self, response):
@@ -1455,9 +1461,9 @@ class ImgGenEndpoint(Endpoint):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         # Defaults
-        self.prompt_key:str = 'prompt'
-        self.neg_prompt_key:str = 'negative_prompt'
-        self.seed_key:str = 'seed'
+        self.prompt_key:Optional[str] = None
+        self.neg_prompt_key:Optional[str] = None
+        self.seed_key:Optional[str] = None
         self.control_types_key:Optional[str] = None
 
     async def return_main_data(self, response):
