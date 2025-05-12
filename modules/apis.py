@@ -946,24 +946,21 @@ class ImgGenClient(APIClient):
                 mime_type = Image.MIME.get(image.format, "image/png")
 
                 # Call PNGInfo endpoint if applicable
-                if mime_type == "image/png" and self.post_pnginfo:
+                if self.post_pnginfo:
                     # Construct image data with URI
                     data_uri = image_bytes_to_data_uri(raw_data, mime_type)               
                     png_payload = {"image": data_uri}
 
-                    r2 = await self.post_pnginfo.call(input_data=png_payload)
-                    if isinstance(r2, dict):
+                    png_info_data = await self.post_pnginfo.call(input_data=png_payload, extract_keys="gen_info_key")
 
-                        png_info_data = r2.get("info")
-
-                        if i == 0 and png_info_data:
-                            # Retain seed
-                            if getattr(self, 'seed_key', None):
-                                seed_match = patterns.seed_value.search(str(png_info_data))
-                                if seed_match:
-                                    self.last_img_payload[self.seed_key] = int(seed_match.group(1))
-                            pnginfo = PngImagePlugin.PngInfo()
-                            pnginfo.add_text("parameters", png_info_data)
+                    if i == 0 and png_info_data:
+                        # Retain seed
+                        if getattr(self, 'seed_key', None):
+                            seed_match = patterns.seed_value.search(str(png_info_data))
+                            if seed_match:
+                                self.last_img_payload[self.seed_key] = int(seed_match.group(1))
+                        pnginfo = PngImagePlugin.PngInfo()
+                        pnginfo.add_text("parameters", png_info_data)
 
                 image.save(f"{shared_path.dir_temp_images}/temp_img_{i}.png", pnginfo=pnginfo)
 
@@ -1465,6 +1462,7 @@ class ImgGenEndpoint(Endpoint):
         self.prompt_key:Optional[str] = None
         self.neg_prompt_key:Optional[str] = None
         self.seed_key:Optional[str] = None
+        self.gen_info_key:Optional[str] = None
         self.control_types_key:Optional[str] = None
 
     async def return_main_data(self, response):
