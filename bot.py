@@ -2854,14 +2854,12 @@ class TaskProcessing(TaskAttributes):
 
             if imggen_ep:
                 base_payload = imggen_ep.get_payload()
-                prompt_key, neg_prompt_key, seed_key = imggen_ep.prompt_key, imggen_ep.neg_prompt_key, imggen_ep.seed_key
+                prompt_key, neg_prompt_key = imggen_ep.prompt_key, imggen_ep.neg_prompt_key
             else:
                 raise RuntimeError(f"Error initializing img payload: No valid endpoint available for imggen post_{mode}")
 
             # Update with prompt, neg prompt, and randomize seed
-            update_data = {k: v for k, v in [(prompt_key, self.prompt),
-                                             (neg_prompt_key, neg_prompt),
-                                             (seed_key, -1)] if k is not None}
+            update_data = {k: v for k, v in [(prompt_key, self.prompt), (neg_prompt_key, neg_prompt)] if k is not None}
             request_payload = deep_merge(base_payload, update_data)
 
             # Apply settings from imgmodel configuration
@@ -3457,7 +3455,7 @@ class Tasks(TaskProcessing):
 
             if api_tts_on:
                 if not api.ttsgen.post_generate:
-                    log.error(f"No 'post_generate' endpoint available for TTS Client {api.ttsgen.name}")
+                    raise RuntimeError(f"No 'post_generate' endpoint available for TTS Client {api.ttsgen.name}")
                 ep = api.ttsgen.post_generate
                 tts_payload:dict = ep.get_payload()
                 tts_payload.update(tts_args) # update with selected voice and lang
@@ -5695,7 +5693,7 @@ async def process_speak_args(ctx: commands.Context, selected_voice=None, lang=No
     try:
         # API handling
         if api_tts_on:
-            api_voice_key = api.ttsgen.post_generate.speaker_input_key
+            api_voice_key = api.ttsgen.post_generate.voice_input_key
             api_lang_key = api.ttsgen.post_generate.language_input_key
             if selected_voice and api_voice_key:
                 tts_args[api_voice_key] = selected_voice
@@ -5748,10 +5746,10 @@ async def convert_and_resample_mp3(ctx, mp3_file, output_directory=None):
             os.remove(mp3_file)
 
 async def process_user_voice(ctx: commands.Context, voice_input=None):
-    api_tts_on, tgwui_tts_on = tts_is_enabled(and_online=True, for_mode='both')
+    api_tts_on, _ = tts_is_enabled(and_online=True, for_mode='both')
     if api_tts_on:
         await ctx.send("Sorry, the bot's configured TTS method does not currently support user voice file input.", ephemeral=True)
-        return ''
+        return None
     try:
         if not (voice_input and getattr(voice_input, 'content_type', '').startswith("audio/")):
             return ''

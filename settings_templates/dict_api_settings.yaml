@@ -1,28 +1,54 @@
+# Overview of sections:
+# - bot_api_functions: defines APIs/endpoints that the bot can use "main functions" (bot commands, message responses, etc)
+# - all_apis: To define ALL APIs/endpoints including ones being used for main functions, and non-main bot functions (via the Tags system / "user commands", etc)
+# - presets: Most 'dict' values in this config can include a 'preset_name' key (linked to a preset dict), to limit redundancy.
+# - workflows: For executing custom logic beyond default bahviors (ei: add additional post-processing from a 'post_txt2img' endpoint call). For non-main functions only (N/A to main functions)
+
 bot_api_functions:
-  # This section defines APIs/endpoints that the bot can use "main functions" (bot commands, message responses, etc).
-  # To disable any, use value null or comment out the line.
   # Be sure to first define your APIs in "all_apis" (below this section), then link them via "name" (Note: case sensitive!!)
-  # Important: Endpoints will often return the relavent data under a dictionary key (or keys).
-  #            You may need to check the input/output structure for API endpoints to set the 'key string' or ['list.of', 'key', 'strings']. (dot notation for deeper dict values)
+  # - You may comment out or set null value for any endpoints in this section which are N/A for your use case (will disable that "main function")
+  # - You may need to research the input/output structure for your API endpoints to configure "_key" values / response_handling
+  # - The extra "_key" values in this section (ei: 'output_file_path_key') can simplify common expected API behavior, but ARE NOT REQUIRED.
+  #   Example scenario: Your main TTS client's post generate endpoint returns raw data (bytes). The bot's main function needs a file path. ...What should I do?
+  #                   - Remove 'output_file_path_key', or null the value
+  #                   - Define a "response_handling" for this endpoint (in 'all_apis') so it return a file path after the last 'step'
+
   imggen:
-    api_name: Stable Diffusion WebUI
-    post_txt2img: {endpoint_name: Post txt2img, prompt_key: prompt, neg_prompt_key: negative_prompt, seed_key: seed}
+    api_name: Stable Diffusion WebUI # Note: Some client-specific integrations require 'Forge', 'Reforge', 'Comfy' to be included in name.
+    post_txt2img:
+      endpoint_name: Post txt2img
+      prompt_key: prompt # input key for the positive prompt. ex: payload = {'prompt': 'This is my prompt', ...}
+      neg_prompt_key: negative_prompt
+      seed_key: seed
     post_img2img: {endpoint_name: Post img2img, prompt_key: prompt, neg_prompt_key: negative_prompt, seed_key: seed}
     get_progress: {endpoint_name: Get Progress}
     post_pnginfo: {endpoint_name: Post PNG Info}
     post_options: {endpoint_name: Post Options}
     get_imgmodels: {endpoint_name: Get ImgModels}
-    get_controlnet_models: {endpoint_name: Get Cnet Models, control_types_key: control_types}
-    get_controlnet_control_types: {endpoint_name: Get Cnet Control Types} #, control_types_key: control_types}
+    get_controlnet_models: {endpoint_name: Get Cnet Models}
+    get_controlnet_control_types:
+      endpoint_name: Get Cnet Control Types
+      control_types_key: control_types # applicable to A1111-like webUIs (A1111 / Forge / ReForge)
     post_server_restart: {endpoint_name: Post Server Restart}
-  # Bot currently cannot use textgen APIs for main functions (support is coming!)
+
+  # Bot currently cannot use textgen APIs for main functions - TextGen API Support coming soon!
   textgen:
     api_name: Text Generation WebUI
+
   ttsgen:
     api_name: AllTalk TTS v2
-    get_voices: {endpoint_name: Get TTS Voices, get_voices_key: voices}
-    get_languages: {endpoint_name: null, get_languages_key: languages}
-    post_generate: {endpoint_name: Post TTS Generate, text_input_key: text_input, output_file_path_key: output_file_path, language_input_key: language, speaker_input_key: character_voice_gen}
+    get_voices:
+      endpoint_name: Get TTS Voices
+      get_voices_key: voices # key name in the response body. Value is a list of strings (the voice names) to populate '/speak' cmd options
+    get_languages:
+      endpoint_name: null # Example API config for 'AllTalk' does not have a "get_languages" route. But if your API does, the bot can use it for '/speak' options.
+      get_languages_key: languages # key name in the response body. Value is a list of languages (the language names) to populate '/speak' cmd options
+    post_generate:
+      endpoint_name: Post TTS Generate
+      text_input_key: text_input # input key for the text that will be generated. ex: payload = {'text_input': 'This is the text to TTS', ...}
+      output_file_path_key: output_file_path # key name in the response body. Value is a string, the path to the generated audio file.
+      language_input_key: language # input key for the language. ex: payload = {'language': 'English', ...}
+      voice_input_key: character_voice_gen  # input key for the voice. ex: payload = {'voice': 'Female01.wav', ...}
 
 
 all_apis:
@@ -93,14 +119,14 @@ all_apis:
         method: POST
 
 
-# Create presets here which can be injected in 'endpoint', 'response_handling', 'workflow' steps, or in any 'post_process' steps.
+# Create presets here which can be injected in any 'endpoint', or in any 'response_handling' / 'workflow' steps.
 presets:
   - name: sd-txt2img-img2img-endpoints
     method: POST
     retry: 1
     payload_type: json
     payload_base: sd-webui.yaml
-    input: {prompt: "{text}"}
+    input: {prompt: "{prompt}"}
     timeout: 120
     response_handling:
       # Capture 'images' list as context variable "image_list"
@@ -117,19 +143,8 @@ presets:
                 file_path: "images"
                 file_name: "img_{image_index}"
 
-  - name: Decode base64 and save
-    type: base64
-    output_key: images      # key in JSON to extract from. Use dot.notation to get a nested key.
-    output_format: png      # only used if type is base64
-    save_to: images
-  
-  - name: Extract metadata
-    endpoint_name: Post PNG Info
-    payload_key: image
-    response_key: info
-    metadata_field: parameters
-
-
+# For executing custom logic beyond default bahviors (ei: add additional post-processing from a 'post_txt2img' endpoint call).
+# For non-main functions only (N/A to main functions)
 workflows:
   - name: img_to_img
     steps:
@@ -191,14 +206,12 @@ workflows:
 # payload_type (RECOMMENDED for all POST/PUT).
 # Use one of: json / form / multipart (file) / query
 
-
 # as value | Behavior                             | Payload area
 # text     | Load file as UTF-8 string            | json, data
 # file     | Load as binary, use multipart        | files
 # base64   | Read file, encode in base64          | json or data
 # raw      | Read file bytes, send as request body| data
 # url      | User provides a direct URL string    | json, params, etc.
-
 
 
 ## Schemas

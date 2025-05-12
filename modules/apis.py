@@ -958,9 +958,10 @@ class ImgGenClient(APIClient):
 
                         if i == 0 and png_info_data:
                             # Retain seed
-                            seed_match = patterns.seed_value.search(str(png_info_data))
-                            if seed_match:
-                                self.last_img_payload['seed'] = int(seed_match.group(1))
+                            if getattr(self, 'seed_key', None):
+                                seed_match = patterns.seed_value.search(str(png_info_data))
+                                if seed_match:
+                                    self.last_img_payload[self.seed_key] = int(seed_match.group(1))
                             pnginfo = PngImagePlugin.PngInfo()
                             pnginfo.add_text("parameters", png_info_data)
 
@@ -1438,7 +1439,7 @@ class TTSGenEndpoint(Endpoint):
         self.get_languages_key:Optional[str] = None
         self.text_input_key:Optional[str] = None
         self.language_input_key:Optional[str] = None
-        self.speaker_input_key:Optional[str] = None
+        self.voice_input_key:Optional[str] = None
         self.output_file_path_key:Optional[str] = None
 
     async def return_main_data(self, response):
