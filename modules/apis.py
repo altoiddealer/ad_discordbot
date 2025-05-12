@@ -1546,6 +1546,7 @@ class StepExecutor:
                 raise ValueError(f"Invalid step format: {step}")
 
             step_name, config = next(iter(step.items()))
+
             method = getattr(self, f"_step_{step_name}", None)
             if not method:
                 raise NotImplementedError(f"Unsupported step: {step_name}")
@@ -1570,10 +1571,12 @@ class StepExecutor:
             return self.response.body
         return self.original_input
     
-    def _apply_returns(self, result, original_input, config:dict, allowed: List[str], default="data"):
-        returns = config.get("returns", default)
+    def _apply_returns(self, result, original_input, config:dict|str, allowed: list[str]|None=None, default="data"):
+        returns = default
+        if isinstance(config, dict):
+            returns = config.get("returns", default)
 
-        if returns not in allowed:
+        if allowed and returns not in allowed:
             log.warning(
                 f"Ignoring invalid 'returns' value '{returns}'. "
                 f"Allowed: {allowed}. Falling back to default: '{default}'."
@@ -1632,7 +1635,7 @@ class StepExecutor:
     @step_returns("data", "input", default="data")
     async def _step_for_each(self, data: Any, config: dict) -> list:
         """
-        Executes the same steps for each Inits a StepExecutor for each item in a Context list.
+        Inits a StepExecutor for each item in a Context list.
 
         Returns:
             list: A list of results, one per item processed.
@@ -1708,6 +1711,7 @@ class StepExecutor:
                         data = data[part]
                     else:
                         raise TypeError(f"Expected dict for key '{part}' but got {type(data).__name__}")
+            print("Returning data!")
             return data
         except (KeyError, IndexError, TypeError) as e:
             if default is not None:
