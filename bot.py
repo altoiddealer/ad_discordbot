@@ -2226,9 +2226,9 @@ class TaskProcessing(TaskAttributes):
                 await self.channel.send(files=image_files, reference=img_ref_message)
             # Rename and move the image at index 0 to the output dir
             timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-            last_image = f'{output_dir}/{timestamp}.png'
-            os.rename(f'{temp_dir}/temp_img_0.png', last_image)
-            copyfile(last_image, f'{temp_dir}/temp_img_0.png')
+            main_image = f'{output_dir}/{timestamp}.png'
+            output_path = f'{temp_dir}/temp_img_0.png'
+            copyfile(output_path, main_image)
         except Exception as e:
             log.error(f"An error occurred when processing image generation: {e}")
 
