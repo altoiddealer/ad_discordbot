@@ -929,46 +929,48 @@ class ImgGenClient(APIClient):
     async def save_images_and_return(self, img_payload:dict, mode:str="txt2img") -> Tuple[List[Image.Image], Optional[PngImagePlugin.PngInfo]]:
         images = []
         pnginfo = None
-        try:
-            ep_for_mode:ImgGenEndpoint = getattr(self, f'post_{mode}')
-            response = await ep_for_mode.call(input_data=img_payload)
 
-            if not isinstance(response, dict):
-                return [], response
+        ep_for_mode:ImgGenEndpoint = getattr(self, f'post_{mode}')
+        images_list = await ep_for_mode.call(input_data=img_payload, extract_keys='images_result_key')
 
-            for i, img_data in enumerate(response.get('images', [])):
-                if "," in img_data:
-                    img_data = img_data.split(",", 1)[1]
-                raw_data = base64.b64decode(img_data)
+        for i, img_data in enumerate(images_list):
+            i_pnginfo = None
 
-                # Attempt to detect image format
-                image = Image.open(io.BytesIO(raw_data))
-                mime_type = Image.MIME.get(image.format, "image/png")
+            if "," in img_data:
+                img_data = img_data.split(",", 1)[1]
+            raw_data = base64.b64decode(img_data)
 
-                # Call PNGInfo endpoint if applicable
-                if self.post_pnginfo:
-                    # Construct image data with URI
-                    data_uri = image_bytes_to_data_uri(raw_data, mime_type)               
-                    png_payload = {"image": data_uri}
+            # Attempt to detect image format
+            image = Image.open(io.BytesIO(raw_data))
+            mime_type = Image.MIME.get(image.format, "image/png")
 
-                    png_info_data = await self.post_pnginfo.call(input_data=png_payload, extract_keys="gen_info_key")
-
-                    if i == 0 and png_info_data:
+            # Call PNGInfo endpoint if applicable
+            if self.post_pnginfo:
+                # Construct image data with URI
+                data_uri = image_bytes_to_data_uri(raw_data, mime_type)
+                # Build payload
+                pnginfo_payload = self.post_pnginfo.get_payload()
+                if self.post_pnginfo.pnginfo_image_key:
+                    pnginfo_payload[self.post_pnginfo.pnginfo_image_key] = data_uri
+                # post for image gen data
+                png_info_data = await self.post_pnginfo.call(input_data=pnginfo_payload, extract_keys="pnginfo_result_key")
+                # Process info and add it to image data before saving
+                if png_info_data:
+                    i_pnginfo = PngImagePlugin.PngInfo()
+                    i_pnginfo.add_text("parameters", png_info_data)
+                    # For first result
+                    if i == 0:
+                        # return png info
+                        pnginfo = i_pnginfo
                         # Retain seed
-                        if getattr(self, 'seed_key', None):
+                        if self.post_pnginfo.seed_key:
                             seed_match = patterns.seed_value.search(str(png_info_data))
                             if seed_match:
-                                self.last_img_payload[self.seed_key] = int(seed_match.group(1))
-                        pnginfo = PngImagePlugin.PngInfo()
-                        pnginfo.add_text("parameters", png_info_data)
+                                self.last_img_payload[self.post_pnginfo.seed_key] = int(seed_match.group(1))
 
-                image.save(f"{shared_path.dir_temp_images}/temp_img_{i}.png", pnginfo=pnginfo)
+            image.save(f"{shared_path.dir_temp_images}/temp_img_{i}.png", pnginfo=i_pnginfo)
 
-                images.append(image)
-
-        except Exception as e:
-            log.error(f"Error retrieving or processing image data: {e}")
-            return [], e
+            images.append(image)
 
         return images, pnginfo
 
@@ -1326,6 +1328,7 @@ class Endpoint:
 
         # Hand off full response to StepExecutor
         if isinstance(self.response_handling, list):
+            log.info(f'[{self.name}] Executing "response_handling" ({len(self.response_handling)} processing steps)')
             handler = StepExecutor(steps=self.response_handling, input=response)
             results = await handler.run()
 
@@ -1462,7 +1465,9 @@ class ImgGenEndpoint(Endpoint):
         self.prompt_key:Optional[str] = None
         self.neg_prompt_key:Optional[str] = None
         self.seed_key:Optional[str] = None
-        self.gen_info_key:Optional[str] = None
+        self.images_result_key:Optional[str] = None
+        self.pnginfo_result_key:Optional[str] = None
+        self.pnginfo_image_key:Optional[str] = None
         self.control_types_key:Optional[str] = None
 
     async def return_main_data(self, response):
@@ -1505,7 +1510,7 @@ class APIResponse:
 
 
 class StepExecutor:
-    def __init__(self, steps: List[dict], input: Any = None):
+    def __init__(self, steps: list[dict], input: Any = None):
         """
         Executes a sequence of data transformation steps with optional context storage.
 
@@ -1516,7 +1521,7 @@ class StepExecutor:
         without affecting the main result passed to the next step.
         """
         self.steps = steps
-        self.context: Dict[str, Any] = {}
+        self.context: dict[str, Any] = {}
         self.original_input = input
         self.response = input if isinstance(input, APIResponse) else None
 

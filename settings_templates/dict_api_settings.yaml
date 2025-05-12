@@ -20,11 +20,13 @@ bot_api_functions:
       prompt_key: prompt # input key for the positive prompt. ex: payload = {'prompt': 'This is my prompt', ...}
       neg_prompt_key: negative_prompt
       seed_key: seed
-    post_img2img: {endpoint_name: Post img2img, prompt_key: prompt, neg_prompt_key: negative_prompt, seed_key: seed}
+      images_result_key: images # key name in the response body. Value is a list of images in base64 format.
+    post_img2img: {endpoint_name: Post img2img, prompt_key: prompt, neg_prompt_key: negative_prompt, seed_key: seed, images_result_key: images}
     get_progress: {endpoint_name: Get Progress}
     post_pnginfo:
       endpoint_name: Post PNG Info
-      gen_info_key: info  # key name in the response body. Value is a string detailing the generation params.
+      pnginfo_image_key: image # input key for an image to get its gen info. ex: payload = {'image': '<the image value>', ...}
+      pnginfo_result_key: info # key name in the response body. Value is a string detailing the generation params.
     post_options: {endpoint_name: Post Options}
     get_imgmodels: {endpoint_name: Get ImgModels}
     get_controlnet_models: {endpoint_name: Get Cnet Models}

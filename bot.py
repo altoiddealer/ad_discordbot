@@ -2135,8 +2135,8 @@ class TaskProcessing(TaskAttributes):
                 return images
             temp_dir = shared_path.dir_temp_images
             # Workaround for layerdiffuse PNG infoReActor + layerdiffuse combination
-            reactor = self.payload['alwayson_scripts'].get('reactor', {})
-            if reactor and reactor['args'][1]:          # if ReActor was enabled:
+            reactor_args = self.payload['alwayson_scripts'].get('reactor', {}).get('args', [])
+            if len(reactor_args) > 1 and reactor_args[1]: # if ReActor was enabled:
                 _, _, _, alpha = ld_output.split()      # Extract alpha channel from layerdiffuse output
                 img0 = Image.open(f'{temp_dir}/temp_img_0.png') # Open first image (with ReActor output)
                 img0 = img0.convert('RGBA')             # Convert it to RGBA
@@ -2145,28 +2145,28 @@ class TaskProcessing(TaskAttributes):
                 img0 = ld_output            # Just replace first image with layerdiffuse output
             img0.save(f'{temp_dir}/temp_img_0.png', pnginfo=pnginfo) # Save the local image with correct pnginfo
             images[0] = img0 # Update images list
-            return images
         except Exception as e:
             log.error(f'Error processing layerdiffuse images: {e}')
+        return images
 
     async def apply_reactor_mask(self:Union["Task","Tasks"], images: list[Image.Image], pnginfo, reactor_mask):
         try:
             reactor_mask = Image.open(io.BytesIO(base64.b64decode(reactor_mask))).convert('L')
-            orig_image = images[0]                                          # Open original image
-            face_image = images.pop(1)                                      # Open image with faceswap applied
-            face_image.putalpha(reactor_mask)                               # Apply reactor mask as alpha to faceswap image
-            orig_image.paste(face_image, (0, 0), face_image)                # Paste the masked faceswap image onto the original
+            orig_image = images[0]                           # Open original image
+            face_image = images.pop(1)                       # Open image with faceswap applied
+            face_image.putalpha(reactor_mask)                # Apply reactor mask as alpha to faceswap image
+            orig_image.paste(face_image, (0, 0), face_image) # Paste the masked faceswap image onto the original
             orig_image.save(f'{shared_path.dir_temp_images}/temp_img_0.png', pnginfo=pnginfo)  # Save the image with correct pnginfo
-            images[0] = orig_image                                          # Replace first image in images list
-            return images
+            images[0] = orig_image                           # Replace first image in images list
         except Exception as e:
             log.error(f'Error masking ReActor output images: {e}')
+        return images
 
-    async def sd_img_gen(self:Union["Task","Tasks"]):
+    async def img_gen(self:Union["Task","Tasks"]):
+        reactor_args = self.payload.get('alwayson_scripts', {}).get('reactor', {}).get('args', [])
+        last_item = reactor_args[-1] if reactor_args else None
+        reactor_mask = reactor_args.pop() if isinstance(last_item, dict) else None
         try:
-            reactor_args = self.payload.get('alwayson_scripts', {}).get('reactor', {}).get('args', [])
-            last_reactor_index = reactor_args[-1] if reactor_args else None
-            reactor_mask = reactor_args.pop() if isinstance(last_reactor_index, dict) else None
             # Start progress task and generation task concurrently
             images_task = asyncio.create_task(api.imggen.save_images_and_return(self.payload, self.params.mode))
             progress_task = asyncio.create_task(api.imggen.track_progress(discord_embeds=self.embeds))
@@ -2174,55 +2174,59 @@ class TaskProcessing(TaskAttributes):
             await asyncio.gather(images_task, progress_task)
             # Get the list of images and copy of pnginfo after both tasks are done
             images, pnginfo = await images_task
-            if not images:
-                await self.embeds.send('img_send', 'Error processing images.', f'Error: "{str(pnginfo)}"\nIf {api.imggen.name} remains unresponsive, consider using "/restart_sd_client" command.')
-                return None
-            # Apply ReActor mask
-            reactor = self.payload.get('alwayson_scripts', {}).get('reactor', {})
-            if len(images) > 1 and reactor and reactor_mask:
-                images = await self.apply_reactor_mask(images, pnginfo, reactor_mask['mask'])
-            # Workaround for layerdiffuse output
-            layerdiffuse = self.payload.get('alwayson_scripts', {}).get('layerdiffuse', {})
-            if len(images) > 1 and layerdiffuse and layerdiffuse['args'][0]:
-                images = await self.layerdiffuse_hack(images, pnginfo)
-            return images
         except Exception as e:
-            log.error(f'Error processing images in {api.imggen.name} API module: {e}')
+            e_prefix = f'[{api.imggen.name}] Error processing images'
+            log.error(f'{e_prefix}: {e}')
+            await self.embeds.send('img_send', e_prefix, f'{e}\nIf {api.imggen.name} remains unresponsive, consider using "/restart_sd_client" command.')
             return []
-
-    async def process_image_gen(self:Union["Task","Tasks"]):
+        # Apply ReActor mask
+        reactor = self.payload.get('alwayson_scripts', {}).get('reactor', {})
+        if len(images) > 1 and reactor and reactor_mask:
+            images = await self.apply_reactor_mask(images, pnginfo, reactor_mask['mask'])
+        # Workaround for layerdiffuse output
+        layerdiffuse = self.payload.get('alwayson_scripts', {}).get('layerdiffuse', {})
+        if len(images) > 1 and layerdiffuse and layerdiffuse['args'][0]:
+            images = await self.layerdiffuse_hack(images, pnginfo)
+        return images
+    
+    def resolve_img_output_dir(self:Union["Task","Tasks"]):
+        output_dir = shared_path.output_dir
         try:
             base_dir = os.path.abspath(shared_path.dir_root)
             # Accept value whether it is relative or absolute
             if os.path.isabs(self.params.sd_output_dir):
-                sd_output_dir = self.params.sd_output_dir
+                output_dir = self.params.sd_output_dir
             else:
-                sd_output_dir = os.path.join(shared_path.output_dir, self.params.sd_output_dir)
+                output_dir = os.path.join(shared_path.output_dir, self.params.sd_output_dir)
             # backwards compatibility (user defined output dir was originally expected to include the base directory)
-            if not os.path.commonpath([base_dir, sd_output_dir]).startswith(base_dir):
+            if not os.path.commonpath([base_dir, output_dir]).startswith(base_dir):
                 log.warning("Tried setting the SD output directory outside the bot. Defaulting to '/output'.")
-                sd_output_dir = shared_path.output_dir
+                output_dir = shared_path.output_dir
             # Create custom output dir if not already existing
-            os.makedirs(sd_output_dir, exist_ok=True)
+            os.makedirs(output_dir, exist_ok=True)
+        except Exception as e:
+            log.error(f"An error occurred preparing the imggen output dir: {e}")
+        return output_dir
 
-            # Generate images, save locally
-            images = await self.sd_img_gen()
+    async def process_image_gen(self:Union["Task","Tasks"]):
+        output_dir = self.resolve_img_output_dir()
+        try:
+            # Generate images while saving locally
+            images = await self.img_gen()
             if not images:
                 return
-
-            # Send images to discord
+            # Prepare images for discord
             # If the censor mode is 1 (blur), prefix the image file with "SPOILER_"
-            file_prefix = 'temp_img_'
-            if self.params.img_censoring == 1:
-                file_prefix = 'SPOILER_temp_img_'
+            file_prefix = 'temp_img_' if self.params.img_censoring != 1 else 'SPOILER_temp_img_'
             temp_dir = shared_path.dir_temp_images
             image_files = [discord.File(f'{temp_dir}/temp_img_{idx}.png', filename=f'{file_prefix}{idx}.png') for idx in range(len(images))]
+            # Send images to discord
             if self.params.should_send_image:
                 img_ref_message = getattr(self, 'img_ref_message', None)
                 await self.channel.send(files=image_files, reference=img_ref_message)
-            # Save the image at index 0 with the date/time naming convention
+            # Rename and move the image at index 0 to the output dir
             timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-            last_image = f'{sd_output_dir}/{timestamp}.png'
+            last_image = f'{output_dir}/{timestamp}.png'
             os.rename(f'{temp_dir}/temp_img_0.png', last_image)
             copyfile(last_image, f'{temp_dir}/temp_img_0.png')
         except Exception as e:
