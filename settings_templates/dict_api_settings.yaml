@@ -98,7 +98,24 @@ all_apis:
     auth: null
     endpoints:
       - {name: Get TTS Voices, path: /api/voices, method: GET, timeout: 10}
-      - {name: Post TTS Generate, path: /api/tts-generate, method: POST}
+      - name: Get Audio
+        path: "{}" # uses 'path_vars' from response_handling to automatically complete the path (ex: '/audio/myoutputfile.wav')
+        method: GET
+      - name: Post TTS Generate
+        path: /api/tts-generate
+        method: POST
+        # Note: response_handling is bypassed in bot main functions if using the "_key" method in 'bot_api_functions' (first section of this file)
+        response_handling:
+          - extract_key: output_file_url
+            save_as: output_url
+          - call_api:
+             client_name: AllTalk TTS v2
+             endpoint_name: Get Audio
+             response_type: bytes
+             path_vars: "{output_url}" # API call will return audio bytes
+          - save:
+              file_format: wav
+              returns: path
 
   - name: ComfyUI
     url: http://127.0.0.1:8188

@@ -667,7 +667,7 @@ class APIClient:
                 return await response.text()
             except Exception:
                 return await response.read()
-            
+
     async def guess_response_type(self, response: aiohttp.ClientResponse):
         content_type = response.headers.get("Content-Type", "").split(";")[0].strip().lower()
         try:
@@ -675,7 +675,7 @@ class APIClient:
                 return await response.json()
             elif content_type.startswith("text/") or content_type in ("application/xml", "text/xml", "text/csv"):
                 return await response.text()
-            elif content_type.startswith("image/") or content_type in (
+            elif content_type.startswith(("audio/", "video/", "image/", "font/")) or content_type in (
                 "application/octet-stream",
                 "application/pdf",
                 "application/zip",
@@ -695,6 +695,20 @@ class APIClient:
             log.warning(f"Failed to decode response (Content-Type: {content_type}): {e}")
             return await response.read()
 
+    def format_endpoint(self, endpoint: str, path_vars: Optional[Union[str, tuple, list, dict]]) -> str:
+        if not path_vars:
+            return endpoint
+
+        try:
+            if isinstance(path_vars, dict):
+                return endpoint.format(**path_vars)
+            elif isinstance(path_vars, (tuple, list)):
+                return endpoint.format(*path_vars)
+            else:
+                return endpoint.format(path_vars)
+        except (IndexError, KeyError, ValueError) as e:
+            raise ValueError(f"Failed to format endpoint '{endpoint}' with path_vars {path_vars}: {e}")
+
     async def request(
         self,
         endpoint: str,
@@ -709,7 +723,12 @@ class APIClient:
         timeout: Optional[int] = None,
         response_type: Optional[str] = None,
         stream: bool = False,
+        path_vars: Optional[Union[str, tuple, list, dict]] = None,
     ) -> Union[Dict[str, Any], str, bytes, None]:
+        
+        # Format endpoint with path variables
+        if path_vars:
+            endpoint = self.format_endpoint(endpoint, path_vars)
 
         url = f"{self.url}{endpoint}" if endpoint.startswith("/") else f"{self.url}/{endpoint}"
         headers = {**self.default_headers, **(headers or {})}
@@ -1443,20 +1462,21 @@ class TTSGenEndpoint(Endpoint):
         self.output_file_path_key:Optional[str] = None
 
     async def return_main_data(self, response):
-        if self == self.client.post_generate:
-            if isinstance(response, bytes):
-                resp_format = self.response_handling.get('type', 'unknown')
-                if resp_format == 'unknown':
-                    resp_format = processing.detect_audio_format(response)
-                    if resp_format == 'unknown':
-                        log.error(f'[{self.name}] Expected response to be mp3 or wav (bytes), but received an unexpected format.')
-                        return None
-                output_dir = os.path.join(shared_path.output_dir, self.response_handling.get('save_dir', ''))
-                save_prefix = os.path.join(shared_path.output_dir, self.response_handling.get('save_prefix', ''))
-                save_format = self.response_handling.get('save_format', resp_format)         
-                audio_fp:str = processing.save_audio_bytes(response, output_dir, input_format=resp_format, file_prefix=save_prefix, output_format=save_format)
-                return audio_fp
-        return None
+        pass
+        # if self == self.client.post_generate:
+        #     if isinstance(response, bytes):
+        #         resp_format = self.response_handling.get('type', 'unknown')
+        #         if resp_format == 'unknown':
+        #             resp_format = processing.detect_audio_format(response)
+        #             if resp_format == 'unknown':
+        #                 log.error(f'[{self.name}] Expected response to be mp3 or wav (bytes), but received an unexpected format.')
+        #                 return None
+        #         output_dir = os.path.join(shared_path.output_dir, self.response_handling.get('save_dir', ''))
+        #         save_prefix = os.path.join(shared_path.output_dir, self.response_handling.get('save_prefix', ''))
+        #         save_format = self.response_handling.get('save_format', resp_format)         
+        #         audio_fp:str = processing.save_audio_bytes(response, output_dir, input_format=resp_format, file_prefix=save_prefix, output_format=save_format)
+        #         return audio_fp
+        # return None
 
 class ImgGenEndpoint(Endpoint):
     def __init__(self, *args, **kwargs):
@@ -1559,11 +1579,13 @@ class StepExecutor:
             # Apply returns logic
             step_result = self._apply_returns(step_result, result, config)
 
+            print("step name:", step_name)
+
             if save_as:
                 self.context[save_as] = step_result
             else:
                 result = step_result  # Only update result if not storing to context
-
+        print("final result:", result)
         return result
 
     def _initial_data(self):
@@ -1595,6 +1617,8 @@ class StepExecutor:
             log.warning(f"'returns': 'dict' requested but result is of type {type(result).__name__}. Falling back to 'data'.")
             return result
         if returns == "path":
+            if isinstance(result, dict):
+                return result.get('path', result)
             if isinstance(result, str):
                 return result
             log.warning(f"'returns': 'path' requested but result is of type {type(result).__name__}. Falling back to 'data'.")
@@ -1666,21 +1690,33 @@ class StepExecutor:
             result = await sub_executor.run(item)
             results.append(result)
 
+        print("results:", results)
+
         return results
 
     @step_returns("data", "input", default="data")
     async def _step_call_api(self, data: Any, config: Union[str, dict]) -> Any:
-        api:API = get_api()
+        api:API = await get_api()
         client_name = config.get("client_name")
-        endpoint_name = config.get("client_name")
-        input_data = config.get("input_data")
+        endpoint_name = config.get("endpoint_name")
+        input_data = config.get("input_data", data)
+        response_type = config.get("response_type")
+        path_vars = config.get("path_vars")
+        if not client_name and endpoint_name:
+            test_ep = self.client.endpoints.get(endpoint_name)
+            if test_ep:
+                client_name = self.client.name
+            else:
+                raise ValueError('API Client name was not included in "call_api" response handling step')
         api_client:APIClient = api.clients.get(client_name)
         if not api_client:
             raise ValueError(f'Call API step requires API Client, but could not find "{client_name}"')
         if not api_client.enabled:
             raise RuntimeError(f'Call API step failed because "{client_name}" is not enabled.')
         endpoint:Endpoint = api_client.endpoints.get(endpoint_name)
-        response = await endpoint.call(input_data=input_data)
+        response = await endpoint.call(input_data=input_data,
+                                       response_type=response_type,
+                                       path_vars=path_vars)
         if not isinstance(response, APIResponse):
             return response
         return response.body
@@ -1711,7 +1747,6 @@ class StepExecutor:
                         data = data[part]
                     else:
                         raise TypeError(f"Expected dict for key '{part}' but got {type(data).__name__}")
-            print("Returning data!")
             return data
         except (KeyError, IndexError, TypeError) as e:
             if default is not None:
@@ -1921,7 +1956,7 @@ class WorkflowExecutor:
 
         # Handle response
         response_handling = step.get("response_handling", {})
-        output_key = response_handling.get("output_key")
+        # output_key = response_handling.get("output_key") - BUGGED
         result = response.get(output_key) if (isinstance(response, dict) and output_key) else response
 
         # Store in context if needed

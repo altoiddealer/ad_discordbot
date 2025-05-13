@@ -1878,11 +1878,11 @@ class TaskProcessing(TaskAttributes):
                     ep = api.ttsgen.post_generate
                     tts_payload:dict = ep.get_payload()
                     tts_payload[ep.text_input_key] = chunk_text
-                    audio_file = await api.ttsgen.post_generate.call(input_data=tts_payload, extract_keys='output_file_path_key')
-                    if audio_file:
+                    audio_fp = await api.ttsgen.post_generate.call(input_data=tts_payload, extract_keys='output_file_path_key')
+                    if audio_fp:
                         stream_replies.streamed_tts = was_streamed
                         setattr(self.params, 'streamed_tts', was_streamed)
-                        self.tts_resp.append(audio_file)
+                        self.tts_resp.append(audio_fp)
 
             def apply_extensions(chunk_text:str, was_streamed=True):
                 vis_resp_chunk:str = extensions_module.apply_extensions('output', chunk_text, state=self.payload['state'], is_chat=True)
