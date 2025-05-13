@@ -1146,11 +1146,11 @@ class Mentions:
     def __init__(self):
         self.previous_user_mention = ''
 
-    def update_mention(self, user_mention:str, last_resp:str='') -> str:
-        mention_resp = last_resp
+    def update_mention(self, user_mention:str, llm_resp:str='') -> str:
+        mention_resp = llm_resp
 
         if user_mention != self.previous_user_mention:
-            mention_resp = f"{user_mention} {last_resp}"
+            mention_resp = f"{user_mention} {llm_resp}"
         self.previous_user_mention = user_mention
         return mention_resp
     
@@ -1168,14 +1168,12 @@ class TaskAttributes():
     settings: "Settings"
     embeds: Embeds
     text: str
+    prompt: str
     payload: dict
-    llm_prompt: str
     params: Params
     tags: Tags
-    img_prompt: str
-    payload: dict
-    last_resp: str
-    tts_resp: list
+    llm_resp: str
+    tts_resps: list
     user_hmessage: HMessage
     bot_hmessage: HMessage
     local_history: History
@@ -1196,12 +1194,12 @@ class TaskProcessing(TaskAttributes):
             task, tally = spontaneous_messaging.tasks[self.channel.id]
             spontaneous_messaging.tasks[self.channel.id] = (task, tally + 1)
 
-    async def send_response_chunk(self:Union["Task","Tasks"], chunk_text:str):
+    async def send_response_chunk(self:Union["Task","Tasks"], resp_chunk:str):
         # Process most recent TTS response (if any)
-        if self.tts_resp:
-            await voice_clients.process_tts_resp(self.ictx, self.tts_resp[-1], self.bot_hmessage)
+        if self.tts_resps:
+            await voice_clients.process_tts_resp(self.ictx, self.tts_resps[-1], self.bot_hmessage)
         # @mention non-consecutive users
-        mention_resp = mentions.update_mention(self.user.mention, chunk_text)
+        mention_resp = mentions.update_mention(self.user.mention, resp_chunk)
         # send responses to channel - reference a message if applicable
         sent_chunk_msg_ids, _ = await send_long_message(self.channel, mention_resp, self.params.ref_message)
         self.params.ref_message = None
@@ -1212,15 +1210,15 @@ class TaskProcessing(TaskAttributes):
     async def send_responses(self:Union["Task","Tasks"]):
         # Process any TTS response
         streamed_tts = getattr(self.params, 'streamed_tts', False)
-        if self.tts_resp and not streamed_tts:
-            await voice_clients.process_tts_resp(self.ictx, self.tts_resp[0], self.bot_hmessage)
+        if self.tts_resps and not streamed_tts:
+            await voice_clients.process_tts_resp(self.ictx, self.tts_resps[0], self.bot_hmessage)
         # Send text responses
         if self.bot_hmessage and self.params.should_send_text:
             # Send single reply if message was not already streamed in chunks
             was_chunked = getattr(self.params, 'was_chunked', False)
             if not was_chunked:
                 # @mention non-consecutive users
-                mention_resp = mentions.update_mention(self.user.mention, self.last_resp)
+                mention_resp = mentions.update_mention(self.user.mention, self.llm_resp)
                 # send responses to channel - reference a message if applicable
                 sent_msg_ids, sent_msg = await send_long_message(self.channel, mention_resp, self.params.ref_message)
                 # Update IDs for Bot HMessage
@@ -1645,7 +1643,7 @@ class TaskProcessing(TaskAttributes):
     async def create_bot_hmessage(self:Union["Task","Tasks"]) -> HMessage:
         try:
             # custom handlings, mainly from 'regenerate'
-            self.bot_hmessage = self.local_history.new_message(self.settings.name, self.last_resp, 'assistant', self.settings._bot_id, text_visible=self.tts_resp)
+            self.bot_hmessage = self.local_history.new_message(self.settings.name, self.llm_resp, 'assistant', self.settings._bot_id, text_visible=self.tts_resps)
             if self.user_hmessage:
                 self.bot_hmessage.mark_as_reply_for(self.user_hmessage)
             if self.params.regenerated:
@@ -1659,7 +1657,7 @@ class TaskProcessing(TaskAttributes):
             if is_direct_message(self.ictx):
                 self.bot_hmessage.dont_save()
 
-            if self.last_resp:
+            if self.llm_resp:
                 truncation = int(self.settings.llmstate.state['truncation_length'] * 4) #approx tokens
                 self.bot_hmessage.history.truncate(truncation)
                 client.loop.create_task(self.bot_hmessage.history.save())
@@ -1698,7 +1696,7 @@ class TaskProcessing(TaskAttributes):
             # Replacing original Bot HMessage via "regenerate replace"
             if self.params.bot_hmessage_to_update:
                 apply_reactions = config.discord['history_reactions'].get('enabled', True)
-                self.bot_hmessage = await replace_msg_in_history_and_discord(client.user, self.ictx, self.params, self.last_resp, self.tts_resp, apply_reactions)
+                self.bot_hmessage = await replace_msg_in_history_and_discord(client.user, self.ictx, self.params, self.llm_resp, self.tts_resps, apply_reactions)
                 self.params.should_send_text = False
             else:
                 await self.create_bot_hmessage()
@@ -1714,21 +1712,21 @@ class TaskProcessing(TaskAttributes):
         try:
 
             # Stream message chunks
-            async def process_chunk(chunk_text:str):
+            async def process_chunk(resp_chunk:str):
                 # Immediately send message chunks (Do not queue)
                 if self.settings.behavior.responsiveness == 1.0 or self.name in ['regenerate', 'continue']:
-                    await self.send_response_chunk(chunk_text)
+                    await self.send_response_chunk(resp_chunk)
                 # Queue message chunks to MessageManager()
                 else:
-                    chunk_message = self.message.create_chunk_message(chunk_text)
+                    chunk_message = self.message.create_chunk_message(resp_chunk)
                     chunk_message.factor_typing_speed()
-                    # Assign some values to the task. 'last_resp' used later if queued.
+                    # Assign some values to the task. 'llm_resp' used later if queued.
                     chunk_task = Task('chunk_message',
                                     self.ictx,
                                     channel=self.channel,
                                     user=self.user,
                                     user_name=self.user_name,
-                                    last_resp=chunk_text,
+                                    llm_resp=resp_chunk,
                                     message=chunk_message,
                                     params=self.params,
                                     local_history=self.local_history,
@@ -1742,7 +1740,7 @@ class TaskProcessing(TaskAttributes):
                     if chunk_task.message.send_time is not None:
                         await message_manager.queue_delayed_message(chunk_task)
                     else:
-                        await self.send_response_chunk(chunk_text)
+                        await self.send_response_chunk(resp_chunk)
 
             async def check_censored(search_text):
                 for tag in self.tags.llm_censor_tags:
@@ -1873,28 +1871,28 @@ class TaskProcessing(TaskAttributes):
             # Easier to manage this as a class
             stream_replies = StreamReplies(self)
 
-            async def apply_tts_and_extensions(chunk_text:str, was_streamed=True):
+            async def apply_tts_and_extensions(resp_chunk:str, was_streamed=True):
                 # If TTS API is online and available, TGWUI TTS extensions will be disabled
                 if tgwui_enabled:
-                    apply_extensions(chunk_text, was_streamed=was_streamed)
+                    apply_extensions(resp_chunk, was_streamed=was_streamed)
                 if tts_is_enabled(and_online=True, for_mode='api') and api.ttsgen.post_generate:
                     ep = api.ttsgen.post_generate
                     tts_payload:dict = ep.get_payload()
-                    tts_payload[ep.text_input_key] = chunk_text
+                    tts_payload[ep.text_input_key] = resp_chunk
                     audio_fp = await api.ttsgen.post_generate.call(input_data=tts_payload, extract_keys='output_file_path_key')
                     if audio_fp:
                         stream_replies.streamed_tts = was_streamed
                         setattr(self.params, 'streamed_tts', was_streamed)
-                        self.tts_resp.append(audio_fp)
+                        self.tts_resps.append(audio_fp)
 
-            def apply_extensions(chunk_text:str, was_streamed=True):
-                vis_resp_chunk:str = extensions_module.apply_extensions('output', chunk_text, state=self.payload['state'], is_chat=True)
+            def apply_extensions(resp_chunk:str, was_streamed=True):
+                vis_resp_chunk:str = extensions_module.apply_extensions('output', resp_chunk, state=self.payload['state'], is_chat=True)
                 if vis_resp_chunk:
                     audio_format_match = patterns.audio_src.search(vis_resp_chunk)
                     if audio_format_match:
                         stream_replies.streamed_tts = was_streamed
                         setattr(self.params, 'streamed_tts', was_streamed)
-                        self.tts_resp.append(audio_format_match.group(1))
+                        self.tts_resps.append(audio_format_match.group(1))
 
             # Sends LLM Payload and processes the generated text
             async def process_responses():
@@ -1918,16 +1916,16 @@ class TaskProcessing(TaskAttributes):
                                for_ui = False,
                                stream_tts = stream_replies.stream_tts)
 
-                async for resp in generate_in_executor(func):
+                async for streaming_response in generate_in_executor(func):
                     # Capture response internally as it is generating
-                    i_resp = resp.get('internal', [])
-                    if len(i_resp) > 0:
-                        i_resp:str = i_resp[len(i_resp) - 1][1]
+                    i_resp_stream = streaming_response.get('internal', [])
+                    if len(i_resp_stream) > 0:
+                        i_resp_stream:str = i_resp_stream[len(i_resp_stream) - 1][1]
                     
                     # Yes response chunking
                     if stream_replies.can_chunk:
                         # Omit continued text from response processing
-                        base_resp:str = i_resp
+                        base_resp:str = i_resp_stream
                         if continue_condition and (len(base_resp) > len(continued_from)):
                             base_resp = base_resp[len(continued_from):]
                         # Check current iteration to see if it meets criteria
@@ -1941,16 +1939,16 @@ class TaskProcessing(TaskAttributes):
                     # Flag that the task sent chunked responses
                     setattr(self.params, 'was_chunked', True)
                     # Handle last chunk
-                    last_chunk = base_resp[len(stream_replies.already_chunked):].strip()
-                    if last_chunk:
+                    resp_chunk = base_resp[len(stream_replies.already_chunked):].strip()
+                    if resp_chunk:
                         # Check last reply chunk for censored text
-                        await check_censored(last_chunk)
+                        await check_censored(resp_chunk)
                         # trigger TTS response / possibly other extension behavior
-                        await apply_tts_and_extensions(last_chunk)
-                        yield last_chunk
+                        await apply_tts_and_extensions(resp_chunk)
+                        yield resp_chunk
                 # Check complete response for censored text
                 else:
-                    await check_censored(i_resp)
+                    await check_censored(i_resp_stream)
 
                 # look for unprocessed tts response after all text generated
                 if not stream_replies.streamed_tts:
@@ -1958,7 +1956,7 @@ class TaskProcessing(TaskAttributes):
                     await apply_tts_and_extensions(resp['visible'][-1][1], was_streamed=False)
 
                 # Save the complete response
-                self.last_resp = i_resp
+                self.llm_resp = i_resp_stream
 
             ####################################
             ## RUN ALL HELPER FUNCTIONS ABOVE ##
@@ -1968,10 +1966,10 @@ class TaskProcessing(TaskAttributes):
             bot_statistics._llm_gen_time_start_last = time.time()
 
             # Runs custom_chatbot_wrapper(), gets responses
-            async for chunk in process_responses():
-                await process_chunk(chunk)
+            async for resp_chunk in process_responses():
+                await process_chunk(resp_chunk)
 
-            if self.last_resp:
+            if self.llm_resp:
                 self.update_llm_gen_statistics() # Update statistics
 
         except TaskCensored:
@@ -2065,7 +2063,7 @@ class TaskProcessing(TaskAttributes):
             total_gens += 1
             bot_statistics.llm['generations_total'] = total_gens
             # Update tokens statistics
-            last_tokens = int(count_tokens(self.last_resp))
+            last_tokens = int(count_tokens(self.llm_resp))
             bot_statistics.llm['num_tokens_last'] = last_tokens
             total_tokens = bot_statistics.llm.get('num_tokens_total', 0)
             total_tokens += last_tokens
@@ -2939,13 +2937,13 @@ class Tasks(TaskProcessing):
     # Parked Message Task may be resumed from here
     async def message_post_llm_task(self:"Task") -> tuple[HMessage, HMessage]:
         try:
-            # set response to img_prompt, then pre-process responses
-            if self.last_resp:
-                self.prompt = self.last_resp
+            # set response to prompt, then pre-process responses
+            if self.llm_resp:
+                self.prompt = self.llm_resp
 
                 # Log message exchange
                 log.info(f'''{self.user_name}: "{self.payload['text']}"''')
-                log.info(f'''{self.payload['state']['name2']}: "{self.last_resp}"''')
+                log.info(f'''{self.payload['state']['name2']}: "{self.llm_resp}"''')
 
                 # Create messages in History
                 await self.create_hmessages()
@@ -3097,12 +3095,12 @@ class Tasks(TaskProcessing):
             await self.embeds.delete('continue') # delete embed
 
             # Return if failed
-            if not self.last_resp:
+            if not self.llm_resp:
                 await self.ictx.followup.send('Failed to continue text.', silent=True)
                 return
 
             # Extract the continued text from previous text
-            continued_text = self.last_resp[len(original_bot_hmessage.text):]
+            continued_text = self.llm_resp[len(original_bot_hmessage.text):]
 
             # Return if nothing new generated
             if not continued_text.strip():
@@ -3112,12 +3110,12 @@ class Tasks(TaskProcessing):
             # Log message exchange
             log.info(f'''{self.user_name}: "{self.payload['text']}"''')
             log.info('Continued text:')
-            log.info(f'''{self.payload['state']['name2']}: "{self.last_resp}"''')
+            log.info(f'''{self.payload['state']['name2']}: "{self.llm_resp}"''')
 
             # Update the original message in history manager
             updated_bot_hmessage = original_bot_hmessage
             updated_bot_hmessage.is_continued = True                         # Mark message as continued
-            updated_bot_hmessage.update(text=self.last_resp, text_visible=self.tts_resp) # replace responses
+            updated_bot_hmessage.update(text=self.llm_resp, text_visible=self.tts_resps) # replace responses
             updated_bot_hmessage.related_ids.insert(0, updated_bot_hmessage.id) # Insert previous last message id into related ids
 
             new_discord_msg = None
@@ -3142,8 +3140,8 @@ class Tasks(TaskProcessing):
                 await bg_task_queue.put(apply_reactions_to_messages(client.user, self.ictx, updated_bot_hmessage, msg_ids_to_edit, new_discord_msg))
 
             # process any tts resp
-            # if self.tts_resp:
-            #     await voice_clients.process_tts_resp(self.ictx, self.tts_resp, updated_bot_hmessage)
+            # if self.tts_resps:
+            #     await voice_clients.process_tts_resp(self.ictx, self.tts_resps[0], updated_bot_hmessage)
 
         except TaskCensored:
             raise
@@ -3470,20 +3468,20 @@ class Tasks(TaskProcessing):
                     tts_payload[ep.text_input_key] = self.text # update with input text
                 audio_file = await api.ttsgen.post_generate.call(input_data=tts_payload, extract_keys='output_file_path_key')
                 if audio_file:
-                    self.tts_resp.append(audio_file)
+                    self.tts_resps.append(audio_file)
             elif tgwui_tts_on:
                 loop = asyncio.get_event_loop()
                 vis_resp_chunk:str = await loop.run_in_executor(None, extensions_module.apply_extensions, 'output', self.text, self.payload['state'], True)
                 audio_format_match = patterns.audio_src.search(vis_resp_chunk)
                 if audio_format_match:
-                    self.tts_resp.append(audio_format_match.group(1))
+                    self.tts_resps.append(audio_format_match.group(1))
 
             # Process responses
             await self.create_bot_hmessage()
             await self.embeds.delete('system') # delete embed
             if not self.bot_hmessage:
                 return
-            await voice_clients.process_tts_resp(self.ictx, self.tts_resp[0], self.bot_hmessage)
+            await voice_clients.process_tts_resp(self.ictx, self.tts_resps[0], self.bot_hmessage)
             # remove api key (don't want to share this to the world!)
             for sub_dict in tts_args.values():
                 if 'api_key' in sub_dict:
@@ -3912,8 +3910,8 @@ class Task(Tasks):
         'change_imgmodel' / 'change_llmmodel' / 'change_char' / 'img_gen' / 'msg_image_cmd' / 'speak'
 
         Default kwargs:
-        channel, user, user_name, embeds, text, payload, llm_prompt, params,
-        tags, img_prompt, user_hmessage, bot_hmessage, local_history
+        channel, user, user_name, embeds, text, prompt, payload, 
+        params, tags, user_hmessage, bot_hmessage, local_history
         '''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
         self.name: str = name
         self.ictx: CtxInteraction = ictx
@@ -3923,20 +3921,20 @@ class Task(Tasks):
         self.user_name: str          = kwargs.pop('user_name', None)
         self.embeds: Embeds          = kwargs.pop('embeds', None)
         self.text: str               = kwargs.pop('text', None)
-        self.prompt: str             = kwargs.pop('llm_prompt', None)
+        self.prompt: str             = kwargs.pop('prompt', None)
         self.payload: dict           = kwargs.pop('payload', None)
 
         self.params: Params          = kwargs.pop('params', None)
         self.tags: Tags              = kwargs.pop('tags', None)
-        self.last_resp: str          = kwargs.pop('last_resp', None)
-        self.tts_resp: list          = kwargs.pop('tts_resp', None)
+        self.llm_resp: str           = kwargs.pop('llm_resp', None)
+        self.tts_resps: list         = kwargs.pop('tts_resps', None)
         self.user_hmessage: HMessage = kwargs.pop('user_hmessage', None)
         self.bot_hmessage: HMessage  = kwargs.pop('bot_hmessage', None)
         self.local_history           = kwargs.pop('local_history', None)
         self.settings: Settings      = kwargs.pop('settings', None)
-        self.istyping:IsTyping       = kwargs.pop('istyping', None)
-        self.message:Message         = kwargs.pop('message', None)
-        self.files_to_send:list      = kwargs.pop('files_to_send', None)
+        self.istyping: IsTyping      = kwargs.pop('istyping', None)
+        self.message: Message        = kwargs.pop('message', None)
+        self.files_to_send: list     = kwargs.pop('files_to_send', None)
 
         # Dynamically assign custom keyword arguments as attributes
         for key, value in kwargs.items():
@@ -3959,8 +3957,8 @@ class Task(Tasks):
         self.params: Params          = self.params if self.params else Params()
         self.tags: Tags              = self.tags if self.tags else Tags(self.ictx)
         # Bot response attributes
-        self.last_resp: str          = self.last_resp if self.last_resp else ''
-        self.tts_resp: list          = self.tts_resp if self.tts_resp else []
+        self.llm_resp: str           = self.llm_resp if self.llm_resp else ''
+        self.tts_resps: list         = self.tts_resps if self.tts_resps else []
         # History attributes
         self.user_hmessage: HMessage = self.user_hmessage if self.user_hmessage else None
         self.bot_hmessage: HMessage  = self.bot_hmessage if self.bot_hmessage else None
@@ -4786,7 +4784,7 @@ if imggen_enabled:
                 except Exception as e:
                     log.error(f"An error occurred while configuring ControlNet for /image command: {e}")
 
-            image_cmd_task.img_prompt = pos_prompt
+            image_cmd_task.prompt = pos_prompt
 
             if use_llm and use_llm == 'YesWithPrefix':
                 pos_prompt = 'Provide a detailed image prompt description (without any preamble or additional text) for: ' + pos_prompt
@@ -6128,7 +6126,7 @@ class MessageManager():
         try:
             # Queued chunk message
             if task.name == 'chunk_message':
-                await task.send_response_chunk(task.last_resp)
+                await task.send_response_chunk(task.llm_resp)
             # Queued 'on_message' or 'spontaneous_message'
             else:
                 await task.message_post_llm_task()
