@@ -376,6 +376,9 @@ async def on_ready():
         # Setup API clients
         await api.setup_all_clients()
 
+        # Build options for /speak command
+        await speak_cmd_options.build_options(sync=False)
+
         # Enforce only one TTS method enabled
         enforce_one_tts_method()
 
@@ -5752,7 +5755,8 @@ async def convert_and_resample_mp3(ctx, mp3_file, output_directory=None):
 async def process_user_voice(ctx: commands.Context, voice_input=None):
     api_tts_on, _ = tts_is_enabled(and_online=True, for_mode='both')
     if api_tts_on:
-        await ctx.send("Sorry, the bot's configured TTS method does not currently support user voice file input.", ephemeral=True)
+        if voice_input:
+            await ctx.send("Sorry, the bot's configured TTS method does not currently support user voice file input.", ephemeral=True)
         return None
     try:
         if not (voice_input and getattr(voice_input, 'content_type', '').startswith("audio/")):
@@ -5856,18 +5860,16 @@ class SpeakCmdOptions:
             log.error(f"Error getting /speak options: {e}")
         return lang_list, all_voices
 
-    async def build_options(self):
+    async def build_options(self, sync:bool=True):
         lang_list, all_voices = await self.get_options()
         # Rebuild options
         if all_voices:
             self.voice_hash_dict = {str(hash(voice_name)):voice_name for voice_name in all_voices}
             self.split_options(all_voices, lang_list)
-        if not client.is_first_on_ready:
+        if sync:
             await client.tree.sync()
 
 speak_cmd_options = SpeakCmdOptions()
-
-asyncio.run(speak_cmd_options.build_options())
 
 @client.hybrid_command(name="speak", description='AI will speak your text using a selected voice (pick only one)')
 @app_commands.rename(voice_1 = speak_cmd_options.voice_options_label)
