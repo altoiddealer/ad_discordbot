@@ -15,7 +15,7 @@ import base64
 import copy
 from typing import Any, Dict, Tuple, List, Optional, Union, Type
 from modules.utils_shared import shared_path, patterns, load_file, get_api
-from modules.utils_misc import valueparser, deep_merge, is_base64, guess_format_from_headers, guess_format_from_data, detect_audio_format, image_bytes_to_data_uri
+from modules.utils_misc import valueparser, deep_merge, is_base64, guess_format_from_headers, guess_format_from_data
 import modules.utils_processing as processing
 
 from modules.logs import import_track, get_logger; import_track(__file__, fp=True); log = get_logger(__name__)  # noqa: E702
@@ -959,18 +959,12 @@ class ImgGenClient(APIClient):
                 img_data = img_data.split(",", 1)[1]
             raw_data = base64.b64decode(img_data)
 
-            # Attempt to detect image format
-            image = Image.open(io.BytesIO(raw_data))
-            mime_type = Image.MIME.get(image.format, "image/png")
-
             # Call PNGInfo endpoint if applicable
             if self.post_pnginfo:
-                # Construct image data with URI
-                data_uri = image_bytes_to_data_uri(raw_data, mime_type)
                 # Build payload
                 pnginfo_payload = self.post_pnginfo.get_payload()
                 if self.post_pnginfo.pnginfo_image_key:
-                    pnginfo_payload[self.post_pnginfo.pnginfo_image_key] = data_uri
+                    pnginfo_payload[self.post_pnginfo.pnginfo_image_key] = img_data
                 # post for image gen data
                 png_info_data = await self.post_pnginfo.call(input_data=pnginfo_payload, extract_keys="pnginfo_result_key")
                 # Process info and add it to image data before saving
@@ -987,8 +981,8 @@ class ImgGenClient(APIClient):
                             if seed_match:
                                 self.last_img_payload[self.post_pnginfo.seed_key] = int(seed_match.group(1))
 
+            image = Image.open(io.BytesIO(raw_data))
             image.save(f"{shared_path.dir_temp_images}/temp_img_{i}.png", pnginfo=i_pnginfo)
-
             images.append(image)
 
         return images, pnginfo
@@ -1570,22 +1564,26 @@ class StepExecutor:
             method = getattr(self, f"_step_{step_name}", None)
             if not method:
                 raise NotImplementedError(f"Unsupported step: {step_name}")
-
-            # Resolve any placeholders using the current context
-            config = self._resolve_context_placeholders(config)
-
-            # Run the step and determine where to store the result
-            step_result = await method(result, config) if asyncio.iscoroutinefunction(method) else method(result, config)
+            
+            if step_name == "for_each":
+                # _step_for_each will resolve placeholders per-item
+                step_result = await method(result, config)
+            else:
+                # Resolve any placeholders using the current context
+                config = self._resolve_context_placeholders(config)
+                # Run the step and determine where to store the result
+                step_result = await method(result, config) if asyncio.iscoroutinefunction(method) else method(result, config)
+            # print("step name:", step_name)
+            # print("step_result IN:", step_result)
             # Apply returns logic
             step_result = self._apply_returns(step_result, result, config)
-
-            print("step name:", step_name)
+            # print("step_result OUT:", step_result)
 
             if save_as:
                 self.context[save_as] = step_result
             else:
                 result = step_result  # Only update result if not storing to context
-        print("final result:", result)
+        # print("final result:", result)
         return result
 
     def _initial_data(self):
@@ -1682,24 +1680,36 @@ class StepExecutor:
         for index, item in enumerate(items):
             sub_executor = StepExecutor(steps)
             sub_executor.response = self.response
+
             sub_executor.context = {
                 **self.context,
                 alias: item,
                 f"{alias}_index": index,
             }
+
             result = await sub_executor.run(item)
             results.append(result)
-
-        print("results:", results)
-
+        # print("step for each results:", results)
         return results
+
+    @step_returns("data", "input", default="data")
+    def _step_return(self, data: Any, config: str) -> Any:
+        """
+        Returns a value from the context using the given key (config).
+        Example: - return: image_list
+        """
+        if not isinstance(config, str):
+            raise ValueError(f"'return' step expects a string key, got: {type(config).__name__}")
+        if config not in self.context:
+            raise KeyError(f"Context does not contain key '{config}'")
+        return self.context[config]
 
     @step_returns("data", "input", default="data")
     async def _step_call_api(self, data: Any, config: Union[str, dict]) -> Any:
         api:API = await get_api()
         client_name = config.get("client_name")
         endpoint_name = config.get("endpoint_name")
-        input_data = config.get("input_data", data)
+        input = config.get("input", data)
         response_type = config.get("response_type")
         path_vars = config.get("path_vars")
         if not client_name and endpoint_name:
@@ -1714,7 +1724,7 @@ class StepExecutor:
         if not api_client.enabled:
             raise RuntimeError(f'Call API step failed because "{client_name}" is not enabled.')
         endpoint:Endpoint = api_client.endpoints.get(endpoint_name)
-        response = await endpoint.call(input_data=input_data,
+        response = await endpoint.call(input_data=input,
                                        response_type=response_type,
                                        path_vars=path_vars)
         if not isinstance(response, APIResponse):
@@ -1763,6 +1773,8 @@ class StepExecutor:
     @step_returns("data", "input", default="data")
     def _step_decode_base64(self, data, config):
         if isinstance(data, str):
+            if "," in data:
+                data = data.split(",", 1)[1]
             return base64.b64decode(data)
         raise TypeError("Expected base64 string for decode_base64 step")
 
@@ -1811,8 +1823,11 @@ class StepExecutor:
         return match.group(1) if match.lastindex else match.group(0)
 
     @step_returns("data", "input", default="data")
-    def _step_format(self, data, fmt):
-        return fmt.format(data=data)
+    def _step_format(self, data, formatted_value:str):
+        # TODO: Add bot variables
+        if not isinstance(formatted_value, str):
+            raise ValueError("The format step requires a string input.")
+        return formatted_value
 
     @step_returns("data", "input", default="data")
     def _step_eval(self, data, expression):
@@ -1831,7 +1846,10 @@ class StepExecutor:
         """
 
         # 1. Setup file path & naming
-        file_name = config.get("file_name", f"data_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}")
+        timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
+        file_name = config.get("file_name", timestamp)
+        if file_name != timestamp and config.get("timestamp") == True:
+            file_name = f'{file_name}_{timestamp}'
         file_path = Path(config.get("file_path", ""))
         output_path = shared_path.output_dir / file_path
         output_path.mkdir(parents=True, exist_ok=True)
@@ -1864,6 +1882,18 @@ class StepExecutor:
         # 5. Save logic
         try:
             async with aiofiles.open(full_path, mode) as f:
+        # 5a. Special case: Handle PIL images with optional PngInfo
+                if isinstance(data, Image.Image) and file_format.lower() in {"png", "jpeg", "jpg", "webp"}:
+                    pnginfo = data.info.get("pnginfo") if file_format.lower() == "png" else None
+                    data.save(full_path, format=file_format.upper(), pnginfo=pnginfo)
+                    log.info(f"Saved image using PIL to {full_path}")
+                    return {
+                        "path": str(full_path),
+                        "format": file_format,
+                        "name": file_name,
+                        "data": data
+                    }
+
                 if file_format == "json":
                     if isinstance(data, (dict, list)):
                         await f.write(json.dumps(data, indent=2))
@@ -1902,6 +1932,48 @@ class StepExecutor:
                 "format": file_format,
                 "name": file_name,
                 "data": data}
+
+    @step_returns("data", "input", default="data")
+    def _step_add_pnginfo(self, data: Any, config: dict) -> Image.Image:
+        """
+        Adds PngInfo metadata to an image using values from context or data.
+
+        Config:
+            image (str, optional): Context key to retrieve the image object.
+            metadata (str, optional): Context key to retrieve metadata string.
+
+            If only one is provided, the other is assumed to come from the `data` parameter.
+
+        Returns:
+            Image.Image: Image with PngInfo metadata injected.
+        """
+        image_key = config.get("image")
+        metadata_key = config.get("metadata")
+
+        if image_key and metadata_key:
+            image = self.context.get(image_key)
+            metadata = self.context.get(metadata_key)
+        elif image_key:
+            image = self.context.get(image_key)
+            metadata = data
+        elif metadata_key:
+            metadata = self.context.get(metadata_key)
+            image = data
+        else:
+            raise ValueError("add_pnginfo step requires at least one of 'image' or 'metadata' in config")
+
+        if not isinstance(image, Image.Image):
+            raise TypeError(f"Expected a PIL.Image.Image for image, got {type(image).__name__}")
+        if not isinstance(metadata, str):
+            raise TypeError(f"Expected a string for metadata, got {type(metadata).__name__}")
+
+        pnginfo = PngImagePlugin.PngInfo()
+        pnginfo.add_text("parameters", metadata)
+
+        # Attach pnginfo to image
+        image.info["pnginfo"] = pnginfo
+
+        return image
 
 
 class WorkflowExecutor:

@@ -216,6 +216,12 @@ def detect_audio_format(data: bytes) -> str:
         return "unknown"
 
 def image_bytes_to_data_uri(image_bytes: bytes, mime_type: str = "image/png") -> str:
+    ### USAGE (IF EVER NEEDED)
+        ## Attempt to detect image format
+        #image = Image.open(io.BytesIO(raw_data))
+        #mime_type = Image.MIME.get(image.format, "image/png")
+        # Construct image data with URI
+        #data_uri = image_bytes_to_data_uri(raw_data, mime_type)
     encoded = base64.b64encode(image_bytes).decode("utf-8")
     return f"data:{mime_type};base64,{encoded}"
 

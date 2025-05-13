@@ -17,23 +17,24 @@ bot_api_functions:
     api_name: Stable Diffusion WebUI # Note: Some client-specific integrations require 'Forge', 'Reforge', 'Comfy' to be included in name.
     post_txt2img:
       endpoint_name: Post txt2img
-      prompt_key: prompt # input key for the positive prompt. ex: payload = {'prompt': 'This is my prompt', ...}
-      neg_prompt_key: negative_prompt
-      seed_key: seed
-      images_result_key: images # key name in the response body. Value is a list of images in base64 format.
+      prompt_key: prompt              # ex: payload = {'prompt': 'This is my prompt', ...}
+      neg_prompt_key: negative_prompt # ex: payload = {'negative_prompt': 'This is the negative prompt', ...}
+      seed_key: seed                  # ex: payload = {'seed': 12345, ...}
+      images_result_key: images       # ex: response = {'images': <list of images in base64 format>, ...}
     post_img2img: {endpoint_name: Post img2img, prompt_key: prompt, neg_prompt_key: negative_prompt, seed_key: seed, images_result_key: images}
     get_progress: {endpoint_name: Get Progress}
     post_pnginfo:
       endpoint_name: Post PNG Info
-      pnginfo_image_key: image # input key for an image to get its gen info. ex: payload = {'image': '<the image value>', ...}
-      pnginfo_result_key: info # key name in the response body. Value is a string detailing the generation params.
+      pnginfo_image_key: image        # ex: payload = {'image': '<the image data>', ...}
+      pnginfo_result_key: info        # ex: response = {'info': "<the image generation params string>", ...}
     post_options: {endpoint_name: Post Options}
     get_imgmodels: {endpoint_name: Get ImgModels}
     get_controlnet_models: {endpoint_name: Get Cnet Models}
+    post_server_restart: {endpoint_name: Post Server Restart}
+    # NOTE: The following is only applicable to A1111-like webUIs (A1111 / Forge / ReForge)
     get_controlnet_control_types:
       endpoint_name: Get Cnet Control Types
-      control_types_key: control_types # applicable to A1111-like webUIs (A1111 / Forge / ReForge)
-    post_server_restart: {endpoint_name: Post Server Restart}
+      control_types_key: control_types # ex: response = {'control_types': <Beautifully organized controlnet model dictionary>, ...}
 
   # Bot currently cannot use textgen APIs for main functions - TextGen API Support coming soon!
   textgen:
@@ -158,7 +159,7 @@ presets:
           in: image_list
           as: image
           steps:
-            - decode_base64: true
+            - decode_base64: true          
             - save:
                 file_format: png
                 file_path: "images"
