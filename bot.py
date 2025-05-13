@@ -1950,13 +1950,15 @@ class TaskProcessing(TaskAttributes):
                 else:
                     await check_censored(i_resp_stream)
 
+                full_llm_resp = i_resp_stream
+
                 # look for unprocessed tts response after all text generated
                 if not stream_replies.streamed_tts:
                     # trigger TTS response / possibly other extension behavior
-                    await apply_tts_and_extensions(resp['visible'][-1][1], was_streamed=False)
+                    await apply_tts_and_extensions(full_llm_resp, was_streamed=False)
 
                 # Save the complete response
-                self.llm_resp = i_resp_stream
+                self.llm_resp = full_llm_resp
 
             ####################################
             ## RUN ALL HELPER FUNCTIONS ABOVE ##
