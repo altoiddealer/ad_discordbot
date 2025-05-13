@@ -1546,6 +1546,15 @@ class StepExecutor:
         #     self.context["_status"] = self.response.status
         #     self.context["_content_type"] = self.response.content_type
 
+    def _split_step(self, step: dict) -> tuple[str, dict, dict]:
+        step = step.copy()
+        metadata_keys = {"save_as", "returns", "skip_if", "log", "on_error"}  # extensible
+        metadata = {k: step.pop(k) for k in metadata_keys if k in step}
+        if len(step) != 1:
+            raise ValueError(f"Invalid step format: {step}")
+        step_name, config = next(iter(step.items()))
+        return step_name, config, metadata
+
     async def run(self, input_data: Any|None = None) -> Any:
         result = input_data or self._initial_data()
 
@@ -1554,12 +1563,8 @@ class StepExecutor:
                 raise ValueError(f"Invalid step: {step}")
 
             step = step.copy()
-            save_as = step.pop("save_as", None)
 
-            if len(step) != 1:
-                raise ValueError(f"Invalid step format: {step}")
-
-            step_name, config = next(iter(step.items()))
+            step_name, config, meta = self._split_step(step)
 
             method = getattr(self, f"_step_{step_name}", None)
             if not method:
@@ -1573,16 +1578,18 @@ class StepExecutor:
                 config = self._resolve_context_placeholders(config)
                 # Run the step and determine where to store the result
                 step_result = await method(result, config) if asyncio.iscoroutinefunction(method) else method(result, config)
+
             # print("step name:", step_name)
             # print("step_result IN:", step_result)
             # Apply returns logic
             step_result = self._apply_returns(step_result, result, config)
             # print("step_result OUT:", step_result)
-
+            save_as = meta.get("save_as")
             if save_as:
                 self.context[save_as] = step_result
             else:
-                result = step_result  # Only update result if not storing to context
+                return step_result
+
         # print("final result:", result)
         return result
 
@@ -1690,6 +1697,30 @@ class StepExecutor:
             result = await sub_executor.run(item)
             results.append(result)
         # print("step for each results:", results)
+        return results
+
+    @step_returns("data", "input", default="data")
+    async def _step_group(self, data: Any, config: list[list[dict]]) -> list:
+        """
+        Executes multiple step sequences in parallel, each defined as a list of steps.
+
+        Each item in the config is a list of steps (a sub-workflow), which is executed
+        in parallel with others.
+
+        Returns:
+            list: The list of results from each parallel sub-sequence.
+        """
+        if not isinstance(config, list) or not all(isinstance(group, list) for group in config):
+            raise ValueError("step_group config must be a list of lists of steps")
+
+        async def run_subgroup(steps: list[dict], index: int):
+            sub_executor = StepExecutor(steps)
+            sub_executor.response = self.response
+            sub_executor.context = self.context.copy()
+            return await sub_executor.run(data)
+
+        tasks = [run_subgroup(steps, idx) for idx, steps in enumerate(config)]
+        results = await asyncio.gather(*tasks)
         return results
 
     @step_returns("data", "input", default="data")
@@ -1980,8 +2011,8 @@ class WorkflowExecutor:
     def __init__(self, workflow_name: str):
         self.workflow_def:dict = apisettings.get_workflow(workflow_name)
         self.api:API = get_api()
-        self.context: Dict[str, Any] = {}  # Stores save_as values
-        self.results: Dict[str, Any] = {}  # Final output for inspection or chaining
+        self.context: Dict[str, Any] = {}
+        self.results: Dict[str, Any] = {}
 
     async def run(self):
         steps = self.workflow_def.get("steps", [])
