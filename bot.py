@@ -109,19 +109,9 @@ client = commands.Bot(command_prefix=".", intents=intents)
 client.is_first_on_ready = True # type: ignore
 
 # Method to check if an API is enabled and available
-async def api_online(api_type:str|None=None, api_name:str='', ictx:CtxInteraction|None=None) -> bool:
-    api_client:Optional[APIClient] = None
-
-    main_api_client:Optional[APIClient] = getattr(api, api_type)
-    if main_api_client:
-        api_client = main_api_client
-    else:
-        api_client = api.clients.get(api_name)
+async def api_online(client_type:str|None=None, client_name:str='', strict=False, ictx:CtxInteraction|None=None) -> bool:
+    api_client:Optional[APIClient] = api.get_client(client_type=client_type, client_name=client_name, strict=strict)
     if not api_client:
-        log.debug(f"API client not found: {api_name}")
-        return False
-    elif not api_client.enabled:
-        log.debug(f"API client offline: {api_name}")
         return False
 
     api_client_online, emsg = await api_client.is_online()
@@ -1540,7 +1530,7 @@ class TaskProcessing(TaskAttributes):
         await self.tags.match_img_tags(self.prompt, self.settings.get_vars())
         await self.apply_generic_tag_matches(phase='img')
         self.params.update_bot_should_do(self.tags) # check for updates from tags
-        if self.params.should_gen_image and await api_online(api_type='imggen', ictx=self.ictx):
+        if self.params.should_gen_image and await api_online(client_type='imggen', ictx=self.ictx):
             # CLONE CURRENT TASK AND QUEUE IT
             log.info('An image task was triggered, created and queued.')
             await self.embeds.send('system', title='Generating an image', description='An image task was triggered, created and queued.', delete_after=5)
@@ -3506,7 +3496,7 @@ class Tasks(TaskProcessing):
             if not self.ictx:
                 self.user_name = 'Automatically'
 
-            if not await api_online(api_type='imggen', ictx=self.ictx): # Can't change Img model if not online!
+            if not await api_online(client_type='imggen', ictx=self.ictx): # Can't change Img model if not online!
                 log.error('Bot tried to change Img Model, but SD API is offline.')
                 return
                 
@@ -4497,7 +4487,7 @@ if imggen_enabled:
         image_cmd_task = Task('image_cmd', ctx)
         setattr(image_cmd_task, 'imgcmd_task', True)
         # Do not process if SD WebUI is offline
-        if not await api_online(api_type='imggen', ictx=ctx):
+        if not await api_online(client_type='imggen', ictx=ctx):
             await ctx.reply("Stable Diffusion is not online.", ephemeral=True, delete_after=5)
             return
         # User inputs from /image command

@@ -133,12 +133,12 @@ all_apis:
       reconnect_on_failure: true
       retry: 1
     endpoints:
-      - name: Queue Prompt
-        path: prompt
-        method: POST
-      - name: View
-        path: view
-        method: POST
+      - {name: Prompt, path: /prompt, method: POST}
+      - {name: History, path: "/history/{prompt_id}", method: GET}
+      - {name: View, path: view, method: POST}
+      - {name: Upload, path: "/upload/{image_type}", method: POST}
+      - {name: Get Models, path: "/models/{folder}", method: GET}
+      - {name: Cancel, path: /interrupt, method: POST}
 
 
 # Create presets here which can be injected in any 'endpoint', or in any 'response_handling' / 'workflow' steps.

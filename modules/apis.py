@@ -206,6 +206,48 @@ class API:
             return False
 
         return True
+    
+    def get_client(self, client_type:str|None=None, client_name:str|None=None, strict=False):
+        api_client = None
+        main_client = getattr(self, client_type)
+        if main_client:
+            api_client = main_client
+        else:
+            api_client = self.clients.get(client_name)
+
+        if not api_client:
+            if strict:
+                raise ValueError(f"API client '{client_name}' not found or invalid.")
+            else:
+                log.warning(f"API client '{client_name}' not found or invalid.")
+            return None
+
+        elif not api_client.enabled:
+            if strict:
+                raise RuntimeError(f'API Client "{client_name}" is currently disabled.')
+            else:
+                log.warning(f'API Client "{client_name}" is currently disabled.')
+            return None
+
+        return api_client
+    
+    def get_endpoint_for(self, api_client:"APIClient", endpoint_name:str, strict=False) -> "Endpoint":
+        endpoint = api_client.endpoints.get(endpoint_name)
+        if not endpoint:
+            if strict:
+                raise ValueError(f'[{api_client.name}] Endpoint "{endpoint_name}" not found or invalid')
+            else:
+                log.warning(f'[{api_client.name}] Endpoint "{endpoint_name}" not found or invalid')
+            return None
+        return endpoint
+
+    def get_client_and_endpoint(self, endpoint_name:str, client_type:str|None=None, client_name:str|None=None, strict=False) -> Tuple["APIClient", "Endpoint"]:
+        api_client = self.get_client(client_type=client_type, client_name=client_name, strict=strict)
+        if not api_client:
+            return None, None
+        endpoint = self.get_endpoint_for(api_client=api_client, endpoint_name=endpoint_name, strict=strict)
+        return api_client, endpoint
+
 
 class WebSocketConnectionConfig:
     def __init__(self, **kwargs):
@@ -1555,6 +1597,11 @@ class StepExecutor:
         step_name, config = next(iter(step.items()))
         return step_name, config, metadata
 
+    def _initial_data(self):
+        if isinstance(self.response, APIResponse):
+            return self.response.body
+        return self.original_input
+
     async def run(self, input_data: Any|None = None) -> Any:
         result = input_data or self._initial_data()
 
@@ -1579,8 +1626,8 @@ class StepExecutor:
                 # Run the step and determine where to store the result
                 step_result = await method(result, config) if asyncio.iscoroutinefunction(method) else method(result, config)
 
-            # print("step name:", step_name)
-            # print("step_result IN:", step_result)
+            # print("step name:", step_name, "step result:", step_result)
+
             # Apply returns logic
             step_result = self._apply_returns(step_result, result, config)
             # print("step_result OUT:", step_result)
@@ -1592,11 +1639,6 @@ class StepExecutor:
 
         # print("final result:", result)
         return result
-
-    def _initial_data(self):
-        if isinstance(self.response, APIResponse):
-            return self.response.body
-        return self.original_input
     
     def _apply_returns(self, result, original_input, config:dict|str, allowed: list[str]|None=None, default="data"):
         returns = default
@@ -1734,28 +1776,37 @@ class StepExecutor:
         if config not in self.context:
             raise KeyError(f"Context does not contain key '{config}'")
         return self.context[config]
-
-    @step_returns("data", "input", default="data")
-    async def _step_call_api(self, data: Any, config: Union[str, dict]) -> Any:
-        api:API = await get_api()
+    
+    async def resolve_api_names(self, config, step_name:str):
         client_name = config.get("client_name")
         endpoint_name = config.get("endpoint_name")
-        input = config.get("input", data)
-        response_type = config.get("response_type")
-        path_vars = config.get("path_vars")
+
         if not client_name and endpoint_name:
             test_ep = self.client.endpoints.get(endpoint_name)
             if test_ep:
                 client_name = self.client.name
             else:
-                raise ValueError('API Client name was not included in "call_api" response handling step')
-        api_client:APIClient = api.clients.get(client_name)
-        if not api_client:
-            raise ValueError(f'Call API step requires API Client, but could not find "{client_name}"')
-        if not api_client.enabled:
-            raise RuntimeError(f'Call API step failed because "{client_name}" is not enabled.')
-        endpoint:Endpoint = api_client.endpoints.get(endpoint_name)
+                raise ValueError(f'API Client name was not included in "{step_name}" response handling step')
+        return client_name, endpoint_name
+
+    @step_returns("data", "input", default="data")
+    async def _step_call_api(self, data: Any, config: Union[str, dict]) -> Any:
+        api:API = await get_api()
+        client_name, endpoint_name = self.resolve_api_names(config, 'call_api')
+        api_client:APIClient = api.get_client(client_name=client_name, strict=True)
+        endpoint:Endpoint = api.get_endpoint_for(api_client=api_client, endpoint_name=endpoint_name, strict=True)
+
+        input = config.get("input", data)
+        payload_type = config.get("payload_type", "any")
+        payload_map = config.get("payload_map")
+        response_type = config.get("response_type", endpoint.response_type)
+        headers = config.get("headers", endpoint.headers)
+        path_vars = config.get("path_vars")
+
         response = await endpoint.call(input_data=input,
+                                       payload_type=payload_type,
+                                       payload_map=payload_map,
+                                       headers=headers,
                                        response_type=response_type,
                                        path_vars=path_vars)
         if not isinstance(response, APIResponse):
