@@ -33,6 +33,13 @@ discord:
     react_emojis: ['✅', '👏']             # for if 'emoji_specific: true'
     target_channel_id: 11111111111111111111 # bot requires message / msg management permissions
 
+# Your setup may allow more/less requests to be processed than default.
+task_queue_concurrency:
+  maximum_total: 3
+  message_queue: 1 # average message requests
+  history_queue: 1 # tasks that manage history at all
+  gen_queue: 1     # tasks that generate images / TTS
+  normal_queue: 3  # generic tasks
 
 # If enabled, user settings will be managed seperately for each server (excluding the settings here in config.yaml)
 per_server_settings:
