@@ -62,7 +62,7 @@ class SharedPath:
 
     def init_shared_paths(root, dir, reason) -> str:
         path = os.path.join(root, dir)
-        if not os.path.exists(path):
+        if not os.path.exists(path) and reason:
             log.info(f'Creating "{path}" for {reason}.')
         os.makedirs(path, exist_ok=True)
         return path
@@ -89,6 +89,7 @@ class SharedPath:
     templates = os.path.join(dir_root, 'settings_templates')
 
     config, config_template = init_user_config_files(dir_root, templates, 'config.yaml')
+    api_settings, api_settings_template = init_user_config_files(dir_root, templates, 'dict_api_settings.yaml')
     base_settings, base_settings_template = init_user_config_files(dir_root, templates, 'dict_base_settings.yaml')
     cmd_options, cmd_options_template = init_user_config_files(dir_root, templates, 'dict_cmdoptions.yaml')
     img_models, img_models_template = init_user_config_files(dir_root, templates, 'dict_imgmodels.yaml')
@@ -101,8 +102,10 @@ class SharedPath:
     user_dir = init_shared_paths(dir_root, 'user', "for files which may be used for bot functions")
 
     dir_user_characters = init_shared_paths(user_dir, 'characters', f"Character files to be used with the bot{' (merge in with TGWUI characters)' if is_tgwui_integrated else ''}.")
+    dir_user_payloads = init_shared_paths(user_dir, 'payloads', "Payloads to be used for API calls.")
 
     dir_user_images = init_shared_paths(user_dir, 'images', "Images to be used for various bot functions.")
+    dir_temp_images = init_shared_paths(dir_user_images, '__temp', "")
     old_user_images = os.path.join(dir_root, 'user_images')
     if os.path.exists(old_user_images):
         log.warning(f'Please migrate your existing "/user_images" contents to: "{dir_user_images}".')
@@ -125,8 +128,9 @@ class Config(BaseFileMemory):
         self.task_queues: dict
         self.per_server_settings: dict
         self.dynamic_prompting_enabled: bool
-        self.textgenwebui: dict
-        self.sd: dict
+        self.textgen: dict
+        self.ttsgen: dict
+        self.imggen: dict
         super().__init__(shared_path.config, version=2, missing_okay=True)
         self.fix_config()
 
@@ -135,8 +139,9 @@ class Config(BaseFileMemory):
         self.task_queues = data.pop('task_queues', {})
         self.per_server_settings = data.pop('per_server_settings', {})
         self.dynamic_prompting_enabled = data.pop('dynamic_prompting_enabled', True)
-        self.textgenwebui = data.pop('textgenwebui', {})
-        self.sd = data.pop('sd', {})
+        self.textgen = data.pop('textgen', {})
+        self.ttsgen = data.pop('ttsgen', {})
+        self.imggen = data.pop('imggen', {})
 
     def fix_config(self):
         config_dict = self.get_vars()
@@ -145,19 +150,22 @@ class Config(BaseFileMemory):
         # Update the user config with any missing values from the template
         fix_dict(config_dict, config_template, 'config.yaml')
 
-    def is_per_server(self):
+    def is_per_server(self) -> bool:
         return self.per_server_settings.get('enabled', False)
     
-    def is_per_character(self):
+    def is_per_character(self) -> bool:
         if self.is_per_server:
             return self.per_server_settings.get('per_server_characters', False)
         return False
     
-    def is_per_server_imgmodels(self):
+    def is_per_server_imgmodels(self) -> bool:
         return self.per_server_settings.get('per_server_imgmodel_settings', False)
 
-    def discord_dm_setting(self, key, default=None):
+    def discord_dm_setting(self, key, default=None) -> bool:
         return self.get('discord', {}).get('direct_messages', {}).get(key, default)
+    
+    def tts_enabled(self) -> bool:
+        return self.get('ttsgen', {}).get('enabled')
 
 config = Config()
 
@@ -213,3 +221,13 @@ class SharedBotEmojis:
         return [cls.hidden_emoji, cls.regen_emoji, cls.continue_emoji]
 
 bot_emojis = SharedBotEmojis()
+
+# SharedPath() must initialize before API().
+_api = None
+async def get_api():
+    global _api
+    if _api is None:
+        from modules.apis import API
+        _api = API()
+        await _api.init()
+    return _api

@@ -1,0 +1,15 @@
+# Example payload for A111 / Forge / Reforge
+
+restore_faces: False
+sampler_name: "DPM++ 2M"
+scheduler: karras
+steps: 40
+distilled_cfg_scale: 3.5
+cfg_scale: 7
+height: 896
+width: 1152
+enable_hr: False
+hr_upscaler: "Latent"
+denoising_strength: 0.5
+hr_scale: 2
+hr_second_pass_steps: 0

@@ -1,0 +1,278 @@
+# Overview of sections:
+# - bot_api_functions: defines APIs/endpoints that the bot can use "main functions" (bot commands, message responses, etc)
+# - all_apis: To define ALL APIs/endpoints including ones being used for main functions, and non-main bot functions (via the Tags system / "user commands", etc)
+# - presets: Most 'dict' values in this config can include a 'preset_name' key (linked to a preset dict), to limit redundancy.
+# - workflows: For executing custom logic beyond default bahviors (ei: add additional post-processing from a 'post_txt2img' endpoint call). For non-main functions only (N/A to main functions)
+
+bot_api_functions:
+  # Be sure to first define your APIs in "all_apis" (below this section), then link them via "name" (Note: case sensitive!!)
+  # - You may comment out or set null value for any endpoints in this section which are N/A for your use case (will disable that "main function")
+  # - You may need to research the input/output structure for your API endpoints to configure "_key" values / response_handling
+  # - The extra "_key" values in this section (ei: 'output_file_path_key') can simplify common expected API behavior, but **ARE NOT REQUIRED**.
+  #   Example scenario: Your main TTS client's post generate endpoint returns raw data (bytes). The bot's main function needs a file path. ...What should I do?
+  #                   - Remove 'output_file_path_key', or null the value
+  #                   - Define a "response_handling" for this endpoint (in 'all_apis') so it return a file path after the last 'step'
+
+  imggen:
+    api_name: Stable Diffusion WebUI # Note: Some client-specific integrations require 'Forge', 'Reforge', 'Comfy' to be included in name.
+    post_txt2img:
+      endpoint_name: Post txt2img
+      prompt_key: prompt              # ex: payload = {'prompt': 'This is my prompt', ...}
+      neg_prompt_key: negative_prompt # ex: payload = {'negative_prompt': 'This is the negative prompt', ...}
+      seed_key: seed                  # ex: payload = {'seed': 12345, ...}
+      images_result_key: images       # ex: response = {'images': <list of images in base64 format>, ...}
+    post_img2img: {endpoint_name: Post img2img, prompt_key: prompt, neg_prompt_key: negative_prompt, seed_key: seed, images_result_key: images}
+    get_progress: {endpoint_name: Get Progress}
+    post_pnginfo:
+      endpoint_name: Post PNG Info
+      pnginfo_image_key: image        # ex: payload = {'image': '<the image data>', ...}
+      pnginfo_result_key: info        # ex: response = {'info': "<the image generation params string>", ...}
+    post_options: {endpoint_name: Post Options}
+    get_imgmodels: {endpoint_name: Get ImgModels}
+    get_controlnet_models: {endpoint_name: Get Cnet Models}
+    post_server_restart: {endpoint_name: Post Server Restart}
+    # NOTE: The following is only applicable to A1111-like webUIs (A1111 / Forge / ReForge)
+    get_controlnet_control_types:
+      endpoint_name: Get Cnet Control Types
+      control_types_key: control_types # ex: response = {'control_types': <Beautifully organized controlnet model dictionary>, ...}
+
+  # Bot currently cannot use textgen APIs for main functions - TextGen API Support coming soon!
+  textgen:
+    api_name: Text Generation WebUI
+
+  ttsgen:
+    api_name: AllTalk TTS v2
+    get_voices:
+      endpoint_name: Get TTS Voices
+      get_voices_key: voices # key name in the response body. Value is a list of strings (the voice names) to populate '/speak' cmd options
+    get_languages:
+      endpoint_name: null # Example API config for 'AllTalk' does not have a "get_languages" route. But if your API does, the bot can use it for '/speak' options.
+      get_languages_key: languages # key name in the response body. Value is a list of languages (the language names) to populate '/speak' cmd options
+    post_generate:
+      endpoint_name: Post TTS Generate
+      text_input_key: text_input # input key for the text that will be generated. ex: payload = {'text_input': 'This is the text to TTS', ...}
+      output_file_path_key: output_file_path # key name in the response body. Value is a string, the path to the generated audio file.
+      language_input_key: language # input key for the language. ex: payload = {'language': 'English', ...}
+      voice_input_key: character_voice_gen  # input key for the voice. ex: payload = {'voice': 'Female01.wav', ...}
+
+
+all_apis:
+  # You may define any number of APIs and Endpoints here (a list of dictionaries), making them available to use for various bot functions,
+  #   including the "main" apis above, the Tags system (dict_tags.yaml), user defined commands (dict_commands.yaml *WIP feature*), etc.
+  - name: Stable Diffusion WebUI
+    url: http://127.0.0.1:7860
+    enabled: true
+    default_headers: {Content-Type: application/json} # will apply to all endpoints unless 'headers' defined in endpoint.
+    default_timeout: 10 # seconds to wait before aborting api call
+    auth: null # {username: myuser, password: mypass} # dict format with keys 'username' and 'password'
+    # Add any endpoints that you may use for bot functions (Tags system, user commands, etc)
+    endpoints:
+      - name: Post txt2img
+        path: /sdapi/v1/txt2img
+        preset: sd-txt2img-img2img-endpoints # See 'presets' further down
+      - name: Post img2img
+        path: /sdapi/v1/img2img
+        preset: sd-txt2img-img2img-endpoints
+      - {name: Get Progress, path: /sdapi/v1/progress, method: GET}
+      - {name: Post PNG Info, path: /sdapi/v1/png-info, method: POST}
+      - {name: Get ImgModels, path: /sdapi/v1/sd-models, method: GET}
+      - {name: Get Options, path: /sdapi/v1/options, method: GET}
+      - {name: Post Options, path: /sdapi/v1/options, method: POST, payload_type: json}
+      - {name: Get Cnet Models, path: /controlnet/model_list, method: GET}
+      - {name: Get Cnet Control Types, path: /controlnet/control_types, method: GET}
+      - {name: Post Server Restart, path: /sdapi/v1/server-restart, method: POST, retry: 0}
+
+  - name: Text Generation WebUI
+    url: http://127.0.0.1:7861
+    enabled: false
+    default_headers: {Content-Type: application/json}
+    default_timeout: 60
+    auth: null
+    endpoints: []
+
+  - name: AllTalk TTS v2
+    url: http://127.0.0.1:7851
+    enabled: false
+    default_headers:
+      Content-Type: application/x-www-form-urlencoded
+    default_timeout: 120
+    auth: null
+    endpoints:
+      - {name: Get TTS Voices, path: /api/voices, method: GET, timeout: 10}
+      - name: Get Audio
+        path: "{}" # uses 'path_vars' from response_handling to automatically complete the path (ex: '/audio/myoutputfile.wav')
+        method: GET
+      - name: Post TTS Generate
+        path: /api/tts-generate
+        method: POST
+        # Note: response_handling is bypassed in bot main functions if using the "_key" method in 'bot_api_functions' (first section of this file)
+        response_handling:
+          - extract_key: output_file_url
+            save_as: output_url
+          - call_api:
+             client_name: AllTalk TTS v2
+             endpoint_name: Get Audio
+             response_type: bytes
+             path_vars: "{output_url}" # API call will return audio bytes
+          - save:
+              file_format: wav
+              returns: path
+
+  - name: ComfyUI
+    url: http://127.0.0.1:8188
+    enabled: false
+    default_headers: {Content-Type: application/json}
+    default_timeout: 60
+    auth: null
+    websocket:
+      url: ws://127.0.0.1:8188/ws
+      client_id_required: true
+      client_id_format: uuid
+      query_params:
+        clientId: "{client_id}"
+      reconnect_on_failure: true
+      retry: 1
+    endpoints:
+      - {name: Prompt, path: /prompt, method: POST}
+      - {name: History, path: "/history/{prompt_id}", method: GET}
+      - {name: View, path: view, method: POST}
+      - {name: Upload, path: "/upload/{image_type}", method: POST}
+      - {name: Get Models, path: "/models/{folder}", method: GET}
+      - {name: Cancel, path: /interrupt, method: POST}
+
+
+# Create presets here which can be injected in any 'endpoint', or in any 'response_handling' / 'workflow' steps.
+presets:
+  - name: sd-txt2img-img2img-endpoints
+    method: POST
+    retry: 1
+    payload_type: json
+    payload_base: sd-webui.yaml
+    input: {prompt: "{prompt}"}
+    timeout: 120
+    response_handling:
+      # Capture 'images' list as context variable "image_list"
+      - extract_key: images
+        save_as: image_list
+      # Execute a 'for loop' of steps on each value in 'image_list' (**EXPERIMENTAL - PLEASE REPORT ISSUES**)
+      - for_each:
+          in: image_list
+          as: image
+          steps:
+            - decode_base64: true          
+            - save:
+                file_format: png
+                file_path: "images"
+                file_name: "img_{image_index}"
+
+# For executing custom logic beyond default bahviors (ei: add additional post-processing from a 'post_txt2img' endpoint call).
+# For non-main functions only (N/A to main functions)
+workflows:
+  - name: img_to_img
+    steps:
+      - name: Transform Image
+        api_name: Stable Diffusion WebUI
+        endpoint_name: Post img2img
+        payload_type: json
+        input:
+          init_images:
+            path: "inputs/photo.jpg"
+            as: base64
+          prompt: "make it look like a Pixar character"
+        save_as: result
+
+  - name: fan_out_translate
+    description: Translates a sentence into multiple languages in parallel
+    steps:
+      - name: Generate English Text
+        api_name: Text Generation WebUI
+        endpoint_name: Generate
+        input:
+          prompt: "Say hello"
+        response_handling:
+          output_key: text
+        save_as: base_text
+      - group:
+          - name: Translate to Spanish
+            api_name: DeepL API
+            endpoint_name: Translate
+            input:
+              text: "{base_text}"
+              target_lang: "ES"
+            save_as: es_text
+
+          - name: Translate to French
+            api_name: DeepL API
+            endpoint_name: Translate
+            input:
+              text: "{base_text}"
+              target_lang: "FR"
+            save_as: fr_text
+
+          - name: Translate to Japanese
+            api_name: DeepL API
+            endpoint_name: Translate
+            input:
+              text: "{base_text}"
+              target_lang: "JA"
+            save_as: ja_text
+      - name: Combine All Translations
+        api_name: Local Processor
+        endpoint_name: Join
+        input:
+          es: "{es_text}"
+          fr: "{fr_text}"
+          ja: "{ja_text}"
+        save_as: multilingual_output
+
+# payload_type (RECOMMENDED for all POST/PUT).
+# Use one of: json / form / multipart (file) / query
+
+# as value | Behavior                             | Payload area
+# text     | Load file as UTF-8 string            | json, data
+# file     | Load as binary, use multipart        | files
+# base64   | Read file, encode in base64          | json or data
+# raw      | Read file bytes, send as request body| data
+# url      | User provides a direct URL string    | json, params, etc.
+
+
+## Schemas
+
+
+# websocket:
+#   url: "ws://127.0.0.1:8188/ws"        # (str) Full WebSocket URL; fallback to HTTP-based conversion if not provided
+#   client_id_required: true             # (bool) Whether a client_id must be added to the connection URL
+#   client_id_format: "uuid"             # (str) Format for generated client_id: "uuid", "short", "timestamp", "hex", "opaque", "int", "machine", "env_user"
+  
+#   token_required: false                # (bool) Whether a token is required in the URL
+#   token_name: "token"                  # (str) The query parameter name used to pass the token (e.g., "token", "auth")
+
+#   session_id_required: false           # (bool) Whether a session ID is required for reconnect/resume
+#   session_id_name: "session_id"        # (str) The query parameter name for session ID
+
+#   channel_required: false              # (bool) Whether the connection must specify a channel/room name
+#   channel_name: "channel"              # (str) The query parameter name for channel (e.g., chat room, pub/sub topic)
+
+#   version_required: false              # (bool) Whether a version must be passed in the URL
+#   version_name: "version"              # (str) The query parameter name for the version (e.g., "v", "api_version")
+
+#   headers:                             # (dict[str, str]) Optional headers to send during WebSocket connection (e.g., for Auth)
+#     Authorization: "Bearer {token}"   # Example: Replace `{token}` at runtime
+
+#   query_params:                        # (dict[str, str]) Key-value pairs to convert into ?key=value&key2=value2...
+#     client_id: "{client_id}"           # Placeholders will be dynamically resolved at runtime
+#     token: "{token}"
+#     channel: "{channel}"
+#     version: "v2"
+#     app_name: "MyApp"
+#     debug: "1"
+
+#   reconnect_on_failure: true           # (bool) If true, the client will auto-reconnect on failure
+#   retry: 1                             # (int) Number of retry attempts for reconnecting
+
+# More dynamic values for query_params:
+# "{client_id}"
+# "{token}"
+# "{session_id}"
+# "{channel}"
+# "{version}"

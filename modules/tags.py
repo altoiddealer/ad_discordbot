@@ -5,11 +5,12 @@ from itertools import product
 import random
 import re
 import traceback
-from typing import Any, Optional
 from modules.database import BaseFileMemory
 from modules.utils_discord import get_user_ctx_inter, is_direct_message
 from modules.typing import TAG, TAG_LIST, TAG_LIST_DICT, CtxInteraction, Union
 from modules.utils_shared import shared_path, flows_queue, patterns
+from typing import Any, Optional, Tuple
+from modules.utils_misc import valueparser
 
 from modules.logs import import_track, get_logger; import_track(__file__, fp=True); log = get_logger(__name__)  # noqa: E702
 logging = log
@@ -42,16 +43,16 @@ persistent_tags = PersistentTags()
 
 class BaseTags(BaseFileMemory):
     def __init__(self) -> None:
-        self.global_tag_keys: dict
+        self._global_tag_keys: dict
         self.tags: list
-        self.tag_presets: list
+        self._tag_presets: list
         super().__init__(shared_path.tags, version=1, missing_okay=True)
         self.tags = self.update_tags(self.tags)
 
     def load_defaults(self, data: dict):
-        self.global_tag_keys = data.pop('global_tag_keys', {})
+        self._global_tag_keys = data.pop('global_tag_keys', {})
         self.tags = data.pop('base_tags', [])
-        self.tag_presets = data.pop('tag_presets', [])
+        self._tag_presets = data.pop('tag_presets', [])
 
     def expand_triggers(self, all_tags:list) -> list:
         def expand_value(value:str) -> str:
@@ -95,7 +96,7 @@ class BaseTags(BaseFileMemory):
             for tag in tags:
                 if 'tag_preset_name' in tag:
                     # Find matching tag preset in tag_presets
-                    for preset in self.tag_presets:
+                    for preset in self._tag_presets:
                         if 'tag_preset_name' in preset and preset['tag_preset_name'] == tag['tag_preset_name']:
                             # Merge corresponding tag presets
                             updated_tags.extend(preset.get('tags', []))
@@ -105,7 +106,7 @@ class BaseTags(BaseFileMemory):
                     updated_tags.append(tag)
             # Add global tag keys to each tag item
             for tag in updated_tags:
-                for key, value in self.global_tag_keys.items():
+                for key, value in self._global_tag_keys.items():
                     if key not in tag:
                         tag[key] = value
             updated_tags = self.expand_triggers(updated_tags) # expand any simplified trigger phrases
@@ -122,6 +123,9 @@ class Tags():
         self.ictx = ictx
         self.user = get_user_ctx_inter(self.ictx) if self.ictx else None # Union[discord.User, discord.Member]
         self.tags_initialized = False
+        # tags lists
+        self.char_tags: TAG_LIST = []
+        self.imgmodel_tags: TAG_LIST = []
         self.matches:list = []
         self.matches_names:list = []
         self.unmatched = {'user': [], 'llm': [], 'userllm': []}
@@ -134,14 +138,14 @@ class Tags():
         or they may be initialized on demand using 'init()'
         '''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
 
-    async def init_tags(self, text:str, settings:dict, phase:str='llm') -> str:
+    async def init_tags(self, text:str, settings:dict) -> str:
         try:
             self.tags_initialized = True
             base_tags_obj = BaseTags()
             base_tags: TAG_LIST      = getattr(base_tags_obj, "tags", [])
             char_tags: TAG_LIST      = settings['llmcontext'].get('tags', []) # character specific tags
             imgmodel_tags: TAG_LIST  = settings['imgmodel'].get('tags', []) # imgmodel specific tags
-            tags_from_text           = self.get_tags_from_text(text, phase)
+            tags_from_text           = self.get_tags_from_text(text)
             flow_step_tags: TAG_LIST = []
             if flows_queue.qsize() > 0:
                 flow_step_tags = [await flows_queue.get()]
@@ -227,105 +231,48 @@ class Tags():
                     log.warning(f"Ignoring unknown search_mode: {search_mode}")
 
 
-    # Function to convert string values to bool/int/float
-    def extract_value(self, value_str:str) -> Optional[Union[bool, int, float, str]]:
+    def get_tags_from_text(self, text: str) -> Tuple[str, TAG_LIST]:
+        """
+        Extracts embedded tags from the input text and parses them into structured dictionaries.
+
+        Returns:
+            - Modified text with tags removed
+            - List of parsed tag dictionaries
+        """
+        tags_from_text = []
+        matches = patterns.instant_tags.findall(text)
+
+        # Remove tags from text / prompt
+        self.text = patterns.instant_tags.sub('', text).strip()
+        self.prompt = patterns.instant_tags.sub('', text).strip()
+
+        for match in matches:
+            tag_dict = {}
+            tag_pairs = match.split('|')
+
+            for pair in tag_pairs:
+                key, value = self._parse_key_value(pair)
+                if key is not None:
+                    tag_dict[key] = value
+
+            if tag_dict:
+                tags_from_text.append(tag_dict)
+
+        return tags_from_text
+
+    def _parse_key_value(self, pair: str) -> Tuple[str, Any]:
+        """Splits 'key:value' string and parses the value using the ValueParser."""
         try:
-            value_str = value_str.strip()
-            if value_str.lower() == 'true':
-                return True
-            elif value_str.lower() == 'false':
-                return False
-            elif '.' in value_str:
-                try:
-                    return float(value_str)
-                except ValueError:
-                    return value_str
-            else:
-                try:
-                    return int(value_str)
-                except ValueError:
-                    return value_str
-
-        except Exception as e:
-            log.error(f"Error converting string to bool/int/float: {e}")
-
-    def parse_tag_from_text_value(self, value_str:str) -> Any:
-        try:
-            if value_str.startswith('{') and value_str.endswith('}'):
-                inner_text = value_str[1:-1]  # Remove outer curly brackets
-                key_value_pairs = inner_text.split(',')
-                result_dict = {}
-                for pair in key_value_pairs:
-                    key, value = self.parse_key_pair_from_text(pair)
-                    result_dict[key] = value
-                return result_dict
-            elif value_str.startswith('[') and value_str.endswith(']'):
-                inner_text = value_str[1:-1]
-                result_list = []
-                # if list of lists
-                if inner_text.startswith('[') and inner_text.endswith(']'):
-                    sublist_strings = patterns.brackets.findall(inner_text)
-                    for sublist_string in sublist_strings:
-                        sublist_string = sublist_string.strip()
-                        sublist_values = self.parse_tag_from_text_value(sublist_string)
-                        result_list.append(sublist_values)
-                # if single list
-                else:
-                    list_strings = inner_text.split(',')
-                    for list_str in list_strings:
-                        list_str = list_str.strip()
-                        list_value = self.parse_tag_from_text_value(list_str)
-                        result_list.append(list_value)
-                return result_list
-            else:
-                if (value_str.startswith("'") and value_str.endswith("'")):
-                    return value_str.strip("'")
-                elif (value_str.startswith('"') and value_str.endswith('"')):
-                    return value_str.strip('"')
-                else:
-                    return self.extract_value(value_str)
-
-        except Exception as e:
-            log.error(f"Error parsing nested value: {e}")
-
-    def parse_key_pair_from_text(self, kv_pair):
-        try:
-            key_value = kv_pair.split(':')
+            key_value = pair.split(':', 1)
+            if len(key_value) != 2:
+                return None, None
             key = key_value[0].strip()
-            value_str = ':'.join(key_value[1:]).strip()
-            value = self.parse_tag_from_text_value(value_str)
+            value_str = key_value[1].strip()
+            value = valueparser.parse_value(value_str)
             return key, value
         except Exception as e:
-            log.error(f"Error parsing nested value: {e}")
+            print(f"Error parsing key-value pair '{pair}': {e}")
             return None, None
-
-    # Matches [[this:syntax]] and creates 'tags' from matches
-    # Can handle any structure including dictionaries, lists, even nested sublists.
-    def get_tags_from_text(self, text:str, phase:str='llm') -> tuple[str, list[dict]]:
-        try:
-            tags_from_text = []
-            matches = patterns.instant_tags.findall(text)
-
-            if phase == 'llm':
-                self.text = patterns.instant_tags.sub('', text).strip()
-            elif phase == 'img':
-                self.img_prompt = patterns.instant_tags.sub('', text).strip()
-            else:
-                log.error("invalid 'phase' for 'get_tags_from_text':", phase)
-
-            for match in matches:
-                tag_dict = {}
-                tag_pairs = match.split('|')
-                for pair in tag_pairs:
-                    key, value = self.parse_key_pair_from_text(pair)
-                    tag_dict[key] = value
-                tags_from_text.append(tag_dict)
-            if tags_from_text:
-                log.info(f"[TAGS] Tags from text: '{tags_from_text}'")
-            return tags_from_text
-        except Exception as e:
-            log.error(f"Error getting tags from text: {e}")
-            return []
 
     async def match_img_tags(self, img_prompt:str, settings:dict):
         try:
@@ -480,7 +427,7 @@ class Tags():
 
     async def match_tags(self, search_text:str, settings:dict, phase:str='llm'):
         if not self.tags_initialized:
-            await self.init_tags(search_text, settings, phase)
+            await self.init_tags(search_text, settings)
         try:
             # Remove 'llm' tags if pre-LLM phase, to be added back to unmatched tags list at the end of function
             if phase == 'llm':

@@ -4,6 +4,11 @@ logging = log
 from datetime import datetime, timedelta
 import math
 import random
+import copy
+import base64
+import mimetypes
+import re
+from typing import Union, Optional
 
 def check_probability(probability) -> bool:
     probability = max(0.0, min(1.0, probability))
@@ -25,8 +30,24 @@ def fix_dict(set, req, src: str | None = None, warned: bool = False, path=""):
             was_warned = was_warned or child_warned  # Update was_warned if any child call was warned
     return set, was_warned
 
+# Safer version of update_dict
+def deep_merge(base: dict, override: dict) -> dict:
+    '''merge 2 dicts. "override" dict has priority'''
+    result = copy.deepcopy(base)
+    for k, v in override.items():
+        if (
+            k in result
+            and isinstance(result[k], dict)
+            and isinstance(v, dict)
+        ):
+            result[k] = deep_merge(result[k], v)
+        else:
+            result[k] = v
+    return result
+
 # Updates matched keys, AND adds missing keys
 def update_dict(d, u):
+    '''dict "u" has priority'''
     for k, v in u.items():
         if isinstance(v, dict):
             d[k] = update_dict(d.get(k, {}), v)
@@ -145,3 +166,166 @@ def get_normalized_weights(target:float, list_len:int, strength:float=1.0) -> li
     # Normalize weights to sum up to 1.0
     total_weight = sum(weights)
     return [weight / total_weight for weight in weights]
+
+def is_base64(s: str) -> bool:
+    try:
+        return base64.b64encode(base64.b64decode(s)) == s.encode()
+    except Exception:
+        return False
+    
+def guess_format_from_headers(headers: dict) -> str|None:
+    """
+    Attempts to infer the file format using HTTP headers.
+    """
+    content_type = headers.get("Content-Type") or headers.get("content-type")
+    content_disposition = headers.get("Content-Disposition") or headers.get("content-disposition")
+
+    # Try inferring from content-type
+    if content_type:
+        mime_type = content_type.split(";")[0].strip()
+        ext = mimetypes.guess_extension(mime_type)
+        if ext:
+            return ext.lstrip(".")  # remove dot from .jpg, .json, etc.
+
+    # Try extracting from content-disposition filename
+    if content_disposition:
+        match = re.search(r'filename="?(?P<name>[^"]+)"?', content_disposition)
+        if match:
+            filename = match.group("name")
+            ext_match = re.search(r"\.([a-zA-Z0-9]+)$", filename)
+            if ext_match:
+                return ext_match.group(1)
+
+    return None  # fallback to guess_format_from_data
+
+def guess_format_from_data(data) -> str:
+    if isinstance(data, dict):
+        return "json"
+    elif isinstance(data, list):
+        return "csv"
+    elif isinstance(data, bytes):
+        return "bin"
+    return "txt"
+
+def detect_audio_format(data: bytes) -> str:
+    if data.startswith(b'ID3') or (len(data) > 1 and data[0] == 0xFF and (data[1] & 0xE0) == 0xE0):
+        return "mp3"
+    elif data.startswith(b'RIFF') and b'WAVE' in data[8:16]:
+        return "wav"
+    else:
+        return "unknown"
+
+def image_bytes_to_data_uri(image_bytes: bytes, mime_type: str = "image/png") -> str:
+    ### USAGE (IF EVER NEEDED)
+        ## Attempt to detect image format
+        #image = Image.open(io.BytesIO(raw_data))
+        #mime_type = Image.MIME.get(image.format, "image/png")
+        # Construct image data with URI
+        #data_uri = image_bytes_to_data_uri(raw_data, mime_type)
+    encoded = base64.b64encode(image_bytes).decode("utf-8")
+    return f"data:{mime_type};base64,{encoded}"
+
+class ValueParser:
+    """
+    Utility to convert loosely formatted string inputs into structured Python values:
+    - Handles primitives: int, float, bool, str
+    - Parses list and dict syntax with nested support
+    """
+
+    def parse_value(self, value_str: str) -> Optional[Union[bool, int, float, str, list, dict]]:
+        """Main entry point to parse any string value into a Python object."""
+        try:
+            value_str = value_str.strip()
+
+            if value_str.startswith('{') and value_str.endswith('}'):
+                return self._parse_dict(value_str)
+            elif value_str.startswith('[') and value_str.endswith(']'):
+                return self._parse_list(value_str)
+            else:
+                return self._parse_scalar(value_str)
+        except Exception as e:
+            log.error(f"Error parsing value: '{value_str}' — {e}")
+            return None
+
+    def _parse_scalar(self, value_str: str) -> Union[bool, int, float, str]:
+        """Attempts to convert a string to bool, int, float, or falls back to str."""
+        if value_str.lower() == 'true':
+            return True
+        if value_str.lower() == 'false':
+            return False
+
+        # Try int
+        try:
+            return int(value_str)
+        except ValueError:
+            pass
+
+        # Try float
+        try:
+            return float(value_str)
+        except ValueError:
+            pass
+
+        # Unquote if needed
+        if (value_str.startswith('"') and value_str.endswith('"')) or \
+           (value_str.startswith("'") and value_str.endswith("'")):
+            return value_str[1:-1]
+
+        return value_str
+
+    def _parse_list(self, value_str: str) -> list:
+        """Parses a list from a string like '[1, 2, {a: 1}, "text"]'."""
+        inner = value_str[1:-1].strip()
+
+        # Handle nested lists or dicts
+        items = self._split_top_level(inner, sep=',')
+
+        return [self.parse_value(item.strip()) for item in items if item.strip()]
+
+    def _parse_dict(self, value_str: str) -> dict:
+        """Parses a dictionary from a string like '{a: 1, b: "text"}'."""
+        inner = value_str[1:-1].strip()
+        result = {}
+
+        pairs = self._split_top_level(inner, sep=',')
+
+        for pair in pairs:
+            if ':' not in pair:
+                log.warning(f"Skipping invalid dict pair: '{pair}'")
+                continue
+            key_str, value_str = pair.split(':', 1)
+            key = key_str.strip()
+            value = self.parse_value(value_str.strip())
+            result[key] = value
+
+        return result
+
+    def _split_top_level(self, s: str, sep: str = ',') -> list[str]:
+        """
+        Splits a string by `sep` but ignores separators inside brackets/braces.
+        Example: "1, [2, 3], {a: 4, b: 5}" → ['1', '[2, 3]', '{a: 4, b: 5}']
+        """
+        result = []
+        depth = 0
+        current = []
+        bracket_pairs = {'{': '}', '[': ']'}
+        opening = bracket_pairs.keys()
+        closing = bracket_pairs.values()
+
+        for char in s:
+            if char in opening:
+                depth += 1
+            elif char in closing:
+                depth -= 1
+            if char == sep and depth == 0:
+                result.append(''.join(current))
+                current = []
+            else:
+                current.append(char)
+
+        if current:
+            result.append(''.join(current))
+
+        return result
+
+valueparser = ValueParser()
