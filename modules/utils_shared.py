@@ -125,6 +125,7 @@ bot_database = Database()
 class Config(BaseFileMemory):
     def __init__(self) -> None:
         self.discord: dict
+        self.task_queues: dict
         self.per_server_settings: dict
         self.dynamic_prompting_enabled: bool
         self.textgen: dict
@@ -135,6 +136,7 @@ class Config(BaseFileMemory):
 
     def load_defaults(self, data: dict):
         self.discord = data.pop('discord', {})
+        self.task_queues = data.pop('task_queues', {})
         self.per_server_settings = data.pop('per_server_settings', {})
         self.dynamic_prompting_enabled = data.pop('dynamic_prompting_enabled', True)
         self.textgen = data.pop('textgen', {})

@@ -32,7 +32,7 @@ import sys
 import traceback
 from modules.typing import ChannelID, UserID, MessageID, CtxInteraction  # noqa: F401
 import signal
-from typing import Union
+from typing import Union, Literal
 from functools import partial
 
 from modules.utils_files import load_file, merge_base, save_yaml_file  # noqa: F401
@@ -193,7 +193,7 @@ async def auto_update_imgmodel_task(mode, duration):
             # CREATE TASK AND QUEUE IT
             params = Params(imgmodel=selected_imgmodel)
             change_imgmodel_task = Task('change_imgmodel', ictx=None, params=params)
-            await task_manager.task_queue.put(change_imgmodel_task)
+            await task_manager.queue_task(change_imgmodel_task, 'gen_queue')
 
         except Exception as e:
             log.error(f"[Auto Change Imgmodels] Error updating image model: {e}")
@@ -375,7 +375,7 @@ async def on_ready():
         # Create background task processing queue
         client.loop.create_task(process_tasks_in_background())
         # Start the Task Manager
-        client.loop.create_task(task_manager.process_tasks())
+        client.loop.create_task(task_manager.start())
 
         # Run guild startup tasks
         await init_guilds()
@@ -876,7 +876,7 @@ if tts_is_enabled():
         # offload to TaskManager() queue
         log.info(f'{ctx.author.display_name} used "/toggle_tts"')
         toggle_tts_task = Task('toggle_tts', ctx)
-        await task_manager.task_queue.put(toggle_tts_task)
+        await task_manager.queue_task(toggle_tts_task, 'normal_queue')
 
 #################################################################
 ###################### DYNAMIC PROMPTING ########################
@@ -1535,7 +1535,7 @@ class TaskProcessing(TaskAttributes):
             log.info('An image task was triggered, created and queued.')
             await self.embeds.send('system', title='Generating an image', description='An image task was triggered, created and queued.', delete_after=5)
             img_gen_task = self.clone('img_gen', self.ictx, ignore_list=['payload']) # Allow payload to be rebuilt. Keep all other task attributes (matched Tags, params, etc)
-            await task_manager.task_queue.put(img_gen_task)
+            await task_manager.queue_task(img_gen_task, 'gen_queue')
 
     async def check_tts_before_llm_gen(self:Union["Task","Tasks"]) -> bool|str:
         '''Returns 'api' or 'tgwui' if it toggled one off. Else False'''
@@ -2892,7 +2892,7 @@ class Tasks(TaskProcessing):
             self.prompt = self.text
 
             # Stop any pending spontaneous message task for current channel
-            await spontaneous_messaging.reset_for_channel(self.ictx)
+            await spontaneous_messaging.reset_for_channel(task_name=self.name, ictx=self.ictx)
 
             # match tags labeled for user / userllm.
             await self.tags.match_tags(self.text, self.settings.get_vars(), phase='llm')
@@ -2948,7 +2948,7 @@ class Tasks(TaskProcessing):
                 if self.params.llmmodel and self.params.llmmodel.get('mode', 'change') == 'swap':
                     # CREATE TASK AND QUEUE IT
                     change_llmmodel_task = Task('change_llmmodel', self.ictx, params=self.params) # Only needs current params
-                    await task_manager.task_queue.put(change_llmmodel_task)
+                    await task_manager.queue_task(change_llmmodel_task, 'gen_queue')
 
             # Stop typing if typing
             if hasattr(self, 'istyping') and self.istyping is not None:
@@ -3978,6 +3978,10 @@ class Task(Tasks):
         self.message:Message         = self.message if self.message else None
         self.files_to_send:list      = self.files_to_send if self.files_to_send else []
 
+    def get_channel_id(self, default=None) -> int|None:
+        channel = getattr(self.ictx, 'channel')
+        return getattr(channel, 'id', default)
+
 
     def init_typing(self, start_time=None, end_time=None):
         '''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
@@ -4064,10 +4068,6 @@ class Task(Tasks):
         run_task() should only be called by the TaskManager()
         Runs a method of Tasks()
         '''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
-        task_manager.current_task = self.name
-        task_manager.current_subtask = None
-        task_manager.current_channel = self.channel
-        task_manager.current_user_name = self.user_name
         return await self.run()
 
 
@@ -4079,125 +4079,192 @@ class Task(Tasks):
         Runs a method of Tasks()
         '''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
         try:
-            task_manager.current_subtask = subtask if subtask is not None else self.name
-            output = await self.run(subtask)
-            task_manager.current_subtask = None
-            return output
+            return await self.run(subtask)
         except TaskCensored:
             raise
 
 #################################################################
-######################### TASK MANAGER ##########################
+######################## TASK MANAGEMENT ########################
 #################################################################
-class TaskManager(Tasks):
-    def __init__(self):
-        self.current_task: str = None
-        self.current_subtask: str = None
-        self.current_channel: discord.TextChannel = None
-        self.current_user_name: str = None
+class QueuedTask:
+    def __init__(self, task: 'Task', queue_name: Literal['message_queue', 'history_queue', 'normal_queue', 'gen_queue'], priority: int = 0):
+        self.task = task
+        self.queue_name = queue_name
+        self.priority = priority
+        self.enqueue_time = time.time()
 
-        # main Task queue
-        self.task_queue = asyncio.Queue()
-        # Special queue for 'on_message'
+    def __lt__(self, other: 'QueuedTask'):
+        return self.enqueue_time < other.enqueue_time
+
+
+class TaskManager:
+    def __init__(self, max_workers: int = 4):
+        # Prevent concurrent message/history tasks in same channel
+        self.locked_channels: set[int] = set()
+        # Task source queues
         self.message_queue = asyncio.PriorityQueue()
+        self.history_queue = asyncio.Queue()
+        self.normal_queue = asyncio.Queue()
+        self.gen_queue = asyncio.Queue()
 
-        # Flag to prioritize the message queue
-        self.prioritize_messages = True # initialize True
+        # Global scheduler (for fairness)
+        self.scheduler_queue = asyncio.PriorityQueue()
 
-        # TODO Parked Queue
-        # self.next_parked_run_time:time = None
-        # self.parked_queue = asyncio.PriorityQueue() # messages that are delayed
+        # Max total concurrency
+        self.max_workers = max_workers
+        self.active_workers = 0
 
-    async def process_tasks(self):
-        try:
-            while True:
-                # Fetch task from the queue
-                await asyncio.sleep(1)
-                if not self.task_queue.empty() or not self.message_queue.empty():
+        queue_config = config.task_queues
 
-                    task, queue_name = await self.get_next_task()
-                    task: Task
+        # Per-queue concurrency limits
+        self.queue_concurrency_limits = {
+            'message_queue': queue_config.get('message_queue_concurrency', 1),
+            'history_queue': queue_config.get('history_queue_concurrency', 1),
+            'gen_queue': queue_config.get('gen_queue_concurrency', 1),
+            'normal_queue': queue_config.get('normal_queue_concurrency', 3)
+        }
 
-                    # Flag processing a task. Check with 'if task_event.is_set():'
-                    task_event.set() 
+        self.queue_semaphores = {
+            queue_name: asyncio.Semaphore(limit)
+            for queue_name, limit in self.queue_concurrency_limits.items()
+        }
 
-                    # Typing will begin immediately or at 'response_time' if set by MessageManager() 
-                    typing = ['flows', 'regenerate', 'msg_image_cmd', 'speak', 'continue']
-                    if ('message' in task.name) or (task.name in typing):
-                        task.init_typing()
+        # Queues that must not run concurrently
+        self.MUTEX_GROUPS = [{'message_queue', 'history_queue'}]
+        self.active_queues: set[str] = set()
 
-                    # Run the task
-                    await self.run_task(task)
+        self.worker_tasks = []
+        self._running = False
 
-                    # Unresponded message tasks will have 'time_to_sent' attribute. Queue these to MessageManager().
-                    if task.message is not None and getattr(task.message, 'send_time', None):
-                        await message_manager.queue_delayed_message(task)
-                    # Finished tasks are deleted
+    def can_run(self, queue_name: str, channel_id: Optional[int] = None) -> bool:
+        # Only enforce per-channel locking for mutually exclusive queues
+        if queue_name in {"message_queue", "history_queue"} and channel_id is not None:
+            if channel_id in self.locked_channels:
+                return False
+        return True
+
+    async def queue_task(self, task: 'Task', queue_name: str, priority: int = 0):
+        qt = QueuedTask(task, queue_name, priority)
+
+        # Maintain existing behavior
+        if queue_name == 'message_queue':
+            await self.message_queue.put((priority, task))
+        elif queue_name == 'history_queue':
+            await self.history_queue.put(task)
+        elif queue_name == 'normal_queue':
+            await self.normal_queue.put(task)
+        elif queue_name == 'gen_queue':
+            await self.history_queue.put(task)
+
+        # Add to centralized scheduler
+        await self.scheduler_queue.put((qt.enqueue_time, qt))
+
+    async def start(self):
+        if not self._running:
+            self._running = True
+            for _ in range(self.max_workers):
+                worker = asyncio.create_task(self.process_task_worker())
+                self.worker_tasks.append(worker)
+
+    async def stop(self):
+        self._running = False
+        for task in self.worker_tasks:
+            task.cancel()
+        self.worker_tasks.clear()
+
+    async def _run_with_semaphore(self, qt: QueuedTask):
+        queue_name = qt.queue_name
+        task:Task = qt.task
+        channel_id = task.get_channel_id()
+
+        # Lock this channel if applicable
+        if queue_name in {"message_queue", "history_queue"} and channel_id is not None:
+            self.locked_channels.add(channel_id)
+
+        sem = self.queue_semaphores[queue_name]
+        await sem.acquire()
+        self.active_queues.add(queue_name)
+
+        asyncio.create_task(self.run_and_cleanup(qt, sem, channel_id))
+
+    async def process_task_worker(self):
+        while self._running:
+            try:
+                # Step 1: Get the first task from the scheduler
+                first_time, first_qt = await self.scheduler_queue.get()
+                first_task:Task = first_qt.task
+                first_queue = first_qt.queue_name
+                first_channel_id = first_task.get_channel_id()
+
+                if self.can_run(first_queue, first_channel_id) and self.queue_semaphores[first_queue]._value > 0:
+                    await self._run_with_semaphore(first_qt)
+                    continue
+
+                # Step 2: Look ahead to one more task
+                try:
+                    second_time, second_qt = await asyncio.wait_for(self.scheduler_queue.get(), timeout=0.1)
+                    second_task:Task = second_qt.task
+                    second_queue = second_qt.queue_name
+                    second_channel_id = second_task.get_channel_id()
+
+                    if self.can_run(second_queue, second_channel_id) and self.queue_semaphores[second_queue]._value > 0:
+                        # Requeue the first task (can't run now)
+                        await self.scheduler_queue.put((first_time, first_qt))
+                        await self._run_with_semaphore(second_qt)
                     else:
-                        await task.stop_typing()
-                        del task
-                        await bot_status.schedule_go_idle()
+                        # Neither task can run; requeue both
+                        await self.scheduler_queue.put((first_time, first_qt))
+                        await self.scheduler_queue.put((second_time, second_qt))
+                        await asyncio.sleep(0.25)
+                except asyncio.TimeoutError:
+                    # No second task available; just requeue the first and pause
+                    await self.scheduler_queue.put((first_time, first_qt))
+                    await asyncio.sleep(0.25)
 
-                    # Queue cleanup
-                    self.reset_current()        # Reset TaskManager() attributes
-                    task_event.clear()     # Flag no longer processing task
-                    current_queue = getattr(self, queue_name)
-                    current_queue: asyncio.Queue|asyncio.PriorityQueue
-                    current_queue.task_done()   # Accept next task
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logging.error(f"Worker error: {e}")
+                traceback.print_exc()
 
-        except Exception as e:
-            logging.error(f"An error occurred while processing a main task: {e}")
-            traceback.print_exc()
-            task_event.clear()
-            client.loop.create_task(task_manager.process_tasks())
+    async def run_and_cleanup(self, qt: QueuedTask, sem: asyncio.Semaphore, channel_id: Optional[int] = None):
+        task = qt.task
+        queue_name = qt.queue_name
 
-    def reset_current(self):
-        self.current_task = None
-        self.current_subtask = None
-        self.current_channel = None
-        self.current_user_name = None
-
-    async def run_task(self, task:Task):
         try:
-            self.current_task = task.name
-            await task.run_task()
-            # flows queue is populated in process_llm_payload_tags()
-            if flows_queue.qsize() > 0:
-                await flows.run_flow_if_any(task.text, task.ictx)
+            task.init_self_values()
+            await bot_status.come_online()
+
+            if 'message' in task.name or task.name in ['flows', 'regenerate', 'msg_image_cmd', 'speak', 'continue']:
+                task.init_typing()
+
+            await self.run_task(task)
+
+            if task.message is not None and getattr(task.message, 'send_time', None):
+                await message_manager.queue_delayed_message(task)
+            else:
+                await task.stop_typing()
+                del task
+                await bot_status.schedule_go_idle()
+
         except TaskCensored:
             pass
         except Exception as e:
-            logging.error(f"An error occurred while processing task {task.name}: {e}")
+            logging.error(f"Error running task {task.name}: {e}")
             traceback.print_exc()
+        finally:
+            self.active_queues.discard(queue_name)
+            sem.release()
+            if channel_id is not None:
+                self.locked_channels.discard(channel_id)
+            task_event.clear()
 
-    async def get_next_task(self):
-        task = None
-        queue_name = None
+    async def run_task(self, task: 'Task'):
+        await task.run_task()
+        if flows_queue.qsize() > 0:
+            await flows.run_flow_if_any(task.text, task.ictx)
 
-        if not self.message_queue.empty():
-            # Condition to prevent always getting from one queue
-            if self.prioritize_messages or self.task_queue.empty():
-                num, task = await self.message_queue.get()
-                task:Task
-                # initialize default values in Task
-                task.init_self_values()
-                task.message.unqueue_time = time.time()
-                log.info(f'Processing message #{num} by {task.user_name}.')
-                queue_name = 'message_queue'
-                self.prioritize_messages = False
-
-        if task is None:
-            self.prioritize_messages = True
-            task:Optional[Task] = await self.task_queue.get()
-            if task:
-                # initialize default values in Task
-                task.init_self_values()
-                await bot_status.come_online()
-                queue_name = 'task_queue'
-
-        return task, queue_name
-
-task_manager = TaskManager()
+task_manager = TaskManager(max_workers=config.task_queues.get('maximum_concurrency', 3))
 
 #################################################################
 ########################## QUEUED FLOW ##########################
@@ -4809,7 +4876,7 @@ if imggen_enabled:
                 # CHANGE NAME (will run 'message' then 'img_gen')
                 image_cmd_task.name = 'msg_image_cmd'
 
-            await task_manager.task_queue.put(image_cmd_task)
+            await task_manager.queue_task(image_cmd_task, 'gen_queue')
 
         except Exception as e:
             log.error(f"An error occurred in image(): {e}")
@@ -4985,7 +5052,7 @@ if tgwui_enabled:
         # offload to TaskManager() queue
         reset_params = Params(character={'char_name': last_character, 'verb': 'Resetting', 'mode': 'reset'})
         reset_task = Task('reset', ctx, params=reset_params)
-        await task_manager.task_queue.put(reset_task)
+        await task_manager.queue_task(reset_task, 'history_queue')
 
     # /save_conversation command
     @client.hybrid_command(description="Saves the current conversation to a new file in text-generation-webui/logs/")
@@ -5014,7 +5081,7 @@ if tgwui_enabled:
         # offload to TaskManager() queue
         log.info(f'{inter.user.display_name} used "edit history"')
         edit_history_task = Task('edit_history', inter, matched_hmessage=matched_hmessage, target_discord_msg=message)
-        await task_manager.task_queue.put(edit_history_task)
+        await task_manager.queue_task(edit_history_task, 'history_queue')
 
     # Context menu command to hide a message pair
     @client.tree.context_menu(name="toggle as hidden")
@@ -5036,7 +5103,7 @@ if tgwui_enabled:
 
         log.info(f'{inter.user.display_name} used "hide or reveal history"')
         hide_or_reveal_history_task = Task('hide_or_reveal_history', inter, local_history=local_history, target_discord_msg=message, target_hmessage=target_hmessage) # custom kwargs
-        await task_manager.task_queue.put(hide_or_reveal_history_task)
+        await task_manager.queue_task(hide_or_reveal_history_task, 'history_queue')
 
     # Initialize Continue/Regenerate Context commands
     async def process_cont_regen_cmds(inter:discord.Interaction, message:discord.Message, cmd:str, mode:str=None):
@@ -5059,11 +5126,11 @@ if tgwui_enabled:
         if cmd == 'Continue':
             log.info(f'{inter.user.display_name} used "{cmd}"')
             continue_task = Task('continue', inter, local_history=local_history, target_discord_msg=message) # custom kwarg
-            await task_manager.task_queue.put(continue_task)
+            await task_manager.queue_task(continue_task, 'history_queue')
         else:
             log.info(f'{inter.user.display_name} used "{cmd} ({mode})"')
             regenerate_task = Task('regenerate', inter, local_history=local_history, target_discord_msg=message, target_hmessage=target_hmessage, mode=mode) # custom kwargs
-            await task_manager.task_queue.put(regenerate_task)
+            await task_manager.queue_task(regenerate_task, 'history_queue')
 
     # Context menu command to Regenerate from selected user message and create new history
     @client.tree.context_menu(name="regenerate create")
@@ -5283,7 +5350,7 @@ async def process_character(ctx, selected_character_value):
         # offload to TaskManager() queue
         change_char_params = Params(character={'char_name': char_name, 'verb': 'Changing', 'mode': 'change'})
         change_char_task = Task('change_char', ctx, params=change_char_params)
-        await task_manager.task_queue.put(change_char_task)
+        await task_manager.queue_task(change_char_task, 'history_queue')
 
     except Exception as e:
         log.error(f"Error processing selected character from /character command: {e}")
@@ -5589,7 +5656,7 @@ async def process_imgmodel(ctx: commands.Context, selected_imgmodel_value:str):
         params = await get_selected_imgmodel_params(selected_imgmodel_value) # {sd_model_checkpoint, imgmodel_name, filename}
         change_imgmodel_params = Params(imgmodel=params)
         change_imgmodel_task = Task('change_imgmodel', ctx, params=change_imgmodel_params)
-        await task_manager.task_queue.put(change_imgmodel_task)
+        await task_manager.queue_task(change_imgmodel_task, 'gen_queue')
 
     except Exception as e:
         log.error(f"Error processing selected imgmodel from /imgmodel command: {e}")
@@ -5631,7 +5698,7 @@ async def process_llmmodel(ctx, selected_llmmodel):
         # offload to TaskManager() queue
         change_llmmodel_params = Params(llmmodel={'llmmodel_name': selected_llmmodel, 'verb': 'Changing', 'mode': 'change'})
         change_llmmodel_task = Task('change_llmmodel', ctx, params=change_llmmodel_params)
-        await task_manager.task_queue.put(change_llmmodel_task)
+        await task_manager.queue_task(change_llmmodel_task, 'gen_queue')
 
     except Exception as e:
         log.error(f"Error processing /llmmodel command: {e}")
@@ -5796,7 +5863,7 @@ async def process_speak(ctx: commands.Context, input_text, selected_voice=None, 
         # offload to TaskManager() queue
         speak_params = Params(tts_args=tts_args, user_voice=user_voice)
         speak_task = Task('speak', ctx, text=input_text, params=speak_params)
-        await task_manager.task_queue.put(speak_task)
+        await task_manager.queue_task(speak_task, 'gen_queue')
 
     except Exception as e:
         log.error(f"Error processing tts request: {e}")
@@ -5948,7 +6015,7 @@ async def process_prompt(ctx: commands.Context, selections:dict):
         log.info(f'{title} "{prompt}"')
         # offload to TaskManager() queue
         prompt_task = Task('message', ctx, text=prompt, params=prompt_params)
-        await task_manager.task_queue.put(prompt_task)
+        await task_manager.queue_task(prompt_task, 'history_queue')
 
     except Exception as e:
         log.error(f"Error processing '/prompt': {e}")
@@ -6192,7 +6259,7 @@ class MessageManager():
         task.message = Message(settings, num, received_time, response_delay, read_text_delay)
         # Schedule come online. Typing will be scheduled when message is unqueued.
         await bot_status.schedule_come_online(task.message.come_online_time)
-        await task_manager.message_queue.put((num, task))
+        await task_manager.queue_task(task, 'message_queue', num)
 
 message_manager = MessageManager()
 
@@ -6203,9 +6270,9 @@ class SpontaneousMessaging():
     def __init__(self):
         self.tasks = {}
 
-    async def reset_for_channel(self, ictx:CtxInteraction):
+    async def reset_for_channel(self, task_name:str, ictx:CtxInteraction):
         # Only reset from discord message or '/prompt' cmd
-        if task_manager.current_task in ['on_message', 'prompt']:
+        if task_name in ['on_message', 'prompt']:
             current_chan_msg_task = self.tasks.get(ictx.channel.id, (None, 0))
             task, _ = current_chan_msg_task
             if task:
@@ -6245,7 +6312,6 @@ class SpontaneousMessaging():
             # get settings instance
             settings:Settings = get_settings(ictx)
             await message_manager.queue_message_task(spontaneous_message_task, settings)
-            #await task_manager.task_queue.put(spontaneous_message_task)
         except Exception as e:
             log.error(f"Error while processing a Spontaneous Message: {e}")
 
