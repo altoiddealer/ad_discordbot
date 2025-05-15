@@ -4205,6 +4205,10 @@ class Task(Tasks):
         # Extra attributes/methods for regular message requests
         self.message:Message         = self.message if self.message else None
 
+    def get_channel_id(self, default=None) -> int|None:
+        channel = getattr(self.ictx, 'channel')
+        return getattr(channel, 'id', default)
+
 
     def init_typing(self, start_time=None, end_time=None):
         '''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
@@ -4322,6 +4326,8 @@ class QueuedTask:
 
 class TaskManager:
     def __init__(self, max_workers: int = 4):
+        # Prevent concurrent message/history tasks in same channel
+        self.locked_channels: set[int] = set()
         # Task source queues
         self.message_queue = asyncio.PriorityQueue()
         self.history_queue = asyncio.Queue()
@@ -4333,15 +4339,16 @@ class TaskManager:
 
         # Max total concurrency
         self.max_workers = max_workers
+        self.active_workers = 0
 
-        concurrencies = config.task_queue_concurrency
+        queue_config = config.task_queues
 
         # Per-queue concurrency limits
         self.queue_concurrency_limits = {
-            'normal_queue': concurrencies.get('normal_queue', 3),
-            'message_queue': concurrencies.get('message_queue', 1),
-            'history_queue': concurrencies.get('history_queue', 1),
-            'gen_queue': concurrencies.get('gen_queue', 1),
+            'message_queue': queue_config.get('message_queue_concurrency', 1),
+            'history_queue': queue_config.get('history_queue_concurrency', 1),
+            'gen_queue': queue_config.get('gen_queue_concurrency', 1),
+            'normal_queue': queue_config.get('normal_queue_concurrency', 3)
         }
 
         self.queue_semaphores = {
@@ -4356,9 +4363,10 @@ class TaskManager:
         self.worker_tasks = []
         self._running = False
 
-    def can_run(self, queue_name: str) -> bool:
-        for group in self.MUTEX_GROUPS:
-            if queue_name in group and self.active_queues.intersection(group):
+    def can_run(self, queue_name: str, channel_id: Optional[int] = None) -> bool:
+        # Only enforce per-channel locking for mutually exclusive queues
+        if queue_name in {"message_queue", "history_queue"} and channel_id is not None:
+            if channel_id in self.locked_channels:
                 return False
         return True
 
@@ -4391,23 +4399,54 @@ class TaskManager:
             task.cancel()
         self.worker_tasks.clear()
 
+    async def _run_with_semaphore(self, qt: QueuedTask):
+        queue_name = qt.queue_name
+        task:Task = qt.task
+        channel_id = task.get_channel_id()
+
+        # Lock this channel if applicable
+        if queue_name in {"message_queue", "history_queue"} and channel_id is not None:
+            self.locked_channels.add(channel_id)
+
+        sem = self.queue_semaphores[queue_name]
+        await sem.acquire()
+        self.active_queues.add(queue_name)
+
+        asyncio.create_task(self.run_and_cleanup(qt, sem, channel_id))
+
     async def process_task_worker(self):
         while self._running:
             try:
-                _, qt = await self.scheduler_queue.get()
-                queue_name = qt.queue_name
-                task = qt.task
+                # Step 1: Get the first task from the scheduler
+                first_time, first_qt = await self.scheduler_queue.get()
+                first_task:Task = first_qt.task
+                first_queue = first_qt.queue_name
+                first_channel_id = first_task.get_channel_id()
 
-                if not self.can_run(queue_name):
-                    await asyncio.sleep(0.5)
-                    await self.scheduler_queue.put((qt.enqueue_time, qt))
+                if self.can_run(first_queue, first_channel_id) and self.queue_semaphores[first_queue]._value > 0:
+                    await self._run_with_semaphore(first_qt)
                     continue
 
-                sem = self.queue_semaphores[queue_name]
-                await sem.acquire()
+                # Step 2: Look ahead to one more task
+                try:
+                    second_time, second_qt = await asyncio.wait_for(self.scheduler_queue.get(), timeout=0.1)
+                    second_task:Task = second_qt.task
+                    second_queue = second_qt.queue_name
+                    second_channel_id = second_task.get_channel_id()
 
-                self.active_queues.add(queue_name)
-                asyncio.create_task(self.run_and_cleanup(qt, sem))
+                    if self.can_run(second_queue, second_channel_id) and self.queue_semaphores[second_queue]._value > 0:
+                        # Requeue the first task (can't run now)
+                        await self.scheduler_queue.put((first_time, first_qt))
+                        await self._run_with_semaphore(second_qt)
+                    else:
+                        # Neither task can run; requeue both
+                        await self.scheduler_queue.put((first_time, first_qt))
+                        await self.scheduler_queue.put((second_time, second_qt))
+                        await asyncio.sleep(0.25)
+                except asyncio.TimeoutError:
+                    # No second task available; just requeue the first and pause
+                    await self.scheduler_queue.put((first_time, first_qt))
+                    await asyncio.sleep(0.25)
 
             except asyncio.CancelledError:
                 break
@@ -4415,7 +4454,7 @@ class TaskManager:
                 logging.error(f"Worker error: {e}")
                 traceback.print_exc()
 
-    async def run_and_cleanup(self, qt: QueuedTask, sem: asyncio.Semaphore):
+    async def run_and_cleanup(self, qt: QueuedTask, sem: asyncio.Semaphore, channel_id: Optional[int] = None):
         task = qt.task
         queue_name = qt.queue_name
 
@@ -4423,19 +4462,8 @@ class TaskManager:
             task.init_self_values()
             await bot_status.come_online()
 
-            # Optional: set flags or trigger typing indicators
-            if hasattr(task, 'name') and (
-                'message' in task.name or task.name in ['flows', 'regenerate', 'msg_image_cmd', 'speak', 'continue']
-            ):
+            if 'message' in task.name or task.name in ['flows', 'regenerate', 'msg_image_cmd', 'speak', 'continue']:
                 task.init_typing()
-
-            print(
-                f"[RUNNING] Task: {getattr(task, 'name', 'Unnamed')} | "
-                f"From: {queue_name} | "
-                f"Enqueued at: {time.strftime('%X', time.localtime(qt.enqueue_time))} | "
-                f"Running at: {time.strftime('%X')} | "
-                f"Active queues: {list(self.active_queues)}"
-            )
 
             await self.run_task(task)
 
@@ -4454,6 +4482,8 @@ class TaskManager:
         finally:
             self.active_queues.discard(queue_name)
             sem.release()
+            if channel_id is not None:
+                self.locked_channels.discard(channel_id)
             task_event.clear()
 
     async def run_task(self, task: 'Task'):
@@ -4461,118 +4491,7 @@ class TaskManager:
         if flows_queue.qsize() > 0:
             await flows.run_flow_if_any(task.text, task.ictx)
 
-task_manager = TaskManager(max_workers=config.task_queue_concurrency['maximum_total'])
-
-
-# class TaskManager(Tasks):
-#     def __init__(self):
-#         self.current_task: str = None
-#         self.current_subtask: str = None
-#         self.current_channel: discord.TextChannel = None
-#         self.current_user_name: str = None
-
-#         # main Task queue
-#         self.task_queue = asyncio.Queue()
-#         # Special queue for 'on_message'
-#         self.message_queue = asyncio.PriorityQueue()
-
-#         # Flag to prioritize the message queue
-#         self.prioritize_messages = True # initialize True
-
-#         # TODO Parked Queue
-#         # self.next_parked_run_time:time = None
-#         # self.parked_queue = asyncio.PriorityQueue() # messages that are delayed
-
-#     async def process_tasks(self):
-#         try:
-#             while True:
-#                 # Fetch task from the queue
-#                 await asyncio.sleep(1)
-#                 if not self.task_queue.empty() or not self.message_queue.empty():
-
-#                     task, queue_name = await self.get_next_task()
-#                     task: Task
-
-#                     # Flag processing a task. Check with 'if task_event.is_set():'
-#                     task_event.set() 
-
-#                     # Typing will begin immediately or at 'response_time' if set by MessageManager() 
-#                     typing = ['flows', 'regenerate', 'msg_image_cmd', 'speak', 'continue']
-#                     if ('message' in task.name) or (task.name in typing):
-#                         task.init_typing()
-
-#                     # Run the task
-#                     await self.run_task(task)
-
-#                     # Unresponded message tasks will have 'time_to_sent' attribute. Queue these to MessageManager().
-#                     if task.message is not None and getattr(task.message, 'send_time', None):
-#                         await message_manager.queue_delayed_message(task)
-#                     # Finished tasks are deleted
-#                     else:
-#                         await task.stop_typing()
-#                         del task
-#                         await bot_status.schedule_go_idle()
-
-#                     # Queue cleanup
-#                     self.reset_current()        # Reset TaskManager() attributes
-#                     task_event.clear()     # Flag no longer processing task
-#                     current_queue = getattr(self, queue_name)
-#                     current_queue: asyncio.Queue|asyncio.PriorityQueue
-#                     current_queue.task_done()   # Accept next task
-
-#         except Exception as e:
-#             logging.error(f"An error occurred while processing a main task: {e}")
-#             traceback.print_exc()
-#             task_event.clear()
-#             client.loop.create_task(task_manager.process_tasks())
-
-#     def reset_current(self):
-#         self.current_task = None
-#         self.current_subtask = None
-#         self.current_channel = None
-#         self.current_user_name = None
-
-#     async def run_task(self, task:Task):
-#         try:
-#             self.current_task = task.name
-#             await task.run_task()
-#             # flows queue is populated in process_llm_payload_tags()
-#             if flows_queue.qsize() > 0:
-#                 await flows.run_flow_if_any(task.text, task.ictx)
-#         except TaskCensored:
-#             pass
-#         except Exception as e:
-#             logging.error(f"An error occurred while processing task {task.name}: {e}")
-#             traceback.print_exc()
-
-#     async def get_next_task(self):
-#         task = None
-#         queue_name = None
-
-#         if not self.message_queue.empty():
-#             # Condition to prevent always getting from one queue
-#             if self.prioritize_messages or self.task_queue.empty():
-#                 num, task = await self.message_queue.get()
-#                 task:Task
-#                 # initialize default values in Task
-#                 task.init_self_values()
-#                 task.message.unqueue_time = time.time()
-#                 log.info(f'Processing message #{num} by {task.user_name}.')
-#                 queue_name = 'message_queue'
-#                 self.prioritize_messages = False
-
-#         if task is None:
-#             self.prioritize_messages = True
-#             task:Optional[Task] = await self.task_queue.get()
-#             if task:
-#                 # initialize default values in Task
-#                 task.init_self_values()
-#                 await bot_status.come_online()
-#                 queue_name = 'task_queue'
-
-#         return task, queue_name
-
-# task_manager = TaskManager()
+task_manager = TaskManager(max_workers=config.task_queues.get('maximum_concurrency', 3))
 
 #################################################################
 ########################## QUEUED FLOW ##########################

@@ -33,13 +33,14 @@ discord:
     react_emojis: ['✅', '👏']             # for if 'emoji_specific: true'
     target_channel_id: 11111111111111111111 # bot requires message / msg management permissions
 
-# Your setup may allow more/less requests to be processed than default.
-task_queue_concurrency:
-  maximum_total: 3
-  message_queue: 1 # average message requests
-  history_queue: 1 # tasks that manage history at all
-  gen_queue: 1     # tasks that generate images / TTS
-  normal_queue: 3  # generic tasks
+# Your setup may allow more/less requests to be processed than default. Food for thought: using light/medium weight AI models can allow you to significantly increase these numbers.
+task_queues:
+  maximum_concurrency: 4 # maximum number of tasks that can run simultaneously at any given time
+  # NOTE: The bot will intelligently not process message/history tasks concurrently, if the requests are from the same channel.
+  message_queue_concurrency: 1 # Chat message requests (LLM Gen)
+  history_queue_concurrency: 1 # History management tasks (some lighter than others, including: regenerate / continue / reset convo / change char / edit history / etc)
+  gen_queue_concurrency: 1     # GPU/CPU intensive tasks (IMG Gen / model changes / etc)
+  normal_queue_concurrency: 3  # lightweight tasks
 
 # If enabled, user settings will be managed seperately for each server (excluding the settings here in config.yaml)
 per_server_settings:
