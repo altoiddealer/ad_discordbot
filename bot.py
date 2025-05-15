@@ -2163,10 +2163,14 @@ class TaskProcessing(TaskAttributes):
             # Start progress task and generation task concurrently
             images_task = asyncio.create_task(api.imggen.save_images_and_return(self.payload, self.params.mode))
             progress_task = asyncio.create_task(api.imggen.track_progress(discord_embeds=self.embeds))
-            # Wait for both tasks to complete
-            await asyncio.gather(images_task, progress_task)
-            # Get the list of images and copy of pnginfo after both tasks are done
+            # Wait for images_task to complete
             images, pnginfo = await images_task
+            # Once images_task is done, cancel progress_task
+            progress_task.cancel()
+            try:
+                await progress_task
+            except asyncio.CancelledError:
+                pass
         except Exception as e:
             e_prefix = f'[{api.imggen.name}] Error processing images'
             log.error(f'{e_prefix}: {e}')

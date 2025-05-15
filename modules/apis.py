@@ -13,7 +13,7 @@ from PIL import Image, PngImagePlugin
 import io
 import base64
 import copy
-from typing import Any, Dict, Tuple, List, Optional, Union, Type
+from typing import Any, Dict, Tuple, List, Optional, Union, Type, Callable, Awaitable, AsyncGenerator
 from modules.utils_shared import shared_path, patterns, load_file, get_api
 from modules.utils_misc import valueparser, deep_merge, is_base64, guess_format_from_headers, guess_format_from_data
 import modules.utils_processing as processing
@@ -473,7 +473,8 @@ class APIClient:
                         headers=ep_dict.get("headers", self.default_headers),
                         stream=ep_dict.get("stream", False),
                         timeout=ep_dict.get("timeout", self.default_timeout),
-                        retry=ep_dict.get("retry", 0))
+                        retry=ep_dict.get("retry", 0),
+                        concurrency_limit=ep_dict.get("concurrency_limit", None))
     
     def _get_self_ep_class(self):
         return Endpoint
@@ -924,68 +925,42 @@ class ImgGenClient(APIClient):
             return 0
 
     async def track_progress(self, discord_embeds):
-        if self.get_progress:
-            try:
-                eta_message = 'Not yet available'
-                await discord_embeds.send('img_gen', f'Waiting for {self.name} ...', f'{self.progress_bar(0)}\n**ETA**: {eta_message}')
-                await asyncio.sleep(1)
+        try:
+            if not self.get_progress:
+                await discord_embeds.send('img_gen', f'Generating an image with {self.name} ...', '')
+            else:
+                while self.get_progress.progress_queued > 0:
+                    await asyncio.sleep(1.0)
 
-                retry_count = 0
-                while retry_count < 5:
-                    progress_data = await self.get_progress.call()
-                    if progress_data and progress_data.get('progress', 0) > 0:
-                        break
-                    log.warning(f'Waiting for progress response from {self.name}, retrying in 1 second (attempt {retry_count + 1}/5)')
-                    await asyncio.sleep(1)
-                    retry_count += 1
-                else:
-                    log.error('Reached maximum retry limit')
-                    await discord_embeds.edit_or_send('img_gen', f'Error getting progress response from {self.name}.', 'Image generation will continue, but progress will not be tracked.')
-                    return
+                try:
+                    self.get_progress.progress_queued += 1
+                    
+                    eta_message = 'Not yet available'
 
-                last_progress = 0
-                stall_count = 0
-                progress = progress_data.get('progress', 0)
-                percent_complete = progress * 100
+                    await discord_embeds.send('img_gen', f'Waiting for {self.name} ...', f'{self.progress_bar(0)}\n**ETA**: {eta_message}')
 
-                while percent_complete < 100 and retry_count < 5:
-                    progress_data = await self.get_progress.call()
-                    if progress_data:
-                        progress = progress_data.get('progress', 0)
-                        percent_complete = progress * 100
-                        eta = progress_data.get('eta_relative', 0)
-
-                        if eta == 0:
-                            progress = 1.0
-                            percent_complete = 100
+                    async for update in self.get_progress.poll():
+                        progress = update["progress"]
+                        eta = update["eta"]
+                        stalled = update["stalled"]
 
                         if progress <= 0.01:
-                            title = f'Preparing to generate image ...'
+                            title = "Preparing to generate image ..."
                         else:
+                            comment = " (Stalled)" if stalled else ""
+                            title = f"Generating image: {progress * 100:.0f}%{comment}"
                             eta_message = f'{round(eta, 2)} seconds'
-                            comment = ''
-                            if progress == last_progress:
-                                stall_count += 1
-                                if stall_count > 2:
-                                    comment = ' (Stalled)'
-                            else:
-                                stall_count = 0
-                            title = f'Generating image: {percent_complete:.0f}%{comment}'
 
                         description = f"{self.progress_bar(progress)}\n**ETA**: {eta_message}"
-                        await discord_embeds.edit('img_gen', title, description)
 
-                        last_progress = progress
-                        await asyncio.sleep(1)
-                    else:
-                        log.warning(f'Connection closed with {self.name}, retrying in 1 second (attempt {retry_count + 1}/5)')
-                        await asyncio.sleep(1)
-                        retry_count += 1
+                        await discord_embeds.edit("img_gen", title, description)
+                finally:
+                    self.get_progress.progress_queued -= 1
 
-                await discord_embeds.delete('img_gen')
-
-            except Exception as e:
-                log.error(f'Error tracking {self.name} image generation progress: {e}')
+        except Exception as e:
+            log.error(f'Error tracking {self.name} image generation progress: {e}')
+        finally:
+            await discord_embeds.delete('img_gen')
 
     async def save_images_and_return(self, img_payload:dict, mode:str="txt2img") -> Tuple[List[Image.Image], Optional[PngImagePlugin.PngInfo]]:
         images = []
@@ -1095,7 +1070,9 @@ class Endpoint:
                  headers: Optional[Dict[str, str]] = None,
                  stream: bool = False,
                  timeout: int = 10,
-                 retry: int = 0):
+                 retry: int = 0,
+                 concurrency_limit: Optional[int] = None):
+
         self.client: Optional["APIClient"] = None
         self.name = name
         self.path = path
@@ -1108,6 +1085,8 @@ class Endpoint:
         self.stream = stream
         self.timeout = timeout
         self.retry = retry
+        self.queued = 0
+        self._semaphore = asyncio.Semaphore(concurrency_limit) if concurrency_limit else None
         if payload_config:
             self.init_payload(payload_config)
 
@@ -1351,19 +1330,23 @@ class Endpoint:
             if data_payload and isinstance(data_payload, dict):
                 data_payload = self.sanitize_payload(data_payload)
 
-        response = await self.client.request(
-            endpoint=self.path,
-            method=self.method,
-            json=json_payload,
-            data=data_payload,
-            params=params_payload,
-            files=files_payload,
-            headers=headers,
-            timeout=timeout,
-            retry=retry,
-            response_type=response_type,
-            **kwargs
-        )
+        request_kwargs = {"endpoint": self.path,
+                          "method": self.method,
+                          "json": json_payload,
+                          "data": data_payload,
+                          "params": params_payload,
+                          "files": files_payload,
+                          "headers": headers,
+                          "timeout": timeout,
+                          "retry": retry,
+                          "response_type": response_type,
+                          **kwargs}
+
+        if self._semaphore:
+            async with self._semaphore:  # Waits if limit is reached
+                response = await self.client.request(**request_kwargs)
+        else:
+            response = await self.client.request(**request_kwargs)
 
         if not isinstance(response, APIResponse):
             return response
@@ -1388,7 +1371,66 @@ class Endpoint:
             results = await handler.run()
 
         return results
-    
+
+    async def poll(self,
+                # progress_fetcher: Callable[[], Awaitable[dict]],
+                max_retries: int = 5,
+                interval: float = 1.0,
+                progress_key: str = "progress",
+                eta_key: str = "eta_relative",
+                **kwargs) -> AsyncGenerator[dict, None]:
+        """
+        General-purpose progress poller.
+        Yields progress dicts (e.g., {progress: 0.3, eta_relative: 12.5}) from the `progress_fetcher` function.
+
+        :param progress_fetcher: Callable that fetches progress data.
+        :param max_retries: Max retries on failure or missing progress.
+        :param interval: Wait time between polls (seconds).
+        :param progress_key: Key in returned dict to use for progress.
+        :param eta_key: Key in returned dict to use for ETA.
+        :yield: dict containing current progress data.
+        """
+        retry_count = 0
+        last_progress = 0
+        stall_count = 0
+
+        while retry_count < max_retries:
+            try:
+                progress_data = await self.call(**kwargs) # progress_fetcher()
+            except Exception as e:
+                log.warning(f"[{self.name}] Progress fetcher failed: {e}")
+                retry_count += 1
+                await asyncio.sleep(interval)
+                continue
+
+            if not progress_data:
+                retry_count += 1
+                await asyncio.sleep(interval)
+                continue
+
+            progress = progress_data.get(progress_key, 0.0)
+            eta = progress_data.get(eta_key, 0)
+
+            # Handle progress logic
+            if progress == last_progress:
+                stall_count += 1
+            else:
+                stall_count = 0
+
+            yield {
+                "progress": progress,
+                "eta": eta,
+                "stalled": stall_count > 2,
+                "raw": progress_data,
+            }
+
+            if progress >= 1.0:
+                break
+
+            last_progress = progress
+            await asyncio.sleep(interval)
+
+
     async def return_main_data(self, response):
         pass
 
@@ -1525,6 +1567,7 @@ class ImgGenEndpoint(Endpoint):
         self.pnginfo_result_key:Optional[str] = None
         self.pnginfo_image_key:Optional[str] = None
         self.control_types_key:Optional[str] = None
+        self.progress_queued = 0
 
     async def return_main_data(self, response):
         pass
