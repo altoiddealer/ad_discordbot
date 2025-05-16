@@ -1288,26 +1288,35 @@ class TaskProcessing(TaskAttributes):
         except Exception as e:
             log.error(f"An error occurred while trying to send extra results: {e}")
 
-    def handle_api_result(self: Union["Task", "Tasks"], api_result: str):
-        target_path = Path(api_result)
-        # If the string looks like a real file path and exists
-        if target_path.exists():
-            target_path = target_path.resolve()
-            base_dir = Path(shared_path.bot_root_dir).resolve()
+    def handle_api_results(self: Union["Task", "Tasks"], api_results):
+        # helper
+        def handle_result(api_result):
+            if not isinstance(api_result, str):
+                log.warning('Cannot send API results to Discord (bot currently only supports string, or list of strings)')
+                return
+            target_path = Path(api_result)
+            # If path to a file
+            if target_path.exists():
+                target_path = target_path.resolve()
+                base_dir = Path(shared_path.bot_root_dir).resolve()
 
-            if base_dir not in target_path.parents and base_dir != target_path:
-                raise ValueError("The file path is outside the allowed output directory.")
+                if base_dir not in target_path.parents and base_dir != target_path:
+                    raise ValueError("The file path is outside the allowed output directory.")
 
-            if target_path.is_file():
-                if target_path.suffix.lower() in [".mp3", ".wav"]:
-                    self.extra_audio.append(str(target_path))
-                else:
-                    self.extra_files.append(str(target_path))
+                if target_path.is_file():
+                    if target_path.suffix.lower() in [".mp3", ".wav"]:
+                        self.extra_audio.append(str(target_path))
+                    else:
+                        self.extra_files.append(str(target_path))
             else:
-                self.extra_text.append(str(target_path))
-        else:
-            # Fallback: Treat it as literal text, not a path
-            self.extra_text.append(api_result)
+                # Text to send to channel
+                self.extra_text.append(api_result)
+
+        if isinstance(api_results, str):
+            handle_result(api_results)
+        elif isinstance(api_results, list):
+            for result in api_results:
+                handle_result(result)
 
     async def fix_llm_payload(self:Union["Task","Tasks"]):
         # Fix llmgen payload by adding any missing required settings
@@ -1562,10 +1571,7 @@ class TaskProcessing(TaskAttributes):
                                 log.warning(f'[TAGS] Endpoint not found for triggered "call_api"')
                             else:
                                 api_result = await endpoint.call(**updated_api_config)
-                                if not isinstance(api_result, str):
-                                    log.warning(f'[TAGS] Endpoint not found for triggered "call_api"')
-                                else:
-                                    self.handle_api_result(api_result)
+                                self.handle_api_results(api_result)
                 if 'persist' in tag_dict:
                     if not tag_name:
                         log.warning(f"[TAGS] A persistent {tag_print} was matched, but it is missing a required 'name' parameter. Cannot make tag persistent.")
@@ -3144,11 +3150,8 @@ class Tasks(TaskProcessing):
         else:
             api_result = await endpoint.call(**updated_api_config)
             if api_result:
-                if not isinstance(api_result, str):
-                    log.warning(f'Received an API result in a currently unsupported format (must be a string ex: filepath, or text)')
-                else:
-                    self.handle_api_result(api_result)
-                    await self.send_extra_results()
+                self.handle_api_results(api_result)
+                await self.send_extra_results()
 
 
     #################################################################
