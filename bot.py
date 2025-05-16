@@ -1568,10 +1568,11 @@ class TaskProcessing(TaskAttributes):
                             await task_manager.queue_task(api_task, queue_to)
                         else:
                             endpoint, updated_api_config = api.get_endpoint_from_config(api_config)
-                            if not endpoint:
+                            if not isinstance(endpoint, Endpoint):
                                 log.warning(f'[TAGS] Endpoint not found for triggered "call_api"')
                             else:
-                                api_result = await endpoint.call(**updated_api_config)
+                                formatted_payload = self.format_api_payload(updated_api_config)
+                                api_result = await endpoint.call(**formatted_payload)
                                 self.handle_api_results(api_result)
                 if 'persist' in tag_dict:
                     if not tag_name:
@@ -2124,7 +2125,9 @@ class TaskProcessing(TaskAttributes):
                     formatted_history = f'"{self.user_name}:" {user_hmessage}\n"{last_character}:" {llm_message}\n'
                     matched_syntax = f"{prefix}_{index}"
                     formatted_prompt = formatted_prompt.replace(f"{{{matched_syntax}}}", formatted_history)
-            formatted_prompt = formatted_prompt.replace('{last_image}', '__temp/temp_img_0.png')
+            # If {last_image} is a value for any image key
+            last_image_fp = os.path.join(shared_path.old_user_images, '__temp/temp_img_0.png')
+            formatted_prompt = formatted_prompt.replace('{last_image}', f'{last_image_fp}')
             return formatted_prompt
         except Exception as e:
             log.error(f'An error occurred while formatting prompt with recent messages: {e}')
@@ -3154,13 +3157,33 @@ class Tasks(TaskProcessing):
     #################################################################
     ############################ API TASK ###########################
     #################################################################
+    def format_api_payload(self: "Task", api_payload: dict):
+        def recursive_format(value):
+            if isinstance(value, str):
+                formatted = self.format_prompt_with_recent_output(value)
+                if formatted != value:
+                    formatted = valueparser.parse_value(formatted)
+                return formatted
+            elif isinstance(value, dict):
+                return {k: recursive_format(v) for k, v in value.items()}
+            elif isinstance(value, list):
+                return [recursive_format(item) for item in value]
+            elif isinstance(value, tuple):
+                return tuple(recursive_format(item) for item in value)
+            else:
+                return value
+
+        return recursive_format(api_payload)
+
+
     async def api_task(self:"Task"):
         api_config = getattr(self, 'api_config')
         endpoint, updated_api_config = api.get_endpoint_from_config(api_config)
-        if not endpoint:
+        if not isinstance(endpoint, Endpoint):
             log.warning(f'Endpoint not found for triggered "call_api"')
         else:
-            api_result = await endpoint.call(**updated_api_config)
+            formatted_payload = self.format_api_payload(updated_api_config)
+            api_result = await endpoint.call(**formatted_payload)
             if api_result:
                 self.handle_api_results(api_result)
                 await self.send_extra_results()
