@@ -230,23 +230,58 @@ class API:
             return None
 
         return api_client
-    
-    def get_endpoint_for(self, api_client:"APIClient", endpoint_name:str, strict=False) -> "Endpoint":
-        endpoint = api_client.endpoints.get(endpoint_name)
-        if not endpoint:
-            if strict:
-                raise ValueError(f'[{api_client.name}] Endpoint "{endpoint_name}" not found or invalid')
-            else:
-                log.warning(f'[{api_client.name}] Endpoint "{endpoint_name}" not found or invalid')
-            return None
-        return endpoint
 
     def get_client_and_endpoint(self, endpoint_name:str, client_type:str|None=None, client_name:str|None=None, strict=False) -> Tuple["APIClient", "Endpoint"]:
         api_client = self.get_client(client_type=client_type, client_name=client_name, strict=strict)
         if not api_client:
             return None, None
-        endpoint = self.get_endpoint_for(api_client=api_client, endpoint_name=endpoint_name, strict=strict)
+        endpoint = api_client.get_endpoint(endpoint_name=endpoint_name, strict=strict)
         return api_client, endpoint
+
+    def get_endpoint_from_config(self, config: dict) -> Tuple[Optional["Endpoint"], dict]:
+        client_type = str(config.pop('client_type', '') or '').lower()
+        client_name = str(config.pop('client_name', '') or '').lower()
+        endpoint_type = str(config.pop('endpoint_type', '') or '').lower()
+        endpoint_name = str(config.pop('endpoint_name', '') or '').lower()
+        # Main client types
+        type_to_client = {'imggen': self.imggen,
+                          'textgen': self.textgen,
+                          'ttsgen': self.ttsgen}
+        # Step 1: Try using client_type (specialized client)
+        if client_type in type_to_client:
+            client = type_to_client[client_type]
+            # 1a: Exact match by endpoint_name
+            if endpoint_name:
+                ep = getattr(client, endpoint_name, None)
+                if isinstance(ep, Endpoint):
+                    return ep, config
+            # 1b: Fallback: match by endpoint_type
+            if endpoint_type:
+                for attr in dir(client):
+                    ep = getattr(client, attr, None)
+                    if isinstance(ep, Endpoint) and endpoint_type in attr.lower():
+                        return ep, config
+        # Step 2: Try using client_name
+        if client_name and client_name in self.clients:
+            client = self.clients[client_name]
+            if endpoint_name and endpoint_name in client.endpoints:
+                return client.endpoints[endpoint_name], config
+            if endpoint_type:
+                for ep in client.endpoints.values():
+                    if endpoint_type in ep.name.lower():
+                        return ep, config
+        # Step 3: Search all clients if only endpoint_name or endpoint_type is provided
+        for client in self.clients.values():
+            # Match exact name
+            if endpoint_name and endpoint_name in client.endpoints:
+                return client.endpoints[endpoint_name], config
+            # Match by type
+            if endpoint_type:
+                for ep in client.endpoints.values():
+                    if endpoint_type in ep.name.lower():
+                        return ep, config
+        # Not found
+        return None, config
 
 
 class WebSocketConnectionConfig:
@@ -408,6 +443,16 @@ class APIClient:
 
     async def main_setup_tasks(self):
         pass
+
+    def get_endpoint(self, endpoint_name:str, strict=False) -> "Endpoint":
+        endpoint = self.endpoints.get(endpoint_name)
+        if not endpoint:
+            if strict:
+                raise ValueError(f'[{self.name}] Endpoint "{endpoint_name}" not found or invalid')
+            else:
+                log.warning(f'[{self.name}] Endpoint "{endpoint_name}" not found or invalid')
+            return None
+        return endpoint
 
     async def toggle(self) -> str | None:
         try:
@@ -1837,7 +1882,7 @@ class StepExecutor:
         api:API = await get_api()
         client_name, endpoint_name = self.resolve_api_names(config, 'call_api')
         api_client:APIClient = api.get_client(client_name=client_name, strict=True)
-        endpoint:Endpoint = api.get_endpoint_for(api_client=api_client, endpoint_name=endpoint_name, strict=True)
+        endpoint:Endpoint = api_client.get_endpoint(endpoint_name=endpoint_name, strict=True)
 
         input = config.get("input", data)
         payload_type = config.get("payload_type", "any")

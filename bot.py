@@ -691,7 +691,7 @@ class VoiceClients:
     def __init__(self):
         self.guild_vcs:dict = {}
         self.expected_state:dict = {}
-        self.queued_tts:list = []
+        self.queued_audio:list = []
 
     def is_connected(self, guild_id):
         if self.guild_vcs.get(guild_id):
@@ -761,19 +761,19 @@ class VoiceClients:
             except Exception:
                 pass
         # Check if there are queued tasks
-        if self.queued_tts:
+        if self.queued_audio:
             # Pop the first task from the queue and play it
-            next_file = self.queued_tts.pop(0)
+            next_file = self.queued_audio.pop(0)
             source = discord.FFmpegPCMAudio(next_file)
             self.guild_vcs[guild_id].play(source, after=lambda e: self.after_playback(guild_id, next_file, e))
 
     async def play_in_voice_channel(self, guild_id, file):
         if not self.guild_vcs.get(guild_id):
-            log.warning(f"[Voice Clients] TTS response detected, but bot is not connected to a voice channel in guild ID {guild_id}")
+            log.warning(f"[Voice Clients] Tried playing an audio file, but voice channel not connected for guild ID {guild_id}")
             return
         # Queue the task if audio is already playing
         if self.guild_vcs[guild_id].is_playing():
-            self.queued_tts.append(file)
+            self.queued_audio.append(file)
         else:
             # Otherwise, play immediately
             source = discord.FFmpegPCMAudio(file)
@@ -784,13 +784,13 @@ class VoiceClients:
             guild_vc:discord.VoiceClient = self.guild_vcs[guild_id]
             if action == 'stop' and guild_vc.is_playing():
                 guild_vc.stop()
-                log.info(f"TTS playback was stopped for guild {guild_id}")
+                log.info(f"Audio playback was stopped for guild {guild_id}")
             elif (action == 'pause' or action == 'toggle') and guild_vc.is_playing():
                 guild_vc.pause()
-                log.info(f"TTS playback was paused in guild {guild_id}")
+                log.info(f"Audio playback was paused in guild {guild_id}")
             elif (action == 'resume' or action == 'toggle') and guild_vc.is_paused():
                 guild_vc.resume()
-                log.info(f"TTS playback resumed in guild {guild_id}")
+                log.info(f"Audio playback resumed in guild {guild_id}")
 
     def detect_format(self, file_path):
         try:
@@ -805,8 +805,8 @@ class VoiceClients:
             pass
         return None
 
-    async def upload_tts_file(self, channel:discord.TextChannel, tts_resp:str|None=None, bot_hmessage:HMessage|None=None):
-        file = tts_resp
+    async def upload_audio_file(self, channel:discord.TextChannel, audio_fp:str, bot_hmessage:HMessage|None=None):
+        file = audio_fp
         filename = os.path.basename(file)
         original_ext = os.path.splitext(filename)[1]
         correct_ext = original_ext
@@ -829,7 +829,7 @@ class VoiceClients:
             elif file.endswith('mp3'):
                 audio = AudioSegment.from_mp3(file)
             else:
-                log.error('TTS generated unsupported file format:', file)
+                log.error('Recieved invalid audio file format:', file)
             audio.export(buffer, format="mp3", bitrate=f"{bit_rate}k")
             mp3_file = File(buffer, filename=mp3_filename)
             
@@ -837,15 +837,15 @@ class VoiceClients:
             # if bot_hmessage:
             #     bot_hmessage.update(audio_id=sent_message.id)
 
-    async def process_tts_resp(self, ictx:CtxInteraction, tts_resp:Optional[str]=None, bot_hmessage:Optional[HMessage]=None):
+    async def process_audio_file(self, ictx:CtxInteraction, audio_fp:str, bot_hmessage:Optional[HMessage]=None):
         play_mode = int(config.ttsgen.get('play_mode', 0))
         # Upload to interaction channel
         if play_mode > 0:
-            await self.upload_tts_file(ictx.channel, tts_resp, bot_hmessage)
+            await self.upload_audio_file(ictx.channel, audio_fp, bot_hmessage)
         # Play in voice channel
-        connected = self.guild_vcs.get(ictx.guild.id)
-        if not is_direct_message(ictx) and play_mode != 1 and self.guild_vcs.get(ictx.guild.id):
-            await bg_task_queue.put(self.play_in_voice_channel(ictx.guild.id, tts_resp)) # run task in background
+        is_connected = self.guild_vcs.get(ictx.guild.id)
+        if is_connected and play_mode != 1 and not is_direct_message(ictx):
+            await bg_task_queue.put(self.play_in_voice_channel(ictx.guild.id, audio_fp)) # run task in background
         if bot_hmessage:
             bot_hmessage.update(spoken=True)
 
@@ -1187,7 +1187,7 @@ class TaskProcessing(TaskAttributes):
     async def send_response_chunk(self:Union["Task","Tasks"], resp_chunk:str):
         # Process most recent TTS response (if any)
         if self.tts_resps:
-            await voice_clients.process_tts_resp(self.ictx, self.tts_resps[-1], self.bot_hmessage)
+            await voice_clients.process_audio_file(self.ictx, self.tts_resps[-1], self.bot_hmessage)
         # @mention non-consecutive users
         mention_resp = mentions.update_mention(self.user.mention, resp_chunk)
         # send responses to channel - reference a message if applicable
@@ -1201,7 +1201,7 @@ class TaskProcessing(TaskAttributes):
         # Process any TTS response
         streamed_tts = getattr(self.params, 'streamed_tts', False)
         if self.tts_resps and not streamed_tts:
-            await voice_clients.process_tts_resp(self.ictx, self.tts_resps[0], self.bot_hmessage)
+            await voice_clients.process_audio_file(self.ictx, self.tts_resps[0], self.bot_hmessage)
         # Send text responses
         if self.bot_hmessage and self.params.should_send_text:
             # Send single reply if message was not already streamed in chunks
@@ -1229,10 +1229,39 @@ class TaskProcessing(TaskAttributes):
             # Apply any reactions applicable to message
             if config.discord['history_reactions'].get('enabled', True):
                 await bg_task_queue.put(apply_reactions_to_messages(client.user, self.ictx, self.bot_hmessage, msg_ids_to_react))
-        # send any user images
-        files_to_send = self.files_to_send
-        if files_to_send:
-            await self.channel.send(file=files_to_send) if len(files_to_send) == 1 else await self.channel.send(files=files_to_send)
+        # send any extra content
+        await bg_task_queue.put(self.send_extra_results())
+
+    async def send_extra_results(self:Union["Task","Tasks"]):
+        try:
+            if self.extra_text:
+                header = "**__Extra text__**:\n"
+                delimiter = "\n--------------------------------------------\n"
+                joined_text = delimiter.join(self.extra_text)
+                all_extra_text = header + joined_text
+                await send_long_message(self.channel, all_extra_text)
+            if self.extra_audio:
+                for audio_fp in self.extra_audio:
+                    await voice_clients.process_audio_file(self.ictx, audio_fp)
+            if self.extra_files:
+                await self.channel.send(file=self.extra_files) if len(self.extra_files) == 1 else await self.channel.send(files=self.extra_files)
+        except Exception as e:
+            log.error(f"An error occurred while trying to send extra results: {e}")
+
+    def handle_api_result(self: Union["Task", "Tasks"], api_result: str):
+        base_dir = Path(shared_path.output_dir).resolve()
+        target_path = Path(api_result).resolve()
+        # Ensure the path is within the allowed output directory
+        if base_dir not in target_path.parents and base_dir != target_path:
+            raise ValueError("The file path is outside the '/user/output' directory.")
+        # Check if it's a file or a directory
+        if target_path.is_file():
+            if target_path.suffix.lower() in [".mp3", ".wav"]:
+                self.extra_audio.append(str(target_path))
+            else:
+                self.extra_files.append(str(target_path))
+        else:
+            self.extra_text.append(str(target_path))
 
     async def fix_llm_payload(self:Union["Task","Tasks"]):
         # Fix llmgen payload by adding any missing required settings
@@ -1468,8 +1497,29 @@ class TaskProcessing(TaskAttributes):
                     user_image_file = str(tag_dict.pop('send_user_image'))
                     user_image_args = self.get_image_tag_args('User image', user_image_file, key=None, set_dir=None)
                     user_image = discord.File(user_image_args)
-                    self.files_to_send.append(user_image)
+                    self.extra_files.append(user_image)
                     log.info(f'[TAGS] Sending user image for matched {tag_print}')
+                if 'call_api' in tag_dict:
+                    api_config = tag_dict.pop('call_api')
+                    if not isinstance(api_config, dict):
+                        log.error('[TAGS] A "call_api" tag was triggered, but it must be in a dict format.')
+                    else:
+                        queue_to = api_config.pop('queue_to', 'gen_queue')
+                        if queue_to:
+                            log.info('An API task was triggered, created and queued.')
+                            await self.embeds.send('system', title='Processing an API Request', description='An API task was triggered, created and queued.', delete_after=5)
+                            api_task = self.clone('api', self.ictx, ignore_list=['payload'], api_config=api_config)
+                            await task_manager.queue_task(api_task, queue_to)
+                        else:
+                            endpoint, updated_api_config = api.get_endpoint_from_config(api_config)
+                            if not endpoint:
+                                log.warning(f'[TAGS] Endpoint not found for triggered "call_api"')
+                            else:
+                                api_result = await endpoint.call(**updated_api_config)
+                                if not isinstance(api_result, str):
+                                    log.warning(f'[TAGS] Endpoint not found for triggered "call_api"')
+                                else:
+                                    self.handle_api_result(api_result)
                 if 'persist' in tag_dict:
                     if not tag_name:
                         log.warning(f"[TAGS] A persistent {tag_print} was matched, but it is missing a required 'name' parameter. Cannot make tag persistent.")
@@ -3038,6 +3088,24 @@ class Tasks(TaskProcessing):
         await self.message_post_llm_task()
 
     #################################################################
+    ############################ API TASK ###########################
+    #################################################################
+    async def api_task(self:"Task"):
+        api_config = getattr(self, 'api_config')
+        endpoint, updated_api_config = api.get_endpoint_from_config(api_config)
+        if not endpoint:
+            log.warning(f'Endpoint not found for triggered "call_api"')
+        else:
+            api_result = await endpoint.call(**updated_api_config)
+            if api_result:
+                if not isinstance(api_result, str):
+                    log.warning(f'Received an API result in a currently unsupported format (must be a string ex: filepath, or text)')
+                else:
+                    self.handle_api_result(api_result)
+                    await self.send_extra_results()
+
+
+    #################################################################
     ######################### CONTINUE TASK #########################
     #################################################################
     async def continue_task(self:"Task"):
@@ -3137,7 +3205,7 @@ class Tasks(TaskProcessing):
 
             # process any tts resp
             # if self.tts_resps:
-            #     await voice_clients.process_tts_resp(self.ictx, self.tts_resps[0], updated_bot_hmessage)
+            #     await voice_clients.process_audio_file(self.ictx, self.tts_resps[0], updated_bot_hmessage)
 
         except TaskCensored:
             raise
@@ -3477,7 +3545,7 @@ class Tasks(TaskProcessing):
             await self.embeds.delete('system') # delete embed
             if not self.bot_hmessage:
                 return
-            await voice_clients.process_tts_resp(self.ictx, self.tts_resps[0], self.bot_hmessage)
+            await voice_clients.process_audio_file(self.ictx, self.tts_resps[0], self.bot_hmessage)
             # remove api key (don't want to share this to the world!)
             for sub_dict in tts_args.values():
                 if 'api_key' in sub_dict:
@@ -3714,9 +3782,8 @@ class Tasks(TaskProcessing):
                     await self.embeds.send('img_send', f"{self.user_name} requested an image:", '', footer=imgcmd_message, nonembed_text=original_prompt)
                 else:
                     await self.channel.send(original_prompt)
-            files_to_send = self.files_to_send
-            if files_to_send:
-                await self.channel.send(file=files_to_send) if len(files_to_send) == 1 else await self.channel.send(files=files_to_send)
+            # send any extra content
+            await bg_task_queue.put(self.send_extra_results())
             # If switching back to original Img model
             if should_swap:
                 swap_params.imgmodel['mode'] = 'swap_back'
@@ -3930,7 +3997,9 @@ class Task(Tasks):
         self.settings: Settings      = kwargs.pop('settings', None)
         self.istyping: IsTyping      = kwargs.pop('istyping', None)
         self.message: Message        = kwargs.pop('message', None)
-        self.files_to_send: list     = kwargs.pop('files_to_send', None)
+        self.extra_text: list        = kwargs.pop('extra_text', None)
+        self.extra_audio: list       = kwargs.pop('extra_audio', None)
+        self.extra_files: list       = kwargs.pop('extra_files', None)
 
         # Dynamically assign custom keyword arguments as attributes
         for key, value in kwargs.items():
@@ -3970,17 +4039,19 @@ class Task(Tasks):
             if self.name not in non_history_tasks:
                 history_char, history_mode = get_char_mode_for_history(settings=self.settings)
                 if is_dm:
-                    self.local_history   = self.local_history if self.local_history else bot_history.get_history_for(self.ictx.channel.id, history_char, history_mode).dont_save()
+                    self.local_history = self.local_history if self.local_history else bot_history.get_history_for(self.ictx.channel.id, history_char, history_mode).dont_save()
                 else:
-                    self.local_history   = self.local_history if self.local_history else bot_history.get_history_for(self.ictx.channel.id, history_char, history_mode)
+                    self.local_history = self.local_history if self.local_history else bot_history.get_history_for(self.ictx.channel.id, history_char, history_mode)
         # Fall back to main bot settings
         if not self.settings:
             self.settings = bot_settings
         # Typing Task
-        self.istyping:IsTyping       = self.istyping if self.istyping else None
+        self.istyping:IsTyping  = self.istyping if self.istyping else None
         # Extra attributes/methods for regular message requests
-        self.message:Message         = self.message if self.message else None
-        self.files_to_send:list      = self.files_to_send if self.files_to_send else []
+        self.message:Message    = self.message if self.message else None
+        self.extra_text:list    = self.extra_text if self.extra_text else []
+        self.extra_audio:list   = self.extra_audio if self.extra_audio else []
+        self.extra_files:list   = self.extra_files if self.extra_files else []
 
     def get_channel_id(self, default=None) -> int|None:
         channel = getattr(self.ictx, 'channel')
