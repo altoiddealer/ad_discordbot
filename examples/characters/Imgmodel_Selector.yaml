@@ -64,4 +64,8 @@ state:
   do_sample: true
   penalty_alpha: 0
   truncation_length: 2048
-  custom_stopping_strings: '":","### Assistant","### Human","</END>","client.user.display_name"'
+  # Stopping strings you may include which this bot will dynamically replace:
+  # "name1" (the user's name)
+  # "name2" (the character's name)
+  custom_stopping_strings: ["### Assistant","### Human","</END>","\nname1:","\nname2:"]
+  stopping_strings: ["### Assistant","### Human","</END>","\nname1:","\nname2:"]

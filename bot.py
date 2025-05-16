@@ -1710,24 +1710,35 @@ class TaskProcessing(TaskAttributes):
                 log.error(f'An error occurred while applying Server Mode: {e}')
 
     # Add dynamic stopping strings
-    def extra_stopping_strings(self:Union["Task","Tasks"]):
+    def extra_stopping_strings(self: Union["Task", "Tasks"]):
         try:
             name1_value = self.payload['state']['name1']
             name2_value = self.payload['state']['name2']
-            # Check and replace in custom_stopping_strings
-            custom_stopping_strings = self.payload['state']['custom_stopping_strings']
-            if "name1" in custom_stopping_strings:
-                custom_stopping_strings = custom_stopping_strings.replace("name1", name1_value)
-            if "name2" in custom_stopping_strings:
-                custom_stopping_strings = custom_stopping_strings.replace("name2", name2_value)
-            self.payload['state']['custom_stopping_strings'] = custom_stopping_strings
-            # Check and replace in stopping_strings
-            stopping_strings = self.payload['state']['stopping_strings']
-            if "name1" in stopping_strings:
-                stopping_strings = stopping_strings.replace("name1", name1_value)
-            if "name2" in stopping_strings:
-                stopping_strings = stopping_strings.replace("name2", name2_value)
-            self.payload['state']['stopping_strings'] = stopping_strings
+
+            # Replace "name1" and "name2" in custom_stopping_strings list
+            custom_stopping_strings = self.payload['state'].get('custom_stopping_strings', [])
+            if custom_stopping_strings:
+                if not isinstance(custom_stopping_strings, list):
+                    log.warning("'custom_stopping_strings' must be a list (the value will be ignored)")
+                else:
+                    custom_stopping_strings = [
+                        s.replace("name1", name1_value).replace("name2", name2_value)
+                        for s in custom_stopping_strings
+                    ]
+                    self.payload['state']['custom_stopping_strings'] = custom_stopping_strings
+
+            # Replace "name1" and "name2" in stopping_strings list
+            stopping_strings = self.payload['state'].get('stopping_strings', [])
+            if stopping_strings:
+                if not isinstance(stopping_strings, list):
+                    log.warning("'stopping_strings' must be a list (the value will be ignored)")
+                else:
+                    stopping_strings = [
+                        s.replace("name1", name1_value).replace("name2", name2_value)
+                        for s in stopping_strings
+                    ]
+                    self.payload['state']['stopping_strings'] = stopping_strings
+
         except Exception as e:
             log.error(f'An error occurred while updating stopping strings: {e}')
 
@@ -1873,21 +1884,21 @@ class TaskProcessing(TaskAttributes):
                         self.stream_tts = False
                         log.error(f"TTS Streaming is confirmed non-functional for {tgwui.tts.extension} (for now), so this is being disabled.")
                     self.streamed_tts:bool       = False
-                    if self.stream_tts and not bot_database.was_warned('stream_tts'):
+                    if tts_is_enabled(and_online=True) and self.stream_tts and not bot_database.was_warned('stream_tts'):
                         char_name = bot_settings.get_last_setting_for("last_character", task.ictx)
                         self.warn_stream_tts(char_name)
                 
                 # Only try streaming TTS if TTS enabled and responses can be chunked
                 def warn_stream_tts(self, char_name:str):
-                    log.warning(f"The bot will try streaming TTS responses ('{char_name}' is configured to stream replies).")
-                    log.info(f"If you experience issues, consider disabling TTSGen setting 'tts_streaming'")
-                    log.info(f"Consider changing {char_name}'s 'chance_to_stream_reply' behavior to '0.0', or disable TTS.")
-                    log.info(f"Report any Issues (https://github.com/altoiddealer/ad_discordbot/issues)")
+                    log.info(f"The bot will try streaming TTS responses ('{char_name}' is configured to stream replies).")
+                    log.info(f"· If you experience issues, consider disabling TTSGen setting 'tts_streaming'")
+                    log.info(f"· Consider changing {char_name}'s 'chance_to_stream_reply' behavior to '0.0', or disable TTS.")
+                    log.info(f"· Report any Issues (https://github.com/altoiddealer/ad_discordbot/issues)")
                     if tgwui_enabled:
                         if 'alltalk' in tgwui.tts.extension:
                             log.warning("**The application MAY hang/crash IF using 'alltalk_tts' in low VRAM mode**")
-                        log.info(f"If you have issues, ensure your TTS client is updated ({tgwui.tts.extension})")
-                        log.info("This MAY have unexpected side effects, particularly for other running TGWUI extensions (if any).")
+                        log.info(f"· If you have issues, ensure your TTS client is updated ({tgwui.tts.extension})")
+                        log.info("· This MAY have unexpected side effects, particularly for other running TGWUI extensions (if any).")
                     bot_database.update_was_warned('stream_tts')
 
                 async def try_chunking(self, resp:str):
@@ -6694,7 +6705,7 @@ class LLMState(SettingsBase):
             'character_menu': '',
             'chat_generation_attempts': 1,
             'chat_prompt_size': 2048,
-            'custom_stopping_strings': '',
+            'custom_stopping_strings': [],
             'custom_system_message': '',
             'custom_token_bans': '',
             'do_sample': True,
@@ -6741,7 +6752,7 @@ class LLMState(SettingsBase):
             'smoothing_factor': 0,
             'static_cache': False,
             'stop_at_newline': False,
-            'stopping_strings': '',
+            'stopping_strings': [],
             'stream': True,
             'temperature': 0.98,
             'temperature_last': False,
