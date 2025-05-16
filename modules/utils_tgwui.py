@@ -360,7 +360,6 @@ def custom_chatbot_wrapper(text, state, regenerate=False, _continue=False, loadi
 
     visible_text = None
     stopping_strings = get_stopping_strings(state)
-    print("stopping_strings:", stopping_strings)
     state['stream'] = state['stream'] if stream_tts == False else True # CUSTOM FOR BOT. FORCES STREAMING.
     is_stream = state['stream']
 
