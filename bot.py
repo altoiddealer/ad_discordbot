@@ -4054,7 +4054,7 @@ class Task(Tasks):
         self.extra_files:list   = self.extra_files if self.extra_files else []
 
     def get_channel_id(self, default=None) -> int|None:
-        channel = getattr(self.ictx, 'channel')
+        channel = getattr(self.ictx, 'channel', None)
         return getattr(channel, 'id', default)
 
 
