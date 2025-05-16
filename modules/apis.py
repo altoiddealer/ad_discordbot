@@ -30,8 +30,16 @@ class APISettings():
     def get_config_for(self, section: str, default=None) -> dict:
         return self.main_settings.get(section, default or {})
 
-    def get_workflow(self, workflow_name: str, default=None) -> dict:
-        return self.workflows.get(workflow_name, default or {})
+    def get_workflow_steps_for(self, workflow_name:str) -> dict:
+        workflow = self.workflows.get(workflow_name)
+        if not workflow:
+            raise RuntimeError(f'[API Workflows] Workflow not found "{workflow_name}"')
+        if not isinstance(workflow, dict):
+            raise ValueError(f'[API Workflows] Invalid format for workflow "{workflow_name}" (must be dict)')
+        workflow_steps = workflow.get('steps')
+        if not isinstance(workflow_steps, list):
+            raise ValueError(f'[API Workflows] Invalid structure for workflow "{workflow_name}" (include a "step" key)')
+        return workflow_steps
 
     def collect_presets(self, presets_list):
         for preset in presets_list:
@@ -292,7 +300,13 @@ class API:
                         return ep, config
         # Not found
         return None, config
-
+    
+    async def run_workflow(self, workflow_name:str, input=None):
+        # TODO Resolve Input
+        workflow_steps = apisettings.get_workflow_steps_for(workflow_name)
+        log.info(f'[API Workflows] Running "{workflow_name}" with ({len(workflow_steps)} processing steps)')
+        handler = StepExecutor(steps=workflow_steps, input=input)
+        return await handler.run()
 
 class WebSocketConnectionConfig:
     def __init__(self, **kwargs):

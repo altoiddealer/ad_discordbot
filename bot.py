@@ -38,7 +38,8 @@ from functools import partial
 from modules.utils_files import load_file, merge_base, save_yaml_file  # noqa: F401
 from modules.utils_shared import bot_args, is_tgwui_integrated, shared_path, bg_task_queue, task_event, flows_queue, flows_event, patterns, bot_emojis, config, bot_database, get_api
 from modules.database import StarBoard, Statistics, BaseFileMemory
-from modules.utils_misc import check_probability, fix_dict, deep_merge, update_dict, sum_update_dict, update_dict_matched_keys, random_value_from_range, convert_lists_to_tuples, get_time, format_time, format_time_difference, get_normalized_weights  # noqa: F401
+from modules.utils_misc import check_probability, fix_dict, deep_merge, update_dict, sum_update_dict, update_dict_matched_keys, random_value_from_range, convert_lists_to_tuples, \
+    get_time, format_time, format_time_difference, get_normalized_weights, valueparser  # noqa: F401
 from modules.utils_discord import Embeds, guild_only, guild_or_owner_only, configurable_for_dm_if, is_direct_message, ireply, sleep_delete_message, send_long_message, \
     EditMessageModal, SelectedListItem, SelectOptionsView, get_user_ctx_inter, get_message_ctx_inter, apply_reactions_to_messages, replace_msg_in_history_and_discord, MAX_MESSAGE_LENGTH, muffled_send  # noqa: F401
 from modules.utils_aspect_ratios import ar_parts_from_dims, dims_from_ar, avg_from_dims, get_aspect_ratio_parts, calculate_aspect_ratio_sizes  # noqa: F401
@@ -4452,11 +4453,10 @@ class Flows(TaskProcessing):
                 text = self.process_prompt_formatting(text, formatting, self.local_history)
             # see if any tag values have dynamic formatting (user prompt, LLM reply, etc)
             elif isinstance(value, str):
-                formatted_value = self.format_prompt_with_recent_output(value, self.local_history)       # output will be a string
+                formatted_value = self.format_prompt_with_recent_output(value, self.local_history) # output will be a string
                 # if the value changed...
                 if formatted_value != value:         
-                    tags = Tags(self.ictx) # Simply to access Tags methods
-                    formatted_value = tags.parse_tag_from_text_value(formatted_value)    # convert new string to correct value type
+                    formatted_value = valueparser.parse_value(formatted_value) # convert new string to correct value type
                 formatted_flow_tags[key] = formatted_value
             # apply wildcards
             text = await dynamic_prompting(text)
