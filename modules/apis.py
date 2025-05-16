@@ -42,11 +42,10 @@ class APISettings():
             if name:
                 self.presets[name] = preset
 
+    def get_preset(self, preset_name: str, default=None) -> dict:
+        return self.presets.get(preset_name, default or {})
+
     def apply_preset(self, config: dict) -> dict:
-        """
-        Merge a config dictionary with its referenced preset (if any),
-        giving priority to explicitly defined values in config.
-        """
         preset_name = config.get("preset")
         if not preset_name:
             return config
@@ -59,18 +58,24 @@ class APISettings():
         merged.pop("preset", None)
         return merged
 
-    def get_preset(self, preset_name: str, default=None) -> dict:
-        return self.presets.get(preset_name, default or {})
-
-    def expand_steps_with_presets(self, steps: list) -> list:
-        expanded_steps = []
-        for step in steps:
-            if not isinstance(step, dict):
-                log.error("Encountered a non-dict step. Steps should be dictionaries.")
-                continue
-            expanded = self.apply_preset(step)
-            expanded_steps.append(expanded)
-        return expanded_steps
+    def apply_presets(self, config):
+        """
+        Recursively applies presets to all dicts found in the config (which can be a dict or list).
+        Returns a new config structure with all presets applied.
+        """
+        if isinstance(config, dict):
+            # Apply preset and get merged result
+            config = self.apply_preset(config)
+            # Recurse into each value and update it
+            for key, value in config.items():
+                config[key] = self.apply_presets(value)
+            return config
+        elif isinstance(config, list):
+            # Recurse into each item in the list
+            return [self.apply_presets(item) for item in config]
+        else:
+            # Base case: return scalar values as-is
+            return config
 
     def collect_workflows(self, workflows_list):
         for workflow in workflows_list:
@@ -78,12 +83,15 @@ class APISettings():
                 log.warning("Encountered a non-dict Workflow. Skipping.")
                 continue
             name = workflow.get('name')
-            if name:
-                self.workflows[name] = workflow
-                workflow_steps = workflow.get('steps')
-                if workflow_steps:
-                    expanded_steps = self.expand_steps_with_presets(workflow_steps)
-                    self.workflows[name]['steps'] = expanded_steps
+            if not name:
+                log.warning("Encountered a Workflow with a 'name'. Skipping.")
+                continue
+            steps = workflow.get('steps')
+            if not steps:
+                log.warning("Encountered a Workflow without any 'steps'. Skipping.")
+                continue
+            self.workflows[name] = workflow
+            self.workflows[name]['steps'] = self.apply_presets(steps)
 
     def collect_settings(self, data:dict):
         # Collect Main APIs
@@ -126,6 +134,8 @@ class API:
 
         # Iterate over all APIs data
         apis:dict = data.get('all_apis', {})
+        # Expand any presets in the data
+        apis = apisettings.apply_presets(apis)
         for api_config in apis:
             if not isinstance(api_config, dict):
                 log.warning('An API definition was not formatted as a dictionary. Ignoring.')
@@ -526,8 +536,6 @@ class APIClient:
 
     def _collect_endpoints(self, endpoints_config:list[dict]):
         for ep_dict in endpoints_config:
-            # Expand any presets
-            ep_dict = apisettings.apply_preset(ep_dict)
             try:
                 ep_class:Endpoint = self._get_self_ep_class()
                 endpoint:Endpoint = self._create_endpoint(ep_class, ep_dict)
