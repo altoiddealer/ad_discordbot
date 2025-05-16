@@ -687,10 +687,27 @@ def enforce_one_tts_method():
         toggle_any_tts(bot_settings, 'tgwui', force='off')
         tgwui.tts.enabled = False
 
+@client.event
+async def on_voice_state_update(member: discord.Member, before: discord.VoiceState, after: discord.VoiceState):
+    if member.id != client.user.id:
+        return
+    guild_id = member.guild.id
+    # Skip if this change was initiated by the script
+    if guild_id in voice_clients._internal_change:
+        return
+    # Bot disconnected
+    if before.channel and not after.channel:
+        voice_clients._update_state(guild_id, False)
+    # Bot connected or moved
+    elif after.channel:
+        vc = after.channel.guild.voice_client
+        voice_clients._update_state(guild_id, True, vc)
+
 class VoiceClients:
     def __init__(self):
         self.guild_vcs:dict = {}
         self.expected_state:dict = {}
+        self._internal_change: set[int] = set()  # Tracks guilds where the bot initiated a VC change
         self.queued_audio:list = []
 
     def is_connected(self, guild_id):
@@ -700,6 +717,14 @@ class VoiceClients:
     
     def should_be_connected(self, guild_id):
         return self.expected_state.get(guild_id, False)
+
+    def _update_state(self, guild_id, connected: bool, vc: Optional[discord.VoiceClient] = None):
+        if connected:
+            self.guild_vcs[guild_id] = vc
+            self.expected_state[guild_id] = True
+        else:
+            self.guild_vcs.pop(guild_id, None)
+            self.expected_state[guild_id] = False
 
     # Try loading character data regardless of mode (chat/instruct)
     async def restore_state(self):
@@ -713,22 +738,23 @@ class VoiceClients:
             except Exception as e:
                 log.error(f'[Voice Clients] An error occurred while restoring voice channel state for guild ID "{guild_id}": {e}')
 
-    async def toggle_voice_client(self, guild_id, toggle:str=None):
+    async def toggle_voice_client(self, guild_id, toggle: str = None):
         try:
+            self._internal_change.add(guild_id)
             if toggle == 'enabled' and not self.is_connected(guild_id):
                 if bot_database.voice_channels.get(guild_id):
                     voice_channel = client.get_channel(bot_database.voice_channels[guild_id])
-                    self.guild_vcs[guild_id] = await voice_channel.connect()
-                    self.expected_state[guild_id] = True
+                    vc = await voice_channel.connect()
+                    self._update_state(guild_id, True, vc)
                 else:
-                    log.warning('[Voice Clients] TTS Gen is enabled, but a valid voice channel is not set for this server.')
-                    log.info('[Voice Clients] Use "/set_server_voice_channel" to select a voice channel for this server.')
-            if toggle == 'disabled':
-                if self.is_connected(guild_id):
-                    await self.guild_vcs[guild_id].disconnect()
-                    self.expected_state[guild_id] = False
+                    log.warning('[Voice Clients] TTS Gen is enabled, but no VC is set.')
+            elif toggle == 'disabled' and self.is_connected(guild_id):
+                await self.guild_vcs[guild_id].disconnect()
+                self._update_state(guild_id, False)
         except Exception as e:
-            log.error(f'[Voice Clients] An error occurred while toggling voice channel for guild ID "{guild_id}": {e}')
+            log.error(f'[Voice Clients] Error toggling VC for guild {guild_id}: {e}')
+        finally:
+            self._internal_change.discard(guild_id)
 
     async def voice_channel(self, guild_id:int, vc_setting:bool=True):
         try:
@@ -877,6 +903,20 @@ if tts_is_enabled():
         log.info(f'{ctx.author.display_name} used "/toggle_tts"')
         toggle_tts_task = Task('toggle_tts', ctx)
         await task_manager.queue_task(toggle_tts_task, 'normal_queue')
+
+# Define context menu app command
+@client.tree.context_menu(name="Bot Join VC")
+@guild_or_owner_only()
+async def bot_join_voice_channel(inter: discord.Interaction, user: discord.User):
+    if user != client.user or not client.is_owner(user):
+        await inter.response.send_message(f"'Bot Join VC' is only for admins to manually join the Bot to VC.", ephemeral=True, delete_after=5)
+        return
+    try:
+        await voice_clients.toggle_voice_client(inter.guild.id, 'enabled')
+        await inter.response.send_message(f"Joined {user.display_name} to Voice Channel.", ephemeral=True, delete_after=5)
+    except Exception as e:
+        await inter.response.send_message(f"Failed to connect bot to VC: {e}", ephemeral=True, delete_after=5)
+        log.error(f"[Bot Join VC] Error joining bot to VC: {e}")
 
 #################################################################
 ###################### DYNAMIC PROMPTING ########################
@@ -1249,19 +1289,25 @@ class TaskProcessing(TaskAttributes):
             log.error(f"An error occurred while trying to send extra results: {e}")
 
     def handle_api_result(self: Union["Task", "Tasks"], api_result: str):
-        base_dir = Path(shared_path.output_dir).resolve()
-        target_path = Path(api_result).resolve()
-        # Ensure the path is within the allowed output directory
-        if base_dir not in target_path.parents and base_dir != target_path:
-            raise ValueError("The file path is outside the '/user/output' directory.")
-        # Check if it's a file or a directory
-        if target_path.is_file():
-            if target_path.suffix.lower() in [".mp3", ".wav"]:
-                self.extra_audio.append(str(target_path))
+        target_path = Path(api_result)
+        # If the string looks like a real file path and exists
+        if target_path.exists():
+            target_path = target_path.resolve()
+            base_dir = Path(shared_path.bot_root_dir).resolve()
+
+            if base_dir not in target_path.parents and base_dir != target_path:
+                raise ValueError("The file path is outside the allowed output directory.")
+
+            if target_path.is_file():
+                if target_path.suffix.lower() in [".mp3", ".wav"]:
+                    self.extra_audio.append(str(target_path))
+                else:
+                    self.extra_files.append(str(target_path))
             else:
-                self.extra_files.append(str(target_path))
+                self.extra_text.append(str(target_path))
         else:
-            self.extra_text.append(str(target_path))
+            # Fallback: Treat it as literal text, not a path
+            self.extra_text.append(api_result)
 
     async def fix_llm_payload(self:Union["Task","Tasks"]):
         # Fix llmgen payload by adding any missing required settings
@@ -3484,7 +3530,7 @@ class Tasks(TaskProcessing):
                 log.warning('Tried to toggle TTS but no client is available to toggle.')
                 return
             toggle = 'api' if api_tts_on else 'tgwui'
-            message = toggle_any_tts(self.settings, toggle)
+            message = await toggle_any_tts(self.settings, toggle)
             vc_guild_ids = [self.ictx.guild.id] if config.is_per_server() else [guild.id for guild in client.guilds]
             for vc_guild_id in vc_guild_ids:
                 await voice_clients.toggle_voice_client(vc_guild_id, message)
