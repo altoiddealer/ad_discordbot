@@ -39,6 +39,22 @@ base_tags:
     on_prefix_only: true
     state: {preset: 'Divine Intellect', mode: instruct} # Update values for textgen-webui state parameters.
 
+  # Example usage for 'call_api' tag (see 'dict_api_settings.yaml')
+  - trigger: dim the lights
+    call_api:
+      api_name: HomeAPI v3  # or 'api_type' for a 'main API' (imggen/ttsgen/textgen)
+      endpoint_name: Lights # or 'endpoint_type' for a 'main API' (post_txt2img, etc)
+      input_data: {brightness: 0.5, hue: amber} # Updates any base payload configured for endpoint
+
+  # Example usage for 'run_workflow' tag (see 'dict_api_settings.yaml')
+  - trigger: generate a video of
+    on_prefix_only: true
+    insert_text: ''
+    insert_text_method: 'replace'
+    run_workflow:
+      name: Wan t2v # the name of a workflow
+      input_data: {prompt: '{prompt}'}} # Example using bot formatting syntax to format the user's text into the prompt field
+
   # Tag that triggers a 'Flow' which asks 'Imgmodel_Selector' to review the prompt
   #    which was written by 'M1inty' to assign the best Image Model for the prompt.
   - trigger: 'check imgmodel'                   # Intended to be used with a prompt like 'draw _______ check imgmodel'
@@ -97,7 +113,7 @@ base_tags:
     load_history: -1              # 0 = default (all history included) / -1 = prompt excludes chat history / > 1 = llm only sees this many recent exchanges.
     save_history: false           # Do not write this interaction to the main chat history
 
-  - name: Example using only_with_tags
+  - name: Example using 'only_with_tags' condition
     only_with_tags: ['img gen Prompt_Enhancer_XL', 'another tag name'] # Condition that is True if any of the listed tag names are matched
     # Does nothing. Just for example usage of the parameter.
 
@@ -210,6 +226,11 @@ tag_presets:
 #   name: 'string'                    Used in print statements. Required when using a 'persist' tag.
 #   send_user_image: 'string'         Sends a local image to the channel. Value values: Image in 'user_images' (png/jpg/txt in base64) -OR- Directory name in '/user_images/'
 #                                       (Picks a random image or random image from random subdirectory)
+#   call_api: {dict}                  Refer to 'dict_api_settings.yaml'. Required: {endpoint_name: The Endpoint Name}. Recommended to include: {api_type: (imggen/ttsgen/textgen)} for 'main' APIs, or {api_name: The Client Name} for all others.
+#                                       Any endpoint values can be overridden in this dict. Payload can be updated with {input_data: {key: value, ...}}.
+#   run_workflow: {dict}              Refer to 'dict_api_settings.yaml'. Runs a predefined workflow. Valid usage: {name: Name of the Workflow, (optional)input_data: {key1: value1, key2: value2, etc}}.
+#     For 'call_api' and 'run_workflow': Any string values can contain bot formtting syntax, ex: "{prompt}" will be replaced with the actual user's text.
+#
 #   flow: {dict}                      A dict of 'flow_steps'. When a 'flow' tag is triggered, it creates a message loop for each defined 'loop_step'
 #   flow_step: [list]                 The tags you want to apply in each flow step.  Without a trigger, they will auto-apply.  'format_prompt' is very useful in each flow_step
 #   flow_step_loops: int              The number of times you want to loop a particular flow_step.

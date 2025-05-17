@@ -2025,6 +2025,48 @@ class StepExecutor:
     def _step_eval(self, data, expression):
         return eval(expression, {"data": data})
 
+    @step_returns("data", "input", default="data")
+    def _step_add_pnginfo(self, data: Any, config: dict) -> Image.Image:
+        """
+        Adds PngInfo metadata to an image using values from context or data.
+
+        Config:
+            image (str, optional): Context key to retrieve the image object.
+            metadata (str, optional): Context key to retrieve metadata string.
+
+            If only one is provided, the other is assumed to come from the `data` parameter.
+
+        Returns:
+            Image.Image: Image with PngInfo metadata injected.
+        """
+        image_key = config.get("image")
+        metadata_key = config.get("metadata")
+
+        if image_key and metadata_key:
+            image = self.context.get(image_key)
+            metadata = self.context.get(metadata_key)
+        elif image_key:
+            image = self.context.get(image_key)
+            metadata = data
+        elif metadata_key:
+            metadata = self.context.get(metadata_key)
+            image = data
+        else:
+            raise ValueError("add_pnginfo step requires at least one of 'image' or 'metadata' in config")
+
+        if not isinstance(image, Image.Image):
+            raise TypeError(f"Expected a PIL.Image.Image for image, got {type(image).__name__}")
+        if not isinstance(metadata, str):
+            raise TypeError(f"Expected a string for metadata, got {type(metadata).__name__}")
+
+        pnginfo = PngImagePlugin.PngInfo()
+        pnginfo.add_text("parameters", metadata)
+
+        # Attach pnginfo to image
+        image.info["pnginfo"] = pnginfo
+
+        return image
+
     @step_returns("path", "dict", "data", default="path")
     async def _step_save(self, data: Any, config: dict):
         """
@@ -2125,154 +2167,26 @@ class StepExecutor:
                 "name": file_name,
                 "data": data}
 
-    @step_returns("data", "input", default="data")
-    def _step_add_pnginfo(self, data: Any, config: dict) -> Image.Image:
-        """
-        Adds PngInfo metadata to an image using values from context or data.
+# async def _process_file_input(self, path: str, input_type: str):
+#     if input_type == "text":
+#         async with aiofiles.open(path, mode='r', encoding='utf-8') as f:
+#             return await f.read()
 
-        Config:
-            image (str, optional): Context key to retrieve the image object.
-            metadata (str, optional): Context key to retrieve metadata string.
+#     elif input_type == "base64":
+#         async with aiofiles.open(path, mode='rb') as f:
+#             raw = await f.read()
+#             return base64.b64encode(raw).decode('utf-8')
 
-            If only one is provided, the other is assumed to come from the `data` parameter.
+#     elif input_type == "file":
+#         # Special behavior — this must be handled outside JSON.
+#         raise ValueError("File upload input type 'file' should be used with multipart/form-data.")
 
-        Returns:
-            Image.Image: Image with PngInfo metadata injected.
-        """
-        image_key = config.get("image")
-        metadata_key = config.get("metadata")
+#     elif input_type == "raw":
+#         async with aiofiles.open(path, mode='rb') as f:
+#             return await f.read()
 
-        if image_key and metadata_key:
-            image = self.context.get(image_key)
-            metadata = self.context.get(metadata_key)
-        elif image_key:
-            image = self.context.get(image_key)
-            metadata = data
-        elif metadata_key:
-            metadata = self.context.get(metadata_key)
-            image = data
-        else:
-            raise ValueError("add_pnginfo step requires at least one of 'image' or 'metadata' in config")
+#     elif input_type == "url":
+#         return path  # Just return the path (expected to be a full URL)
 
-        if not isinstance(image, Image.Image):
-            raise TypeError(f"Expected a PIL.Image.Image for image, got {type(image).__name__}")
-        if not isinstance(metadata, str):
-            raise TypeError(f"Expected a string for metadata, got {type(metadata).__name__}")
-
-        pnginfo = PngImagePlugin.PngInfo()
-        pnginfo.add_text("parameters", metadata)
-
-        # Attach pnginfo to image
-        image.info["pnginfo"] = pnginfo
-
-        return image
-
-
-class WorkflowExecutor:
-    def __init__(self, workflow_name: str):
-        self.workflow_def:dict = apisettings.get_workflow(workflow_name)
-        self.api:API = get_api()
-        self.context: Dict[str, Any] = {}
-        self.results: Dict[str, Any] = {}
-
-    async def run(self):
-        steps = self.workflow_def.get("steps", [])
-
-        for step in steps:
-            if "group" in step:  # parallel group
-                await self._run_group_steps(step["group"])
-            else:
-                await self._run_step(step)
-
-        return self.results
-
-    async def _run_group_steps(self, step_group: List[dict]):
-        step_names = []
-        for step in step_group:
-            step_names.append(step.get('name'))
-        log.info(f'Processing API workflow group steps: {step_names}')
-        await asyncio.gather(*[self._run_step(step) for step in step_group])
-
-    async def _run_step(self, step: dict):
-        name = step.get("name", "<unnamed>")
-        log.info(f'Processing API Workflow step: {name}')
-        api_name = step.get("api_name")
-        endpoint_name = step.get("endpoint_name")
-
-        # Get APIClient and Endpoint
-        api_client:APIClient = self.api.clients.get(api_name)
-        if not api_client:
-            raise ValueError(f"Unknown API client: {api_name}")
-        endpoint = api_client.endpoints.get(endpoint_name)
-        if not endpoint:
-            raise ValueError(f"Unknown endpoint: {endpoint_name} for client {api_name}")
-
-        # Process input
-        input_data = await self._resolve_inputs(step.get("input", {}))
-        payload_type = step.get("payload_type", "json")
-        payload_map = step.get("payload_map")
-
-        response = await endpoint.call(
-            input_data=input_data,
-            payload_type=payload_type,
-            payload_map=payload_map
-        )
-
-        # Handle response
-        response_handling = step.get("response_handling", {})
-        # output_key = response_handling.get("output_key") - BUGGED
-        result = response.get(output_key) if (isinstance(response, dict) and output_key) else response
-
-        # Store in context if needed
-        save_as = step.get("save_as")
-        if save_as:
-            self.context[save_as] = result
-            self.results[save_as] = result
-
-
-    async def _resolve_inputs(self, inputs: Any) -> Any:
-        if isinstance(inputs, str):
-            if inputs.startswith("{") and inputs.endswith("}"):
-                context_key = inputs[1:-1]
-                return self.context.get(context_key)
-            return inputs
-
-        elif isinstance(inputs, dict):
-            if "path" in inputs and "as" in inputs:
-                return await self._process_file_input(inputs["path"], inputs["as"])
-
-            resolved = {}
-            for k, v in inputs.items():
-                resolved[k] = await self._resolve_inputs(v)
-            return resolved
-
-        elif isinstance(inputs, list):
-            return [await self._resolve_inputs(item) for item in inputs]
-
-        else:
-            return inputs
-
-
-    async def _process_file_input(self, path: str, input_type: str):
-        if input_type == "text":
-            async with aiofiles.open(path, mode='r', encoding='utf-8') as f:
-                return await f.read()
-
-        elif input_type == "base64":
-            async with aiofiles.open(path, mode='rb') as f:
-                raw = await f.read()
-                return base64.b64encode(raw).decode('utf-8')
-
-        elif input_type == "file":
-            # Special behavior — this must be handled outside JSON.
-            raise ValueError("File upload input type 'file' should be used with multipart/form-data.")
-
-        elif input_type == "raw":
-            async with aiofiles.open(path, mode='rb') as f:
-                return await f.read()
-
-        elif input_type == "url":
-            return path  # Just return the path (expected to be a full URL)
-
-        else:
-            raise ValueError(f"Unknown input type: {input_type}")
+#     else:
+#         raise ValueError(f"Unknown input type: {input_type}")

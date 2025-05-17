@@ -1696,7 +1696,7 @@ class TaskProcessing(TaskAttributes):
         # apply tags relevant to LLM payload
         await self.process_llm_payload_tags(llm_payload_mods)
         # apply formatting tags to LLM prompt
-        self.process_prompt_formatting(self.prompt, formatting)
+        self.process_prompt_formatting(self.prompt, **formatting)
         # apply params from /prompt command
         self.apply_prompt_params()
         # assign finalized prompt to payload
@@ -2097,9 +2097,9 @@ class TaskProcessing(TaskAttributes):
             else:
                 await self.ictx.channel.send("This conversation will not be saved. ***However***, your interactions will be included in the bot's general logging.")
 
-    def format_prompt_with_recent_output(self:Union["Task","Tasks"], prompt:str, local_history:History|None=None) -> str:
+    def format_prompt_with_recent_output(self:Union["Task","Tasks"], prompt:str) -> str:
         try:
-            local_history = local_history if local_history is not None else self.local_history
+            local_history = self.local_history
             formatted_prompt = prompt
             # Find all matches of {user_x} and {llm_x} in the prompt
             matches = patterns.recent_msg_roles.findall(prompt)
@@ -2133,21 +2133,22 @@ class TaskProcessing(TaskAttributes):
             log.error(f'An error occurred while formatting prompt with recent messages: {e}')
             return prompt
 
-    def process_prompt_formatting(self:Union["Task","Tasks"], prompt:str, formatting:dict, local_history:History|None=None) -> str:
+    def process_prompt_formatting(self:Union["Task","Tasks"], prompt:str, **kwargs) -> str:
         updated_prompt = prompt
         try:
             # unpack formatting dict
-            format_prompt: list[str] = formatting.get('format_prompt', [])
-            time_offset = formatting.get('time_offset', None)
-            time_format = formatting.get('time_format', None)
-            date_format = formatting.get('date_format', None)
+
+            format_prompt: list[str] = kwargs.get('format_prompt', [])
+            time_offset = kwargs.get('time_offset', None)
+            time_format = kwargs.get('time_format', None)
+            date_format = kwargs.get('date_format', None)
 
             # Tag handling for prompt formatting
             if format_prompt:
                 for fmt_prompt in format_prompt:
                     updated_prompt = fmt_prompt.replace('{prompt}', updated_prompt)
             # format prompt with any defined recent messages
-            updated_prompt = self.format_prompt_with_recent_output(updated_prompt, local_history)
+            updated_prompt = self.format_prompt_with_recent_output(updated_prompt)
             # format prompt with last time
             time_since_last_msg = bot_database.get_last_msg_for(self.channel.id)
             if time_since_last_msg:
@@ -2155,7 +2156,6 @@ class TaskProcessing(TaskAttributes):
             else:
                 time_since_last_msg = ''
             updated_prompt = updated_prompt.replace('{time_since_last_msg}', time_since_last_msg)
-            updated_prompt = updated_prompt.replace('{time_since_last_user_msg}', time_since_last_msg) # deprecated code
             # Format time if defined
             new_time, new_date = get_time(time_offset, time_format, date_format)
             updated_prompt = updated_prompt.replace('{time}', new_time)
@@ -3160,7 +3160,7 @@ class Tasks(TaskProcessing):
     def format_api_payload(self: "Task", api_payload: dict):
         def recursive_format(value):
             if isinstance(value, str):
-                formatted = self.format_prompt_with_recent_output(value)
+                formatted = self.process_prompt_formatting(format_prompt=[value])
                 if formatted != value:
                     formatted = valueparser.parse_value(formatted)
                 return formatted
@@ -4472,11 +4472,10 @@ class Flows(TaskProcessing):
                 flow_name = f": {value}"
             # format prompt before feeding it back into message_task()
             elif key == 'format_prompt':
-                formatting = {'format_prompt': [value]}
-                text = self.process_prompt_formatting(text, formatting, self.local_history)
+                text = self.process_prompt_formatting(text, format_prompt=[value])
             # see if any tag values have dynamic formatting (user prompt, LLM reply, etc)
             elif isinstance(value, str):
-                formatted_value = self.format_prompt_with_recent_output(value, self.local_history) # output will be a string
+                formatted_value = self.format_prompt_with_recent_output(value) # output will be a string
                 # if the value changed...
                 if formatted_value != value:         
                     formatted_value = valueparser.parse_value(formatted_value) # convert new string to correct value type
