@@ -148,7 +148,7 @@ presets:
     retry: 1
     payload_type: json
     payload_base: sd-webui.yaml
-    input: {prompt: "{prompt}"}
+    input_data: {prompt: "{prompt}"}
     timeout: 120
     response_handling:
       # Capture 'images' list as context variable "image_list"
@@ -174,7 +174,7 @@ workflows:
         api_name: Stable Diffusion WebUI
         endpoint_name: Post img2img
         payload_type: json
-        input:
+        input_data:
           init_images:
             path: "inputs/photo.jpg"
             as: base64
@@ -184,49 +184,41 @@ workflows:
   - name: fan_out_translate
     description: Translates a sentence into multiple languages in parallel
     steps:
-      - name: Generate English Text
-        api_name: Text Generation WebUI
-        endpoint_name: Generate
-        input:
-          prompt: "Say hello"
-        response_handling:
-          output_key: text
+      - call_api:
+          api_name: Text Generation WebUI
+          endpoint_name: Generate
+          input_data:
+            prompt: "Say hello"
+      - extract_key: text
         save_as: base_text
       - group:
-          - name: Translate to Spanish
-            api_name: DeepL API
-            endpoint_name: Translate
-            input:
-              text: "{base_text}"
-              target_lang: "ES"
+          - call_api:
+              api_name: DeepL API
+              endpoint_name: Translate
+              input_data:
+                text: "{base_text}"
+                target_lang: "ES"
             save_as: es_text
 
-          - name: Translate to French
-            api_name: DeepL API
-            endpoint_name: Translate
-            input:
-              text: "{base_text}"
-              target_lang: "FR"
+          - call_api:
+              api_name: DeepL API
+              endpoint_name: Translate
+              input_data:
+                text: "{base_text}"
+                target_lang: "FR"
             save_as: fr_text
 
-          - name: Translate to Japanese
-            api_name: DeepL API
-            endpoint_name: Translate
-            input:
-              text: "{base_text}"
-              target_lang: "JA"
-            save_as: ja_text
-      - name: Combine All Translations
-        api_name: Local Processor
-        endpoint_name: Join
-        input:
-          es: "{es_text}"
-          fr: "{fr_text}"
-          ja: "{ja_text}"
-        save_as: multilingual_output
+      - call_api:
+          api_name: Local Processor
+          endpoint_name: Join
+          input_data:
+            es: "{es_text}"
+            fr: "{fr_text}"
+      # returns result of last step (multilingual output)
 
-# payload_type (RECOMMENDED for all POST/PUT).
-# Use one of: json / form / multipart (file) / query
+
+# payload_type (recommended for all POST/PUT).
+# Use one of: json (default) / form / multipart (file) / query
 
 # as value | Behavior                             | Payload area
 # text     | Load file as UTF-8 string            | json, data
@@ -237,7 +229,6 @@ workflows:
 
 
 ## Schemas
-
 
 # websocket:
 #   url: "ws://127.0.0.1:8188/ws"        # (str) Full WebSocket URL; fallback to HTTP-based conversion if not provided

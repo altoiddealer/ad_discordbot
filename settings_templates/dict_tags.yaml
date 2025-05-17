@@ -45,6 +45,7 @@ base_tags:
       api_name: HomeAPI v3  # or 'api_type' for a 'main API' (imggen/ttsgen/textgen)
       endpoint_name: Lights # or 'endpoint_type' for a 'main API' (post_txt2img, etc)
       input_data: {brightness: 0.5, hue: amber} # Updates any base payload configured for endpoint
+      queue_to: null # null = runs immediately.  Defaults to 'gen_queue' (creates/queues a new 'Task'). Other valid options are 'history_queue' (tasks that modify chat history) and 'normal_queue' (light tasks)
 
   # Example usage for 'run_workflow' tag (see 'dict_api_settings.yaml')
   - trigger: generate a video of
@@ -54,6 +55,7 @@ base_tags:
     run_workflow:
       name: Wan t2v # the name of a workflow
       input_data: {prompt: '{prompt}'}} # Example using bot formatting syntax to format the user's text into the prompt field
+      queue_to: gen_queue # defaults to gen_queue if 'queue_to' is omitted
 
   # Tag that triggers a 'Flow' which asks 'Imgmodel_Selector' to review the prompt
   #    which was written by 'M1inty' to assign the best Image Model for the prompt.

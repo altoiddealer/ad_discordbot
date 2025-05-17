@@ -200,30 +200,6 @@ class API:
             self.setup_tasks = []  # Clear after use
         except Exception as e:
             pass
-
-    def is_api_object(self, client_name:str|None=None, ep_name:str|None=None, log_missing:bool=False) -> bool:
-        client = getattr(self, client_name, None)
-        if client is None:
-            client = self.clients.get(client_name, None)
-
-        if not isinstance(client, APIClient):
-            if log_missing:
-                log.warning(f"API client '{client_name}' not found or invalid.")
-            return False
-
-        if ep_name is None:
-            return True
-
-        endpoint = getattr(client, ep_name, None)
-        if endpoint is None:
-            endpoint = client.endpoints.get(ep_name, None)
-
-        if not isinstance(endpoint, Endpoint):
-            if log_missing:
-                log.warning(f"Endpoint '{ep_name}' not found or invalid in client '{client_name}'.")
-            return False
-
-        return True
     
     def get_client(self, client_type:str|None=None, client_name:str|None=None, strict=False):
         api_client = None
@@ -300,12 +276,11 @@ class API:
                         return ep, config
         # Not found
         return None, config
-    
-    async def run_workflow(self, workflow_name:str, input=None):
-        # TODO Resolve Input
-        workflow_steps = apisettings.get_workflow_steps_for(workflow_name)
-        log.info(f'[API Workflows] Running "{workflow_name}" with ({len(workflow_steps)} processing steps)')
-        handler = StepExecutor(steps=workflow_steps, input=input)
+      
+    async def run_workflow(self, name:str, input_data=None):
+        workflow_steps = apisettings.get_workflow_steps_for(name)
+        log.info(f'[API Workflows] Running "{name}" with ({len(workflow_steps)} processing steps)')
+        handler = StepExecutor(steps=workflow_steps, input_data=input_data)
         return await handler.run()
 
 class WebSocketConnectionConfig:
@@ -1434,7 +1409,7 @@ class Endpoint:
         # Hand off full response to StepExecutor
         if isinstance(self.response_handling, list):
             log.info(f'[{self.name}] Executing "response_handling" ({len(self.response_handling)} processing steps)')
-            handler = StepExecutor(steps=self.response_handling, input=response)
+            handler = StepExecutor(steps=self.response_handling, input_data=response)
             results = await handler.run()
 
         return results
@@ -1676,7 +1651,7 @@ class APIResponse:
 
 
 class StepExecutor:
-    def __init__(self, steps: list[dict], input: Any = None):
+    def __init__(self, steps: list[dict], input_data: Any = None):
         """
         Executes a sequence of data transformation steps with optional context storage.
 
@@ -1688,8 +1663,8 @@ class StepExecutor:
         """
         self.steps = steps
         self.context: dict[str, Any] = {}
-        self.original_input = input
-        self.response = input if isinstance(input, APIResponse) else None
+        self.original_input_data = input_data
+        self.response = input_data if isinstance(input_data, APIResponse) else None
 
         # Store full response in context for access by steps (e.g. headers)
         # if self.response:

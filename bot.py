@@ -1562,6 +1562,7 @@ class TaskProcessing(TaskAttributes):
                     else:
                         queue_to = api_config.pop('queue_to', 'gen_queue')
                         if queue_to:
+                            queue_to = 'gen_queue' if queue_to == 'message_queue' else queue_to # Do not allow to go to Message queue
                             log.info('An API task was triggered, created and queued.')
                             await self.embeds.send('system', title='Processing an API Request', description='An API task was triggered, created and queued.', delete_after=5)
                             api_task = self.clone('api', self.ictx, ignore_list=['payload'], api_config=api_config)
@@ -1571,9 +1572,21 @@ class TaskProcessing(TaskAttributes):
                             if not isinstance(endpoint, Endpoint):
                                 log.warning(f'[TAGS] Endpoint not found for triggered "call_api"')
                             else:
-                                formatted_payload = self.format_api_payload(updated_api_config)
-                                api_result = await endpoint.call(**formatted_payload)
-                                self.handle_api_results(api_result)
+                                await self.run_api_task(endpoint, updated_api_config)
+                if 'run_workflow' in tag_dict:
+                    workflow_config = tag_dict.pop('run_workflow')
+                    if not isinstance(workflow_config, dict):
+                        log.error('[TAGS] A "run_workflow" tag was triggered, but it must be in a dict format.')
+                    else:
+                        queue_to = workflow_config.pop('queue_to', 'gen_queue')
+                        if queue_to:
+                            queue_to = 'gen_queue' if queue_to == 'message_queue' else queue_to # Do not allow to go to Message queue
+                            log.info('A Workflow task was triggered, created and queued.')
+                            await self.embeds.send('system', title='Processing a Workflow Request', description='A Workflow task was triggered, created and queued.', delete_after=5)
+                            workflow_task = self.clone('workflow', self.ictx, ignore_list=['payload'], workflow_config=workflow_config)
+                            await task_manager.queue_task(workflow_task, queue_to)
+                        else:
+                            await self.run_workflow_task(workflow_config)
                 if 'persist' in tag_dict:
                     if not tag_name:
                         log.warning(f"[TAGS] A persistent {tag_print} was matched, but it is missing a required 'name' parameter. Cannot make tag persistent.")
@@ -3157,6 +3170,21 @@ class Tasks(TaskProcessing):
     #################################################################
     ############################ API TASK ###########################
     #################################################################
+    async def run_api_task(self:"Task", endpoint:Endpoint, config:dict):
+        # update default endpoint payload with any provided input
+        input_data = config.pop('input_data', {}) # pop input
+        base_payload = endpoint.get_payload()     # get default payload for endpoint
+        if base_payload and isinstance(base_payload, dict):
+            input_data = deep_merge(base_payload, input_data)
+        config['input_data'] = input_data         # put payload back in before formatting
+        # formats bot syntax like '{prompt}', {llm_0}, etc
+        formatted_payload = self.format_api_payload(config)
+        # Call and collect results
+        api_results = await endpoint.call(**formatted_payload)
+        if api_results:
+            self.handle_api_results(api_results)
+            await self.send_extra_results()
+
     def format_api_payload(self: "Task", api_payload: dict):
         def recursive_format(value):
             if isinstance(value, str):
@@ -3175,19 +3203,29 @@ class Tasks(TaskProcessing):
 
         return recursive_format(api_payload)
 
-
     async def api_task(self:"Task"):
         api_config = getattr(self, 'api_config')
-        endpoint, updated_api_config = api.get_endpoint_from_config(api_config)
+        endpoint, config = api.get_endpoint_from_config(api_config)
         if not isinstance(endpoint, Endpoint):
             log.warning(f'Endpoint not found for triggered "call_api"')
         else:
-            formatted_payload = self.format_api_payload(updated_api_config)
-            api_result = await endpoint.call(**formatted_payload)
-            if api_result:
-                self.handle_api_results(api_result)
-                await self.send_extra_results()
+            await self.run_api_task(endpoint, config)
 
+    #################################################################
+    ######################## WORKFLOW TASK ##########################
+    #################################################################
+    async def run_workflow_task(self:"Task", config:dict):
+        # formats bot syntax like '{prompt}', {llm_0}, etc
+        formatted_payload = self.format_api_payload(config)
+        # Run workflow and collect results
+        workflow_results = await api.run_workflow(**formatted_payload)
+        if workflow_results:
+            self.handle_api_results(workflow_results)
+            await self.send_extra_results()
+
+    async def workflow_task(self:"Task"):
+        workflow_config = getattr(self, 'workflow_config')
+        await self.run_workflow_task(workflow_config)
 
     #################################################################
     ######################### CONTINUE TASK #########################
