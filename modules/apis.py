@@ -1862,7 +1862,7 @@ class StepExecutor:
             raise KeyError(f"Context does not contain key '{config}'")
         return self.context[config]
     
-    async def resolve_api_names(self, config, step_name:str):
+    def resolve_api_names(self, config, step_name:str):
         client_name = config.get("client_name")
         endpoint_name = config.get("endpoint_name")
 
