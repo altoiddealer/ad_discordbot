@@ -203,7 +203,7 @@ class API:
     
     def get_client(self, client_type:str|None=None, client_name:str|None=None, strict=False):
         api_client = None
-        main_client = getattr(self, client_type)
+        main_client = getattr(self, client_type) if client_type else None
         if main_client:
             api_client = main_client
         else:

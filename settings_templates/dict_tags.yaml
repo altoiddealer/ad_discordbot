@@ -54,7 +54,7 @@ base_tags:
     insert_text_method: 'replace'
     run_workflow:
       name: Wan t2v # the name of a workflow
-      input_data: {prompt: '{prompt}'}} # Example using bot formatting syntax to format the user's text into the prompt field
+      input_data: {prompt: '{prompt}'} # Example using bot formatting syntax to format the user's text into the prompt field
       queue_to: gen_queue # defaults to gen_queue if 'queue_to' is omitted
 
   # Tag that triggers a 'Flow' which asks 'Imgmodel_Selector' to review the prompt
