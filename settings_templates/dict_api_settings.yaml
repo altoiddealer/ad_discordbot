@@ -27,8 +27,14 @@ bot_api_functions:
       endpoint_name: Post PNG Info
       pnginfo_image_key: image        # ex: payload = {'image': '<the image data>', ...}
       pnginfo_result_key: info        # ex: response = {'info': "<the image generation params string>", ...}
-    post_options: {endpoint_name: Post Options}
-    get_imgmodels: {endpoint_name: Get ImgModels}
+    post_options:
+      endpoint_name: Post Options
+      imgmodel_input_key: sd_model_checkpoint
+    get_imgmodels:
+      endpoint_name: Get ImgModels
+      imgmodel_name_key: model_name
+      imgmodel_value_key: title
+      imgmodel_filename_key: filename
     get_controlnet_models: {endpoint_name: Get Cnet Models}
     post_server_restart: {endpoint_name: Post Server Restart}
     # NOTE: The following is only applicable to A1111-like webUIs (A1111 / Forge / ReForge)

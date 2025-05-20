@@ -158,7 +158,10 @@ async def process_tasks_in_background():
 async def auto_select_imgmodel(current_imgmodel_name, mode='random'):
     try:
         all_imgmodels = await fetch_imgmodels()
-        all_imgmodel_names = [imgmodel.get('imgmodel_name', '') for imgmodel in all_imgmodels]
+        value_key = api.imggen.post_options.imgmodel_value_key or ''
+        name_key = api.imggen.post_options.imgmodel_name_key or value_key or ''
+
+        all_imgmodel_names = [imgmodel.get(name_key, '') for imgmodel in all_imgmodels]
 
         current_index = None
         if current_imgmodel_name and current_imgmodel_name in all_imgmodel_names:
@@ -2690,19 +2693,20 @@ class TaskProcessing(TaskAttributes):
             # Imgmodel handling
             new_imgmodel = change_imgmodel or swap_imgmodel or None
             if new_imgmodel:
-                imgmodel_params = await get_selected_imgmodel_params(new_imgmodel, self.ictx) # {sd_model_checkpoint, imgmodel_name, filename}
+                new_imgmodel_data = await get_imgmodel_data(new_imgmodel, self.ictx) # {value, name, filename}
+                name_key = api.imggen.get_imgmodels.imgmodel_name_key or api.imggen.get_imgmodels.imgmodel_value_key or ''
+                new_imgmodel_name = new_imgmodel_data.get(name_key, '')
                 current_imgmodel_name = bot_settings.get_last_setting_for("last_imgmodel_name", self.ictx)
-                new_imgmodel_name = imgmodel_params.get('imgmodel_name', '')
                 # Check if new model same as current model
                 if current_imgmodel_name == new_imgmodel_name:
                     log.info(f'[TAGS] Img model was triggered to change, but it is the same as current ("{current_imgmodel_name}").')
                 else:
-                    self.params.imgmodel = imgmodel_params
-                    mode = 'change' if new_imgmodel == change_imgmodel else 'swap'
-                    verb = 'Changing' if mode == 'change' else 'Swapping'
-                    self.params.imgmodel['current_imgmodel_name'] = current_imgmodel_name
-                    self.params.imgmodel['mode'] = mode
-                    self.params.imgmodel['verb'] = verb
+                    # Add values to Params. Will trigger model change
+                    self.params.imgmodel = new_imgmodel_data
+                    mode = 'change' if change_imgmodel else 'swap'
+                    verb = 'Changing' if change_imgmodel else 'Swapping'
+                    setattr(self.params, 'imgmodel_mode', mode)
+                    setattr(self.params, 'imgmodel_verb', verb)
                     log.info(f'[TAGS] {verb} Img model: "{new_imgmodel_name}"')
             # Payload handling
             if last_img_payload:
@@ -2994,9 +2998,9 @@ class TaskProcessing(TaskAttributes):
             request_payload = deep_merge(base_payload, update_data)
 
             # Apply settings from imgmodel configuration
-            imgmodel_payload = copy.deepcopy(self.settings.imgmodel.payload_mods)
+            imgmodel_payload_mods = copy.deepcopy(self.settings.imgmodel.payload_mods)
 
-            self.payload  = deep_merge(request_payload, imgmodel_payload)
+            self.payload = deep_merge(request_payload, imgmodel_payload_mods)
 
         except Exception as e:
             log.error(f"Error initializing img payload: {e}")
@@ -3686,49 +3690,43 @@ class Tasks(TaskProcessing):
     #################### CHANGE IMG MODEL TASK ######################
     #################################################################
     async def change_imgmodel_task(self:"Task"):
+        name_key = api.imggen.get_imgmodels.imgmodel_name_key or ''
+        value_key = api.imggen.get_imgmodels.imgmodel_value_key or name_key or ''
+        print_model_name = self.params.imgmodel.get(name_key, value_key)
+
+        imgmodel_value = self.params.imgmodel.get(value_key)
+        if not imgmodel_value:
+            await self.embeds.send('change', 'Failed to change Img model:', f'Img model not found: {print_model_name}')
+            return False
+
         try:
+            # Send embed
             if not self.ictx:
                 self.user_name = 'Automatically'
-
-            if not await api_online(client_type='imggen', ictx=self.ictx): # Can't change Img model if not online!
-                log.error('Bot tried to change Img Model, but SD API is offline.')
-                return
-                
-            if not api.imggen.post_options:
-                log.error(f"No 'post_options' endpoint available for ImgGen Client {api.imggen.name}")
-                return
-
-            imgmodel_params = self.params.imgmodel
-            imgmodel_name = imgmodel_params.get('imgmodel_name', '')
-            mode = imgmodel_params.get('mode', 'change')    # default to 'change
-            verb = imgmodel_params.get('verb', 'Changing')  # default to 'Changing'
-
-            # Value did not match any known model names/checkpoints
-            if len(imgmodel_params) < 3:
-                await self.embeds.send('change', 'Failed to change Img model:', f'Img model not found: {imgmodel_name}')
-                return False
-
-            await self.embeds.send('change', f'{verb} Img model ... ', f'{verb} to {imgmodel_name}')
+            mode = getattr(self.params, 'imgmodel_mode', 'change')    # default to 'change
+            verb = getattr(self.params, 'imgmodel_verb', 'Changing')  # default to 'Changing'
+            await self.embeds.send('change', f'{verb} Img model ... ', f'{verb} to {print_model_name}')
 
             # Swap Image model
             if mode == 'swap' or mode == 'swap_back':
-                new_model_settings = {'sd_model_checkpoint': imgmodel_params['sd_model_checkpoint']}
-                if not config.is_per_server_imgmodels():
-                    await api.imggen.post_options.call(input_data=new_model_settings)
+                # Check client is online
+                if await api_online(client_type='imggen', ictx=self.ictx):
+                    if api.imggen.post_options and not config.is_per_server_imgmodels():
+                        await change_imgmodel(self.params.imgmodel, self.ictx, save=False)
                 await self.embeds.delete('change') # delete embed
                 return True
 
             # Change Image model
-            await change_imgmodel(imgmodel_params, self.ictx)
+            await change_imgmodel(self.params.imgmodel, self.ictx)
 
             # Announce change
             await self.embeds.delete('change') # delete any embed
-            await self.embeds.send('change', f"{self.user_name} changed Img model:", f'**{imgmodel_name}**')
+            await self.embeds.send('change', f"{self.user_name} changed Img model:", f'**{print_model_name}**')
             if bot_database.announce_channels and self.embeds.enabled('change'):
                 # Send embeds to announcement channels
-                await bg_task_queue.put(announce_changes('changed Img model', imgmodel_name, self.ictx))
+                await bg_task_queue.put(announce_changes('changed Img model', print_model_name, self.ictx))
 
-            log.info(f"Image model changed to: {imgmodel_name}")
+            log.info(f"Image model changed to: {print_model_name}")
             if config.discord['post_active_settings'].get('enabled', True):
                 settings_keys = ['imgmodel']
                 # Auto-change imgmodel task will not have an interaction
@@ -3739,8 +3737,8 @@ class Tasks(TaskProcessing):
 
         except Exception as e:
             log.error(f"Error changing Img model: {e}")
-            traceback.print_exc()
             await self.embeds.edit_or_send('change', "An error occurred while changing Img model", e)
+            traceback.print_exc()
             return False
 
     #################################################################
@@ -3881,16 +3879,11 @@ class Tasks(TaskProcessing):
             self.clean_img_payload()
             # Change imgmodel if triggered by tags
             should_swap = False
-            imgmodel_params = self.params.imgmodel
-            if imgmodel_params:
-                # Add checkpoint to image payload (change_imgmodel_task() will change it anyway)
-                sd_model_checkpoint = imgmodel_params.get('sd_model_checkpoint', '')
-                override_settings = self.payload['override_settings']
-                override_settings['sd_model_checkpoint'] = sd_model_checkpoint
-                # collect params for event of model swapping
-                swap_params: Params = Params()
-                swap_params.imgmodel['imgmodel_name'] = bot_settings.get_last_setting_for("last_imgmodel_name", self.ictx)
-                swap_params.imgmodel['sd_model_checkpoint'] = bot_settings.get_last_setting_for("last_imgmodel_checkpoint", self.ictx)
+            if self.params.imgmodel:
+                if getattr(self.params, 'imgmodel_mode', 'change') == 'swap':
+                    swap_params: Params = Params()
+                    last_imgmodel = bot_settings.get_last_setting_for("last_imgmodel_value", self.ictx)
+                    swap_params.imgmodel = get_imgmodel_data(last_imgmodel)
                 # RUN A CHANGE IMGMODEL SUBTASK
                 should_swap = await self.run_subtask('change_imgmodel')
             # Generate images
@@ -3908,8 +3901,8 @@ class Tasks(TaskProcessing):
             await bg_task_queue.put(self.send_extra_results())
             # If switching back to original Img model
             if should_swap:
-                swap_params.imgmodel['mode'] = 'swap_back'
-                swap_params.imgmodel['verb'] = 'Swapping back to'
+                setattr(swap_params, 'imgmodel_mode', 'swap_back')
+                setattr(swap_params, 'imgmodel_verb', 'Swapping back to')
                 # RUN A CHANGE IMGMODEL SUBTASK
                 self.params.imgmodel = swap_params.imgmodel
                 await self.run_subtask('change_imgmodel')
@@ -5609,15 +5602,16 @@ async def character(ctx: commands.Context):
 #################################################################
 # Apply user defined filters to imgmodel list
 async def filter_imgmodels(all_imgmodels:list, ictx:CtxInteraction=None) -> list:
+    value_key = api.imggen.get_imgmodels.imgmodel_value_key or ''
+    name_key = api.imggen.get_imgmodels.imgmodel_name_key or ''
 
     def apply_filters(imgmodels:list, filter_list:list, exclude_list:list) -> list:
         if filter_list or exclude_list:
             return [imgmodel for imgmodel in imgmodels
                     if (
-                        (not filter_list or any(re.search(re.escape(filter_text), imgmodel.get('imgmodel_name', '') + imgmodel.get('sd_model_checkpoint', ''), re.IGNORECASE) for filter_text in filter_list))
-                        and (not exclude_list or not any(re.search(re.escape(exclude_text), imgmodel.get('imgmodel_name', '') + imgmodel.get('sd_model_checkpoint', ''), re.IGNORECASE) for exclude_text in exclude_list))
+                        (not filter_list or any(re.search(re.escape(filter_text), imgmodel.get(name_key, '') + imgmodel.get(value_key, ''), re.IGNORECASE) for filter_text in filter_list))
+                        and (not exclude_list or not any(re.search(re.escape(exclude_text), imgmodel.get(name_key, '') + imgmodel.get(value_key, ''), re.IGNORECASE) for exclude_text in exclude_list))
                     )]
-
     try:
         imgmodels_data = load_file(shared_path.img_models, {})
         # Apply global filters
@@ -5643,214 +5637,228 @@ async def filter_imgmodels(all_imgmodels:list, ictx:CtxInteraction=None) -> list
 async def fetch_imgmodels(ictx:CtxInteraction=None) -> list:
     try:
         all_imgmodels = await api.imggen.get_imgmodels.call()
-        # Replace key names for easier management
-        for imgmodel in all_imgmodels:
-            if 'title' in imgmodel:
-                imgmodel['sd_model_checkpoint'] = imgmodel.pop('title')
-            if 'model_name' in imgmodel:
-                imgmodel['imgmodel_name'] = imgmodel.pop('model_name')
-        filtered_imgmodels = await filter_imgmodels(all_imgmodels, ictx)
-        return filtered_imgmodels
+        return await filter_imgmodels(all_imgmodels, ictx)
 
     except Exception as e:
         log.error(f"Error fetching image models: {e}")
         return []
 
 # Check filesize/filters with selected imgmodel to assume resolution / tags
-async def guess_model_data(selected_imgmodel:dict, presets:list[dict]) -> dict|None:
+async def guess_model_data(imgmodel_data:dict, presets:list[dict]) -> dict|None:
+    imgmodel_key = api.imggen.get_imgmodels.imgmodel_name_key or api.imggen.get_imgmodels.imgmodel_value_key or api.imggen.get_imgmodels.imgmodel_filename_key or ''
+    filename_key = api.imggen.get_imgmodels.imgmodel_filename_key or ''
     try:
-        filename:Optional[str] = selected_imgmodel.pop('filename', '')
-        if filename is None:
-            return {}
-
-        # Checks filesize of selected imgmodel
+        imgmodel = imgmodel_data.get(imgmodel_key)
+        filename: Optional[str] = imgmodel_data.get(filename_key, '')
         file_size_gb = 0
-        try:
-            file_size_bytes = os.path.getsize(filename)
-            file_size_gb = file_size_bytes / (1024 ** 3)  # 1 GB = 1024^3 bytes
-        except Exception as e:
-            if not bot_database.was_warned('imgmodel_filename'):
-                bot_database.update_was_warned('imgmodel_filename')
-                log.warning("[Change Imgmodels] Failed to read the filesize of the selected image model (may be on remote system?).")
-                log.warning("[Change Imgmodels] Filesize will not be factored when evaluating presets in 'dict_imgmodels.yaml'.")
-                log.warning(f"[Change Imgmodels] File not found: {e}")
+        filename_available = bool(filename)
+
+        if filename_available:
+            try:
+                file_size_bytes = os.path.getsize(filename)
+                file_size_gb = file_size_bytes / (1024 ** 3)  # 1 GB = 1024^3 bytes
+            except Exception as e:
+                if not bot_database.was_warned('imgmodel_filename'):
+                    bot_database.update_was_warned('imgmodel_filename')
+                    log.warning("[Change Imgmodels] Failed to read the filesize of the selected image model (may be on remote system?).")
+                    log.warning("[Change Imgmodels] Filesize will not be factored when evaluating presets in 'dict_imgmodels.yaml'.")
+                    log.warning(f"[Change Imgmodels] File not found: {e}")
+                filename_available = False  # Disable filename-based filters if file is inaccessible
 
         match_counts = []
         for preset in presets:
-            # no guessing needed for exact match
-            exact_match = preset.pop('exact_match', '')
-            if exact_match and selected_imgmodel.get('imgmodel_name') == exact_match:
+            preset_copy = preset.copy()
+            exact_match = preset_copy.pop('exact_match', '')
+            if exact_match and imgmodel == exact_match:
                 log.info(f'Applying exact match imgmodel preset for "{exact_match}".')
-                return preset
-            # score presets by how close they match the selected imgmodel
-            filter_list = preset.pop('filter', [])
-            exclude_list = preset.pop('exclude', [])
+                return preset_copy
+
+            filter_list = preset_copy.pop('filter', [])
+            exclude_list = preset_copy.pop('exclude', [])
             match_count = 0
-            if filter_list:
-                if all(re.search(re.escape(filter_text), filename, re.IGNORECASE) for filter_text in filter_list):
+
+            # Only apply filename-dependent filters if filename is available
+            if filename_available:
+                if filter_list:
+                    if all(re.search(re.escape(filter_text), filename, re.IGNORECASE) for filter_text in filter_list):
+                        match_count += 1
+                    else:
+                        match_count -= 1
+                if exclude_list:
+                    if not any(re.search(re.escape(exclude_text), filename, re.IGNORECASE) for exclude_text in exclude_list):
+                        match_count += 1
+                    else:
+                        match_count -= 1
+                if 'max_filesize' in preset_copy and preset_copy['max_filesize'] > file_size_gb:
                     match_count += 1
-                else:
-                    match_count -= 1
-            if exclude_list:
-                if not any(re.search(re.escape(exclude_text), filename, re.IGNORECASE) for exclude_text in exclude_list):
-                    match_count += 1
-                else:
-                    match_count -= 1
-            if 'max_filesize' in preset and preset['max_filesize'] > file_size_gb:
-                match_count += 1
-                del preset['max_filesize']
-            match_counts.append((preset, match_count))
-        match_counts.sort(key=lambda x: x[1], reverse=True)  # Sort presets based on match counts
+                    del preset_copy['max_filesize']
+            else:
+                # Ignore max_filesize if we can't get it
+                preset_copy.pop('max_filesize', None)
+
+            match_counts.append((preset_copy, match_count))
+
+        match_counts.sort(key=lambda x: x[1], reverse=True)
         matched_preset = match_counts[0][0] if match_counts else None
         return matched_preset
     except Exception as e:
         log.error(f"Error guessing selected imgmodel data: {e}")
         return {}
 
-async def change_imgmodel(selected_imgmodel_params:dict, ictx:CtxInteraction=None):
+# Save new Img model data
+async def save_new_imgmodel_settings(ictx:CtxInteraction, updated_imgmodel_data:dict, imgmodel_tags):
+    settings:Settings = bot_settings
+    if config.is_per_server_imgmodels():
+        settings:Settings = get_settings(ictx)
 
-    # Merge selected imgmodel/tag data with base settings
-    async def merge_new_imgmodel_data(selected_imgmodel_params:dict):
-        try:
-            # Get extra model information
-            imgmodel_tags = None
-            imgmodel_settings = {}
-            imgmodels_data = load_file(shared_path.img_models, {})
-            if imgmodels_data.get('settings', {}).get('auto_change_imgmodels', {}).get('guess_model_params', True):
-                imgmodel_presets = copy.deepcopy(imgmodels_data.get('presets', []))
-                matched_preset = await guess_model_data(selected_imgmodel_params, imgmodel_presets)
-                if matched_preset:
-                    imgmodel_tags = matched_preset.pop('tags', None)
-                    imgmodel_settings['payload_mods'] = matched_preset.get('payload', {})
+    # Update settings
+    settings.imgmodel.payload_mods.update(updated_imgmodel_data)
+    # Update tags
+    settings.imgmodel.tags = imgmodel_tags
 
-            # Merge the selected imgmodel data with base imgmodel data
-            updated_imgmodel_params:dict = merge_base(imgmodel_settings, 'imgmodel')
+    # Remove options we do not want to retain in Settings
+    saved_override_settings:dict = settings.imgmodel.payload_mods.get('override_settings', {})
+    if not config.is_per_server_imgmodels():
+        imgmodel_options = list(saved_override_settings.keys())  # list all options
+        # Replace override_settings with an empty dict
+        saved_override_settings = {}
+        if imgmodel_options:
+            log.info(f"[Change Imgmodel] Applying Options which won't be retained for next bot startup: {imgmodel_options}")
 
-            # Set defaults
-            payload:dict = updated_imgmodel_params.setdefault('payload', {})
-            override_settings:dict = payload.setdefault('override_settings', {})
+    # Fix any invalid settings
+    settings.fix_settings()
+    # Save file
+    settings.save()
 
-            # Configure override settings
-            # For per-server imgmodels, only the image request payload will drive model changes (won't change now via API)
-            if config.is_per_server_imgmodels():
-                override_settings['sd_model_checkpoint'] = selected_imgmodel_params['sd_model_checkpoint']
-            # Forge manages VAE / Text Encoders using "forge_additional_modules" during change model request.
-            if api.imggen.is_forge():
-                # Ensure required params for Forge model loading
-                if not override_settings.get('forge_additional_modules'):
-                    forge_additional_modules = []
-                    if override_settings.get('sd_vae') and override_settings['sd_vae'] != "Automatic":
-                        vae = override_settings['sd_vae']
-                        forge_additional_modules.append(vae)
-                        log.info(f'[Change Imgmodel] VAE "{vae}" was added to Forge options "forge_additional_modules".')
-                    override_settings['forge_additional_modules'] = forge_additional_modules
-            else:
-                # Remove invalid settings
-                override_settings.pop('forge_inference_memory', None)
-                override_settings.pop('forge_additional_modules', None)
+    # Check if old/new average resolution is different
+    if settings.imgmodel.payload_mods.get('width') and settings.imgmodel.payload_mods.get('height'):
+        new_avg = avg_from_dims(settings.imgmodel.payload_mods['width'], settings.imgmodel.payload_mods['height'])
+        if new_avg != bot_settings.get_last_setting_for("last_imgmodel_res", ictx):
+            # save new res to bot database
+            bot_settings.set_last_setting_for("last_imgmodel_res", new_avg, ictx, save_now=True)
+            # update /image cmd res options
+            await bg_task_queue.put(update_size_options(new_avg))
 
-            # Unpack any tag presets
-            imgmodel_tags = base_tags.update_tags(imgmodel_tags)
+# Adds applicable override_settings to the imgmodel settings. returns override_settings
+def get_override_settings(imgmodel_data:dict) -> dict:
+    value_key = api.imggen.get_imgmodels.imgmodel_value_key or ''
+    override_settings = {}
+    # Apply integrations for for A1111-like APIs
+    if api.imggen.is_sdwebui_variant():
+        # Set defaults
+        override_settings:dict = imgmodel_data.setdefault('override_settings', {})
+        # For per-server imgmodels, only the image request payload will drive model changes (won't change now via API)
+        if config.is_per_server_imgmodels():
+            override_settings[value_key] = imgmodel_data[value_key]
+        # Forge manages VAE / Text Encoders using "forge_additional_modules" during change model request.
+        if api.imggen.is_forge():
+            log.info("Factoring required option for Forge: 'forge_additional_modules'. If you get a Forge error 'You do not have Clip State Dict!', please double-check your presets in 'dict_imgmodels.yaml'")
+            # Ensure required params for Forge model loading
+            if not override_settings.get('forge_additional_modules'):
+                forge_additional_modules = []
+                if override_settings.get('sd_vae') and override_settings['sd_vae'] != "Automatic":
+                    vae = override_settings['sd_vae']
+                    forge_additional_modules.append(vae)
+                    log.info(f'[Change Imgmodel] VAE "{vae}" was added to Forge options "forge_additional_modules".')
+                override_settings['forge_additional_modules'] = forge_additional_modules
+    return override_settings
 
-            return updated_imgmodel_params, imgmodel_tags
-        except Exception as e:
-            log.error(f"Error merging selected imgmodel data with base imgmodel data: {e}")
-            return {}, []
+# Merge selected imgmodel/tag data with base settings
+async def get_imgmodel_settings(imgmodel_data:dict) -> Tuple[dict, list]:
+    imgmodel_settings = {}
+    imgmodel_tags = []
+    try:
+        # Get extra model information
+        imgmodels_data = load_file(shared_path.img_models, {})
+        if imgmodels_data.get('settings', {}).get('auto_change_imgmodels', {}).get('guess_model_params', True):
+            imgmodel_presets = copy.deepcopy(imgmodels_data.get('presets', []))
+            matched_preset = await guess_model_data(imgmodel_data, imgmodel_presets)
+            if matched_preset:
+                imgmodel_tags = matched_preset.pop('tags', [])
+                imgmodel_settings = matched_preset.get('payload', {})
+        # Unpack any tag presets
+        imgmodel_tags = base_tags.update_tags(imgmodel_tags)
+    except Exception as e:
+        log.error(f"Error merging selected imgmodel data with base imgmodel data: {e}")
+    return imgmodel_settings, imgmodel_tags
 
-    # Save new Img model data
-    async def save_new_imgmodel_settings(load_new_model:dict, updated_imgmodel_params:dict, imgmodel_tags):
-        try:
-            settings:Settings = bot_settings
-            if config.is_per_server_imgmodels():
-                settings:Settings = get_settings(ictx)
-
-            # Update settings
-            settings.imgmodel.update(updated_imgmodel_params)
-            # Update tags
-            settings.imgmodel.tags = imgmodel_tags
-
-            # Update model loading payload
-            override_settings:dict = settings.imgmodel.payload_mods.get('override_settings', {})
-            load_new_model.update(override_settings)
-
-            # Remove options we do not want to retain in Settings
-            if not config.is_per_server_imgmodels():
-                imgmodel_options = list(override_settings.keys())  # list all options
-                # Replace override_settings with an empty dict
-                settings.imgmodel.payload_mods['override_settings'] = {}
-                if imgmodel_options:
-                    log.info(f"[Change Imgmodel] Applying Options which won't be retained for next bot startup: {imgmodel_options}")
-
-            # Fix any invalid settings
-            settings.fix_settings()
-            # Save file
-            settings.save()
-
-            # load the model
-            if not config.is_per_server_imgmodels():
-                await api.imggen.post_options.call(input_data=load_new_model)
-
-            # Check if old/new average resolution is different
-            new_avg = avg_from_dims(settings.imgmodel.payload['width'], settings.imgmodel.payload['height'])
-            if new_avg != bot_settings.get_last_setting_for("last_imgmodel_res", ictx):
-                # save new res to bot database
-                bot_settings.set_last_setting_for("last_imgmodel_res", new_avg, ictx, save_now=True)
-                # update /image cmd res options
-                await bg_task_queue.put(update_size_options(new_avg))
-        except Exception as e:
-            log.error(f"Error updating settings with the selected imgmodel data: {e}")
+async def change_imgmodel(imgmodel_data:dict, ictx:CtxInteraction=None, save:bool=True):
+    name_key = api.imggen.get_imgmodels.imgmodel_name_key or ''
+    value_key = api.imggen.get_imgmodels.imgmodel_value_key or name_key or ''
 
     # Save model details to bot database
-    bot_settings.set_last_setting_for("last_imgmodel_name", selected_imgmodel_params['imgmodel_name'], ictx)
-    bot_settings.set_last_setting_for("last_imgmodel_checkpoint", selected_imgmodel_params['sd_model_checkpoint'], ictx, save_now=True)
-    # Retain the model checkpoint
-    load_new_model = {'sd_model_checkpoint': selected_imgmodel_params['sd_model_checkpoint']}
+    bot_settings.set_last_setting_for("last_imgmodel_name", imgmodel_data[name_key], ictx)
+    bot_settings.set_last_setting_for("last_imgmodel_value", imgmodel_data[value_key], ictx, save_now=save)
+
+    options_payload = {}
+    imgmodel_input_key = api.imggen.post_options.imgmodel_input_key
+    if imgmodel_input_key:
+        options_payload[imgmodel_input_key] = imgmodel_data[value_key]
 
     # Guess model params, merge with basesettings
-    updated_imgmodel_params, imgmodel_tags = await merge_new_imgmodel_data(selected_imgmodel_params)
+    imgmodel_settings, imgmodel_tags = await get_imgmodel_settings(imgmodel_data)
+    
+    # Factors override_settings if applicable
+    options_payload.update(get_override_settings(imgmodel_settings))
+
+    try:
+        # load the model
+        if not config.is_per_server_imgmodels():
+            base_options = api.imggen.post_options.get_payload()
+            updated_options_payload = deep_merge(base_options, options_payload)
+            await api.imggen.post_options.call(input_data=updated_options_payload, sanitize=True)
+    except Exception as e:
+        log.error(f"Error updating settings with the selected imgmodel data: {e}")
+        raise
 
     # Save settings
-    await save_new_imgmodel_settings(load_new_model, updated_imgmodel_params, imgmodel_tags)
-    # Restart auto-change imgmodel task if triggered by a user interaction
-    if ictx:
-        global imgmodel_update_task
-        if imgmodel_update_task and not imgmodel_update_task.done():
-            imgmodel_update_task.cancel()
-            await bg_task_queue.put(start_auto_change_imgmodels('restarted'))
+    if save:
+        await save_new_imgmodel_settings(ictx, imgmodel_settings, imgmodel_tags)
+        # Restart auto-change imgmodel task if triggered by a user interaction
+        if ictx:
+            global imgmodel_update_task
+            if imgmodel_update_task and not imgmodel_update_task.done():
+                imgmodel_update_task.cancel()
+                await bg_task_queue.put(start_auto_change_imgmodels('restarted'))
 
-async def get_selected_imgmodel_params(selected_imgmodel_value:str, ictx:CtxInteraction=None) -> dict:
+async def get_imgmodel_data(imgmodel_value:str, ictx:CtxInteraction=None) -> dict:
     try:
-        selected_imgmodel_params = {}
+        imgmodel_data = {}
 
         all_imgmodels = await fetch_imgmodels(ictx)
+
+        name_key = api.imggen.get_imgmodels.imgmodel_name_key or ''
+        value_key = api.imggen.get_imgmodels.imgmodel_value_key or ''
+        filename_key = api.imggen.get_imgmodels.imgmodel_filename_key or ''
+
         for imgmodel in all_imgmodels:
             # check that the value matches a valid checkpoint
-            if selected_imgmodel_value == (imgmodel.get('imgmodel_name') or imgmodel.get('sd_model_checkpoint')):
-                selected_imgmodel_params = {"sd_model_checkpoint": imgmodel["sd_model_checkpoint"],
-                                            "imgmodel_name": imgmodel.get("imgmodel_name"),
-                                            "filename": imgmodel.get("filename", None)}
+            if imgmodel_value == (imgmodel.get(name_key) or imgmodel.get(value_key)):
+                imgmodel_data = {k: imgmodel[k]
+                                for k in (value_key, name_key, filename_key)
+                                if k and k in imgmodel}
                 break
-        if not selected_imgmodel_params:
-            log.error(f'Img model not found: {selected_imgmodel_value}')
-        return selected_imgmodel_params
+        if not imgmodel_data:
+            log.error(f'Img model not found: {imgmodel_value}')
+        return imgmodel_data
 
     except Exception as e:
         log.error(f"Error getting selected imgmodel data: {e}")
         return {}
 
-async def process_imgmodel(ctx: commands.Context, selected_imgmodel_value:str):
+async def process_imgmodel(ctx: commands.Context, selected_imgmodel:str):
     user_name = get_user_ctx_inter(ctx).display_name or None
     try:
-        if not selected_imgmodel_value:
+        if not selected_imgmodel:
             await ctx.reply('**No Img model was selected**.', ephemeral=True, delete_after=5)
             return
         await ireply(ctx, 'Img model change') # send a response msg to the user
 
-        log.info(f'{user_name} used "/imgmodel": "{selected_imgmodel_value}"')
+        log.info(f'{user_name} used "/imgmodel": "{selected_imgmodel}"')
         # offload to TaskManager() queue
-        params = await get_selected_imgmodel_params(selected_imgmodel_value) # {sd_model_checkpoint, imgmodel_name, filename}
-        change_imgmodel_params = Params(imgmodel=params)
-        change_imgmodel_task = Task('change_imgmodel', ctx, params=change_imgmodel_params)
+        params = await get_imgmodel_data(selected_imgmodel) # {value, name, filename}
+        change_imgmodel_data = Params(imgmodel=params)
+        change_imgmodel_task = Task('change_imgmodel', ctx, params=change_imgmodel_data)
         await task_manager.queue_task(change_imgmodel_task, 'gen_queue')
 
     except Exception as e:
@@ -5863,13 +5871,14 @@ if imggen_enabled:
     async def imgmodel(ctx: commands.Context):
         all_imgmodels = await fetch_imgmodels(ctx)
         if all_imgmodels:
-            items_for_img_model = [i["imgmodel_name"] for i in all_imgmodels]
-            warned_too_many_img_model = False # TODO use the warned_once feature?
-            imgmodels_view = SelectOptionsView(items_for_img_model,
+            display_key = api.imggen.get_imgmodels.imgmodel_name_key or api.imggen.get_imgmodels.imgmodel_value_key
+            items_for_imgmodel = [i[display_key] for i in all_imgmodels]
+            warned_too_many_imgmodel = False # TODO use the warned_once feature?
+            imgmodels_view = SelectOptionsView(items_for_imgmodel,
                                             custom_id_prefix='imgmodels',
                                             placeholder_prefix='ImgModels: ',
                                             unload_item=None,
-                                            warned=warned_too_many_img_model)
+                                            warned=warned_too_many_imgmodel)
             view_message = await ctx.send('### Select an Image Model.', view=imgmodels_view, ephemeral=True)
             await imgmodels_view.wait()
             selected_item = imgmodels_view.get_selected()

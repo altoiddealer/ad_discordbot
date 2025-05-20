@@ -1,10 +1,8 @@
-# These are the baseline settings you may adjust to your liking.
-# When you use bot commands like /character, /imgmodel, etc - those settings will have higher priority.
-# Note that Img model settings defined here DO NOT get merged until the bot changes Img models (via '/imgmodel' cmd, or the 'auto change Img models' feature).
+# These are the baseline settings you may adjust to your liking (or at least as reference to internal default values)
+# These settings will override internal defaults.
+# You may include any of these directly in character files (see '/examples/characters' for usage) which will override these values.
 
 # To see the currently active settings, look in internal/activesettings.yaml (which is not intended to be edited).
-
-# There are many settings here you probably don't need to tinker with.
 
 behavior:
   reply_to_itself: 0.0                # 0.0 = never happens / 1.0 = always happens

@@ -1056,6 +1056,9 @@ class ImgGenClient(APIClient):
     def is_forge(self) -> bool:
         return ('forge' in self.name.lower() and not self.is_reforge())
     
+    def is_sdwebui_variant(self) -> bool:
+        return any(substring in self.name.lower() for substring in ['stable', 'a1111', 'sdwebui', 'forge'])
+    
     def supports_loractrl(self) -> bool:
         return (self.is_sdwebui() or self.is_reforge()) and not self.is_forge()
 
@@ -1248,8 +1251,8 @@ class Endpoint:
         Recursively sanitizes the payload using the OpenAPI schema by removing unknown keys.
         """
         ep_schema = self.schema or self.get_schema()
-        if not ep_schema:
-            log.debug(f"No schema found for {self.method} {self.path} — skipping sanitization")
+        if not ep_schema or not ep_schema.get("properties"):
+            log.debug(f"No schema or schema properties found for {self.method} {self.path} — skipping sanitization")
             return payload
 
         def _sanitize(data: dict, schema_props: dict, required_fields: list = None) -> dict:
@@ -1608,6 +1611,10 @@ class ImgGenEndpoint(Endpoint):
         self.images_result_key:Optional[str] = None
         self.pnginfo_result_key:Optional[str] = None
         self.pnginfo_image_key:Optional[str] = None
+        self.imgmodel_input_key:Optional[str] = None
+        self.imgmodel_value_key:Optional[str] = None
+        self.imgmodel_name_key:Optional[str] = None
+        self.imgmodel_filename_key:Optional[str] = None
         self.control_types_key:Optional[str] = None
         self.progress_queued = 0
 
@@ -1720,7 +1727,7 @@ class StepExecutor:
             if save_as:
                 self.context[save_as] = step_result
             else:
-                return step_result
+                result = step_result
 
         # print("final result:", result)
         return result
