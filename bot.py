@@ -5706,24 +5706,23 @@ async def guess_model_data(imgmodel_data:dict, presets:list[dict]) -> dict|None:
         return {}
 
 # Save new Img model data
-async def save_new_imgmodel_settings(ictx:CtxInteraction, updated_imgmodel_data:dict, imgmodel_tags):
+async def save_new_imgmodel_settings(ictx:CtxInteraction, new_imgmodel_settings:dict, imgmodel_tags):
+    # Remove options we do not want to retain in Settings
+    override_settings:dict = new_imgmodel_settings.get('override_settings', {})
+    if override_settings and not config.is_per_server_imgmodels():
+        imgmodel_options = list(override_settings.keys())  # list all options
+        if imgmodel_options:
+            log.info(f"[Change Imgmodel] Applying Options which won't be retained for next bot startup: {imgmodel_options}")
+        # Remove override_settings
+        new_imgmodel_settings.pop('override_settings')
+
+    # Update settings
     settings:Settings = bot_settings
     if config.is_per_server_imgmodels():
         settings:Settings = get_settings(ictx)
 
-    # Update settings
-    settings.imgmodel.payload_mods.update(updated_imgmodel_data)
-    # Update tags
+    settings.imgmodel.payload_mods = new_imgmodel_settings
     settings.imgmodel.tags = imgmodel_tags
-
-    # Remove options we do not want to retain in Settings
-    saved_override_settings:dict = settings.imgmodel.payload_mods.get('override_settings', {})
-    if not config.is_per_server_imgmodels():
-        imgmodel_options = list(saved_override_settings.keys())  # list all options
-        # Replace override_settings with an empty dict
-        saved_override_settings = {}
-        if imgmodel_options:
-            log.info(f"[Change Imgmodel] Applying Options which won't be retained for next bot startup: {imgmodel_options}")
 
     # Fix any invalid settings
     settings.fix_settings()
