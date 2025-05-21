@@ -971,7 +971,7 @@ class ImgGenClient(APIClient):
                     
                     eta_message = 'Not yet available'
 
-                    await discord_embeds.send('img_gen', f'Waiting for {self.name} ...', f'{self.progress_bar(0)}\n**ETA**: {eta_message}')
+                    await discord_embeds.send('img_gen', f'Waiting for {self.name} ...', f'{progress_bar(0)}\n**ETA**: {eta_message}')
 
                     async for update in self.get_progress.poll():
                         progress = update["progress"]
@@ -985,7 +985,7 @@ class ImgGenClient(APIClient):
                             title = f"Generating image: {progress * 100:.0f}%{comment}"
                             eta_message = f'{round(eta, 2)} seconds'
 
-                        description = f"{self.progress_bar(progress)}\n**ETA**: {eta_message}"
+                        description = f"{progress_bar(progress)}\n**ETA**: {eta_message}"
 
                         await discord_embeds.edit("img_gen", title, description)
                 finally:
