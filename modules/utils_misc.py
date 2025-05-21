@@ -10,6 +10,14 @@ import mimetypes
 import re
 from typing import Union, Optional
 
+def progress_bar(value, length=15):
+    try:
+        filled_length = int(length * value)
+        bar = ':black_square_button:' * filled_length + ':black_large_square:' * (length - filled_length)
+        return f'{bar}'
+    except Exception:
+        return 0
+
 def check_probability(probability) -> bool:
     probability = max(0.0, min(1.0, probability))
     return random.random() < probability

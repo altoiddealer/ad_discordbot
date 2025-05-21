@@ -176,6 +176,33 @@ presets:
 workflows:
   - name: img_to_img
     steps:
+      - call_api:
+        api_name: Stable Diffusion WebUI
+        endpoint_name: Post img2img
+        payload_type: json
+        input_data:
+          init_images:
+            path: "inputs/photo.jpg"
+            as: base64
+          prompt: "make it look like a Pixar character"
+        save_as: result
+
+  - name: Comfy Wan t2v
+    steps:
+      - group:
+        - - call_api:
+              api_name: ComfyUI
+              endpoint_name: Prompt
+              payload_type: json
+              input_data:
+                prompt: {prompt}
+        - - poll_api:
+              api_name: ComfyUI
+              endpoint_name: Progress
+              progress_key: progress
+              eta_key: eta_relative
+              message: Generating a video
+
       - name: Transform Image
         api_name: Stable Diffusion WebUI
         endpoint_name: Post img2img

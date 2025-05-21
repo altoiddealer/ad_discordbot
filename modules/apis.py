@@ -15,7 +15,7 @@ import base64
 import copy
 from typing import Any, Dict, Tuple, List, Optional, Union, Type, Callable, Awaitable, AsyncGenerator
 from modules.utils_shared import shared_path, patterns, load_file, get_api
-from modules.utils_misc import valueparser, deep_merge, is_base64, guess_format_from_headers, guess_format_from_data
+from modules.utils_misc import valueparser, progress_bar, deep_merge, is_base64, guess_format_from_headers, guess_format_from_data
 import modules.utils_processing as processing
 
 from modules.logs import import_track, get_logger; import_track(__file__, fp=True); log = get_logger(__name__)  # noqa: E702
@@ -277,10 +277,10 @@ class API:
         # Not found
         return None, config
       
-    async def run_workflow(self, name:str, input_data=None):
+    async def run_workflow(self, name:str, input_data=None, ictx=None):
         workflow_steps = apisettings.get_workflow_steps_for(name)
         log.info(f'[API Workflows] Running "{name}" with ({len(workflow_steps)} processing steps)')
-        handler = StepExecutor(steps=workflow_steps, input_data=input_data)
+        handler = StepExecutor(steps=workflow_steps, input_data=input_data, ictx=ictx)
         return await handler.run()
 
 class WebSocketConnectionConfig:
@@ -957,14 +957,6 @@ class ImgGenClient(APIClient):
     def _get_self_ep_class(self):
         return ImgGenEndpoint
 
-    
-    def progress_bar(self, value, length=15):
-        try:
-            filled_length = int(length * value)
-            bar = ':black_square_button:' * filled_length + ':black_large_square:' * (length - filled_length)
-            return f'{bar}'
-        except Exception:
-            return 0
 
     async def track_progress(self, discord_embeds):
         try:
@@ -1355,6 +1347,7 @@ class Endpoint:
                    payload_map: dict = None,
                    sanitize:bool=False,
                    extract_keys:str|List[str]|None=None,
+                   ictx=None,
                    **kwargs
                    ) -> Any:
         if self.client is None:
@@ -1412,23 +1405,18 @@ class Endpoint:
         # Hand off full response to StepExecutor
         if isinstance(self.response_handling, list):
             log.info(f'[{self.name}] Executing "response_handling" ({len(self.response_handling)} processing steps)')
-            handler = StepExecutor(steps=self.response_handling, input_data=response)
+            handler = StepExecutor(steps=self.response_handling, input_data=response, ictx=ictx)
             results = await handler.run()
 
         return results
 
     async def poll(self,
-                # progress_fetcher: Callable[[], Awaitable[dict]],
-                max_retries: int = 5,
-                interval: float = 1.0,
-                progress_key: str = "progress",
-                eta_key: str = "eta_relative",
-                **kwargs) -> AsyncGenerator[dict, None]:
+                   max_retries: int = 5,
+                   interval: float = 1.0,
+                   progress_key: str = "progress",
+                   eta_key: str = "eta_relative",
+                   **kwargs) -> AsyncGenerator[dict, None]:
         """
-        General-purpose progress poller.
-        Yields progress dicts (e.g., {progress: 0.3, eta_relative: 12.5}) from the `progress_fetcher` function.
-
-        :param progress_fetcher: Callable that fetches progress data.
         :param max_retries: Max retries on failure or missing progress.
         :param interval: Wait time between polls (seconds).
         :param progress_key: Key in returned dict to use for progress.
@@ -1441,7 +1429,7 @@ class Endpoint:
 
         while retry_count < max_retries:
             try:
-                progress_data = await self.call(**kwargs) # progress_fetcher()
+                progress_data = await self.call(**kwargs)
             except Exception as e:
                 log.warning(f"[{self.name}] Progress fetcher failed: {e}")
                 retry_count += 1
@@ -1658,7 +1646,7 @@ class APIResponse:
 
 
 class StepExecutor:
-    def __init__(self, steps: list[dict], input_data: Any = None):
+    def __init__(self, steps: list[dict], input_data: Any = None, ictx=None):
         """
         Executes a sequence of data transformation steps with optional context storage.
 
@@ -1672,13 +1660,7 @@ class StepExecutor:
         self.context: dict[str, Any] = {}
         self.original_input_data = input_data
         self.response = input_data if isinstance(input_data, APIResponse) else None
-
-        # Store full response in context for access by steps (e.g. headers)
-        # if self.response:
-        #     self.context["_response"] = self.response
-        #     self.context["_headers"] = self.response.headers
-        #     self.context["_status"] = self.response.status
-        #     self.context["_content_type"] = self.response.content_type
+        self.ictx = ictx
 
     def _split_step(self, step: dict) -> tuple[str, dict, dict]:
         step = step.copy()
@@ -1819,7 +1801,7 @@ class StepExecutor:
         results = []
 
         for index, item in enumerate(items):
-            sub_executor = StepExecutor(steps)
+            sub_executor = StepExecutor(steps, ictx=self.ictx)
             sub_executor.response = self.response
 
             sub_executor.context = {
@@ -1848,7 +1830,7 @@ class StepExecutor:
             raise ValueError("step_group config must be a list of lists of steps")
 
         async def run_subgroup(steps: list[dict], index: int):
-            sub_executor = StepExecutor(steps)
+            sub_executor = StepExecutor(steps, ictx=self.ictx)
             sub_executor.response = self.response
             sub_executor.context = self.context.copy()
             return await sub_executor.run(data)
@@ -1904,6 +1886,96 @@ class StepExecutor:
         if not isinstance(response, APIResponse):
             return response
         return response.body
+
+    @step_returns("data", "input", default="data")
+    async def _step_poll_api(self, data: Any, config: dict) -> list[dict]:
+        """
+        Polls an endpoint for progress updates.
+        """
+        from modules.utils_discord import Embeds
+        embeds = Embeds(ictx = self.ictx)
+        api:API = await get_api()
+        client_name, endpoint_name = self.resolve_api_names(config, 'call_api')
+        api_client:APIClient = api.get_client(client_name=client_name, strict=True)
+        endpoint:Endpoint = api_client.get_endpoint(endpoint_name=endpoint_name, strict=True)
+
+        max_retries = config.get("max_retries", 30)
+        interval = config.get("interval", 1.0)
+        progress_key = config.get("progress_key", "progress")
+        eta_key = config.get("eta_key", "eta_relative")
+        message = config.get("message", "Generating image")
+
+        eta_message = ''
+
+        await embeds.send('img_gen', f'Waiting for {api_client.name} ...', f'{progress_bar(0)}\n{eta_message}')
+        try:
+            updates = []        
+            async for update in endpoint.poll(max_retries=max_retries,
+                                            interval=interval,
+                                            progress_key=progress_key,
+                                            eta_key=eta_key):
+                progress = update["progress"]
+                eta = update["eta"]
+                stalled = update["stalled"]
+
+                if progress <= 0.01:
+                    title = "Initializing ..."
+                else:
+                    comment = " (Stalled)" if stalled else ""
+                    title = f"{message}: {progress * 100:.0f}%{comment}"
+                    eta_message = f'{round(eta, 2)} seconds'
+
+                description = f"{progress_bar(progress)}\n**ETA**: {eta_message}"
+
+                await embeds.edit("img_gen", title, description)
+
+                updates.append(update)
+        except Exception as e:
+            await embeds.edit_or_send('img_gen', f'[{api_client.name}] An error occurred while {message}', e)
+        finally:
+            await embeds.delete('img_gen')
+
+        return updates
+
+
+    async def track_progress(self, discord_embeds):
+        try:
+            if not self.get_progress:
+                await discord_embeds.send('img_gen', f'Generating an image with {self.name} ...', '')
+            else:
+                while self.get_progress.progress_queued > 0:
+                    await asyncio.sleep(1.0)
+
+                try:
+                    self.get_progress.progress_queued += 1
+                    
+                    eta_message = 'Not yet available'
+
+                    await discord_embeds.send('img_gen', f'Waiting for {self.name} ...', f'{progress_bar(0)}\n**ETA**: {eta_message}')
+
+                    async for update in self.get_progress.poll():
+                        progress = update["progress"]
+                        eta = update["eta"]
+                        stalled = update["stalled"]
+
+                        if progress <= 0.01:
+                            title = "Preparing to generate image ..."
+                        else:
+                            comment = " (Stalled)" if stalled else ""
+                            title = f"Generating image: {progress * 100:.0f}%{comment}"
+                            eta_message = f'{round(eta, 2)} seconds'
+
+                        description = f"{progress_bar(progress)}\n**ETA**: {eta_message}"
+
+                        await discord_embeds.edit("img_gen", title, description)
+                finally:
+                    self.get_progress.progress_queued -= 1
+
+        except Exception as e:
+            log.error(f'Error tracking {self.name} image generation progress: {e}')
+        finally:
+            await discord_embeds.delete('img_gen')
+
 
     @step_returns("data", "input", default="data")
     def _step_extract_key(self, data: Any, config: Union[str, dict]) -> Any:
