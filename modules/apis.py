@@ -1465,26 +1465,33 @@ class Endpoint:
         if eta_key:
             progress_values['eta'] = eta_key
 
-        await embeds.send('img_gen', f'Waiting for {self.client.name} ...', f'{progress_bar(0)}')
-
         STALL_THRESHOLD = 5.0
         last_progress = 0.0
         stall_time = 0.0
-        eta_message = ''
 
         updates = []
+
+        # Prevent multiple progress tasks on same endpoint from running in tandem
+        while self.fetching_progress == True:
+            await asyncio.sleep(1.0)
+        self.fetching_progress = True
+
         try:
-            # Prevent multiple progress tasks on same endpoint from running in tandem
-            while self.fetching_progress == True:
-                await asyncio.sleep(1.0)
-            self.fetching_progress = True
-            try:
+            title = f'Waiting for {self.client.name} ...'
+            description = f'{progress_bar(0)}'
+            eta_message = ''
+            await embeds.send('img_gen', title, description)
+
+            while last_progress < 1.0:           
                 async for update in self.poll(return_values=progress_values,
                                               interval=interval,
                                               duration=duration,
                                               num_calls=num_calls,
                                               **kwargs):
-                    # Handle progress logic
+                    # Collect updates
+                    updates.append(update)
+
+                    # Read progress safely
                     progress = update.get("progress", 0.0)
                     try:
                         progress = float(progress)
@@ -1493,34 +1500,32 @@ class Endpoint:
                     progress = max(0.0, min(progress, 1.0))
                     eta = update.get('eta')
 
+                    # Check if complete
+                    if progress >= 1.0:
+                        break
+
+                    # Check for stalled condition
                     if progress == last_progress:
                         stall_time += interval
                     else:
                         stall_time = 0.0
 
-                    if progress <= 0.01:
-                        title = "Initializing ..."
-                    else:
+                    # Edit the Discord Embed
+                    if progress > 0.01:
                         comment = " (Stalled)" if stall_time >= STALL_THRESHOLD else ""
                         title = f"{message}: {progress * 100:.0f}%{comment}"
                         if isinstance(eta, float) or isinstance(eta, int):
-                            eta_message = f'{round(eta, 2)} seconds'
+                            eta_message = f'\n**ETA**: {round(eta, 2)} seconds'
+                        description = f"{progress_bar(progress)}{eta_message}"
+                        await embeds.edit("img_gen", title, description)
 
-                    description = f"{progress_bar(progress)}\n**ETA**: {eta_message}"
-
-                    await embeds.edit("img_gen", title, description)
-
-                    updates.append(update)
-
-                    if progress >= 1.0:
-                        break
-            finally:
-                self.fetching_progress = False
+                    last_progress = progress
 
         except Exception as e:
             await embeds.edit_or_send('img_gen', f'[{self.client.name}] An error occurred while {message}', e)
         finally:
             await embeds.delete('img_gen')
+            self.fetching_progress = False
 
         return updates
 
@@ -1930,10 +1935,7 @@ class StepExecutor:
         api_client:APIClient = api.get_client(client_name=client_name, strict=True)
         endpoint:Endpoint = api_client.get_endpoint(endpoint_name=endpoint_name, strict=True)
 
-        input = config.pop("input", data)
-
-        response = await endpoint.call(input_data=input,
-                                       **config)
+        response = await endpoint.call(**config)
         if not isinstance(response, APIResponse):
             return response
         return response.body
