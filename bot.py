@@ -2295,7 +2295,7 @@ class TaskProcessing(TaskAttributes):
         try:
             # Start progress task and generation task concurrently
             images_task = asyncio.create_task(api.imggen.save_images_and_return(self.payload, self.params.mode))
-            progress_task = asyncio.create_task(api.imggen.track_progress(discord_embeds=self.embeds))
+            progress_task = asyncio.create_task(api.imggen.track_progress(ictx=self.ictx))
             # Wait for images_task to complete
             images, pnginfo = await images_task
             # Once images_task is done, cancel progress_task

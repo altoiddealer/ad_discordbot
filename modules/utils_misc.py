@@ -8,7 +8,7 @@ import copy
 import base64
 import mimetypes
 import re
-from typing import Union, Optional
+from typing import Union, Optional, Any
 
 def progress_bar(value, length=15):
     try:
@@ -37,6 +37,37 @@ def fix_dict(set, req, src: str | None = None, warned: bool = False, path=""):
             set[k], child_warned = fix_dict(set[k], req_v, src, warned, current_path)
             was_warned = was_warned or child_warned  # Update was_warned if any child call was warned
     return set, was_warned
+
+def extract_key(data: Any, config: Union[str, dict]) -> Any:
+    if isinstance(config, dict):
+        path = config.get("path")
+        default = config.get("default", None)
+    else:
+        path = config
+        default = None
+
+    if not isinstance(path, str):
+        raise ValueError("Path must be a string.")
+
+    try:
+        parts = re.findall(r'[^.\[\]]+|\[\d+\]', path)
+        for part in parts:
+            if re.fullmatch(r'\[\d+\]', part):  # list index
+                idx = int(part[1:-1])
+                if isinstance(data, list):
+                    data = data[idx]
+                else:
+                    raise TypeError(f"Expected list for index access but got {type(data).__name__}")
+            else:  # dict key
+                if isinstance(data, dict):
+                    data = data[part]
+                else:
+                    raise TypeError(f"Expected dict for key '{part}' but got {type(data).__name__}")
+        return data
+    except (KeyError, IndexError, TypeError) as e:
+        if default is not None:
+            return default
+        raise ValueError(f"Failed to extract path '{path}': {e}")
 
 # Safer version of update_dict
 def deep_merge(base: dict, override: dict) -> dict:

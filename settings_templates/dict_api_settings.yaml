@@ -1,20 +1,22 @@
-# Overview of sections:
-# - bot_api_functions: defines APIs/endpoints that the bot can use "main functions" (bot commands, message responses, etc)
-# - all_apis: To define ALL APIs/endpoints including ones being used for main functions, and non-main bot functions (via the Tags system / "user commands", etc)
+# Overview:
+# - bot_api_functions: defines APIs/endpoints for the bot's "main functions" (bot commands, message responses, etc). Only one "main client" allowed for each: ImgGen / TextGem / TTSGen
+# - all_apis: A list of ALL APIs/endpoints including ones being used for main functions, and non-main bot functions (via the Tags system / "user commands", etc)
 # - presets: Most 'dict' values in this config can include a 'preset_name' key (linked to a preset dict), to limit redundancy.
 # - workflows: For executing custom logic beyond default bahviors (ei: add additional post-processing from a 'post_txt2img' endpoint call). For non-main functions only (N/A to main functions)
 
 bot_api_functions:
-  # Be sure to first define your APIs in "all_apis" (below this section), then link them via "name" (Note: case sensitive!!)
-  # - You may comment out or set null value for any endpoints in this section which are N/A for your use case (will disable that "main function")
-  # - You may need to research the input/output structure for your API endpoints to configure "_key" values / response_handling
-  # - The extra "_key" values in this section (ei: 'output_file_path_key') can simplify common expected API behavior, but **ARE NOT REQUIRED**.
-  #   Example scenario: Your main TTS client's post generate endpoint returns raw data (bytes). The bot's main function needs a file path. ...What should I do?
-  #                   - Remove 'output_file_path_key', or null the value
-  #                   - Define a "response_handling" for this endpoint (in 'all_apis') so it return a file path after the last 'step'
+  # Instructions:
+  # - Define your APIs in "all_apis" (below this section), then link them via "name" (Note: case sensitive!!)
+  # - Comment out or set null value for any data in this section which is N/A for the API (ex: Commenting/removing 'get_progress' will disable progress checking for main ImgGen tasks)
+  # - You may need to research the input/output structure for your API endpoints to configure "_key" values. ('response_handling' can also be used to return expected value types - more on this below)
+  # - The extra "_key" values in this section (ei: 'output_file_path_key') are intended to simplify common expected API behavior, but **ARE NOT REQUIRED**.
+  #   Example scenario: Your main TTS client's 'post_generate' endpoint returns raw data (bytes). The bot's main functions need the file path. ...What should I do?
+  #                   - Set 'output_file_path_key: null' (or remove the line)
+  #                   - Define a "response_handling" for this endpoint (in 'all_apis') so it returns a file path after the last 'step'
 
   imggen:
-    api_name: Stable Diffusion WebUI # Note: Some client-specific integrations require 'Forge', 'Reforge', 'Comfy' to be included in name.
+    # Note: Some client-specific integrations require 'Forge', 'Reforge', 'Comfy' to be included in name.
+    api_name: Stable Diffusion WebUI
     post_txt2img:
       endpoint_name: Post txt2img
       prompt_key: prompt              # ex: payload = {'prompt': 'This is my prompt', ...}
@@ -22,7 +24,10 @@ bot_api_functions:
       seed_key: seed                  # ex: payload = {'seed': 12345, ...}
       images_result_key: images       # ex: response = {'images': <list of images in base64 format>, ...}
     post_img2img: {endpoint_name: Post img2img, prompt_key: prompt, neg_prompt_key: negative_prompt, seed_key: seed, images_result_key: images}
-    get_progress: {endpoint_name: Get Progress}
+    get_progress:
+      endpoint_name: Get Progress
+      progress_key: progress          # ex: response = {'progress': 0.2, ...}
+      eta_key: eta_relative           # ex: response = {'eta_relative': 163.53, ...}
     post_pnginfo:
       endpoint_name: Post PNG Info
       pnginfo_image_key: image        # ex: payload = {'image': '<the image data>', ...}
