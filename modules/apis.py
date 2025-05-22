@@ -1729,10 +1729,10 @@ class StepExecutor:
 
     def _split_step(self, step: dict) -> tuple[str, dict, dict]:
         step = step.copy()
-        metadata_keys = {"save_as", "returns", "skip_if", "log", "on_error"}  # extensible
+        metadata_keys = {"save_as", "on_error"} #, "returns", "skip_if", "log"}  # extensible
         metadata = {k: step.pop(k) for k in metadata_keys if k in step}
         if len(step) != 1:
-            raise ValueError(f"Invalid step format: {step}")
+            raise ValueError(f"[StepExecutor] Invalid step format: {step}")
         step_name, config = next(iter(step.items()))
         return step_name, config, metadata
 
@@ -1746,7 +1746,7 @@ class StepExecutor:
 
         for step in self.steps:
             if not isinstance(step, dict):
-                raise ValueError(f"Invalid step: {step}")
+                raise ValueError(f"[StepExecutor] Invalid step: {step}")
 
             step = step.copy()
 
@@ -1754,27 +1754,45 @@ class StepExecutor:
 
             method = getattr(self, f"_step_{step_name}", None)
             if not method:
-                raise NotImplementedError(f"Unsupported step: {step_name}")
+                raise NotImplementedError(f"[StepExecutor] Unsupported step: {step_name}")
             
-            if step_name == "for_each":
-                # _step_for_each will resolve placeholders per-item
-                step_result = await method(result, config)
-            else:
-                # Resolve any placeholders using the current context
-                config = self._resolve_context_placeholders(config)
-                # Run the step and determine where to store the result
-                step_result = await method(result, config) if asyncio.iscoroutinefunction(method) else method(result, config)
+            try:
+                if step_name == "for_each":
+                    # _step_for_each will resolve placeholders per-item
+                    step_result = await method(result, config)
+                else:
+                    # Resolve any placeholders using the current context
+                    config = self._resolve_context_placeholders(config)
+                    # Run the step and determine where to store the result
+                    step_result = await method(result, config) if asyncio.iscoroutinefunction(method) else method(result, config)
 
-            # print("step name:", step_name, "step result:", step_result)
+                # print("step name:", step_name, "step result:", step_result)
 
-            # Apply returns logic
-            step_result = self._apply_returns(step_result, result, config)
-            # print("step_result OUT:", step_result)
-            save_as = meta.get("save_as")
-            if save_as:
-                self.context[save_as] = step_result
-            else:
-                result = step_result
+                # Apply returns logic
+                step_result = self._apply_returns(step_result, result, config)
+                # print("step_result OUT:", step_result)
+                save_as = meta.get("save_as")
+                if save_as:
+                    self.context[save_as] = step_result
+                else:
+                    result = step_result
+            except Exception as e:
+                on_error = meta.get("on_error", "raise")
+                if on_error == "skip":
+                    log.error(f"[StepExecutor] Step '{step_name}' failed and was skipped: {e}")
+                    continue
+                elif on_error == "default":
+                    # Use default value from config or None
+                    default_value = config.get("default", None)
+                    log.error(f"[StepExecutor] Step '{step_name}' failed, using default: {default_value} ({e})")
+                    step_result = default_value
+                    if meta.get("save_as"):
+                        self.context[meta["save_as"]] = step_result
+                    else:
+                        result = step_result
+                else:  # Default behavior: raise
+                    log.error(f"[StepExecutor] An error occured while processing step '{step_name}': {e}")
+                    raise
 
         # print("final result:", result)
         return result
@@ -1786,8 +1804,8 @@ class StepExecutor:
 
         if allowed and returns not in allowed:
             log.warning(
-                f"Ignoring invalid 'returns' value '{returns}'. "
-                f"Allowed: {allowed}. Falling back to default: '{default}'."
+                f"[StepExecutor] Ignoring invalid 'returns' value '{returns}'. "
+                f"[StepExecutor] Allowed: {allowed}. Falling back to default: '{default}'."
             )
             returns = default
 
@@ -1800,17 +1818,17 @@ class StepExecutor:
         if returns == "dict":
             if isinstance(result, dict):
                 return result
-            log.warning(f"'returns': 'dict' requested but result is of type {type(result).__name__}. Falling back to 'data'.")
+            log.warning(f"[StepExecutor] 'returns': 'dict' requested but result is of type {type(result).__name__}. Falling back to 'data'.")
             return result
         if returns == "path":
             if isinstance(result, dict):
                 return result.get('path', result)
             if isinstance(result, str):
                 return result
-            log.warning(f"'returns': 'path' requested but result is of type {type(result).__name__}. Falling back to 'data'.")
+            log.warning(f"[StepExecutor] 'returns': 'path' requested but result is of type {type(result).__name__}. Falling back to 'data'.")
             return result
 
-        log.warning(f"Unhandled 'returns' value: {returns}. Falling back to 'data'.")
+        log.warning(f"[StepExecutor] Unhandled 'returns' value: {returns}. Falling back to 'data'.")
         return result
 
     def step_returns(*allowed: str, default: str = "data"):
@@ -1855,13 +1873,13 @@ class StepExecutor:
         steps = config.get("steps")
 
         if not steps or not isinstance(steps, list):
-            raise ValueError("for_each step requires a 'steps' list.")
+            raise ValueError("[StepExecutor] 'for_each' step requires a 'steps' list.")
 
         # Determine iterable: from context (by string) or directly as list
         items = self.context.get(source) if isinstance(source, str) else source
 
         if not isinstance(items, list):
-            raise TypeError(f"'for_each' expected a list but got {type(items).__name__}")
+            raise TypeError(f"[StepExecutor] 'for_each' expected a list but got {type(items).__name__}")
 
         results = []
 
@@ -1911,9 +1929,9 @@ class StepExecutor:
         Example: - return: image_list
         """
         if not isinstance(config, str):
-            raise ValueError(f"'return' step expects a string key, got: {type(config).__name__}")
+            raise ValueError(f"[StepExecutor] 'return' step expects a string key, got: {type(config).__name__}")
         if config not in self.context:
-            raise KeyError(f"Context does not contain key '{config}'")
+            raise KeyError(f"[StepExecutor] Context does not contain key '{config}'")
         return self.context[config]
     
     def resolve_api_names(self, config:dict, step_name:str):
@@ -1925,7 +1943,7 @@ class StepExecutor:
             if test_ep:
                 client_name = self.client.name
             else:
-                raise ValueError(f'API Client name was not included in "{step_name}" response handling step')
+                raise ValueError(f'[StepExecutor] API Client name was not included in "{step_name}" response handling step')
         return client_name, endpoint_name
 
     @step_returns("data", "input", default="data")
@@ -2011,7 +2029,7 @@ class StepExecutor:
             if "," in data:
                 data = data.split(",", 1)[1]
             return base64.b64decode(data)
-        raise TypeError("Expected base64 string for decode_base64 step")
+        raise TypeError("[StepExecutor] Expected base64 string for 'decode_base64' step")
 
     @step_returns("data", "input", default="data")
     def _step_type(self, data, to_type):
@@ -2028,44 +2046,46 @@ class StepExecutor:
         }
 
         if not isinstance(data, dict):
-            raise TypeError(f"'cast' step requires a dict input, got {type(data).__name__}")
+            raise TypeError(f"[StepExecutor] 'cast' step requires a dict input, got {type(data).__name__}")
 
         result = data.copy()
         for key, type_name in config.items():
             if key not in result:
-                log.warning(f"'cast' step: key '{key}' not found in data")
+                log.warning(f"[StepExecutor] 'cast' step: key '{key}' not found in data")
                 continue
             if type_name not in type_map:
-                raise ValueError(f"'cast' step: unsupported type '{type_name}'")
+                raise ValueError(f"[StepExecutor] 'cast' step: unsupported type '{type_name}'")
             try:
                 result[key] = type_map[type_name](result[key])
             except Exception as e:
-                log.warning(f"Failed to cast '{key}' to {type_name}: {e}")
+                log.warning(f"[StepExecutor] Failed to cast '{key}' to {type_name}: {e}")
 
         return result
 
     @step_returns("data", "input", default="data")
     def _step_evaluate(self, data, value: str) -> Any:
         if not isinstance(value, str):
-            raise ValueError("The evaluate step requires a string input.")
+            raise ValueError("[StepExecutor] The evaluate step requires a string input.")
         return valueparser.parse_value(value)
 
     @step_returns("data", "input", default="data")
     def _step_regex(self, data, pattern):
         match = re.search(pattern, data)
         if not match:
-            raise ValueError("No regex match found")
+            log.warning("[StepExecutor] No regex match found")
+            return data
         return match.group(1) if match.lastindex else match.group(0)
 
     @step_returns("data", "input", default="data")
     def _step_format(self, data, formatted_value:str):
         # TODO: Add bot variables
         if not isinstance(formatted_value, str):
-            raise ValueError("The format step requires a string input.")
+            raise ValueError("[StepExecutor] The format step requires a string input.")
         return formatted_value
 
     @step_returns("data", "input", default="data")
     def _step_eval(self, data, expression):
+        # TODO: Expand eval step
         return eval(expression, {"data": data})
 
     @step_returns("data", "input", default="data")
@@ -2095,12 +2115,12 @@ class StepExecutor:
             metadata = self.context.get(metadata_key)
             image = data
         else:
-            raise ValueError("add_pnginfo step requires at least one of 'image' or 'metadata' in config")
+            raise ValueError("[StepExecutor] 'add_pnginfo' step requires at least one of 'image' or 'metadata' in config")
 
         if not isinstance(image, Image.Image):
-            raise TypeError(f"Expected a PIL.Image.Image for image, got {type(image).__name__}")
+            raise TypeError(f"[StepExecutor] Expected a PIL.Image.Image for image, got {type(image).__name__}")
         if not isinstance(metadata, str):
-            raise TypeError(f"Expected a string for metadata, got {type(metadata).__name__}")
+            raise TypeError(f"[StepExecutor] Expected a string for metadata, got {type(metadata).__name__}")
 
         pnginfo = PngImagePlugin.PngInfo()
         pnginfo.add_text("parameters", metadata)
@@ -2139,7 +2159,7 @@ class StepExecutor:
             if not file_format:
                 file_format = guess_format_from_data(data)
             if file_format:
-                log.info(f'Guessed output file format for "save" step by analyzing headers/data: "{file_format}"')
+                log.info(f'[StepExecutor] Guessed output file format for "save" step by analyzing headers/data: "{file_format}"')
 
         full_path = output_path / f"{file_name}.{file_format}"
         binary_formats = {"jpg", "jpeg", "png", "webp", "gif", "mp3", "wav", "mp4", "webm", "bin"}
@@ -2148,9 +2168,9 @@ class StepExecutor:
         if isinstance(data, str) and is_base64(data):
             try:
                 data = base64.b64decode(data)
-                log.info("Detected base64 input; decoded to binary.")
+                log.info("[StepExecutor] Detected base64 input; decoded to binary.")
             except Exception as e:
-                log.error(f"Failed to decode base64 string: {e}")
+                log.error(f"[StepExecutor] Failed to decode base64 string: {e}")
                 raise
 
         # 4. Select write mode
@@ -2163,7 +2183,7 @@ class StepExecutor:
                 if isinstance(data, Image.Image) and file_format.lower() in {"png", "jpeg", "jpg", "webp"}:
                     pnginfo = data.info.get("pnginfo") if file_format.lower() == "png" else None
                     data.save(full_path, format=file_format.upper(), pnginfo=pnginfo)
-                    log.info(f"Saved image using PIL to {full_path}")
+                    log.info(f"[StepExecutor] Saved image using PIL to {full_path}")
                     return {
                         "path": str(full_path),
                         "format": file_format,
@@ -2175,21 +2195,21 @@ class StepExecutor:
                     if isinstance(data, (dict, list)):
                         await f.write(json.dumps(data, indent=2))
                     else:
-                        raise TypeError("JSON format requires dict or list.")
+                        raise TypeError("[StepExecutor] JSON format requires dict or list.")
                 elif file_format == "yaml":
                     if isinstance(data, (dict, list)):
                         await f.write(yaml.dump(data))
                     else:
-                        raise TypeError("YAML format requires dict or list.")
+                        raise TypeError("[StepExecutor] YAML format requires dict or list.")
                 elif file_format == "csv":
                     if isinstance(data, list) and all(isinstance(row, (list, tuple)) for row in data):
                         csv_content = "\n".join([",".join(map(str, row)) for row in data])
                         await f.write(csv_content)
                     else:
-                        raise TypeError("CSV format requires list of lists/tuples.")
+                        raise TypeError("[StepExecutor] CSV format requires list of lists/tuples.")
                 elif mode == "w":
                     if not isinstance(data, (str, int, float)):
-                        raise TypeError(f"Text format requires str/number, got {type(data).__name__}")
+                        raise TypeError(f"[StepExecutor] Text format requires str/number, got {type(data).__name__}")
                     await f.write(str(data))
                 elif mode == "wb":
                     if isinstance(data, bytes):
@@ -2197,13 +2217,13 @@ class StepExecutor:
                     elif isinstance(data, str):
                         await f.write(data.encode())
                     else:
-                        raise TypeError(f"Binary format requires bytes or str, got {type(data).__name__}")
+                        raise TypeError(f"[StepExecutor] Binary format requires bytes or str, got {type(data).__name__}")
 
         except Exception as e:
-            log.error(f"Failed to save data as {file_format}: {e}")
+            log.error(f"[StepExecutor] Failed to save data as {file_format}: {e}")
             raise
 
-        log.info(f"Saved data to {full_path}")
+        log.info(f"[StepExecutor] Saved data to {full_path}")
 
         return {"path": str(full_path),
                 "format": file_format,

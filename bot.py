@@ -2250,10 +2250,11 @@ class TaskProcessing(TaskAttributes):
     async def layerdiffuse_hack(self:Union["Task","Tasks"], images, pnginfo):
         try:
             ld_output = None
+            # Find the first image with alpha channel
             for i, image in enumerate(images):
                 if image.mode == 'RGBA':
                     if i == 0:
-                        return images
+                        return images # First image already has alpha
                     ld_output = images.pop(i)
                     break
             if ld_output is None:
