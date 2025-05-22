@@ -488,7 +488,8 @@ class APIClient:
         headers = self.ws_config.build_headers()
         try:
             self.ws = await self.session.ws_connect(url, headers=headers)
-            log.info(f"[{self.name}] WebSocket connection established.")
+            log.info(
+                f"[{self.name}] WebSocket connection established ({url})")
         except Exception as e:
             log.error(f"[{self.name}] failed to connect to WebSocket: {e}")
             self.ws = None
@@ -784,7 +785,6 @@ class APIClient:
     def format_endpoint(self, endpoint: str, path_vars: Optional[Union[str, tuple, list, dict]]) -> str:
         if not path_vars:
             return endpoint
-
         try:
             if isinstance(path_vars, dict):
                 return endpoint.format(**path_vars)
@@ -925,6 +925,72 @@ class APIClient:
         except Exception as e:
             log.exception(f"[{self.name}] WebSocket message failed: {e}")
             raise
+
+    async def poll_ws(
+        self,
+        return_values: dict,
+        type_filter: Optional[list[str]] = None,
+        match_data: Optional[dict] = None,
+        duration: int = -1,
+        timeout: int = 30,
+    ) -> AsyncGenerator[dict, None]:
+        """
+        Polls data from a WebSocket stream and yields parsed messages.
+        
+        - `return_values`: Mapping of keys to extract (e.g., {'progress': 'data.value'})
+        - `type_filter`: If provided, only process messages with matching "type".
+        - `match_data`: Dictionary to match inside message["data"] (e.g., {'prompt_id': 'abc'}).
+        - `duration`: Max duration to poll (in seconds). -1 means no limit.
+        """
+        from json import loads as json_loads
+        start_time = time.monotonic()
+
+        while True:
+            if duration > 0 and (time.monotonic() - start_time) >= duration:
+                log.info(f"[{self.name}] WebSocket polling stopped after {duration}s")
+                break
+
+            try:
+                if not self.ws or self.ws.closed:
+                    await self.client._connect_websocket()
+
+                msg = await self.ws.receive(timeout=timeout)
+
+                if msg.type != aiohttp.WSMsgType.TEXT:
+                    continue
+
+                try:
+                    payload = json_loads(msg.data)
+                except Exception:
+                    log.warning(f"[{self.name}] Received invalid JSON from WebSocket")
+                    continue
+
+                msg_type = payload.get("type")
+                data = payload.get("data", {})
+
+                # Apply optional filters
+                if type_filter and msg_type not in type_filter:
+                    continue
+
+                if match_data and any(data.get(k) != v for k, v in match_data.items()):
+                    continue
+
+                # Extract values
+                result = {}
+                for key, path in return_values.items():
+                    try:
+                        result[key] = extract_key(payload, path)
+                    except Exception as e:
+                        log.debug(f"[{self.name}] Could not extract {key} from message: {e}")
+                        continue
+
+                if result:
+                    yield result
+
+            except Exception as e:
+                log.exception(f"[{self.name}] WebSocket polling failed: {e}")
+                break
+
 
 class DummyClient:
     def __init__(self, target_cls: type):
@@ -1334,9 +1400,9 @@ class Endpoint:
                    **kwargs
                    ) -> Any:
         if self.client is None:
-            raise ValueError("Endpoint not bound to an APIClient")
+            raise ValueError(f"[{self.name}] Endpoint not bound to an APIClient")
         if not self.client.enabled:
-            raise RuntimeError(f"Endpoint {self.name} was called, but API Client '{self.client.name}' is currently disabled. Use '/toggle_api' to enable the client when available.")
+            raise RuntimeError(f"[{self.name}] API Client '{self.client.name}' is currently disabled. Use '/toggle_api' to enable the client when available.")
 
         headers = kwargs.pop('headers', self.headers)
         timeout = kwargs.pop('timeout', self.timeout)
@@ -1447,6 +1513,7 @@ class Endpoint:
             await asyncio.sleep(interval)
 
     async def track_progress(self,
+                             endpoint: "Endpoint",
                              interval: float = 1.0,
                              duration: int = -1,
                              num_calls: int = -1,
@@ -1454,6 +1521,9 @@ class Endpoint:
                              eta_key: Optional[str] = None,
                              message: str = '',
                              ictx=None,
+                             use_ws=False,
+                             type_filter: list[str] = ["progress", "executed"],
+                             match_data: dict|None = None,
                              **kwargs) -> list[dict]:
         """
         Polls an endpoint while sending a progress Embed to discord.
@@ -1464,6 +1534,8 @@ class Endpoint:
         progress_values = {'progress': progress_key}
         if eta_key:
             progress_values['eta'] = eta_key
+
+        match_data = match_data or {}
 
         STALL_THRESHOLD = 5.0
         last_progress = 0.0
@@ -1482,12 +1554,19 @@ class Endpoint:
             eta_message = ''
             await embeds.send('img_gen', title, description)
 
-            while last_progress < 1.0:           
-                async for update in self.poll(return_values=progress_values,
-                                              interval=interval,
-                                              duration=duration,
-                                              num_calls=num_calls,
-                                              **kwargs):
+            poller = self.client.poll_ws(return_values=progress_values,
+                                         type_filter=type_filter,
+                                         match_data=match_data,
+                                         duration=duration) \
+                     if use_ws else \
+                     self.poll(return_values=progress_values,
+                               interval=interval,
+                               duration=duration,
+                               num_calls=num_calls,
+                               **kwargs)
+
+            while last_progress < 1.0:
+                async for update in poller:
                     # Collect updates
                     updates.append(update)
 
@@ -1529,9 +1608,6 @@ class Endpoint:
 
         return updates
 
-    async def return_main_data(self, response):
-        pass
-
     async def process_ws_request(self, json_payload, data_payload, **kwargs):
         # Compose WebSocket message
         message = {}
@@ -1560,6 +1636,9 @@ class Endpoint:
             response_type=response_type,
             **kwargs
         )
+
+    async def return_main_data(self, response):
+        pass
 
     def can_extract(self, extract_keys: str | List[str]) -> bool:
         """Check if all keys in 'extract_keys' are present as self attributes"""
