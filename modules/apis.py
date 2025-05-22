@@ -412,6 +412,7 @@ class APIClient:
         self.auth = auth
         self.endpoints: dict[str, Endpoint] = {}
         self.openapi_schema = None
+        self.fetching_progress = False
         self._endpoint_fetch_payloads = []
         # WebSocket connection
         self.ws = None
@@ -929,21 +930,27 @@ class APIClient:
     async def poll_ws(
         self,
         return_values: dict,
-        type_filter: Optional[list[str]] = None,
-        match_data: Optional[dict] = None,
+        interval: float = 0.0,
         duration: int = -1,
+        num_yields: int = -1,
         timeout: int = 30,
+        type_filter: Optional[list[str]] = None,
+        data_filter: Optional[dict] = None,
     ) -> AsyncGenerator[dict, None]:
         """
-        Polls data from a WebSocket stream and yields parsed messages.
+        Stream messages from WebSocket and yield structured data at most once per `yield_interval` seconds.
         
-        - `return_values`: Mapping of keys to extract (e.g., {'progress': 'data.value'})
-        - `type_filter`: If provided, only process messages with matching "type".
-        - `match_data`: Dictionary to match inside message["data"] (e.g., {'prompt_id': 'abc'}).
-        - `duration`: Max duration to poll (in seconds). -1 means no limit.
+        - `return_values`: Dict of key -> dotpath to extract
+        - `type_filter`: List of message types to process
+        - `data_filter`: Dict of required key-values in data field
+        - `duration`: Time in seconds before polling stops
+        - `timeout`: Timeout per WS receive
+        - `interval`: Minimum time in seconds between yields
         """
         from json import loads as json_loads
         start_time = time.monotonic()
+        yield_count = 0
+        last_yield_time = 0.0
 
         while True:
             if duration > 0 and (time.monotonic() - start_time) >= duration:
@@ -952,7 +959,7 @@ class APIClient:
 
             try:
                 if not self.ws or self.ws.closed:
-                    await self.client._connect_websocket()
+                    await self._connect_websocket()
 
                 msg = await self.ws.receive(timeout=timeout)
 
@@ -962,35 +969,145 @@ class APIClient:
                 try:
                     payload = json_loads(msg.data)
                 except Exception:
-                    log.warning(f"[{self.name}] Received invalid JSON from WebSocket")
+                    log.warning(f"[{self.name}] Invalid JSON in WebSocket message")
                     continue
 
                 msg_type = payload.get("type")
                 data = payload.get("data", {})
 
-                # Apply optional filters
                 if type_filter and msg_type not in type_filter:
                     continue
 
-                if match_data and any(data.get(k) != v for k, v in match_data.items()):
+                if data_filter and any(data.get(k) != v for k, v in data_filter.items()):
                     continue
 
-                # Extract values
                 result = {}
                 for key, path in return_values.items():
                     try:
                         result[key] = extract_key(payload, path)
                     except Exception as e:
-                        log.debug(f"[{self.name}] Could not extract {key} from message: {e}")
+                        log.debug(f"[{self.name}] Extraction failed for {key}: {e}")
                         continue
+
+                now = time.monotonic()
+                if interval > 0 and (now - last_yield_time) < interval:
+                    continue  # Delay yielding
+                last_yield_time = now
 
                 if result:
                     yield result
+                    yield_count += 1
+                    if num_yields > 0 and yield_count >= num_yields:
+                        log.info(f"[{self.name}] WebSocket polling stopped after num_yields limit ({num_yields}).")
+                        break
 
             except Exception as e:
                 log.exception(f"[{self.name}] WebSocket polling failed: {e}")
                 break
 
+    async def track_progress(self,
+                             endpoint: Optional["Endpoint"] = None,
+                             use_ws=False,
+                             interval: float = 1.0,
+                             duration: int = -1,
+                             num_yields: int = -1,
+                             progress_key: str = "progress",
+                             eta_key: Optional[str] = None,
+                             message: str = '',
+                             ictx=None,
+                             type_filter: list[str] = ["progress", "executed"], # websocket
+                             data_filter: Optional[dict] = None, # websocket
+                             **kwargs) -> list[dict]:
+        """
+        Polls an endpoint while sending a progress Embed to discord.
+        """
+        from modules.utils_discord import Embeds
+        embeds = Embeds(ictx)
+
+        # Resolve endpoint / websocket
+        if not endpoint and not use_ws:
+            endpoint = getattr(self, "get_progress", None)
+            if not endpoint:
+                log.warning(f'[{self.name}] "track_progress" has no configured endpoint. Defaulting to assume websocket method.')
+                use_ws = True
+
+        # Resolve progress_values
+        kwargs.pop("return_values", None)
+        progress_values = {'progress': progress_key}
+        if eta_key:
+            progress_values['eta'] = eta_key
+
+        STALL_THRESHOLD = 5.0
+        last_progress = 0.0
+        stall_time = 0.0
+
+        updates = []
+
+        # Prevent multiple progress tasks on same endpoint from running in tandem
+        while self.fetching_progress == True:
+            await asyncio.sleep(1.0)
+        self.fetching_progress = True
+
+        try:
+            title = f'Waiting for {self.name} ...'
+            description = f'{progress_bar(0)}'
+            eta_message = ''
+            await embeds.send('img_gen', title, description)
+
+            poller = self.poll_ws(return_values=progress_values,
+                                  interval=interval,
+                                  duration=duration,
+                                  num_yields=num_yields,
+                                  type_filter=type_filter,
+                                  data_filter=data_filter) \
+                     if use_ws else \
+                     endpoint.poll(return_values=progress_values,
+                                   interval=interval,
+                                   duration=duration,
+                                   num_yields=num_yields,
+                                   **kwargs)
+
+            async for update in poller:
+                # Collect updates
+                updates.append(update)
+
+                # Read progress safely
+                progress = update.get("progress", 0.0)
+                try:
+                    progress = float(progress)
+                except (TypeError, ValueError):
+                    progress = 0.0
+                progress = max(0.0, min(progress, 1.0))
+                eta = update.get('eta')
+
+                # Check if complete
+                if progress >= 1.0:
+                    break
+
+                # Check for stalled condition
+                if progress == last_progress:
+                    stall_time += interval
+                else:
+                    stall_time = 0.0
+
+                # Edit the Discord Embed
+                if progress > 0.01:
+                    comment = " (Stalled)" if stall_time >= STALL_THRESHOLD else ""
+                    title = f"{message}: {progress * 100:.0f}%{comment}"
+                    if isinstance(eta, float) or isinstance(eta, int):
+                        eta_message = f'\n**ETA**: {round(eta, 2)} seconds'
+                    description = f"{progress_bar(progress)}{eta_message}"
+                    await embeds.edit("img_gen", title, description)
+
+                last_progress = progress
+
+        except Exception as e:
+            await embeds.edit_or_send('img_gen', f'[{self.name}] An error occurred while {message}', e)
+        finally:
+            await embeds.delete('img_gen')
+            self.fetching_progress = False
+
+        return updates
 
 class DummyClient:
     def __init__(self, target_cls: type):
@@ -1024,7 +1141,7 @@ class ImgGenClient(APIClient):
     def _get_self_ep_class(self):
         return ImgGenEndpoint
 
-    async def track_progress(self, ictx=None):
+    async def track_t2i_i2i_progress(self, ictx=None):
         from modules.utils_discord import Embeds
         embeds = Embeds()
         try:
@@ -1034,11 +1151,11 @@ class ImgGenClient(APIClient):
                 progress_key = self.get_progress.progress_key
                 eta_key = self.get_progress.eta_key
                 message = "Generating image"
-                if progress_key is not None:
-                    await self.get_progress.track_progress(progress_key=progress_key,
-                                                           eta_key=eta_key,
-                                                           message=message,
-                                                           ictx=ictx)
+                await self.track_progress(endpoint=self.get_progress,
+                                          progress_key=progress_key,
+                                          eta_key=eta_key,
+                                          message=message,
+                                          ictx=ictx)
         except Exception as e:
             log.error(f'Error tracking {self.name} image generation progress: {e}')
         finally:
@@ -1171,7 +1288,6 @@ class Endpoint:
         self.timeout = timeout
         self.retry = retry
         self.queued = 0
-        self.fetching_progress = False
         self._semaphore = asyncio.Semaphore(concurrency_limit) if concurrency_limit else None
         if payload_config:
             self.init_payload(payload_config)
@@ -1460,22 +1576,21 @@ class Endpoint:
         return results
 
     async def poll(self,
-                return_values: dict,
-                interval: float = 1.0,
-                duration: int = -1,
-                num_calls: int = -1,
-                **kwargs) -> AsyncGenerator[dict, None]:
+                   return_values: dict,
+                   interval: float = 1.0,
+                   duration: int = -1,
+                   num_yields: int = -1,
+                   **kwargs) -> AsyncGenerator[dict, None]:
         """
         Poll an API repeatedly, extracting specified values from each response.
 
         :param return_values: A dict where keys are output keys and values are paths (str or dict) for extract_key().
         :param interval: Time in seconds between polls.
         :param duration: Max duration to poll (in seconds). -1 means no limit.
-        :param num_calls: Max number of polls to perform. -1 means no limit.
+        :param num_yields: Max number of yields to return. -1 means no limit.
         :yield: Dict with extracted values based on return_values.
         """
-        return_values = return_values or {}
-        call_count = 0
+        yield_count = 0
         start_time = time.monotonic()
 
         while True:
@@ -1484,11 +1599,6 @@ class Endpoint:
                 elapsed = time.monotonic() - start_time
                 if elapsed >= duration:
                     log.info(f"[{self.name}] Polling stopped after duration limit ({duration}s).")
-                    break
-
-            if num_calls > 0:
-                if call_count >= num_calls:
-                    log.info(f"[{self.name}] Polling stopped after num_calls limit ({num_calls}).")
                     break
 
             try:
@@ -1500,113 +1610,24 @@ class Endpoint:
             if not response_data:
                 await asyncio.sleep(interval)
                 continue
-
-            result = {}
-            for key, config in return_values.items():
-                try:
-                    result[key] = extract_key(response_data, config)
-                except ValueError as e:
-                    log.warning(f"[{self.name}] Failed to extract key '{key}': {e}")
-
-            yield result
-            call_count += 1
-            await asyncio.sleep(interval)
-
-    async def track_progress(self,
-                             endpoint: "Endpoint",
-                             interval: float = 1.0,
-                             duration: int = -1,
-                             num_calls: int = -1,
-                             progress_key: str = "progress",
-                             eta_key: Optional[str] = None,
-                             message: str = '',
-                             ictx=None,
-                             use_ws=False,
-                             type_filter: list[str] = ["progress", "executed"],
-                             match_data: dict|None = None,
-                             **kwargs) -> list[dict]:
-        """
-        Polls an endpoint while sending a progress Embed to discord.
-        """
-        from modules.utils_discord import Embeds
-        embeds = Embeds(ictx)
-
-        progress_values = {'progress': progress_key}
-        if eta_key:
-            progress_values['eta'] = eta_key
-
-        match_data = match_data or {}
-
-        STALL_THRESHOLD = 5.0
-        last_progress = 0.0
-        stall_time = 0.0
-
-        updates = []
-
-        # Prevent multiple progress tasks on same endpoint from running in tandem
-        while self.fetching_progress == True:
-            await asyncio.sleep(1.0)
-        self.fetching_progress = True
-
-        try:
-            title = f'Waiting for {self.client.name} ...'
-            description = f'{progress_bar(0)}'
-            eta_message = ''
-            await embeds.send('img_gen', title, description)
-
-            poller = self.client.poll_ws(return_values=progress_values,
-                                         type_filter=type_filter,
-                                         match_data=match_data,
-                                         duration=duration) \
-                     if use_ws else \
-                     self.poll(return_values=progress_values,
-                               interval=interval,
-                               duration=duration,
-                               num_calls=num_calls,
-                               **kwargs)
-
-            while last_progress < 1.0:
-                async for update in poller:
-                    # Collect updates
-                    updates.append(update)
-
-                    # Read progress safely
-                    progress = update.get("progress", 0.0)
+            
+            # Process response
+            if not return_values:
+                result = response_data
+            else:
+                result = {}
+                for key, config in return_values.items():
                     try:
-                        progress = float(progress)
-                    except (TypeError, ValueError):
-                        progress = 0.0
-                    progress = max(0.0, min(progress, 1.0))
-                    eta = update.get('eta')
+                        result[key] = extract_key(response_data, config)
+                    except ValueError as e:
+                        log.warning(f"[{self.name}] Failed to extract key '{key}': {e}")
+            yield result
 
-                    # Check if complete
-                    if progress >= 1.0:
-                        break
-
-                    # Check for stalled condition
-                    if progress == last_progress:
-                        stall_time += interval
-                    else:
-                        stall_time = 0.0
-
-                    # Edit the Discord Embed
-                    if progress > 0.01:
-                        comment = " (Stalled)" if stall_time >= STALL_THRESHOLD else ""
-                        title = f"{message}: {progress * 100:.0f}%{comment}"
-                        if isinstance(eta, float) or isinstance(eta, int):
-                            eta_message = f'\n**ETA**: {round(eta, 2)} seconds'
-                        description = f"{progress_bar(progress)}{eta_message}"
-                        await embeds.edit("img_gen", title, description)
-
-                    last_progress = progress
-
-        except Exception as e:
-            await embeds.edit_or_send('img_gen', f'[{self.client.name}] An error occurred while {message}', e)
-        finally:
-            await embeds.delete('img_gen')
-            self.fetching_progress = False
-
-        return updates
+            yield_count += 1
+            if num_yields > 0 and yield_count >= num_yields:
+                log.info(f"[{self.name}] Polling stopped after num_yields limit ({num_yields}).")
+                break
+            await asyncio.sleep(interval)
 
     async def process_ws_request(self, json_payload, data_payload, **kwargs):
         # Compose WebSocket message
@@ -2017,7 +2038,7 @@ class StepExecutor:
         client_name = config.get("client_name")
         endpoint_name = config.get("endpoint_name")
 
-        if not client_name and endpoint_name:
+        if endpoint_name and not client_name:
             test_ep = self.client.endpoints.get(endpoint_name)
             if test_ep:
                 client_name = self.client.name
@@ -2046,26 +2067,18 @@ class StepExecutor:
         api:API = await get_api()
         client_name, endpoint_name = self.resolve_api_names(config, 'track_progress')
         api_client:APIClient = api.get_client(client_name=client_name, strict=True)
-        endpoint:Endpoint = api_client.get_endpoint(endpoint_name=endpoint_name, strict=True)
 
-        interval = config.pop("interval", 1.0)
-        duration = config.pop("duration", -1)
-        num_calls = config.pop("num_calls", -1)
+        # Resolve polling method
+        endpoint:Optional[Endpoint] = None
+        use_ws = config.pop("use_ws", False)
+        if not use_ws:
+            endpoint = api_client.get_endpoint(endpoint_name=endpoint_name, strict=True)
+        use_ws = False if endpoint else True
 
-        config.pop("return_values", None)
-        progress_key = config.pop("progress_key", "progress")
-        eta_key = config.pop("eta_key", None)
-
-        message = config.pop("message", "")
-
-        return await endpoint.track_progress(interval=interval,
-                                             duration=duration,
-                                             num_calls=num_calls,
-                                             progress_key=progress_key,
-                                             eta_key=eta_key,
-                                             message=message,
-                                             ictx=ictx,
-                                             **config)
+        return await api_client.track_progress(endpoint=endpoint,
+                                               use_ws=use_ws,
+                                               ictx=ictx,
+                                               **config)
 
     @step_returns("data", "input", default="data")
     async def _step_poll_api(self, data: Any, config: dict) -> list[dict]:
@@ -2080,14 +2093,14 @@ class StepExecutor:
         return_values = config.pop("return_values", {})
         interval = config.pop("interval", 1.0)
         duration = config.pop("duration", -1)
-        num_calls = config.pop("num_calls", -1)
+        num_yields = config.pop("num_yields", -1)
 
         results = []        
         async for result in endpoint.poll(return_values=return_values,
-                                            interval=interval,
-                                            duration=duration,
-                                            num_calls=num_calls,
-                                            **config):
+                                          interval=interval,
+                                          duration=duration,
+                                          num_yields=num_yields,
+                                          **config):
             results.append(result)
         return results
 
