@@ -3710,12 +3710,9 @@ class Tasks(TaskProcessing):
 
             # Swap Image model
             if mode == 'swap' or mode == 'swap_back':
-                # Check client is online
-                if await api_online(client_type='imggen', ictx=self.ictx):
-                    if api.imggen.post_options and not config.is_per_server_imgmodels():
-                        await change_imgmodel(self.params.imgmodel, self.ictx, save=False)
+                new_options = await change_imgmodel(self.params.imgmodel, self.ictx, save=False)
                 await self.embeds.delete('change') # delete embed
-                return True
+                return new_options
 
             # Change Image model
             await change_imgmodel(self.params.imgmodel, self.ictx)
@@ -3882,11 +3879,13 @@ class Tasks(TaskProcessing):
             should_swap = False
             if self.params.imgmodel:
                 if getattr(self.params, 'imgmodel_mode', 'change') == 'swap':
+                    should_swap = True
                     swap_params: Params = Params()
                     last_imgmodel = bot_settings.get_last_setting_for("last_imgmodel_value", self.ictx)
                     swap_params.imgmodel = get_imgmodel_data(last_imgmodel)
                 # RUN A CHANGE IMGMODEL SUBTASK
-                should_swap = await self.run_subtask('change_imgmodel')
+                new_options = await self.run_subtask('change_imgmodel')
+                self.payload = update_dict_matched_keys(self.payload, new_options)
             # Generate images
             await self.process_image_gen()
             # Send images, user's prompt, and any params from "/image" cmd
@@ -5782,16 +5781,17 @@ async def get_imgmodel_settings(imgmodel_data:dict) -> Tuple[dict, list]:
         log.error(f"Error merging selected imgmodel data with base imgmodel data: {e}")
     return imgmodel_settings, imgmodel_tags
 
-async def change_imgmodel(imgmodel_data:dict, ictx:CtxInteraction=None, save:bool=True):
+async def change_imgmodel(imgmodel_data:dict, ictx:CtxInteraction=None, save:bool=True) -> dict:
     name_key = api.imggen.get_imgmodels.imgmodel_name_key or ''
     value_key = api.imggen.get_imgmodels.imgmodel_value_key or name_key or ''
+    post_options_ep:Optional[Endpoint] = getattr(api.imggen, 'post_options', None)
 
     # Save model details to bot database
     bot_settings.set_last_setting_for("last_imgmodel_name", imgmodel_data[name_key], ictx)
     bot_settings.set_last_setting_for("last_imgmodel_value", imgmodel_data[value_key], ictx, save_now=save)
 
     options_payload = {}
-    imgmodel_input_key = api.imggen.post_options.imgmodel_input_key
+    imgmodel_input_key:Optional[str] = getattr(post_options_ep, 'imgmodel_input_key', None)
     if imgmodel_input_key:
         options_payload[imgmodel_input_key] = imgmodel_data[value_key]
 
@@ -5800,16 +5800,17 @@ async def change_imgmodel(imgmodel_data:dict, ictx:CtxInteraction=None, save:boo
     
     # Factors override_settings if applicable
     options_payload.update(get_override_settings(imgmodel_settings))
+    updated_options_payload = options_payload
 
-    try:
-        # load the model
-        if not config.is_per_server_imgmodels():
+    if post_options_ep and not config.is_per_server_imgmodels():
+        try:
+            # load the model
             base_options = api.imggen.post_options.get_payload()
             updated_options_payload = deep_merge(base_options, options_payload)
             await api.imggen.post_options.call(input_data=updated_options_payload, sanitize=True)
-    except Exception as e:
-        log.error(f"Error updating settings with the selected imgmodel data: {e}")
-        raise
+        except Exception as e:
+            log.error(f"Error updating settings with the selected imgmodel data: {e}")
+            raise
 
     # Save settings
     if save:
@@ -5820,6 +5821,8 @@ async def change_imgmodel(imgmodel_data:dict, ictx:CtxInteraction=None, save:boo
             if imgmodel_update_task and not imgmodel_update_task.done():
                 imgmodel_update_task.cancel()
                 await bg_task_queue.put(start_auto_change_imgmodels('restarted'))
+
+    return updated_options_payload
 
 async def get_imgmodel_data(imgmodel_value:str, ictx:CtxInteraction=None) -> dict:
     try:

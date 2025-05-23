@@ -146,6 +146,12 @@ all_apis:
     endpoints:
       - {name: Prompt, path: /prompt, method: POST}
       - {name: History, path: "/history/{prompt_id}", method: GET}
+      - name: Get Checkpoints
+        path: "/object_info/CheckpointLoaderSimple"
+        method: GET
+        response_handling:
+          - extract_key: CheckpointLoaderSimple.input.required.ckpt_name[0] # list of models
+          - map: {as: dict, key: model_name} # convert list to a list of dicts [{'model_name': 'leosamsHelloworldXL_helloworldXL70.safetensors'}, {'model_name': ...}]
       - {name: View, path: view, method: POST}
       - {name: Upload, path: "/upload/{image_type}", method: POST}
       - {name: Get Models, path: "/models/{folder}", method: GET}

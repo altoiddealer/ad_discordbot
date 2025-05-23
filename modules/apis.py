@@ -418,7 +418,7 @@ class APIClient:
         self.ws = None
         self.ws_config: Optional[WebSocketConnectionConfig] = None
         if websocket_config:
-            self.ws_config = WebSocketConnectionConfig(websocket_config)
+            self.ws_config = WebSocketConnectionConfig(**websocket_config)
         # set auth
         if auth:
             try:
@@ -1114,6 +1114,8 @@ class DummyClient:
         annotations = getattr(target_cls, '__annotations__', {})
         for attr_name in annotations:
             setattr(self, attr_name, None)
+    def __getattr__(self, name):
+        return None # Return None for any missing attribute
     def __bool__(self):
         return False  # Makes instances evaluate False
 
@@ -2153,6 +2155,44 @@ class StepExecutor:
                 log.warning(f"[StepExecutor] Failed to cast '{key}' to {type_name}: {e}")
 
         return result
+
+    @step_returns("data", "input", default="data")
+    def _step_map(self, data, config: dict):
+        """
+        Transforms each item in a list using a mapping config.
+        Example config:
+            {
+                "as": "dict",          # or "value", "tuple", "custom"
+                "key": "name",         # Used if "as" == "dict"
+            }
+        """
+        if not isinstance(data, list):
+            raise TypeError("[StepExecutor] 'map' step requires list input")
+
+        transform_type = config.get("as", "value")
+
+        if transform_type == "dict":
+            key = config.get("key")
+            if not key:
+                raise ValueError("[StepExecutor] 'map' step with 'dict' transform requires 'key'")
+            return [{key: item} for item in data]
+
+        elif transform_type == "tuple":
+            return [(item,) for item in data]
+
+        # elif transform_type == "custom":
+        #     # Optional: allow arbitrary callable by name (e.g., "lambda x: {'name': x}")
+        #     expr = config.get("lambda")
+        #     if not expr:
+        #         raise ValueError("[StepExecutor] 'map' step with 'custom' transform requires 'lambda'")
+        #     func = eval(expr)  # ⚠️ Only safe in trusted environments!
+        #     return [func(item) for item in data]
+
+        # elif transform_type == "value":
+        #     return data  # no-op
+
+        else:
+            raise ValueError(f"[StepExecutor] Unknown transform type: {transform_type}")
 
     @step_returns("data", "input", default="data")
     def _step_evaluate(self, data, value: str) -> Any:
