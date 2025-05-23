@@ -478,7 +478,7 @@ async def post_active_settings(guild:discord.Guild, key_str_list:Optional[list[s
             if 'tags' in managed_keys:
                 tags_key = char_tags
         elif key_name == 'imgmodel':
-            custom_prefix = f'name: {bot_settings.get_last_setting_for("last_imgmodel_name", guild_id=guild.id)}\n'
+            custom_prefix = f'name: {settings.imgmodel.last_imgmodel_name}\n'
             settings_key = settings_copy.get('imgmodel', {})
             # check if updating imgmodel tags
             if 'tags' in managed_keys:
@@ -2620,7 +2620,7 @@ class TaskProcessing(TaskAttributes):
                 new_imgmodel_data = await imgmodel_settings.get_imgmodel_data(new_imgmodel, self.ictx) # {value, name, filename}
                 name_key = api.imggen.get_imgmodels.imgmodel_name_key or api.imggen.get_imgmodels.imgmodel_value_key or ''
                 new_imgmodel_name = new_imgmodel_data.get(name_key, '')
-                current_imgmodel_name = bot_settings.get_last_setting_for("last_imgmodel_name", self.ictx)
+                current_imgmodel_name = imgmodel_settings.last_imgmodel_name
                 # Check if new model same as current model
                 if current_imgmodel_name == new_imgmodel_name:
                     log.info(f'[TAGS] Img model was triggered to change, but it is the same as current ("{current_imgmodel_name}").')
@@ -3760,8 +3760,8 @@ class Tasks(TaskProcessing):
                 if getattr(self.params, 'imgmodel_mode', 'change') == 'swap':
                     should_swap = True
                     swap_params: Params = Params()
-                    last_imgmodel = bot_settings.get_last_setting_for("last_imgmodel_value", self.ictx)
                     imgmodel_settings:ImgModel = get_imgmodel_settings(self.ictx)
+                    last_imgmodel = imgmodel_settings.last_imgmodel_value
                     swap_params.imgmodel = imgmodel_settings.get_imgmodel_data(last_imgmodel)
                 # RUN A CHANGE IMGMODEL SUBTASK
                 new_options = await self.run_subtask('change_imgmodel')
@@ -6557,28 +6557,9 @@ class ImgModel(SettingsBase):
                 # update /image cmd res options
                 await bg_task_queue.put(update_size_options(new_avg))
 
-    # Adds applicable override_settings to the imgmodel settings. returns override_settings
-    def get_override_settings(self, imgmodel_data:dict) -> dict:
-        override_settings = {}
-        # Apply integrations for for A1111-like APIs
-        if api.imggen.is_sdwebui_variant():
-            # Set defaults
-            override_settings:dict = imgmodel_data.setdefault('override_settings', {})
-            # For per-server imgmodels, only the image request payload will drive model changes (won't change now via API)
-            if config.is_per_server_imgmodels():
-                override_settings[self._value_key] = imgmodel_data[self._value_key]
-            # Forge manages VAE / Text Encoders using "forge_additional_modules" during change model request.
-            if api.imggen.is_forge():
-                log.info("Factoring required option for Forge: 'forge_additional_modules'. If you get a Forge error 'You do not have Clip State Dict!', please double-check your presets in 'dict_imgmodels.yaml'")
-                # Ensure required params for Forge model loading
-                if not override_settings.get('forge_additional_modules'):
-                    forge_additional_modules = []
-                    if override_settings.get('sd_vae') and override_settings['sd_vae'] != "Automatic":
-                        vae = override_settings['sd_vae']
-                        forge_additional_modules.append(vae)
-                        log.info(f'[Change Imgmodel] VAE "{vae}" was added to Forge options "forge_additional_modules".')
-                    override_settings['forge_additional_modules'] = forge_additional_modules
-        return override_settings
+    # subclass behavior
+    def get_extra_settings(self, imgmodel_data:dict) -> dict:
+        return {}
 
     # Merge selected imgmodel/tag data with base settings
     async def update_imgmodel_settings(self, imgmodel_data:dict) -> Tuple[dict, list]:
@@ -6603,8 +6584,8 @@ class ImgModel(SettingsBase):
         post_options_ep:Optional[Endpoint] = getattr(api.imggen, 'post_options', None)
 
         # Save model details to bot database
-        bot_settings.set_last_setting_for("last_imgmodel_name", imgmodel_data[self._name_key], ictx)
-        bot_settings.set_last_setting_for("last_imgmodel_value", imgmodel_data[self._value_key], ictx, save_now=save)
+        self.last_imgmodel_name = imgmodel_data.get(self._name_key, self._value_key) or ''
+        self.last_imgmodel_value = imgmodel_data.get(self._value_key, self._name_key) or ''
 
         options_payload = {}
         imgmodel_input_key:Optional[str] = getattr(post_options_ep, 'imgmodel_input_key', None)
@@ -6615,7 +6596,7 @@ class ImgModel(SettingsBase):
         imgmodel_settings, imgmodel_tags = await self.update_imgmodel_settings(imgmodel_data)
         
         # Factors override_settings if applicable
-        options_payload.update(self.get_override_settings(imgmodel_settings))
+        options_payload.update(self.get_extra_settings(imgmodel_settings))
         updated_options_payload = options_payload
 
         if post_options_ep and not config.is_per_server_imgmodels():
@@ -6663,7 +6644,7 @@ class ImgModel(SettingsBase):
     ## Function to automatically change image models
     # Select imgmodel based on mode, while avoid repeating current imgmodel
     async def auto_select_imgmodel(self, mode='random'):
-        current_imgmodel_name = bot_database.last_imgmodel_name
+        current_imgmodel_name = self.last_imgmodel_name
         try:
             all_imgmodels:list[dict] = await self.fetch_imgmodels()
             all_imgmodel_names = [imgmodel.get(self._any_key, '') for imgmodel in all_imgmodels]
@@ -6777,6 +6758,21 @@ class ComfyImgModel(ImgModel):
 class SDWebUIImgModel(ImgModel):
     def __init__(self):
         super().__init__()
+        # Convenience keys
+        self._name_key = api.imggen.get_imgmodels.imgmodel_name_key or 'model_name'
+        self._value_key = api.imggen.get_imgmodels.imgmodel_value_key or 'title'
+        self._filename_key = api.imggen.get_imgmodels.imgmodel_filename_key or 'filename'
+        self._any_key = self._name_key or self._value_key or self._filename_key or ''
+
+    # Manage override_settings for A1111-like APIs. returns override_settings
+    def get_extra_settings(self, imgmodel_data:dict) -> dict:
+        override_settings = {}
+        # Set defaults
+        override_settings:dict = imgmodel_data.setdefault('override_settings', {})
+        # For per-server imgmodels, only the image request payload will drive model changes (won't change now via API)
+        if config.is_per_server_imgmodels():
+            override_settings[self._value_key] = imgmodel_data[self._value_key]
+        return override_settings
 
 class A1111ImgModel(SDWebUIImgModel):
     def __init__(self):
@@ -6789,6 +6785,27 @@ class ReForgeImgModel(SDWebUIImgModel):
 class ForgeImgModel(SDWebUIImgModel):
     def __init__(self):
         super().__init__()
+
+    # Manage override_settings for Forge. returns override_settings
+    def get_extra_settings(self, imgmodel_data:dict) -> dict:
+        override_settings = {}
+        # Set defaults
+        override_settings:dict = imgmodel_data.setdefault('override_settings', {})
+        # For per-server imgmodels, only the image request payload will drive model changes (won't change now via API)
+        if config.is_per_server_imgmodels():
+            override_settings[self._value_key] = imgmodel_data[self._value_key]
+        # Forge manages VAE / Text Encoders using "forge_additional_modules" during change model request.
+        log.info("Factoring required option for Forge: 'forge_additional_modules'.")
+        log.info("If you get a Forge error 'You do not have Clip State Dict!', please double-check your presets in 'dict_imgmodels.yaml'")
+        # Ensure required params for Forge model loading
+        if not override_settings.get('forge_additional_modules'):
+            forge_additional_modules = []
+            if override_settings.get('sd_vae') and override_settings['sd_vae'] != "Automatic":
+                vae = override_settings['sd_vae']
+                forge_additional_modules.append(vae)
+                log.info(f'[Change Imgmodel] VAE "{vae}" was added to Forge options "forge_additional_modules".')
+            override_settings['forge_additional_modules'] = forge_additional_modules
+        return override_settings
 
 
 class LLMContext(SettingsBase):
