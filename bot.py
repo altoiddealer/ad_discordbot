@@ -152,6 +152,16 @@ async def process_tasks_in_background():
 #################################################################
 ########################## BOT STARTUP ##########################
 #################################################################
+# Feature to automatically change imgmodels periodically
+async def init_auto_change_imgmodels():
+    imgmodels_data:dict = load_file(shared_path.img_models, {})
+    if imgmodels_data and imgmodels_data.get('settings', {}).get('auto_change_imgmodels', {}).get('enabled', False):
+        if config.is_per_server_imgmodels():
+            for guild_id, settings in guild_settings.items():
+                await bg_task_queue.put(settings.imgmodel.start_auto_change_imgmodels(guild_id=guild_id))
+        else:
+            await bg_task_queue.put(bot_settings.imgmodel.start_auto_change_imgmodels())
+
 # Try getting a valid character file source
 def get_character(guild_id:int|None=None, guild_settings=None):
     # Determine applicable Settings()
@@ -299,7 +309,7 @@ async def on_ready():
 
             # Start background task to to change image models automatically
             if imggen_enabled:
-                await bot_settings.imgmodel.init_auto_change_imgmodels()
+                await init_auto_change_imgmodels()
             
             log.info("----------------------------------------------")
             log.info("                Bot is ready")
@@ -2606,7 +2616,8 @@ class TaskProcessing(TaskAttributes):
             # Imgmodel handling
             new_imgmodel = change_imgmodel or swap_imgmodel or None
             if new_imgmodel:
-                new_imgmodel_data = await bot_settings.imgmodel.get_imgmodel_data(new_imgmodel, self.ictx) # {value, name, filename}
+                imgmodel_settings:ImgModel = get_imgmodel_settings(self.ictx)
+                new_imgmodel_data = await imgmodel_settings.get_imgmodel_data(new_imgmodel, self.ictx) # {value, name, filename}
                 name_key = api.imggen.get_imgmodels.imgmodel_name_key or api.imggen.get_imgmodels.imgmodel_value_key or ''
                 new_imgmodel_name = new_imgmodel_data.get(name_key, '')
                 current_imgmodel_name = bot_settings.get_last_setting_for("last_imgmodel_name", self.ictx)
@@ -3603,53 +3614,9 @@ class Tasks(TaskProcessing):
     #################### CHANGE IMG MODEL TASK ######################
     #################################################################
     async def change_imgmodel_task(self:"Task"):
-        name_key = api.imggen.get_imgmodels.imgmodel_name_key or ''
-        value_key = api.imggen.get_imgmodels.imgmodel_value_key or name_key or ''
-        print_model_name = self.params.imgmodel.get(name_key, value_key)
-
-        imgmodel_value = self.params.imgmodel.get(value_key)
-        if not imgmodel_value:
-            await self.embeds.send('change', 'Failed to change Img model:', f'Img model not found: {print_model_name}')
-            return False
-
-        try:
-            # Send embed
-            if not self.ictx:
-                self.user_name = 'Automatically'
-            mode = getattr(self.params, 'imgmodel_mode', 'change')    # default to 'change
-            verb = getattr(self.params, 'imgmodel_verb', 'Changing')  # default to 'Changing'
-            await self.embeds.send('change', f'{verb} Img model ... ', f'{verb} to {print_model_name}')
-
-            # Swap Image model
-            if mode == 'swap' or mode == 'swap_back':
-                new_options = await bot_settings.imgmodel.change_imgmodel(self.params.imgmodel, self.ictx, save=False)
-                await self.embeds.delete('change') # delete embed
-                return new_options
-
-            # Change Image model
-            await bot_settings.imgmodel.change_imgmodel(self.params.imgmodel, self.ictx)
-
-            # Announce change
-            await self.embeds.delete('change') # delete any embed
-            await self.embeds.send('change', f"{self.user_name} changed Img model:", f'**{print_model_name}**')
-            if bot_database.announce_channels and self.embeds.enabled('change'):
-                # Send embeds to announcement channels
-                await bg_task_queue.put(announce_changes('changed Img model', print_model_name, self.ictx))
-
-            log.info(f"Image model changed to: {print_model_name}")
-            if config.discord['post_active_settings'].get('enabled', True):
-                settings_keys = ['imgmodel']
-                # Auto-change imgmodel task will not have an interaction
-                if self.ictx and config.is_per_server():
-                    await bg_task_queue.put(post_active_settings(self.ictx.guild.id, settings_keys))
-                else:
-                    await bg_task_queue.put(post_active_settings_to_all(settings_keys))
-
-        except Exception as e:
-            log.error(f"Error changing Img model: {e}")
-            await self.embeds.edit_or_send('change', "An error occurred while changing Img model", e)
-            traceback.print_exc()
-            return False
+        imgmodel_settings:ImgModel = get_imgmodel_settings(self.ictx)
+        # delegate to ImgModel()
+        await imgmodel_settings.change_imgmodel_task(task=self)
 
     #################################################################
     #################### CHANGE LLM MODEL TASK ######################
@@ -3794,7 +3761,8 @@ class Tasks(TaskProcessing):
                     should_swap = True
                     swap_params: Params = Params()
                     last_imgmodel = bot_settings.get_last_setting_for("last_imgmodel_value", self.ictx)
-                    swap_params.imgmodel = bot_settings.imgmodel.get_imgmodel_data(last_imgmodel)
+                    imgmodel_settings:ImgModel = get_imgmodel_settings(self.ictx)
+                    swap_params.imgmodel = imgmodel_settings.get_imgmodel_data(last_imgmodel)
                 # RUN A CHANGE IMGMODEL SUBTASK
                 new_options = await self.run_subtask('change_imgmodel')
                 self.payload = deep_merge(self.payload, new_options)
@@ -5518,7 +5486,7 @@ if imggen_enabled:
     @client.hybrid_command(description='Toggles the automatic Img model changing task')
     @guild_or_owner_only()
     async def toggle_auto_change_imgmodels(ctx: commands.Context):
-        imgmodel_settings = bot_settings.imgmodel
+        imgmodel_settings:ImgModel = get_imgmodel_settings(ctx)
         imgmodel_update_task = imgmodel_settings._imgmodel_update_task
         if imgmodel_update_task and not imgmodel_update_task.done():
             imgmodel_update_task.cancel()
@@ -5539,7 +5507,8 @@ if imggen_enabled:
 
             log.info(f'{user_name} used "/imgmodel": "{selected_imgmodel}"')
             # offload to TaskManager() queue
-            imgmodel_data = await bot_settings.imgmodel.get_imgmodel_data(selected_imgmodel)
+            imgmodel_settings:ImgModel = get_imgmodel_settings(ctx)
+            imgmodel_data = await imgmodel_settings.get_imgmodel_data(selected_imgmodel)
             change_imgmodel_task = Task('change_imgmodel', ctx, params=Params(imgmodel=imgmodel_data))
             await task_manager.queue_task(change_imgmodel_task, 'gen_queue')
 
@@ -5549,9 +5518,10 @@ if imggen_enabled:
     @client.hybrid_command(description="Choose an Img Model")
     @guild_or_owner_only()
     async def imgmodel(ctx: commands.Context):
-        all_imgmodels = await bot_settings.imgmodel.fetch_imgmodels(ctx)
+        imgmodel_settings:ImgModel = get_imgmodel_settings(ctx)
+        all_imgmodels = await imgmodel_settings.fetch_imgmodels(ctx)
         if all_imgmodels:
-            display_key = bot_settings.imgmodel._any_key
+            display_key = imgmodel_settings._any_key
             items_for_imgmodel = [i[display_key] for i in all_imgmodels]
             warned_too_many_imgmodel = False # TODO use the warned_once feature?
             imgmodels_view = SelectOptionsView(items_for_imgmodel,
@@ -6241,10 +6211,15 @@ spontaneous_messaging = SpontaneousMessaging()
 guild_settings:dict[int, "Settings"] = {}
 
 # Returns either guild specific or main instance of Settings() 
-def get_settings(ictx:CtxInteraction|None=None):
+def get_settings(ictx:CtxInteraction|None=None) -> "Settings":
     if config.is_per_server() and ictx and not is_direct_message(ictx):
         return guild_settings.get(ictx.guild.id, bot_settings)
     return bot_settings
+
+def get_imgmodel_settings(ictx:CtxInteraction|None=None) -> "ImgModel":
+    if config.is_per_server_imgmodels():
+        return get_settings(ictx)
+    return bot_settings.imgmodel
 
 class SettingsBase:
     def get_vars(self):
@@ -6432,117 +6407,59 @@ class ImgModel(SettingsBase):
         self._value_key = api.imggen.get_imgmodels.imgmodel_value_key or ''
         self._filename_key = api.imggen.get_imgmodels.imgmodel_filename_key or ''
         self._any_key = self._name_key or self._value_key or self._filename_key or ''
+        # database-like
+        self.last_imgmodel_name: str = ''
+        self.last_imgmodel_value: str = ''
+        self.last_imgmodel_res: int = 1024
         # Override base values
         self.payload_mods:dict = {}
         self.tags:TAG_LIST = []
 
-    ## Function to automatically change image models
-    # Select imgmodel based on mode, while avoid repeating current imgmodel
-    async def auto_select_imgmodel(self, mode='random'):
-        current_imgmodel_name = bot_database.last_imgmodel_name
-        try:
-            all_imgmodels:list[dict] = await self.fetch_imgmodels()
-            all_imgmodel_names = [imgmodel.get(self._any_key, '') for imgmodel in all_imgmodels]
+    def apply_filters(self, items: list[Union[str, dict]], filter_list: list[str], exclude_list: list[str]) -> list:
+        def item_matches(text: str) -> bool:
+            # Check inclusion
+            if filter_list and not any(re.search(re.escape(f), text, re.IGNORECASE) for f in filter_list):
+                return False
+            # Check exclusion
+            if exclude_list and any(re.search(re.escape(e), text, re.IGNORECASE) for e in exclude_list):
+                return False
+            return True
 
-            current_index = None
-            if current_imgmodel_name and current_imgmodel_name in all_imgmodel_names:
-                current_index = all_imgmodel_names.index(current_imgmodel_name)
-
-            if mode == 'random':
-                if current_index is not None and len(all_imgmodels) > 1:
-                    all_imgmodels.pop(current_index)
-                return random.choice(all_imgmodels)
-
-            elif mode == 'cycle':
-                if current_index is not None:
-                    next_index = (current_index + 1) % len(all_imgmodel_names)  # Cycle to the beginning if at the end
-                    return all_imgmodels[next_index]
-                else:
-                    log.info("[Auto Change Imgmodels] Previous imgmodel name was not matched in list of fetched imgmodels.")
-                    log.info("[Auto Change Imgmodels] New imgmodel was selected at random instead of 'cycle'.")
-                    return random.choice(all_imgmodels) # If no image model set yet, select randomly
-        except Exception as e:
-            log.error(f"[Auto Change Imgmodels] Error selecting image model: {e}")
-
-    # Task to auto-select an imgmodel at user defined interval
-    async def auto_update_imgmodel_task(self, mode, duration):
-        while True:
-            await asyncio.sleep(duration)
-            try:
-                # Select an imgmodel automatically
-                selected_imgmodel = await self.auto_select_imgmodel(mode)
-
-                # CREATE TASK AND QUEUE IT
-                params = Params(imgmodel=selected_imgmodel)
-                change_imgmodel_task = Task('change_imgmodel', ictx=None, params=params)
-                await task_manager.queue_task(change_imgmodel_task, 'gen_queue')
-
-            except Exception as e:
-                log.error(f"[Auto Change Imgmodels] Error updating image model: {e}")
-
-    # helper function to begin auto-select imgmodel task
-    async def start_auto_change_imgmodels(self, status:str='started'):
-        try:
-            # load imgmodel settings file and read config
-            imgmodels_data:dict = load_file(shared_path.img_models, {})
-            auto_change_settings = imgmodels_data.get('settings', {}).get('auto_change_imgmodels', {})
-            mode = auto_change_settings.get('mode', 'random')
-            frequency = auto_change_settings.get('frequency', 1.0)
-            duration = frequency*3600 # 3600 = 1 hour
-
-            self._imgmodel_update_task = client.loop.create_task(self.auto_update_imgmodel_task(mode, duration))
-
-            log.info(f"[Auto Change Imgmodels] Task was {status} (Mode: '{mode}', Frequency: {frequency} hours).")
-        except Exception as e:
-            log.error(f"[Auto Change Imgmodels] Error starting task: {e}")
-
-    async def init_auto_change_imgmodels(self):
-        imgmodels_data:dict = load_file(shared_path.img_models, {})
-        if imgmodels_data and imgmodels_data.get('settings', {}).get('auto_change_imgmodels', {}).get('enabled', False):
-            if config.is_per_server() and len(guild_settings) > 1:
-                log.warning('[Auto Change Imgmodels] Main config is set for "per-guild" settings management. Disabling this task.')
-                # Remove the registered command '/toggle_auto_change_imgmodels'
-                client.remove_command("toggle_auto_change_imgmodels")
+        def get_text(item: Union[str, dict]) -> str:
+            if isinstance(item, str):
+                return item
+            elif isinstance(item, dict):
+                return item.get(self._name_key, '') + item.get(self._value_key, '')
             else:
-                await bg_task_queue.put(self.start_auto_change_imgmodels())
+                raise ValueError(f"Unsupported item type: {type(item)}")
+
+        return [item for item in items if item_matches(get_text(item))]
 
     # Apply user defined filters to imgmodel list
     async def filter_imgmodels(self, all_imgmodels:list, ictx:CtxInteraction=None) -> list:
-
-        def apply_filters(imgmodels:list, filter_list:list, exclude_list:list) -> list:
-            if filter_list or exclude_list:
-                return [imgmodel for imgmodel in imgmodels
-                        if (
-                            (not filter_list or any(re.search(re.escape(filter_text), imgmodel.get(self._name_key, '') + imgmodel.get(self._value_key, ''), re.IGNORECASE) for filter_text in filter_list))
-                            and (not exclude_list or not any(re.search(re.escape(exclude_text), imgmodel.get(self._name_key, '') + imgmodel.get(self._value_key, ''), re.IGNORECASE) for exclude_text in exclude_list))
-                        )]
         try:
             imgmodels_data = load_file(shared_path.img_models, {})
             # Apply global filters
             global_filters = imgmodels_data.get('settings', {}).get('filter', [])
             global_excludes = imgmodels_data.get('settings', {}).get('exclude', [])
-            filtered_imgmodels = apply_filters(all_imgmodels, global_filters, global_excludes)
+            filtered_imgmodels = self.apply_filters(all_imgmodels, global_filters, global_excludes)
             # Apply per-server filters
             per_server_filters = imgmodels_data.get('settings', {}).get('per_server_filters', [])
             if ictx is not None and hasattr(ictx, 'guild'):
                 for preset in per_server_filters:
                     preset:dict
                     if ictx.guild.id == preset.get('guild_id'):
-                        filtered_imgmodels = apply_filters(filtered_imgmodels, preset.get('filter', []), preset.get('exclude', []))
+                        filtered_imgmodels = self.apply_filters(filtered_imgmodels, preset.get('filter', []), preset.get('exclude', []))
                         break
-
             return filtered_imgmodels
-
         except Exception as e:
             log.error(f"Error filtering image model list: {e}")
 
-
-    # Get current list of imgmodels from API
+    # Get and filter a current list of imgmodels from API
     async def fetch_imgmodels(self, ictx:CtxInteraction=None) -> list:
         try:
             all_imgmodels = await api.imggen.get_imgmodels.call()
             return await self.filter_imgmodels(all_imgmodels, ictx)
-
         except Exception as e:
             log.error(f"Error fetching image models: {e}")
             return []
@@ -6664,7 +6581,7 @@ class ImgModel(SettingsBase):
         return override_settings
 
     # Merge selected imgmodel/tag data with base settings
-    async def get_imgmodel_settings(self, imgmodel_data:dict) -> Tuple[dict, list]:
+    async def update_imgmodel_settings(self, imgmodel_data:dict) -> Tuple[dict, list]:
         imgmodel_settings = {}
         imgmodel_tags = []
         try:
@@ -6695,7 +6612,7 @@ class ImgModel(SettingsBase):
             options_payload[imgmodel_input_key] = imgmodel_data[self._any_key]
 
         # Guess model params, merge with basesettings
-        imgmodel_settings, imgmodel_tags = await self.get_imgmodel_settings(imgmodel_data)
+        imgmodel_settings, imgmodel_tags = await self.update_imgmodel_settings(imgmodel_data)
         
         # Factors override_settings if applicable
         options_payload.update(self.get_override_settings(imgmodel_settings))
@@ -6742,6 +6659,116 @@ class ImgModel(SettingsBase):
         except Exception as e:
             log.error(f"Error getting selected imgmodel data: {e}")
             return {}
+
+    ## Function to automatically change image models
+    # Select imgmodel based on mode, while avoid repeating current imgmodel
+    async def auto_select_imgmodel(self, mode='random'):
+        current_imgmodel_name = bot_database.last_imgmodel_name
+        try:
+            all_imgmodels:list[dict] = await self.fetch_imgmodels()
+            all_imgmodel_names = [imgmodel.get(self._any_key, '') for imgmodel in all_imgmodels]
+
+            current_index = None
+            if current_imgmodel_name and current_imgmodel_name in all_imgmodel_names:
+                current_index = all_imgmodel_names.index(current_imgmodel_name)
+
+            if mode == 'random':
+                if current_index is not None and len(all_imgmodels) > 1:
+                    all_imgmodels.pop(current_index)
+                return random.choice(all_imgmodels)
+
+            elif mode == 'cycle':
+                if current_index is not None:
+                    next_index = (current_index + 1) % len(all_imgmodel_names)  # Cycle to the beginning if at the end
+                    return all_imgmodels[next_index]
+                else:
+                    log.info("[Auto Change Imgmodels] Previous imgmodel name was not matched in list of fetched imgmodels.")
+                    log.info("[Auto Change Imgmodels] New imgmodel was selected at random instead of 'cycle'.")
+                    return random.choice(all_imgmodels) # If no image model set yet, select randomly
+        except Exception as e:
+            log.error(f"[Auto Change Imgmodels] Error selecting image model: {e}")
+
+    # Task to auto-select an imgmodel at user defined interval
+    async def auto_update_imgmodel_task(self, mode, duration):
+        while True:
+            await asyncio.sleep(duration)
+            try:
+                # Select an imgmodel automatically
+                selected_imgmodel = await self.auto_select_imgmodel(mode)
+
+                # CREATE TASK AND QUEUE IT
+                params = Params(imgmodel=selected_imgmodel)
+                change_imgmodel_task = Task('change_imgmodel', ictx=None, params=params)
+                await task_manager.queue_task(change_imgmodel_task, 'gen_queue')
+
+            except Exception as e:
+                log.error(f"[Auto Change Imgmodels] Error updating image model: {e}")
+
+    # helper function to begin auto-select imgmodel task
+    async def start_auto_change_imgmodels(self, status:str='Started', guild_id=None):
+        try:
+            # load imgmodel settings file and read config
+            imgmodels_data:dict = load_file(shared_path.img_models, {})
+            auto_change_settings = imgmodels_data.get('settings', {}).get('auto_change_imgmodels', {})
+            mode = auto_change_settings.get('mode', 'random')
+            frequency = auto_change_settings.get('frequency', 1.0)
+            duration = frequency*3600 # 3600 = 1 hour
+
+            self._imgmodel_update_task = client.loop.create_task(self.auto_update_imgmodel_task(mode, duration))
+
+            guild_msg = f", guild: {guild_id}" if guild_id else ''
+
+            log.info(f"[Auto Change Imgmodels] {status} (Mode: '{mode}', Frequency: {frequency} hrs{guild_msg}).")
+        except Exception as e:
+            log.error(f"[Auto Change Imgmodels] Error starting task: {e}")
+
+    # From change_imgmodel_task
+    async def change_imgmodel_task(self, task:"Task"):
+        print_model_name = task.params.imgmodel.get(self._name_key, self._value_key)
+
+        imgmodel_value = task.params.imgmodel.get(self._any_key)
+        if not imgmodel_value:
+            await task.embeds.send('change', 'Failed to change Img model:', f'Img model not found: {print_model_name}')
+            return False
+
+        try:
+            # Send embed
+            if not task.ictx:
+                task.user_name = 'Automatically'
+            mode = getattr(task.params, 'imgmodel_mode', 'change')    # default to 'change
+            verb = getattr(task.params, 'imgmodel_verb', 'Changing')  # default to 'Changing'
+            await task.embeds.send('change', f'{verb} Img model ... ', f'{verb} to {print_model_name}')
+
+            # Swap Image model
+            if mode == 'swap' or mode == 'swap_back':
+                new_options = await self.change_imgmodel(task.params.imgmodel, task.ictx, save=False)
+                await task.embeds.delete('change') # delete embed
+                return new_options
+
+            # Change Image model
+            await self.change_imgmodel(task.params.imgmodel, task.ictx)
+
+            # Announce change
+            await task.embeds.delete('change') # delete any embed
+            await task.embeds.send('change', f"{task.user_name} changed Img model:", f'**{print_model_name}**')
+            if bot_database.announce_channels and task.embeds.enabled('change'):
+                # Send embeds to announcement channels
+                await bg_task_queue.put(announce_changes('changed Img model', print_model_name, task.ictx))
+
+            log.info(f"Image model changed to: {print_model_name}")
+            if config.discord['post_active_settings'].get('enabled', True):
+                settings_keys = ['imgmodel']
+                # Auto-change imgmodel task will not have an interaction
+                if task.ictx and config.is_per_server():
+                    await bg_task_queue.put(post_active_settings(task.ictx.guild.id, settings_keys))
+                else:
+                    await bg_task_queue.put(post_active_settings_to_all(settings_keys))
+
+        except Exception as e:
+            log.error(f"Error changing Img model: {e}")
+            await task.embeds.edit_or_send('change', "An error occurred while changing Img model", e)
+            traceback.print_exc()
+            return False
 
 class ComfyImgModel(ImgModel):
     def __init__(self):
