@@ -144,7 +144,6 @@ tgwui_enabled = is_tgwui_integrated and tgwui.enabled
 #################################################################
 ##################### BACKGROUND QUEUE TASK #####################
 #################################################################
-
 async def process_tasks_in_background():
     while True:
         task = await bg_task_queue.get()
@@ -153,96 +152,6 @@ async def process_tasks_in_background():
 #################################################################
 ########################## BOT STARTUP ##########################
 #################################################################
-## Function to automatically change image models
-# Select imgmodel based on mode, while avoid repeating current imgmodel
-async def auto_select_imgmodel(current_imgmodel_name, mode='random'):
-    try:
-        all_imgmodels = await fetch_imgmodels()
-        value_key = api.imggen.post_options.imgmodel_value_key or ''
-        name_key = api.imggen.post_options.imgmodel_name_key or value_key or ''
-
-        all_imgmodel_names = [imgmodel.get(name_key, '') for imgmodel in all_imgmodels]
-
-        current_index = None
-        if current_imgmodel_name and current_imgmodel_name in all_imgmodel_names:
-            current_index = all_imgmodel_names.index(current_imgmodel_name)
-
-        if mode == 'random':
-            if current_index is not None and len(all_imgmodels) > 1:
-                all_imgmodels.pop(current_index)
-
-            return random.choice(all_imgmodels)
-
-        elif mode == 'cycle':
-            if current_index is not None:
-                next_index = (current_index + 1) % len(all_imgmodel_names)  # Cycle to the beginning if at the end
-                return all_imgmodels[next_index]
-
-            else:
-                log.info("[Auto Change Imgmodels] Previous imgmodel name was not matched in list of fetched imgmodels.")
-                log.info("[Auto Change Imgmodels] New imgmodel was selected at random instead of 'cycle'.")
-                return random.choice(all_imgmodels) # If no image model set yet, select randomly
-
-    except Exception as e:
-        log.error(f"[Auto Change Imgmodels] Error selecting image model: {e}")
-
-# Task to auto-select an imgmodel at user defined interval
-async def auto_update_imgmodel_task(mode, duration):
-    while True:
-        await asyncio.sleep(duration)
-        try:
-            # Select an imgmodel automatically
-            selected_imgmodel = await auto_select_imgmodel(bot_database.last_imgmodel_name, mode)
-
-            # CREATE TASK AND QUEUE IT
-            params = Params(imgmodel=selected_imgmodel)
-            change_imgmodel_task = Task('change_imgmodel', ictx=None, params=params)
-            await task_manager.queue_task(change_imgmodel_task, 'gen_queue')
-
-        except Exception as e:
-            log.error(f"[Auto Change Imgmodels] Error updating image model: {e}")
-        #await asyncio.sleep(duration)
-
-imgmodel_update_task = None # Global variable allows process to be cancelled and restarted (reset sleep timer)
-
-if imggen_enabled:
-    # Register command for helper function to toggle auto-select imgmodel
-    @client.hybrid_command(description='Toggles the automatic Img model changing task')
-    @guild_or_owner_only()
-    async def toggle_auto_change_imgmodels(ctx: commands.Context):
-        global imgmodel_update_task
-        if imgmodel_update_task and not imgmodel_update_task.done():
-            imgmodel_update_task.cancel()
-            await ctx.send("Auto-change Imgmodels task was cancelled.", ephemeral=True, delete_after=5)
-            log.info("[Auto Change Imgmodels] Task was cancelled via '/toggle_auto_change_imgmodels_task'")
-        else:
-            await bg_task_queue.put(start_auto_change_imgmodels())
-            await ctx.send("Auto-change Img models task was started.", ephemeral=True, delete_after=5)
-
-# helper function to begin auto-select imgmodel task
-async def start_auto_change_imgmodels(status:str='started'):
-    try:
-        global imgmodel_update_task
-        imgmodels_data = load_file(shared_path.img_models, {})
-        auto_change_settings = imgmodels_data.get('settings', {}).get('auto_change_imgmodels', {})
-        mode = auto_change_settings.get('mode', 'random')
-        frequency = auto_change_settings.get('frequency', 1.0)
-        duration = frequency*3600 # 3600 = 1 hour
-        imgmodel_update_task = client.loop.create_task(auto_update_imgmodel_task(mode, duration))
-        log.info(f"[Auto Change Imgmodels] Task was {status} (Mode: '{mode}', Frequency: {frequency} hours).")
-    except Exception as e:
-        log.error(f"[Auto Change Imgmodels] Error starting task: {e}")
-
-async def init_auto_change_imgmodels():
-    imgmodels_data = load_file(shared_path.img_models, {})
-    if imgmodels_data and imgmodels_data.get('settings', {}).get('auto_change_imgmodels', {}).get('enabled', False):
-        if config.is_per_server() and len(guild_settings) > 1:
-            log.warning('[Auto Change Imgmodels] Main config is set for "per-guild" settings management. Disabling this task.')
-            # Remove the registered command '/toggle_auto_change_imgmodels'
-            client.remove_command("toggle_auto_change_imgmodels")
-        else:
-            await bg_task_queue.put(start_auto_change_imgmodels())
-
 # Try getting a valid character file source
 def get_character(guild_id:int|None=None, guild_settings=None):
     # Determine applicable Settings()
@@ -357,48 +266,51 @@ async def in_any_guilds():
 #################################################################
 @client.event
 async def on_ready():
-    await in_any_guilds()
+    try:
+        await in_any_guilds()
 
-    # If first time running bot
-    if bot_database.first_run:
-        await first_run()
-    
-    # Ensure startup tasks do not re-execute if bot's discord connection status fluctuates
-    if client.is_first_on_ready: # type: ignore
-        client.is_first_on_ready = False # type: ignore
-
-        # Setup API clients
-        await api.setup_all_clients()
-
-        # Build options for /speak command
-        await speak_cmd_options.build_options(sync=False)
-
-        # Enforce only one TTS method enabled
-        enforce_one_tts_method()
-
-        # Create background task processing queue
-        client.loop.create_task(process_tasks_in_background())
-        # Start the Task Manager
-        client.loop.create_task(task_manager.start())
-
-        # Run guild startup tasks
-        await init_guilds()
-
-        # Load character(s)
-        await init_characters()
-
-        # Start background task to to change image models automatically
-        if imggen_enabled:
-            await init_auto_change_imgmodels()
+        # If first time running bot
+        if bot_database.first_run:
+            await first_run()
         
-        log.info("----------------------------------------------")
-        log.info("                Bot is ready")
-        log.info("    Use Ctrl+C to shutdown the bot cleanly")
-        log.info("----------------------------------------------")
-    # Run only on discord reconnections
-    else:
-        await voice_clients.restore_state()
-    
+        # Ensure startup tasks do not re-execute if bot's discord connection status fluctuates
+        if client.is_first_on_ready: # type: ignore
+            client.is_first_on_ready = False # type: ignore
+
+            # Setup API clients
+            await api.setup_all_clients()
+
+            # Build options for /speak command
+            await speak_cmd_options.build_options(sync=False)
+
+            # Enforce only one TTS method enabled
+            enforce_one_tts_method()
+
+            # Create background task processing queue
+            client.loop.create_task(process_tasks_in_background())
+            # Start the Task Manager
+            client.loop.create_task(task_manager.start())
+
+            # Run guild startup tasks
+            await init_guilds()
+
+            # Load character(s)
+            await init_characters()
+
+            # Start background task to to change image models automatically
+            if imggen_enabled:
+                await bot_settings.imgmodel.init_auto_change_imgmodels()
+            
+            log.info("----------------------------------------------")
+            log.info("                Bot is ready")
+            log.info("    Use Ctrl+C to shutdown the bot cleanly")
+            log.info("----------------------------------------------")
+        # Run only on discord reconnections
+        else:
+            await voice_clients.restore_state()
+    except Exception as e:
+        print(traceback.format_exc())
+        log.critical(e)
     
     ######################
     # Run every on_ready()
@@ -2694,7 +2606,7 @@ class TaskProcessing(TaskAttributes):
             # Imgmodel handling
             new_imgmodel = change_imgmodel or swap_imgmodel or None
             if new_imgmodel:
-                new_imgmodel_data = await get_imgmodel_data(new_imgmodel, self.ictx) # {value, name, filename}
+                new_imgmodel_data = await bot_settings.imgmodel.get_imgmodel_data(new_imgmodel, self.ictx) # {value, name, filename}
                 name_key = api.imggen.get_imgmodels.imgmodel_name_key or api.imggen.get_imgmodels.imgmodel_value_key or ''
                 new_imgmodel_name = new_imgmodel_data.get(name_key, '')
                 current_imgmodel_name = bot_settings.get_last_setting_for("last_imgmodel_name", self.ictx)
@@ -3710,12 +3622,12 @@ class Tasks(TaskProcessing):
 
             # Swap Image model
             if mode == 'swap' or mode == 'swap_back':
-                new_options = await change_imgmodel(self.params.imgmodel, self.ictx, save=False)
+                new_options = await bot_settings.imgmodel.change_imgmodel(self.params.imgmodel, self.ictx, save=False)
                 await self.embeds.delete('change') # delete embed
                 return new_options
 
             # Change Image model
-            await change_imgmodel(self.params.imgmodel, self.ictx)
+            await bot_settings.imgmodel.change_imgmodel(self.params.imgmodel, self.ictx)
 
             # Announce change
             await self.embeds.delete('change') # delete any embed
@@ -3882,7 +3794,7 @@ class Tasks(TaskProcessing):
                     should_swap = True
                     swap_params: Params = Params()
                     last_imgmodel = bot_settings.get_last_setting_for("last_imgmodel_value", self.ictx)
-                    swap_params.imgmodel = get_imgmodel_data(last_imgmodel)
+                    swap_params.imgmodel = bot_settings.imgmodel.get_imgmodel_data(last_imgmodel)
                 # RUN A CHANGE IMGMODEL SUBTASK
                 new_options = await self.run_subtask('change_imgmodel')
                 self.payload = deep_merge(self.payload, new_options)
@@ -5598,283 +5510,48 @@ async def character(ctx: commands.Context):
         await ctx.send('There are no characters available', ephemeral=True)
 
 #################################################################
-####################### /IMGMODEL COMMAND #######################
+####################### IMGMODEL COMMANDS #######################
 #################################################################
-# Apply user defined filters to imgmodel list
-async def filter_imgmodels(all_imgmodels:list, ictx:CtxInteraction=None) -> list:
-    value_key = api.imggen.get_imgmodels.imgmodel_value_key or ''
-    name_key = api.imggen.get_imgmodels.imgmodel_name_key or ''
-
-    def apply_filters(imgmodels:list, filter_list:list, exclude_list:list) -> list:
-        if filter_list or exclude_list:
-            return [imgmodel for imgmodel in imgmodels
-                    if (
-                        (not filter_list or any(re.search(re.escape(filter_text), imgmodel.get(name_key, '') + imgmodel.get(value_key, ''), re.IGNORECASE) for filter_text in filter_list))
-                        and (not exclude_list or not any(re.search(re.escape(exclude_text), imgmodel.get(name_key, '') + imgmodel.get(value_key, ''), re.IGNORECASE) for exclude_text in exclude_list))
-                    )]
-    try:
-        imgmodels_data = load_file(shared_path.img_models, {})
-        # Apply global filters
-        global_filters = imgmodels_data.get('settings', {}).get('filter', [])
-        global_excludes = imgmodels_data.get('settings', {}).get('exclude', [])
-        filtered_imgmodels = apply_filters(all_imgmodels, global_filters, global_excludes)
-        # Apply per-server filters
-        per_server_filters = imgmodels_data.get('settings', {}).get('per_server_filters', [])
-        if ictx is not None and hasattr(ictx, 'guild'):
-            for preset in per_server_filters:
-                preset:dict
-                if ictx.guild.id == preset.get('guild_id'):
-                    filtered_imgmodels = apply_filters(filtered_imgmodels, preset.get('filter', []), preset.get('exclude', []))
-                    break
-
-        return filtered_imgmodels
-
-    except Exception as e:
-        log.error(f"Error filtering image model list: {e}")
-
-
-# Get current list of imgmodels from API
-async def fetch_imgmodels(ictx:CtxInteraction=None) -> list:
-    try:
-        all_imgmodels = await api.imggen.get_imgmodels.call()
-        return await filter_imgmodels(all_imgmodels, ictx)
-
-    except Exception as e:
-        log.error(f"Error fetching image models: {e}")
-        return []
-
-# Check filesize/filters with selected imgmodel to assume resolution / tags
-async def guess_model_data(imgmodel_data:dict, presets:list[dict]) -> dict|None:
-    imgmodel_key = api.imggen.get_imgmodels.imgmodel_name_key or api.imggen.get_imgmodels.imgmodel_value_key or api.imggen.get_imgmodels.imgmodel_filename_key or ''
-    filename_key = api.imggen.get_imgmodels.imgmodel_filename_key or ''
-    try:
-        imgmodel = imgmodel_data.get(imgmodel_key)
-        filename: Optional[str] = imgmodel_data.get(filename_key, '')
-        file_size_gb = 0
-        filename_available = bool(filename)
-
-        if filename_available:
-            try:
-                file_size_bytes = os.path.getsize(filename)
-                file_size_gb = file_size_bytes / (1024 ** 3)  # 1 GB = 1024^3 bytes
-            except Exception as e:
-                if not bot_database.was_warned('imgmodel_filename'):
-                    bot_database.update_was_warned('imgmodel_filename')
-                    log.warning("[Change Imgmodels] Failed to read the filesize of the selected image model (may be on remote system?).")
-                    log.warning("[Change Imgmodels] Filesize will not be factored when evaluating presets in 'dict_imgmodels.yaml'.")
-                    log.warning(f"[Change Imgmodels] File not found: {e}")
-                filename_available = False  # Disable filename-based filters if file is inaccessible
-
-        match_counts = []
-        for preset in presets:
-            preset_copy = preset.copy()
-            exact_match = preset_copy.pop('exact_match', '')
-            if exact_match and imgmodel == exact_match:
-                log.info(f'Applying exact match imgmodel preset for "{exact_match}".')
-                return preset_copy
-
-            filter_list = preset_copy.pop('filter', [])
-            exclude_list = preset_copy.pop('exclude', [])
-            match_count = 0
-
-            # Only apply filename-dependent filters if filename is available
-            if filename_available:
-                if filter_list:
-                    if all(re.search(re.escape(filter_text), filename, re.IGNORECASE) for filter_text in filter_list):
-                        match_count += 1
-                    else:
-                        match_count -= 1
-                if exclude_list:
-                    if not any(re.search(re.escape(exclude_text), filename, re.IGNORECASE) for exclude_text in exclude_list):
-                        match_count += 1
-                    else:
-                        match_count -= 1
-                if 'max_filesize' in preset_copy and preset_copy['max_filesize'] > file_size_gb:
-                    match_count += 1
-                    del preset_copy['max_filesize']
-            else:
-                # Ignore max_filesize if we can't get it
-                preset_copy.pop('max_filesize', None)
-
-            match_counts.append((preset_copy, match_count))
-
-        match_counts.sort(key=lambda x: x[1], reverse=True)
-        matched_preset = match_counts[0][0] if match_counts else None
-        return matched_preset
-    except Exception as e:
-        log.error(f"Error guessing selected imgmodel data: {e}")
-        return {}
-
-# Save new Img model data
-async def save_new_imgmodel_settings(ictx:CtxInteraction, new_imgmodel_settings:dict, imgmodel_tags):
-    # Remove options we do not want to retain in Settings
-    override_settings:dict = new_imgmodel_settings.get('override_settings', {})
-    if override_settings and not config.is_per_server_imgmodels():
-        imgmodel_options = list(override_settings.keys())  # list all options
-        if imgmodel_options:
-            log.info(f"[Change Imgmodel] Applying Options which won't be retained for next bot startup: {imgmodel_options}")
-        # Remove override_settings
-        new_imgmodel_settings.pop('override_settings')
-
-    # Update settings
-    settings:Settings = bot_settings
-    if config.is_per_server_imgmodels():
-        settings:Settings = get_settings(ictx)
-
-    settings.imgmodel.payload_mods = new_imgmodel_settings
-    settings.imgmodel.tags = imgmodel_tags
-
-    # Fix any invalid settings
-    settings.fix_settings()
-    # Save file
-    settings.save()
-
-    # Check if old/new average resolution is different
-    if settings.imgmodel.payload_mods.get('width') and settings.imgmodel.payload_mods.get('height'):
-        new_avg = avg_from_dims(settings.imgmodel.payload_mods['width'], settings.imgmodel.payload_mods['height'])
-        if new_avg != bot_settings.get_last_setting_for("last_imgmodel_res", ictx):
-            # save new res to bot database
-            bot_settings.set_last_setting_for("last_imgmodel_res", new_avg, ictx, save_now=True)
-            # update /image cmd res options
-            await bg_task_queue.put(update_size_options(new_avg))
-
-# Adds applicable override_settings to the imgmodel settings. returns override_settings
-def get_override_settings(imgmodel_data:dict) -> dict:
-    value_key = api.imggen.get_imgmodels.imgmodel_value_key or ''
-    override_settings = {}
-    # Apply integrations for for A1111-like APIs
-    if api.imggen.is_sdwebui_variant():
-        # Set defaults
-        override_settings:dict = imgmodel_data.setdefault('override_settings', {})
-        # For per-server imgmodels, only the image request payload will drive model changes (won't change now via API)
-        if config.is_per_server_imgmodels():
-            override_settings[value_key] = imgmodel_data[value_key]
-        # Forge manages VAE / Text Encoders using "forge_additional_modules" during change model request.
-        if api.imggen.is_forge():
-            log.info("Factoring required option for Forge: 'forge_additional_modules'. If you get a Forge error 'You do not have Clip State Dict!', please double-check your presets in 'dict_imgmodels.yaml'")
-            # Ensure required params for Forge model loading
-            if not override_settings.get('forge_additional_modules'):
-                forge_additional_modules = []
-                if override_settings.get('sd_vae') and override_settings['sd_vae'] != "Automatic":
-                    vae = override_settings['sd_vae']
-                    forge_additional_modules.append(vae)
-                    log.info(f'[Change Imgmodel] VAE "{vae}" was added to Forge options "forge_additional_modules".')
-                override_settings['forge_additional_modules'] = forge_additional_modules
-    return override_settings
-
-# Merge selected imgmodel/tag data with base settings
-async def get_imgmodel_settings(imgmodel_data:dict) -> Tuple[dict, list]:
-    imgmodel_settings = {}
-    imgmodel_tags = []
-    try:
-        # Get extra model information
-        imgmodels_data = load_file(shared_path.img_models, {})
-        if imgmodels_data.get('settings', {}).get('auto_change_imgmodels', {}).get('guess_model_params', True):
-            imgmodel_presets = copy.deepcopy(imgmodels_data.get('presets', []))
-            matched_preset = await guess_model_data(imgmodel_data, imgmodel_presets)
-            if matched_preset:
-                imgmodel_tags = matched_preset.pop('tags', [])
-                imgmodel_settings = matched_preset.get('payload', {})
-        # Unpack any tag presets
-        imgmodel_tags = base_tags.update_tags(imgmodel_tags)
-    except Exception as e:
-        log.error(f"Error merging selected imgmodel data with base imgmodel data: {e}")
-    return imgmodel_settings, imgmodel_tags
-
-async def change_imgmodel(imgmodel_data:dict, ictx:CtxInteraction=None, save:bool=True) -> dict:
-    name_key = api.imggen.get_imgmodels.imgmodel_name_key or ''
-    value_key = api.imggen.get_imgmodels.imgmodel_value_key or name_key or ''
-    post_options_ep:Optional[Endpoint] = getattr(api.imggen, 'post_options', None)
-
-    # Save model details to bot database
-    bot_settings.set_last_setting_for("last_imgmodel_name", imgmodel_data[name_key], ictx)
-    bot_settings.set_last_setting_for("last_imgmodel_value", imgmodel_data[value_key], ictx, save_now=save)
-
-    options_payload = {}
-    imgmodel_input_key:Optional[str] = getattr(post_options_ep, 'imgmodel_input_key', None)
-    if imgmodel_input_key:
-        options_payload[imgmodel_input_key] = imgmodel_data[value_key]
-
-    # Guess model params, merge with basesettings
-    imgmodel_settings, imgmodel_tags = await get_imgmodel_settings(imgmodel_data)
-    
-    # Factors override_settings if applicable
-    options_payload.update(get_override_settings(imgmodel_settings))
-    updated_options_payload = options_payload
-
-    if post_options_ep and not config.is_per_server_imgmodels():
-        try:
-            # load the model
-            base_options = api.imggen.post_options.get_payload()
-            updated_options_payload = deep_merge(base_options, options_payload)
-            await api.imggen.post_options.call(input_data=updated_options_payload, sanitize=True)
-        except Exception as e:
-            log.error(f"Error updating settings with the selected imgmodel data: {e}")
-            raise
-
-    # Save settings
-    if save:
-        await save_new_imgmodel_settings(ictx, imgmodel_settings, imgmodel_tags)
-        # Restart auto-change imgmodel task if triggered by a user interaction
-        if ictx:
-            global imgmodel_update_task
-            if imgmodel_update_task and not imgmodel_update_task.done():
-                imgmodel_update_task.cancel()
-                await bg_task_queue.put(start_auto_change_imgmodels('restarted'))
-
-    return updated_options_payload
-
-async def get_imgmodel_data(imgmodel_value:str, ictx:CtxInteraction=None) -> dict:
-    try:
-        imgmodel_data = {}
-
-        all_imgmodels = await fetch_imgmodels(ictx)
-
-        name_key = api.imggen.get_imgmodels.imgmodel_name_key or ''
-        value_key = api.imggen.get_imgmodels.imgmodel_value_key or ''
-        filename_key = api.imggen.get_imgmodels.imgmodel_filename_key or ''
-
-        for imgmodel in all_imgmodels:
-            # check that the value matches a valid checkpoint
-            if imgmodel_value == (imgmodel.get(name_key) or imgmodel.get(value_key)):
-                imgmodel_data = {k: imgmodel[k]
-                                for k in (value_key, name_key, filename_key)
-                                if k and k in imgmodel}
-                break
-        if not imgmodel_data:
-            log.error(f'Img model not found: {imgmodel_value}')
-        return imgmodel_data
-
-    except Exception as e:
-        log.error(f"Error getting selected imgmodel data: {e}")
-        return {}
-
-async def process_imgmodel(ctx: commands.Context, selected_imgmodel:str):
-    user_name = get_user_ctx_inter(ctx).display_name or None
-    try:
-        if not selected_imgmodel:
-            await ctx.reply('**No Img model was selected**.', ephemeral=True, delete_after=5)
-            return
-        await ireply(ctx, 'Img model change') # send a response msg to the user
-
-        log.info(f'{user_name} used "/imgmodel": "{selected_imgmodel}"')
-        # offload to TaskManager() queue
-        params = await get_imgmodel_data(selected_imgmodel) # {value, name, filename}
-        change_imgmodel_data = Params(imgmodel=params)
-        change_imgmodel_task = Task('change_imgmodel', ctx, params=change_imgmodel_data)
-        await task_manager.queue_task(change_imgmodel_task, 'gen_queue')
-
-    except Exception as e:
-        log.error(f"Error processing selected imgmodel from /imgmodel command: {e}")
-
 if imggen_enabled:
+
+    # Register command for helper function to toggle auto-select imgmodel
+    @client.hybrid_command(description='Toggles the automatic Img model changing task')
+    @guild_or_owner_only()
+    async def toggle_auto_change_imgmodels(ctx: commands.Context):
+        imgmodel_settings = bot_settings.imgmodel
+        imgmodel_update_task = imgmodel_settings._imgmodel_update_task
+        if imgmodel_update_task and not imgmodel_update_task.done():
+            imgmodel_update_task.cancel()
+            await ctx.send("Auto-change Imgmodels task was cancelled.", ephemeral=True, delete_after=5)
+            log.info("[Auto Change Imgmodels] Task was cancelled via '/toggle_auto_change_imgmodels_task'")
+        else:
+            await bg_task_queue.put(imgmodel_settings.start_auto_change_imgmodels())
+            await ctx.send("Auto-change Img models task was started.", ephemeral=True, delete_after=5)
+
+
+    async def process_imgmodel(ctx: commands.Context, selected_imgmodel:str):
+        user_name = get_user_ctx_inter(ctx).display_name or None
+        try:
+            if not selected_imgmodel:
+                await ctx.reply('**No Img model was selected**.', ephemeral=True, delete_after=5)
+                return
+            await ireply(ctx, 'Img model change') # send a response msg to the user
+
+            log.info(f'{user_name} used "/imgmodel": "{selected_imgmodel}"')
+            # offload to TaskManager() queue
+            imgmodel_data = await bot_settings.imgmodel.get_imgmodel_data(selected_imgmodel)
+            change_imgmodel_task = Task('change_imgmodel', ctx, params=Params(imgmodel=imgmodel_data))
+            await task_manager.queue_task(change_imgmodel_task, 'gen_queue')
+
+        except Exception as e:
+            log.error(f"Error processing selected imgmodel from /imgmodel command: {e}")
 
     @client.hybrid_command(description="Choose an Img Model")
     @guild_or_owner_only()
     async def imgmodel(ctx: commands.Context):
-        all_imgmodels = await fetch_imgmodels(ctx)
+        all_imgmodels = await bot_settings.imgmodel.fetch_imgmodels(ctx)
         if all_imgmodels:
-            display_key = api.imggen.get_imgmodels.imgmodel_name_key or api.imggen.get_imgmodels.imgmodel_value_key
+            display_key = bot_settings.imgmodel._any_key
             items_for_imgmodel = [i[display_key] for i in all_imgmodels]
             warned_too_many_imgmodel = False # TODO use the warned_once feature?
             imgmodels_view = SelectOptionsView(items_for_imgmodel,
@@ -6749,8 +6426,322 @@ class Behavior(SettingsBase):
 
 class ImgModel(SettingsBase):
     def __init__(self):
-        self.payload_mods = {}
-        self.tags = []
+        self._imgmodel_update_task:Optional[asyncio.Task] = None
+        # Convenience keys
+        self._name_key = api.imggen.get_imgmodels.imgmodel_name_key or ''
+        self._value_key = api.imggen.get_imgmodels.imgmodel_value_key or ''
+        self._filename_key = api.imggen.get_imgmodels.imgmodel_filename_key or ''
+        self._any_key = self._name_key or self._value_key or self._filename_key or ''
+        # Override base values
+        self.payload_mods:dict = {}
+        self.tags:TAG_LIST = []
+
+    ## Function to automatically change image models
+    # Select imgmodel based on mode, while avoid repeating current imgmodel
+    async def auto_select_imgmodel(self, mode='random'):
+        current_imgmodel_name = bot_database.last_imgmodel_name
+        try:
+            all_imgmodels:list[dict] = await self.fetch_imgmodels()
+            all_imgmodel_names = [imgmodel.get(self._any_key, '') for imgmodel in all_imgmodels]
+
+            current_index = None
+            if current_imgmodel_name and current_imgmodel_name in all_imgmodel_names:
+                current_index = all_imgmodel_names.index(current_imgmodel_name)
+
+            if mode == 'random':
+                if current_index is not None and len(all_imgmodels) > 1:
+                    all_imgmodels.pop(current_index)
+                return random.choice(all_imgmodels)
+
+            elif mode == 'cycle':
+                if current_index is not None:
+                    next_index = (current_index + 1) % len(all_imgmodel_names)  # Cycle to the beginning if at the end
+                    return all_imgmodels[next_index]
+                else:
+                    log.info("[Auto Change Imgmodels] Previous imgmodel name was not matched in list of fetched imgmodels.")
+                    log.info("[Auto Change Imgmodels] New imgmodel was selected at random instead of 'cycle'.")
+                    return random.choice(all_imgmodels) # If no image model set yet, select randomly
+        except Exception as e:
+            log.error(f"[Auto Change Imgmodels] Error selecting image model: {e}")
+
+    # Task to auto-select an imgmodel at user defined interval
+    async def auto_update_imgmodel_task(self, mode, duration):
+        while True:
+            await asyncio.sleep(duration)
+            try:
+                # Select an imgmodel automatically
+                selected_imgmodel = await self.auto_select_imgmodel(mode)
+
+                # CREATE TASK AND QUEUE IT
+                params = Params(imgmodel=selected_imgmodel)
+                change_imgmodel_task = Task('change_imgmodel', ictx=None, params=params)
+                await task_manager.queue_task(change_imgmodel_task, 'gen_queue')
+
+            except Exception as e:
+                log.error(f"[Auto Change Imgmodels] Error updating image model: {e}")
+
+    # helper function to begin auto-select imgmodel task
+    async def start_auto_change_imgmodels(self, status:str='started'):
+        try:
+            # load imgmodel settings file and read config
+            imgmodels_data:dict = load_file(shared_path.img_models, {})
+            auto_change_settings = imgmodels_data.get('settings', {}).get('auto_change_imgmodels', {})
+            mode = auto_change_settings.get('mode', 'random')
+            frequency = auto_change_settings.get('frequency', 1.0)
+            duration = frequency*3600 # 3600 = 1 hour
+
+            self._imgmodel_update_task = client.loop.create_task(self.auto_update_imgmodel_task(mode, duration))
+
+            log.info(f"[Auto Change Imgmodels] Task was {status} (Mode: '{mode}', Frequency: {frequency} hours).")
+        except Exception as e:
+            log.error(f"[Auto Change Imgmodels] Error starting task: {e}")
+
+    async def init_auto_change_imgmodels(self):
+        imgmodels_data:dict = load_file(shared_path.img_models, {})
+        if imgmodels_data and imgmodels_data.get('settings', {}).get('auto_change_imgmodels', {}).get('enabled', False):
+            if config.is_per_server() and len(guild_settings) > 1:
+                log.warning('[Auto Change Imgmodels] Main config is set for "per-guild" settings management. Disabling this task.')
+                # Remove the registered command '/toggle_auto_change_imgmodels'
+                client.remove_command("toggle_auto_change_imgmodels")
+            else:
+                await bg_task_queue.put(self.start_auto_change_imgmodels())
+
+    # Apply user defined filters to imgmodel list
+    async def filter_imgmodels(self, all_imgmodels:list, ictx:CtxInteraction=None) -> list:
+
+        def apply_filters(imgmodels:list, filter_list:list, exclude_list:list) -> list:
+            if filter_list or exclude_list:
+                return [imgmodel for imgmodel in imgmodels
+                        if (
+                            (not filter_list or any(re.search(re.escape(filter_text), imgmodel.get(self._name_key, '') + imgmodel.get(self._value_key, ''), re.IGNORECASE) for filter_text in filter_list))
+                            and (not exclude_list or not any(re.search(re.escape(exclude_text), imgmodel.get(self._name_key, '') + imgmodel.get(self._value_key, ''), re.IGNORECASE) for exclude_text in exclude_list))
+                        )]
+        try:
+            imgmodels_data = load_file(shared_path.img_models, {})
+            # Apply global filters
+            global_filters = imgmodels_data.get('settings', {}).get('filter', [])
+            global_excludes = imgmodels_data.get('settings', {}).get('exclude', [])
+            filtered_imgmodels = apply_filters(all_imgmodels, global_filters, global_excludes)
+            # Apply per-server filters
+            per_server_filters = imgmodels_data.get('settings', {}).get('per_server_filters', [])
+            if ictx is not None and hasattr(ictx, 'guild'):
+                for preset in per_server_filters:
+                    preset:dict
+                    if ictx.guild.id == preset.get('guild_id'):
+                        filtered_imgmodels = apply_filters(filtered_imgmodels, preset.get('filter', []), preset.get('exclude', []))
+                        break
+
+            return filtered_imgmodels
+
+        except Exception as e:
+            log.error(f"Error filtering image model list: {e}")
+
+
+    # Get current list of imgmodels from API
+    async def fetch_imgmodels(self, ictx:CtxInteraction=None) -> list:
+        try:
+            all_imgmodels = await api.imggen.get_imgmodels.call()
+            return await self.filter_imgmodels(all_imgmodels, ictx)
+
+        except Exception as e:
+            log.error(f"Error fetching image models: {e}")
+            return []
+
+    # Check filesize/filters with selected imgmodel to assume resolution / tags
+    async def guess_model_data(self, imgmodel_data:dict, presets:list[dict]) -> dict|None:
+        try:
+            imgmodel = imgmodel_data.get(self._any_key)
+            filename: Optional[str] = imgmodel_data.get(self._filename_key, '')
+            file_size_gb = 0
+            filename_available = bool(filename)
+
+            if filename_available:
+                try:
+                    file_size_bytes = os.path.getsize(filename)
+                    file_size_gb = file_size_bytes / (1024 ** 3)  # 1 GB = 1024^3 bytes
+                except Exception as e:
+                    if not bot_database.was_warned('imgmodel_filename'):
+                        bot_database.update_was_warned('imgmodel_filename')
+                        log.warning("[Change Imgmodels] Failed to read the filesize of the selected image model (may be on remote system?).")
+                        log.warning("[Change Imgmodels] Filesize will not be factored when evaluating presets in 'dict_imgmodels.yaml'.")
+                        log.warning(f"[Change Imgmodels] File not found: {e}")
+                    filename_available = False  # Disable filename-based filters if file is inaccessible
+
+            match_counts = []
+            for preset in presets:
+                preset_copy = preset.copy()
+                exact_match = preset_copy.pop('exact_match', '')
+                if exact_match and imgmodel == exact_match:
+                    log.info(f'Applying exact match imgmodel preset for "{exact_match}".')
+                    return preset_copy
+
+                filter_list = preset_copy.pop('filter', [])
+                exclude_list = preset_copy.pop('exclude', [])
+                match_count = 0
+
+                # Only apply filename-dependent filters if filename is available
+                if filename_available:
+                    if filter_list:
+                        if all(re.search(re.escape(filter_text), filename, re.IGNORECASE) for filter_text in filter_list):
+                            match_count += 1
+                        else:
+                            match_count -= 1
+                    if exclude_list:
+                        if not any(re.search(re.escape(exclude_text), filename, re.IGNORECASE) for exclude_text in exclude_list):
+                            match_count += 1
+                        else:
+                            match_count -= 1
+                    if 'max_filesize' in preset_copy and preset_copy['max_filesize'] > file_size_gb:
+                        match_count += 1
+                        del preset_copy['max_filesize']
+                else:
+                    # Ignore max_filesize if we can't get it
+                    preset_copy.pop('max_filesize', None)
+
+                match_counts.append((preset_copy, match_count))
+
+            match_counts.sort(key=lambda x: x[1], reverse=True)
+            matched_preset = match_counts[0][0] if match_counts else None
+            return matched_preset
+        except Exception as e:
+            log.error(f"Error guessing selected imgmodel data: {e}")
+            return {}
+
+    # Save new Img model data
+    async def save_new_imgmodel_settings(self, ictx:CtxInteraction, new_imgmodel_settings:dict, imgmodel_tags):
+        # Remove options we do not want to retain in Settings
+        override_settings:dict = new_imgmodel_settings.get('override_settings', {})
+        if override_settings and not config.is_per_server_imgmodels():
+            imgmodel_options = list(override_settings.keys())  # list all options
+            if imgmodel_options:
+                log.info(f"[Change Imgmodel] Applying Options which won't be retained for next bot startup: {imgmodel_options}")
+            # Remove override_settings
+            new_imgmodel_settings.pop('override_settings')
+
+        # Update settings
+        settings:Settings = bot_settings
+        if config.is_per_server_imgmodels():
+            settings:Settings = get_settings(ictx)
+
+        settings.imgmodel.payload_mods = new_imgmodel_settings
+        settings.imgmodel.tags = imgmodel_tags
+
+        # Fix any invalid settings
+        settings.fix_settings()
+        # Save file
+        settings.save()
+
+        # Check if old/new average resolution is different
+        if settings.imgmodel.payload_mods.get('width') and settings.imgmodel.payload_mods.get('height'):
+            new_avg = avg_from_dims(settings.imgmodel.payload_mods['width'], settings.imgmodel.payload_mods['height'])
+            if new_avg != bot_settings.get_last_setting_for("last_imgmodel_res", ictx):
+                # save new res to bot database
+                bot_settings.set_last_setting_for("last_imgmodel_res", new_avg, ictx, save_now=True)
+                # update /image cmd res options
+                await bg_task_queue.put(update_size_options(new_avg))
+
+    # Adds applicable override_settings to the imgmodel settings. returns override_settings
+    def get_override_settings(self, imgmodel_data:dict) -> dict:
+        override_settings = {}
+        # Apply integrations for for A1111-like APIs
+        if api.imggen.is_sdwebui_variant():
+            # Set defaults
+            override_settings:dict = imgmodel_data.setdefault('override_settings', {})
+            # For per-server imgmodels, only the image request payload will drive model changes (won't change now via API)
+            if config.is_per_server_imgmodels():
+                override_settings[self._value_key] = imgmodel_data[self._value_key]
+            # Forge manages VAE / Text Encoders using "forge_additional_modules" during change model request.
+            if api.imggen.is_forge():
+                log.info("Factoring required option for Forge: 'forge_additional_modules'. If you get a Forge error 'You do not have Clip State Dict!', please double-check your presets in 'dict_imgmodels.yaml'")
+                # Ensure required params for Forge model loading
+                if not override_settings.get('forge_additional_modules'):
+                    forge_additional_modules = []
+                    if override_settings.get('sd_vae') and override_settings['sd_vae'] != "Automatic":
+                        vae = override_settings['sd_vae']
+                        forge_additional_modules.append(vae)
+                        log.info(f'[Change Imgmodel] VAE "{vae}" was added to Forge options "forge_additional_modules".')
+                    override_settings['forge_additional_modules'] = forge_additional_modules
+        return override_settings
+
+    # Merge selected imgmodel/tag data with base settings
+    async def get_imgmodel_settings(self, imgmodel_data:dict) -> Tuple[dict, list]:
+        imgmodel_settings = {}
+        imgmodel_tags = []
+        try:
+            # Get extra model information
+            imgmodels_data = load_file(shared_path.img_models, {})
+            if imgmodels_data.get('settings', {}).get('auto_change_imgmodels', {}).get('guess_model_params', True):
+                imgmodel_presets = copy.deepcopy(imgmodels_data.get('presets', []))
+                matched_preset = await self.guess_model_data(imgmodel_data, imgmodel_presets)
+                if matched_preset:
+                    imgmodel_tags = matched_preset.pop('tags', [])
+                    imgmodel_settings = matched_preset.get('payload', {})
+            # Unpack any tag presets
+            imgmodel_tags = base_tags.update_tags(imgmodel_tags)
+        except Exception as e:
+            log.error(f"Error merging selected imgmodel data with base imgmodel data: {e}")
+        return imgmodel_settings, imgmodel_tags
+
+    async def change_imgmodel(self, imgmodel_data:dict, ictx:CtxInteraction=None, save:bool=True) -> dict:
+        post_options_ep:Optional[Endpoint] = getattr(api.imggen, 'post_options', None)
+
+        # Save model details to bot database
+        bot_settings.set_last_setting_for("last_imgmodel_name", imgmodel_data[self._name_key], ictx)
+        bot_settings.set_last_setting_for("last_imgmodel_value", imgmodel_data[self._value_key], ictx, save_now=save)
+
+        options_payload = {}
+        imgmodel_input_key:Optional[str] = getattr(post_options_ep, 'imgmodel_input_key', None)
+        if imgmodel_input_key:
+            options_payload[imgmodel_input_key] = imgmodel_data[self._any_key]
+
+        # Guess model params, merge with basesettings
+        imgmodel_settings, imgmodel_tags = await self.get_imgmodel_settings(imgmodel_data)
+        
+        # Factors override_settings if applicable
+        options_payload.update(self.get_override_settings(imgmodel_settings))
+        updated_options_payload = options_payload
+
+        if post_options_ep and not config.is_per_server_imgmodels():
+            try:
+                # load the model
+                base_options = api.imggen.post_options.get_payload()
+                updated_options_payload = deep_merge(base_options, options_payload)
+                await api.imggen.post_options.call(input_data=updated_options_payload, sanitize=True)
+            except Exception as e:
+                log.error(f"Error updating settings with the selected imgmodel data: {e}")
+                raise
+
+        # Save settings
+        if save:
+            await self.save_new_imgmodel_settings(ictx, imgmodel_settings, imgmodel_tags)
+            # Restart auto-change imgmodel task if triggered by a user interaction
+            if ictx:
+                if self._imgmodel_update_task and not self._imgmodel_update_task.done():
+                    self._imgmodel_update_task.cancel()
+                    await bg_task_queue.put(self.start_auto_change_imgmodels('restarted'))
+
+        return updated_options_payload
+
+    async def get_imgmodel_data(self, imgmodel_value:str, ictx:CtxInteraction=None) -> dict:
+        try:
+            imgmodel_data = {}
+
+            all_imgmodels = await self.fetch_imgmodels(ictx)
+
+            for imgmodel in all_imgmodels:
+                # check that the value matches a valid checkpoint
+                if imgmodel_value == (imgmodel.get(self._name_key) or imgmodel.get(self._value_key)):
+                    imgmodel_data = {k: imgmodel[k]
+                                    for k in (self._value_key, self._name_key, self._filename_key)
+                                    if k and k in imgmodel}
+                    break
+            if not imgmodel_data:
+                log.error(f'Img model not found: {imgmodel_value}')
+            return imgmodel_data
+
+        except Exception as e:
+            log.error(f"Error getting selected imgmodel data: {e}")
+            return {}
 
 class ComfyImgModel(ImgModel):
     def __init__(self):
