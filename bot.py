@@ -6772,6 +6772,7 @@ class ForgeImgModel(SDWebUIImgModel):
     def __init__(self):
         super().__init__()
 
+
 class LLMContext(SettingsBase):
     def __init__(self):
         self.context = 'The following is a conversation with an AI Large Language Model. The AI has been trained to answer questions, provide recommendations, and help with decision making. The AI follows user requests. The AI thinks outside the box.'
@@ -6920,15 +6921,15 @@ class Settings(BaseFileMemory):
             if api.imggen.is_comfy():
                 log.info(f"[{api.imggen.name}] recognized as ComfyUI.")
                 self.imgmodel = ComfyImgModel()
-            elif api.imggen.is_sdwebui():
-                log.info(f"[{api.imggen.name}] recognized as A111.")
-                self.imgmodel = A1111ImgModel()
             elif api.imggen.is_reforge():
                 log.info(f"[{api.imggen.name}] recognized as ReForge.")
                 self.imgmodel = ReForgeImgModel()
             elif api.imggen.is_forge():
                 log.info(f"[{api.imggen.name}] recognized as Forge.")
                 self.imgmodel = ForgeImgModel()
+            elif api.imggen.is_sdwebui():
+                log.info(f"[{api.imggen.name}] recognized as A1111.")
+                self.imgmodel = A1111ImgModel()
             else:
                 log.info(f'[{api.imggen.name}] is an unknown API. "main bot functions" will rely heavily on user configuration.')
                 self.imgmodel = ImgModel()
