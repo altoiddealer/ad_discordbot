@@ -1205,6 +1205,8 @@ class ImgGenClient(APIClient):
 
         return images, pnginfo
 
+    def is_comfy(self) -> bool:
+        return any('comfy' in self.name.lower())
 
     def is_sdwebui(self) -> bool:
         return any(substring in self.name.lower() for substring in ['stable', 'a1111', 'sdwebui'])

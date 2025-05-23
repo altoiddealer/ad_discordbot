@@ -3885,7 +3885,7 @@ class Tasks(TaskProcessing):
                     swap_params.imgmodel = get_imgmodel_data(last_imgmodel)
                 # RUN A CHANGE IMGMODEL SUBTASK
                 new_options = await self.run_subtask('change_imgmodel')
-                self.payload = update_dict_matched_keys(self.payload, new_options)
+                self.payload = deep_merge(self.payload, new_options)
             # Generate images
             await self.process_image_gen()
             # Send images, user's prompt, and any params from "/image" cmd
@@ -6752,6 +6752,25 @@ class ImgModel(SettingsBase):
         self.payload_mods = {}
         self.tags = []
 
+class ComfyImgModel(ImgModel):
+    def __init__(self):
+        super().__init__()
+
+class SDWebUIImgModel(ImgModel):
+    def __init__(self):
+        super().__init__()
+
+class A1111ImgModel(SDWebUIImgModel):
+    def __init__(self):
+        super().__init__()
+
+class ReForgeImgModel(SDWebUIImgModel):
+    def __init__(self):
+        super().__init__()
+
+class ForgeImgModel(SDWebUIImgModel):
+    def __init__(self):
+        super().__init__()
 
 class LLMContext(SettingsBase):
     def __init__(self):
@@ -6893,9 +6912,30 @@ class Settings(BaseFileMemory):
         #log.info("[Per Server Settings] Important information about this feature:")
         log.info("[Per Server Settings] Note: 'dict_base_settings.yaml' applies to ALL server settings. Omit settings you do not want shared!")
 
+    def init_imgmodel(self):
+        if not api.imggen:
+            self.imgmodel = ImgModel()
+        else:
+            log.info(f"Checking if '{api.imggen.name}' is a known API (name has 'Comfy', 'A1111', 'Forge', 'ReForge', etc)")
+            if api.imggen.is_comfy():
+                log.info(f"[{api.imggen.name}] recognized as ComfyUI.")
+                self.imgmodel = ComfyImgModel()
+            elif api.imggen.is_sdwebui():
+                log.info(f"[{api.imggen.name}] recognized as A111.")
+                self.imgmodel = A1111ImgModel()
+            elif api.imggen.is_reforge():
+                log.info(f"[{api.imggen.name}] recognized as ReForge.")
+                self.imgmodel = ReForgeImgModel()
+            elif api.imggen.is_forge():
+                log.info(f"[{api.imggen.name}] recognized as Forge.")
+                self.imgmodel = ForgeImgModel()
+            else:
+                log.info(f'[{api.imggen.name}] is an unknown API. "main bot functions" will rely heavily on user configuration.')
+                self.imgmodel = ImgModel()
+
     def load_defaults(self):
+        self.init_imgmodel()
         self.behavior = Behavior()
-        self.imgmodel = ImgModel()
         self.llmcontext = LLMContext()
         self.llmstate = LLMState()
 
