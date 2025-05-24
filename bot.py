@@ -6819,9 +6819,11 @@ class ForgeImgModel(SDWebUIImgModel):
         # For per-server imgmodels, only the image request payload will drive model changes (won't change now via API)
         if config.is_per_server_imgmodels():
             override_settings[self._value_key] = imgmodel_data[self._value_key]
-        # Forge manages VAE / Text Encoders using "forge_additional_modules" during change model request.
-        log.info("Factoring required option for Forge: 'forge_additional_modules'.")
-        log.info("If you get a Forge error 'You do not have Clip State Dict!', please double-check your presets in 'dict_imgmodels.yaml'")
+        if not bot_database.was_warned('forge_clip_state_dict'):
+            # Forge manages VAE / Text Encoders using "forge_additional_modules" during change model request.
+            log.info("Factoring required option for Forge: 'forge_additional_modules'.")
+            log.info("If you get a Forge error 'You do not have Clip State Dict!', please double-check your presets in 'dict_imgmodels.yaml'")
+            bot_database.update_was_warned('forge_clip_state_dict')
         # Ensure required params for Forge model loading
         if not override_settings.get('forge_additional_modules'):
             forge_additional_modules = []
