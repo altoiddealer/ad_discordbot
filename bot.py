@@ -3762,7 +3762,7 @@ class Tasks(TaskProcessing):
                     swap_params: Params = Params()
                     imgmodel_settings:ImgModel = get_imgmodel_settings(self.ictx)
                     last_imgmodel = imgmodel_settings.last_imgmodel_value
-                    swap_params.imgmodel = imgmodel_settings.get_imgmodel_data(last_imgmodel)
+                    swap_params.imgmodel = await imgmodel_settings.get_imgmodel_data(last_imgmodel)
                 # RUN A CHANGE IMGMODEL SUBTASK
                 new_options = await self.run_subtask('change_imgmodel')
                 self.payload = deep_merge(self.payload, new_options)
@@ -5521,14 +5521,13 @@ if imggen_enabled:
         imgmodel_settings:ImgModel = get_imgmodel_settings(ctx)
         all_imgmodels = await imgmodel_settings.fetch_imgmodels(ctx)
         if all_imgmodels:
-            display_key = imgmodel_settings._any_key
-            items_for_imgmodel = [i[display_key] for i in all_imgmodels]
+            imgmodel_names = imgmodel_settings.collect_names(all_imgmodels)
             warned_too_many_imgmodel = False # TODO use the warned_once feature?
-            imgmodels_view = SelectOptionsView(items_for_imgmodel,
-                                            custom_id_prefix='imgmodels',
-                                            placeholder_prefix='ImgModels: ',
-                                            unload_item=None,
-                                            warned=warned_too_many_imgmodel)
+            imgmodels_view = SelectOptionsView(imgmodel_names,
+                                               custom_id_prefix='imgmodels',
+                                               placeholder_prefix='ImgModels: ',
+                                               unload_item=None,
+                                               warned=warned_too_many_imgmodel)
             view_message = await ctx.send('### Select an Image Model.', view=imgmodels_view, ephemeral=True)
             await imgmodels_view.wait()
             selected_item = imgmodels_view.get_selected()
@@ -6418,6 +6417,18 @@ class ImgModel(SettingsBase):
         self.payload_mods:dict = {}
         self.tags:TAG_LIST = []
 
+    def collect_names(self, imgmodels:list):
+        if not imgmodels:
+            return []
+        first = imgmodels[0]
+        if isinstance(first, dict):
+            display_key = self._any_key
+            return [i[display_key] for i in imgmodels]
+        elif isinstance(first, str):
+            return imgmodels
+        else:
+            raise ValueError("Unsupported element type in imgmodels list")
+
     def apply_filters(self, items: list[Union[str, dict]], filter_list: list[str], exclude_list: list[str]) -> list:
         def item_matches(text: str) -> bool:
             # Check inclusion
@@ -6440,6 +6451,7 @@ class ImgModel(SettingsBase):
 
     # Apply user defined filters to imgmodel list
     async def filter_imgmodels(self, all_imgmodels:list, ictx:CtxInteraction=None) -> list:
+        filtered_imgmodels = all_imgmodels
         try:
             imgmodels_data = load_file(shared_path.img_models, {})
             # Apply global filters
@@ -6454,18 +6466,19 @@ class ImgModel(SettingsBase):
                     if ictx.guild.id == preset.get('guild_id'):
                         filtered_imgmodels = self.apply_filters(filtered_imgmodels, preset.get('filter', []), preset.get('exclude', []))
                         break
-            return filtered_imgmodels
         except Exception as e:
             log.error(f"Error filtering image model list: {e}")
+        return filtered_imgmodels
 
     # Get and filter a current list of imgmodels from API
     async def fetch_imgmodels(self, ictx:CtxInteraction=None) -> list:
+        all_imgmodels = []
         try:
             all_imgmodels = await api.imggen.get_imgmodels.call()
             return await self.filter_imgmodels(all_imgmodels, ictx)
         except Exception as e:
             log.error(f"Error fetching image models: {e}")
-            return []
+        return all_imgmodels
 
     # Check filesize/filters with selected imgmodel to assume resolution / tags
     async def guess_model_data(self, imgmodel_data:dict, presets:list[dict]) -> dict|None:
@@ -6620,9 +6633,7 @@ class ImgModel(SettingsBase):
     async def get_imgmodel_data(self, imgmodel_value:str, ictx:CtxInteraction=None) -> dict:
         try:
             imgmodel_data = {}
-
             all_imgmodels = await self.fetch_imgmodels(ictx)
-
             for imgmodel in all_imgmodels:
                 # check that the value matches a valid checkpoint
                 if imgmodel_value == (imgmodel.get(self._name_key) or imgmodel.get(self._value_key)):
@@ -6633,22 +6644,20 @@ class ImgModel(SettingsBase):
             if not imgmodel_data:
                 log.error(f'Img model not found: {imgmodel_value}')
             return imgmodel_data
-
         except Exception as e:
             log.error(f"Error getting selected imgmodel data: {e}")
             return {}
 
     ## Function to automatically change image models
     # Select imgmodel based on mode, while avoid repeating current imgmodel
-    async def auto_select_imgmodel(self, mode='random'):
-        current_imgmodel_name = self.last_imgmodel_name
+    async def auto_select_imgmodel(self, mode='random') -> str:
         try:
-            all_imgmodels:list[dict] = await self.fetch_imgmodels()
-            all_imgmodel_names = [imgmodel.get(self._any_key, '') for imgmodel in all_imgmodels]
+            all_imgmodels:list = await self.fetch_imgmodels()
+            all_imgmodel_names = self.collect_names(all_imgmodels)
 
             current_index = None
-            if current_imgmodel_name and current_imgmodel_name in all_imgmodel_names:
-                current_index = all_imgmodel_names.index(current_imgmodel_name)
+            if self.last_imgmodel_name and self.last_imgmodel_name in all_imgmodel_names:
+                current_index = all_imgmodel_names.index(self.last_imgmodel_name)
 
             if mode == 'random':
                 if current_index is not None and len(all_imgmodels) > 1:
@@ -6669,13 +6678,13 @@ class ImgModel(SettingsBase):
     # Task to auto-select an imgmodel at user defined interval
     async def auto_update_imgmodel_task(self, mode, duration):
         while True:
-            await asyncio.sleep(duration)
             try:
+                await asyncio.sleep(duration)
                 # Select an imgmodel automatically
-                selected_imgmodel = await self.auto_select_imgmodel(mode)
+                imgmodel_name = await self.auto_select_imgmodel(mode)
 
                 # CREATE TASK AND QUEUE IT
-                params = Params(imgmodel=selected_imgmodel)
+                params = Params(imgmodel=imgmodel_name)
                 change_imgmodel_task = Task('change_imgmodel', ictx=None, params=params)
                 await task_manager.queue_task(change_imgmodel_task, 'gen_queue')
 
@@ -6751,6 +6760,15 @@ class ImgModel(SettingsBase):
 class ComfyImgModel(ImgModel):
     def __init__(self):
         super().__init__()
+        # Convenience keys
+        self._name_key = api.imggen.get_imgmodels.imgmodel_name_key or 'model_name'
+        self._value_key = api.imggen.get_imgmodels.imgmodel_value_key or 'title'
+        self._filename_key = api.imggen.get_imgmodels.imgmodel_filename_key or ''
+        self._any_key = self._name_key or self._value_key or ''
+
+    async def get_imgmodel_data(self, imgmodel_value:str, ictx:CtxInteraction=None) -> dict:
+        return {self._name_key: imgmodel_value,
+                self._value_key: imgmodel_value}
 
 class SDWebUIImgModel(ImgModel):
     def __init__(self):
@@ -6760,7 +6778,6 @@ class SDWebUIImgModel(ImgModel):
         self._value_key = api.imggen.get_imgmodels.imgmodel_value_key or 'title'
         self._filename_key = api.imggen.get_imgmodels.imgmodel_filename_key or 'filename'
         self._any_key = self._name_key or self._value_key or self._filename_key or ''
-
         if hasattr(api.imggen, 'post_options') and api.imggen.post_options:
             self._imgmodel_input_key:str = api.imggen.post_options.imgmodel_input_key or 'sd_model_checkpoint'
 

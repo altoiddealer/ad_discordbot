@@ -1219,7 +1219,10 @@ class ImgGenClient(APIClient):
         return images, pnginfo
 
     def is_comfy(self) -> bool:
-        return 'comfy' in self.name.lower()
+        return isinstance(self, ComfyImgGenClient)
+
+    def is_sdwebui_variant(self) -> bool:
+        return isinstance(self, SDWebUIImgGenClient)
 
     def is_sdwebui(self) -> bool:
         return any(substring in self.name.lower() for substring in ['stable', 'a1111', 'sdwebui'])
@@ -1229,9 +1232,6 @@ class ImgGenClient(APIClient):
     
     def is_forge(self) -> bool:
         return ('forge' in self.name.lower() and not self.is_reforge())
-    
-    def is_sdwebui_variant(self) -> bool:
-        return any(substring in self.name.lower() for substring in ['stable', 'a1111', 'sdwebui', 'forge'])
     
     def supports_loractrl(self) -> bool:
         return (self.is_sdwebui() or self.is_reforge()) and not self.is_forge()
