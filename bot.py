@@ -6607,8 +6607,8 @@ class ImgModel(SettingsBase):
 
     async def change_imgmodel(self, imgmodel_data:dict, ictx:CtxInteraction=None, save:bool=True) -> dict:
         # Retain model details
-        self.last_imgmodel_name = imgmodel_data.get(self._name_key, self._value_key) or ''
-        self.last_imgmodel_value = imgmodel_data.get(self._value_key, self._name_key) or ''
+        self.last_imgmodel_name = imgmodel_data.get(self._name_key, '')
+        self.last_imgmodel_value = imgmodel_data.get(self._value_key, '')
 
         # Guess model params, merge with basesettings
         imgmodel_settings, imgmodel_tags = await self.update_imgmodel_settings(imgmodel_data)
@@ -6719,7 +6719,7 @@ class ImgModel(SettingsBase):
 
     # From change_imgmodel_task
     async def change_imgmodel_task(self, task:"Task"):
-        print_model_name:str = task.params.imgmodel.get(self._name_key, self._value_key)
+        print_model_name:str = task.params.imgmodel.get(self._name_key) or task.params.imgmodel.get(self._value_key, '')
         imgmodel_value:str = task.params.imgmodel.get(self._any_key)
 
         if not imgmodel_value:
