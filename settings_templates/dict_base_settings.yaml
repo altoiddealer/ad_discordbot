@@ -33,7 +33,11 @@ behavior:
   spontaneous_msg_max_wait: 60.0      # Maximum wait before bot may spontaneously message (-minutes-)
   spontaneous_msg_prompts:            # Random prompt will be picked from this list if triggered
     - '''[SYSTEM] The conversation has been inactive for {time_since_last_msg}, so you should say something.'''
-  # - 'another prompt' 
+  # - 'another prompt'
+
+imgmodel:
+  payload_mods: {}
+  tags: {}
 
 llmcontext:
   context: 'The following is a conversation with an AI Large Language Model. The AI has been trained to answer questions, provide recommendations, and help with decision making. The AI follows user requests. The AI thinks outside the box.'

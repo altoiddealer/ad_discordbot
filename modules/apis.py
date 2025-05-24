@@ -113,6 +113,14 @@ class APISettings():
 apisettings = APISettings()
 
 
+def resolve_imggen_subclassing(name: str) -> type["ImgGenClient"]:
+    name = name.lower()
+    if 'comfy' in name:
+        return ComfyImgGenClient
+    elif any(x in name for x in ['stable', 'a1111', 'sdwebui', 'forge']):
+        return SDWebUIImgGenClient
+    return ImgGenClient
+
 class API:
     def __init__(self):
         # ALL API clients
@@ -161,7 +169,10 @@ class API:
             api_func_type = main_api_name_map.get(name)
             is_main = api_func_type is not None
             # Determine which client class to use
-            ClientClass = client_type_map.get(api_func_type, APIClient)
+            if api_func_type == "imggen":
+                ClientClass = resolve_imggen_subclassing(name)
+            else:
+                ClientClass = client_type_map.get(api_func_type, APIClient)
 
             # Collect all valid user APIs
             try:
@@ -541,7 +552,7 @@ class APIClient:
                 log.warning(f"[{self.name}] Skipping endpoint due to missing key: {e}")
 
     def _bind_main_ep_values(self, config_entry: dict):
-        if not type(self) in [TextGenClient, TTSGenClient, ImgGenClient]:
+        if not isinstance(self, (TextGenClient, TTSGenClient, ImgGenClient)):
             return
 
         endpoint_name = config_entry.get("endpoint_name")
@@ -1066,43 +1077,46 @@ class APIClient:
                                    duration=duration,
                                    num_yields=num_yields,
                                    **kwargs)
-
+            
             async for update in poller:
-                # Collect updates
-                updates.append(update)
-
-                # Read progress safely
-                progress = update.get("progress", 0.0)
                 try:
-                    progress = float(progress)
-                except (TypeError, ValueError):
-                    progress = 0.0
-                progress = max(0.0, min(progress, 1.0))
-                eta = update.get('eta')
+                    # Collect updates
+                    updates.append(update)
 
-                # Check if complete
-                if progress >= 1.0:
+                    # Read progress safely
+                    progress = update.get("progress", 0.0)
+                    try:
+                        progress = float(progress)
+                    except (TypeError, ValueError):
+                        progress = 0.0
+                    progress = max(0.0, min(progress, 1.0))
+                    eta = update.get('eta')
+
+                    # Check if complete
+                    if progress >= 1.0:
+                        break
+
+                    # Check for stalled condition
+                    if progress == last_progress:
+                        stall_time += interval
+                    else:
+                        stall_time = 0.0
+
+                    # Edit the Discord Embed
+                    if progress > 0.01:
+                        comment = " (Stalled)" if stall_time >= STALL_THRESHOLD else ""
+                        title = f"{message}: {progress * 100:.0f}%{comment}"
+                        if isinstance(eta, float) or isinstance(eta, int):
+                            eta_message = f'\n**ETA**: {round(eta, 2)} seconds'
+                        description = f"{progress_bar(progress)}{eta_message}"
+                        await embeds.edit("img_gen", title, description)
+
+                    last_progress = progress
+
+                except Exception as e:
+                    await embeds.edit_or_send('img_gen', f'[{self.name}] An error occurred while {message}', e)
                     break
 
-                # Check for stalled condition
-                if progress == last_progress:
-                    stall_time += interval
-                else:
-                    stall_time = 0.0
-
-                # Edit the Discord Embed
-                if progress > 0.01:
-                    comment = " (Stalled)" if stall_time >= STALL_THRESHOLD else ""
-                    title = f"{message}: {progress * 100:.0f}%{comment}"
-                    if isinstance(eta, float) or isinstance(eta, int):
-                        eta_message = f'\n**ETA**: {round(eta, 2)} seconds'
-                    description = f"{progress_bar(progress)}{eta_message}"
-                    await embeds.edit("img_gen", title, description)
-
-                last_progress = progress
-
-        except Exception as e:
-            await embeds.edit_or_send('img_gen', f'[{self.name}] An error occurred while {message}', e)
         finally:
             await embeds.delete('img_gen')
             self.fetching_progress = False
@@ -1131,7 +1145,6 @@ class ImgGenClient(APIClient):
         self.get_progress: Optional[ImgGenEndpoint] = None
         self.post_pnginfo: Optional[ImgGenEndpoint] = None
         self.post_options: Optional[ImgGenEndpoint] = None
-        self.get_imgmodels: Optional[ImgGenEndpoint] = None
         self.get_imgmodels: Optional[ImgGenEndpoint] = None
         self.get_controlnet_models: Optional[ImgGenEndpoint] = None
         self.get_controlnet_control_types: Optional[ImgGenEndpoint] = None
@@ -1222,6 +1235,14 @@ class ImgGenClient(APIClient):
     
     def supports_loractrl(self) -> bool:
         return (self.is_sdwebui() or self.is_reforge()) and not self.is_forge()
+
+class SDWebUIImgGenClient(ImgGenClient):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+class ComfyImgGenClient(ImgGenClient):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
 
 
 class TextGenClient(APIClient):
@@ -1620,11 +1641,12 @@ class Endpoint:
                 result = response_data
             else:
                 result = {}
-                for key, config in return_values.items():
-                    try:
+                try:
+                    for key, config in return_values.items():
                         result[key] = extract_key(response_data, config)
-                    except ValueError as e:
-                        log.warning(f"[{self.name}] Failed to extract key '{key}': {e}")
+                except ValueError as e:
+                    log.warning(f"[{self.name}] Failed to extract key '{key}': {e}")
+                    raise
             yield result
 
             yield_count += 1
@@ -2099,13 +2121,17 @@ class StepExecutor:
         duration = config.pop("duration", -1)
         num_yields = config.pop("num_yields", -1)
 
-        results = []        
-        async for result in endpoint.poll(return_values=return_values,
-                                          interval=interval,
-                                          duration=duration,
-                                          num_yields=num_yields,
-                                          **config):
-            results.append(result)
+        results = []
+        try:
+            async for result in endpoint.poll(return_values=return_values,
+                                            interval=interval,
+                                            duration=duration,
+                                            num_yields=num_yields,
+                                            **config):
+                results.append(result)
+        except Exception as e:
+            log.error(f"[StepExecutor] Error in 'poll_api' step: {e}")
+
         return results
 
     @step_returns("data", "input", default="data")

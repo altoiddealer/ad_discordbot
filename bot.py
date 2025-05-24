@@ -6407,6 +6407,9 @@ class ImgModel(SettingsBase):
         self._value_key = api.imggen.get_imgmodels.imgmodel_value_key or ''
         self._filename_key = api.imggen.get_imgmodels.imgmodel_filename_key or ''
         self._any_key = self._name_key or self._value_key or self._filename_key or ''
+
+        post_options_ep = getattr(api.imggen, 'post_options', None)
+        self._imgmodel_input_key:Optional[str] = getattr(post_options_ep, 'imgmodel_input_key', None)
         # database-like
         self.last_imgmodel_name: str = ''
         self.last_imgmodel_value: str = ''
@@ -6581,33 +6584,27 @@ class ImgModel(SettingsBase):
         return imgmodel_settings, imgmodel_tags
 
     async def change_imgmodel(self, imgmodel_data:dict, ictx:CtxInteraction=None, save:bool=True) -> dict:
-        post_options_ep:Optional[Endpoint] = getattr(api.imggen, 'post_options', None)
-
-        # Save model details to bot database
+        # Retain model details
         self.last_imgmodel_name = imgmodel_data.get(self._name_key, self._value_key) or ''
         self.last_imgmodel_value = imgmodel_data.get(self._value_key, self._name_key) or ''
 
-        options_payload = {}
-        imgmodel_input_key:Optional[str] = getattr(post_options_ep, 'imgmodel_input_key', None)
-        if imgmodel_input_key:
-            options_payload[imgmodel_input_key] = imgmodel_data[self._any_key]
-
         # Guess model params, merge with basesettings
         imgmodel_settings, imgmodel_tags = await self.update_imgmodel_settings(imgmodel_data)
-        
-        # Factors override_settings if applicable
-        options_payload.update(self.get_extra_settings(imgmodel_settings))
-        updated_options_payload = options_payload
 
-        if post_options_ep and not config.is_per_server_imgmodels():
+        # Collect options payload
+        options_payload:dict = api.imggen.post_options.get_payload() if hasattr(api.imggen, 'post_options') else {}
+        if self._imgmodel_input_key:
+            options_payload[self._imgmodel_input_key] = imgmodel_data[self._any_key]
+        
+        # Factors extras (override_settings, etc) if applicable
+        options_payload.update(self.get_extra_settings(imgmodel_settings))
+
+        # Post new settings to API
+        if not config.is_per_server_imgmodels():
             try:
-                # load the model
-                base_options = api.imggen.post_options.get_payload()
-                updated_options_payload = deep_merge(base_options, options_payload)
-                await api.imggen.post_options.call(input_data=updated_options_payload, sanitize=True)
+                await api.imggen.post_options.call(input_data=options_payload, sanitize=True)
             except Exception as e:
-                log.error(f"Error updating settings with the selected imgmodel data: {e}")
-                raise
+                log.error(f"Error posting updated imgmodel settings to API: {e}")
 
         # Save settings
         if save:
@@ -6618,7 +6615,7 @@ class ImgModel(SettingsBase):
                     self._imgmodel_update_task.cancel()
                     await bg_task_queue.put(self.start_auto_change_imgmodels('restarted'))
 
-        return updated_options_payload
+        return options_payload
 
     async def get_imgmodel_data(self, imgmodel_value:str, ictx:CtxInteraction=None) -> dict:
         try:
@@ -6763,6 +6760,9 @@ class SDWebUIImgModel(ImgModel):
         self._value_key = api.imggen.get_imgmodels.imgmodel_value_key or 'title'
         self._filename_key = api.imggen.get_imgmodels.imgmodel_filename_key or 'filename'
         self._any_key = self._name_key or self._value_key or self._filename_key or ''
+
+        if hasattr(api.imggen, 'post_options') and api.imggen.post_options:
+            self._imgmodel_input_key:str = api.imggen.post_options.imgmodel_input_key or 'sd_model_checkpoint'
 
     # Manage override_settings for A1111-like APIs. returns override_settings
     def get_extra_settings(self, imgmodel_data:dict) -> dict:
