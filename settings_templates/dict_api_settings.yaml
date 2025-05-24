@@ -42,7 +42,8 @@ bot_api_functions:
       imgmodel_filename_key: filename
     get_controlnet_models: {endpoint_name: Get Cnet Models}
     post_server_restart: {endpoint_name: Post Server Restart}
-    # NOTE: The following is only applicable to A1111-like webUIs (A1111 / Forge / ReForge)
+    # NOTE: The bot's "main controlnet" support works out-of-the-box for A1111-like webUIs (A1111 / Forge / ReForge)
+    #       ComfyUI (and potentially other APIs) does not have an endpoint that returns the expected structure. See example usage in all_apis: ComfyUI.
     get_controlnet_control_types:
       endpoint_name: Get Cnet Control Types
       control_types_key: control_types # ex: response = {'control_types': <Beautifully organized controlnet model dictionary>, ...}
@@ -156,6 +157,8 @@ all_apis:
       - {name: Upload, path: "/upload/{image_type}", method: POST}
       - {name: Get Models, path: "/models/{folder}", method: GET}
       - {name: Cancel, path: /interrupt, method: POST}
+      # 'method: null' will skip API call, and simply return the payload as the result. In this case, user needs to manually configure a '/user/payload/cnet_data.yaml'
+      - {name: Get Cnet Control Types, path: /anything/at/all, method: null, payload: cnet_data.yaml}
 
 
 # Create presets here which can be injected in any 'endpoint', or in any 'response_handling' / 'workflow' steps.

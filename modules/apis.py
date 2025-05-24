@@ -1290,7 +1290,7 @@ class Endpoint:
     def __init__(self,
                  name: str,
                  path: str,
-                 method: str = "GET",
+                 method: Optional[str] = "GET",
                  response_type: str = "json",
                  payload_config: Optional[str|dict] = None,
                  response_handling: Optional[list] = None,
@@ -1303,7 +1303,7 @@ class Endpoint:
         self.client: Optional["APIClient"] = None
         self.name = name
         self.path = path
-        self.method = method.upper()
+        self.method = method.upper() if method is not None else None
         self.response_type = response_type
         self.response_handling = response_handling
         self.payload = {}
@@ -1351,7 +1351,8 @@ class Endpoint:
             return
 
         preferred_content_type = self.get_preferred_content_type()
-        self.schema = self.get_schema(preferred_content_type)
+        if self.method is not None:
+            self.schema = self.get_schema(preferred_content_type)
 
 
     def generate_payload_from_schema(self) -> dict:
@@ -1552,39 +1553,46 @@ class Endpoint:
 
         json_payload, data_payload, params_payload, files_payload = self.resolve_input_data(input_data, payload_type, payload_map)
 
-        if sanitize:
-            if json_payload and isinstance(json_payload, dict):
-                json_payload = self.sanitize_payload(json_payload)
-            if data_payload and isinstance(data_payload, dict):
-                data_payload = self.sanitize_payload(data_payload)
+        response:Optional[APIResponse] = None
+        results = {}
 
-        request_kwargs = {"endpoint": self.path,
-                          "method": self.method,
-                          "json": json_payload,
-                          "data": data_payload,
-                          "params": params_payload,
-                          "files": files_payload,
-                          "headers": headers,
-                          "timeout": timeout,
-                          "retry": retry,
-                          "response_type": response_type,
-                          **kwargs}
+        if self.method is None:
+            log.info(f"[{self.name}] has 'null' method. The input data will be returned as response data.")
+            results = json_payload
+        else:            
+            if sanitize:
+                if json_payload and isinstance(json_payload, dict):
+                    json_payload = self.sanitize_payload(json_payload)
+                if data_payload and isinstance(data_payload, dict):
+                    data_payload = self.sanitize_payload(data_payload)
 
-        if self._semaphore:
-            async with self._semaphore:  # Waits if limit is reached
+            request_kwargs = {"endpoint": self.path,
+                            "method": self.method,
+                            "json": json_payload,
+                            "data": data_payload,
+                            "params": params_payload,
+                            "files": files_payload,
+                            "headers": headers,
+                            "timeout": timeout,
+                            "retry": retry,
+                            "response_type": response_type,
+                            **kwargs}
+
+            if self._semaphore:
+                async with self._semaphore:  # Waits if limit is reached
+                    response = await self.client.request(**request_kwargs)
+            else:
                 response = await self.client.request(**request_kwargs)
-        else:
-            response = await self.client.request(**request_kwargs)
 
-        if not isinstance(response, APIResponse):
-            return response
+            if not isinstance(response, APIResponse):
+                return response
 
-        # Legacy compatibility step (uses only the response body)
-        main_ep_response = await self.return_main_data(response.body)
-        if main_ep_response:
-            return main_ep_response
-        
-        results = response.body
+            # Legacy compatibility step (uses only the response body)
+            main_ep_response = await self.return_main_data(response.body)
+            if main_ep_response:
+                return main_ep_response
+            
+            results = response.body
 
         # Optional key extraction (bypasses StepExecutor)
         if extract_keys and self.can_extract(extract_keys):
@@ -1595,7 +1603,7 @@ class Endpoint:
         # Hand off full response to StepExecutor
         if isinstance(self.response_handling, list):
             log.info(f'[{self.name}] Executing "response_handling" ({len(self.response_handling)} processing steps)')
-            handler = StepExecutor(steps=self.response_handling, input_data=response, ictx=ictx)
+            handler = StepExecutor(steps=self.response_handling, input_data=response or results, ictx=ictx)
             results = await handler.run()
 
         return results
