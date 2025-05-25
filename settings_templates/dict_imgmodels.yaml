@@ -77,6 +77,12 @@ presets:
     payload:
       width: 1024
       height: 1024
+      # EXAMPLE USAGE FOR SETTING MODULES IF USING COMFYUI (or any other "non-A1111-like" API).
+      #       NOTE: Add each item to the '__overrides__' dict in your payload, then reference with {placeholder_syntax}
+      # vae: ae.safetensors                         # maps to "{vae}"
+      # clip: clip_l.safetensors                    # maps to "{clip}"
+      # text_encoder: t5xxl_fp8_e4m3fn.safetensors  # maps to "{text_encoder}"
+      
       # EXAMPLE USAGE FOR SETTING MODULES IF USING FORGE
       # override_settings:
       #   forge_additional_modules:

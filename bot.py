@@ -1019,6 +1019,60 @@ async def announce_changes(change_label:str, change_name:str, ictx: CtxInteracti
         log.error(f'An error occurred while announcing changes to announce channels: {e}')
 
 #################################################################
+########################## BOT VARS #############################
+#################################################################
+class BotVars():
+    def __init__(self):
+        # General
+        self.prompt:Optional[str] = None
+        self.character:Optional[str] = None
+        # Image related
+        self.neg_prompt:Optional[str] = None
+        self.width:Optional[int] = None
+        self.height:Optional[int] = None
+        self.ckpt_name:Optional[str] = None
+        self.seed:Optional[int] = None
+        self.i2i_image:Optional[str] = None
+        self.denoising_strength:Optional[float] = None
+        self.cnet_image:Optional[str] = None
+        self.cnet_mask:Optional[str] = None
+        self.cnet_model:Optional[str] = None
+        self.cnet_module:Optional[str] = None
+        self.cnet_weight:Optional[float] = None
+        self.cnet_processor_res:Optional[int] = None
+        self.cnet_guidance_start:Optional[float] = None
+        self.cnet_guidance_end:Optional[float] = None
+        self.cnet_threshold_a:Optional[int] = None
+        self.cnet_threshold_b:Optional[int] = None
+        self.face_image:Optional[str] = None
+
+    def update_from(self, input:Any):
+        if isinstance(input, "Task"):
+            self.prompt = input.prompt
+            # TODO Add more updates            
+
+    def format_overrides_into_payload(self):
+        if "__overrides__" not in self.payload:
+            return
+        # Extract and remove overrides from the payload
+        overrides = self.payload.pop("__overrides__")
+        # Helper to to replace placeholders like {pos_prompt} with overrides["pos_prompt"]
+        def recursive_replace(obj):
+            if isinstance(obj, dict):
+                return {k: recursive_replace(v) for k, v in obj.items()}
+            elif isinstance(obj, list):
+                return [recursive_replace(v) for v in obj]
+            elif isinstance(obj, str):
+                return re.sub(r'\{(\w+)\}', lambda m: str(overrides.get(m.group(1), m.group(0))), obj)
+            else:
+                return obj
+
+        update_dict_matched_keys(overrides, vars(self))
+        self.payload = recursive_replace(self.payload)
+
+bot_vars = BotVars()
+
+#################################################################
 ########################### PARAMS ##############################
 #################################################################
 class Params:
@@ -1136,7 +1190,6 @@ class TaskAttributes():
     bot_hmessage: HMessage
     local_history: History
     istyping: "IsTyping"
-
 
 class TaskProcessing(TaskAttributes):
     ####################### MOSTLY TEXT GEN PROCESSING #########################
@@ -1526,7 +1579,6 @@ class TaskProcessing(TaskAttributes):
             raise
         except Exception as e:
             log.error(f"Error processing generic tag matches: {e}")
-
 
     def apply_begin_reply_with(self:Union["Task","Tasks"]):
         # Continue from value of 'begin_reply_with'
@@ -2919,9 +2971,7 @@ class TaskProcessing(TaskAttributes):
             request_payload = deep_merge(base_payload, update_data)
 
             # Apply settings from imgmodel configuration
-            imgmodel_payload_mods = copy.deepcopy(self.settings.imgmodel.payload_mods)
-
-            self.payload = deep_merge(request_payload, imgmodel_payload_mods)
+            self.payload = self.settings.imgmodel.apply_payload_overrides(request_payload)
 
         except Exception as e:
             log.error(f"Error initializing img payload: {e}")
@@ -6413,6 +6463,9 @@ class ImgModel(SettingsBase):
         self.payload_mods:dict = {}
         self.tags:TAG_LIST = []
 
+    def apply_payload_overrides(self, payload) -> dict:
+        return deep_merge(payload, self.payload_mods)
+
     def collect_names(self, imgmodels:list):
         if not imgmodels:
             return []
@@ -6773,6 +6826,11 @@ class ComfyImgModel(ImgModel):
         self._value_key = api.imggen.get_imgmodels.imgmodel_value_key or 'title'
         self._filename_key = api.imggen.get_imgmodels.imgmodel_filename_key or ''
         self._any_key = self._name_key or self._value_key or ''
+
+    def apply_payload_overrides(self, payload) -> dict:
+        if not '__overrides__' in payload:
+            return payload
+        return deep_merge(payload['__overrides__'], self.payload_mods)
 
     async def get_imgmodel_data(self, imgmodel_value:str, ictx:CtxInteraction=None) -> dict:
         return {self._name_key: imgmodel_value,
