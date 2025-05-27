@@ -526,6 +526,7 @@ class APIClient:
                         path=ep_dict.get("path", ""),
                         method=ep_dict.get("method", "GET"),
                         response_type=ep_dict.get("response_type", "json"),
+                        payload_type=ep_dict.get("payload_type", "any"),
                         payload_config=ep_dict.get("payload_base"),
                         response_handling=ep_dict.get("response_handling"),
                         headers=ep_dict.get("headers", self.default_headers),
@@ -842,6 +843,7 @@ class APIClient:
                           "headers": headers,
                           "auth": auth or self.auth,
                           "timeout": aiohttp.ClientTimeout(total=timeout)}
+        
         if files:
             form_data = aiohttp.FormData()
             for key, val in files.items():
@@ -852,6 +854,8 @@ class APIClient:
                 request_kwargs["data"] = data
             if json is not None:
                 request_kwargs["json"] = json
+
+        print(f"[{self.name}] request_kwargs:", request_kwargs)
 
         # Ensure session exists
         if not self.session:
@@ -963,6 +967,8 @@ class APIClient:
         yield_count = 0
         last_yield_time = 0.0
 
+        print("RETURN VALUES:", return_values)
+
         while True:
             if duration > 0 and (time.monotonic() - start_time) >= duration:
                 log.info(f"[{self.name}] WebSocket polling stopped after {duration}s")
@@ -973,6 +979,7 @@ class APIClient:
                     await self._connect_websocket()
 
                 msg = await self.ws.receive(timeout=timeout)
+                print(msg)
 
                 if msg.type != aiohttp.WSMsgType.TEXT:
                     continue
@@ -994,6 +1001,7 @@ class APIClient:
 
                 result = {}
                 for key, path in return_values.items():
+                    print("key:", key, "path:", path)
                     try:
                         result[key] = extract_key(payload, path)
                     except Exception as e:
@@ -1006,6 +1014,7 @@ class APIClient:
                 last_yield_time = now
 
                 if result:
+                    print("result:", result)
                     yield result
                     yield_count += 1
                     if num_yields > 0 and yield_count >= num_yields:
@@ -1218,6 +1227,15 @@ class ImgGenClient(APIClient):
 
         return images, pnginfo
 
+    async def main_imggen(self, img_payload:dict, mode:str="txt2img", ictx=None) -> Tuple[List[Image.Image], Optional[PngImagePlugin.PngInfo]]:
+        # Start progress task and generation task concurrently
+        images_task = asyncio.create_task(self.save_images_and_return(img_payload, mode))
+        progress_task = asyncio.create_task(self.track_t2i_i2i_progress(ictx=ictx))
+        # Wait for images_task to complete
+        images, pnginfo = await images_task
+        # Once images_task is done, cancel progress_task
+        progress_task.cancel()
+
     def is_comfy(self) -> bool:
         return isinstance(self, ComfyImgGenClient)
 
@@ -1292,6 +1310,7 @@ class Endpoint:
                  path: str,
                  method: Optional[str] = "GET",
                  response_type: str = "json",
+                 payload_type: str = "any",
                  payload_config: Optional[str|dict] = None,
                  response_handling: Optional[list] = None,
                  headers: Optional[Dict[str, str]] = None,
@@ -1306,6 +1325,7 @@ class Endpoint:
         self.method = method.upper() if method is not None else None
         self.response_type = response_type
         self.response_handling = response_handling
+        self.payload_type = payload_type
         self.payload = {}
         self.schema: Optional[dict] = None
         self.headers = headers or {}
@@ -1534,7 +1554,6 @@ class Endpoint:
 
     async def call(self,
                    input_data: dict = None,
-                   payload_type: str = "any",
                    payload_map: dict = None,
                    sanitize:bool=False,
                    extract_keys:str|List[str]|None=None,
@@ -1549,6 +1568,7 @@ class Endpoint:
         headers = kwargs.pop('headers', self.headers)
         timeout = kwargs.pop('timeout', self.timeout)
         retry = kwargs.pop('retry', self.retry)
+        payload_type = kwargs.pop('payload_type', self.payload_type)
         response_type = kwargs.pop('response_type', self.response_type)
 
         json_payload, data_payload, params_payload, files_payload = self.resolve_input_data(input_data, payload_type, payload_map)
@@ -1599,7 +1619,7 @@ class Endpoint:
             return self.extract_main_keys(results, extract_keys)
 
         # ws_response = await self.process_ws_request(json_payload, data_payload, input_data, **kwargs)
-
+        print("RESULTS:", results)
         # Hand off full response to StepExecutor
         if isinstance(self.response_handling, list):
             log.info(f'[{self.name}] Executing "response_handling" ({len(self.response_handling)} processing steps)')
@@ -1896,7 +1916,7 @@ class StepExecutor:
                     step_result = await method(result, config)
                 else:
                     # Resolve any placeholders using the current context
-                    config = self._resolve_context_placeholders(config)
+                    config = self._resolve_context_placeholders(result, config)
                     # Run the step and determine where to store the result
                     step_result = await method(result, config) if asyncio.iscoroutinefunction(method) else method(result, config)
 
@@ -1978,26 +1998,35 @@ class StepExecutor:
             return async_wrapper if asyncio.iscoroutinefunction(func) else sync_wrapper
         return decorator
 
-    def _resolve_context_placeholders(self, config: Any) -> Any:
-        if not self.context:
+    def _resolve_context_placeholders(self, data: Any, config: Any) -> Any:
+        def _stringify(value):
+            if isinstance(value, (dict, list)):
+                return json.dumps(value)  # Structured and safe
+            if value is None:
+                return ""
+            return str(value)
+
+        # current result can be injected via "{result}"
+        context = {k: _stringify(v) for k, v in {**self.context, "result": data}.items()}
+        if not context:
             return config
         if isinstance(config, str):
-            return config.format(**self.context)
+            return config.format(**context)
         elif isinstance(config, dict):
-            return {k: self._resolve_context_placeholders(v) for k, v in config.items()}
+            return {k: self._resolve_context_placeholders(data, v) for k, v in config.items()}
         elif isinstance(config, list):
-            return [self._resolve_context_placeholders(i) for i in config]
+            return [self._resolve_context_placeholders(data, i) for i in config]
         return config
     
     def _substitute(self, value):
         if isinstance(value, str) and "{" in value:
             return value.format(**self.context)
         return value
-
+    
     @step_returns("data", "input", default="data")
     async def _step_for_each(self, data: Any, config: dict) -> list:
         """
-        Inits a StepExecutor for each item in a Context list.
+        Runs a sub-StepExecutor for each item in a list or each key-value pair in a dict.
 
         Returns:
             list: A list of results, one per item processed.
@@ -2009,27 +2038,40 @@ class StepExecutor:
         if not steps or not isinstance(steps, list):
             raise ValueError("[StepExecutor] 'for_each' step requires a 'steps' list.")
 
-        # Determine iterable: from context (by string) or directly as list
+        # Determine iterable: from context (by string) or directly as list/dict
         items = self.context.get(source) if isinstance(source, str) else source
 
-        if not isinstance(items, list):
-            raise TypeError(f"[StepExecutor] 'for_each' expected a list but got {type(items).__name__}")
+        if isinstance(items, list):
+            iterable = enumerate(items)
+            get_context = lambda idx, val: {
+                alias: val,
+                f"{alias}_index": idx,
+            }
+        elif isinstance(items, dict):
+            iterable = enumerate(items.items())
+            get_context = lambda idx, pair: {
+                f"{alias}_key": pair[0],
+                f"{alias}_value": pair[1],
+                f"{alias}_index": idx,
+            }
+        else:
+            raise TypeError(f"[StepExecutor] 'for_each' expected list or dict but got {type(items).__name__}")
 
         results = []
 
-        for index, item in enumerate(items):
+        for index, item in iterable:
             sub_executor = StepExecutor(steps, ictx=self.ictx)
             sub_executor.response = self.response
 
             sub_executor.context = {
                 **self.context,
-                alias: item,
-                f"{alias}_index": index,
+                **get_context(index, item),
             }
 
-            result = await sub_executor.run(item)
+            value = item if isinstance(items, list) else item[1]
+            result = await sub_executor.run(value)
             results.append(result)
-        # print("step for each results:", results)
+
         return results
 
     @step_returns("data", "input", default="data")
@@ -2057,6 +2099,10 @@ class StepExecutor:
         return results
 
     @step_returns("data", "input", default="data")
+    async def _step_pass(self, data: Any, config: Any):
+        return data
+
+    @step_returns("data", "input", default="data")
     def _step_return(self, data: Any, config: str) -> Any:
         """
         Returns a value from the context using the given key (config).
@@ -2069,25 +2115,25 @@ class StepExecutor:
         return self.context[config]
     
     def resolve_api_names(self, config:dict, step_name:str):
-        client_name = config.get("client_name")
-        endpoint_name = config.get("endpoint_name")
-
-        if endpoint_name and not client_name:
-            test_ep = self.client.endpoints.get(endpoint_name)
-            if test_ep:
-                client_name = self.client.name
-            else:
-                raise ValueError(f'[StepExecutor] API Client name was not included in "{step_name}" response handling step')
-        return client_name, endpoint_name
+        client_name = config.pop("client_name", None) or config.pop("client", None)
+        if not client_name:
+            raise ValueError(f'[StepExecutor] API "client_name" was not included in "{step_name}" response handling step')
+        use_ws = config.pop("use_ws", False)
+        endpoint_name = config.pop("endpoint_name", None) or config.pop("endpoint", None)
+        if not endpoint_name and not use_ws:
+            raise ValueError(f'[StepExecutor] API "endpoint_name" was not included in "{step_name}" response handling step')
+        return client_name, endpoint_name, use_ws
 
     @step_returns("data", "input", default="data")
     async def _step_call_api(self, data: Any, config: Union[str, dict]) -> Any:
         api:API = await get_api()
-        client_name, endpoint_name = self.resolve_api_names(config, 'call_api')
+        client_name, endpoint_name, use_ws = self.resolve_api_names(config, 'call_api')
         api_client:APIClient = api.get_client(client_name=client_name, strict=True)
         endpoint:Endpoint = api_client.get_endpoint(endpoint_name=endpoint_name, strict=True)
 
-        response = await endpoint.call(**config)
+        input_data = config.pop('input_data', data)
+
+        response = await endpoint.call(input_data=input_data, **config)
         if not isinstance(response, APIResponse):
             return response
         return response.body
@@ -2097,17 +2143,15 @@ class StepExecutor:
         """
         Polls an endpoint while sending a progress Embed to discord.
         """
-        ictx = self.ictx
+        ictx = self.ictx # to send discord Embed to channel
         api:API = await get_api()
-        client_name, endpoint_name = self.resolve_api_names(config, 'track_progress')
+        client_name, endpoint_name, use_ws = self.resolve_api_names(config, 'track_progress')
         api_client:APIClient = api.get_client(client_name=client_name, strict=True)
 
         # Resolve polling method
         endpoint:Optional[Endpoint] = None
-        use_ws = config.pop("use_ws", False)
         if not use_ws:
             endpoint = api_client.get_endpoint(endpoint_name=endpoint_name, strict=True)
-        use_ws = False if endpoint else True
 
         return await api_client.track_progress(endpoint=endpoint,
                                                use_ws=use_ws,
@@ -2120,7 +2164,7 @@ class StepExecutor:
         Polls an endpoint.
         """
         api:API = await get_api()
-        client_name, endpoint_name = self.resolve_api_names(config, 'poll_api')
+        client_name, endpoint_name, use_ws = self.resolve_api_names(config, 'poll_api')
         api_client:APIClient = api.get_client(client_name=client_name, strict=True)
         endpoint:Endpoint = api_client.get_endpoint(endpoint_name=endpoint_name, strict=True)
 

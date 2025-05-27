@@ -117,12 +117,15 @@ def sum_update_dict(d, u):
         u[k] = d[k]
     return u
 
-# Updates matched keys, but DOES NOT add missing keys
-def update_dict_matched_keys(d, u):
+# Updates matched keys, but DOES NOT add missing keys (optional skip of None values)
+def update_dict_matched_keys(d, u, skip_none=False):
     for k, v in u.items():
-        if isinstance(v, dict):
-            d[k] = update_dict(d.get(k, {}), v)
-        else:
+        if k not in d:
+            continue  # Do not add missing keys
+
+        if isinstance(v, dict) and isinstance(d.get(k), dict):
+            update_dict_matched_keys(d[k], v, skip_none=skip_none)
+        elif not (skip_none and v is None):
             d[k] = v
     return d
 

@@ -145,7 +145,11 @@ all_apis:
       reconnect_on_failure: true
       retry: 1
     endpoints:
-      - {name: Prompt, path: /prompt, method: POST}
+      - name: Prompt
+        path: /prompt
+        method: POST
+        payload_base: comfyui_text2image.json
+        payload_type: json
       - {name: History, path: "/history/{prompt_id}", method: GET}
       - name: Get Checkpoints
         path: "/object_info/CheckpointLoaderSimple"
@@ -158,7 +162,7 @@ all_apis:
       - {name: Get Models, path: "/models/{folder}", method: GET}
       - {name: Cancel, path: /interrupt, method: POST}
       # 'method: null' will skip API call, and simply return the payload as the result. In this case, user needs to manually configure a '/user/payload/cnet_data.yaml'
-      - {name: Get Cnet Control Types, path: /anything/at/all, method: null, payload: cnet_data.yaml}
+      - {name: Get Cnet Control Types, path: /anything/at/all, method: null, payload_base: cnet_data.yaml}
 
 
 # Create presets here which can be injected in any 'endpoint', or in any 'response_handling' / 'workflow' steps.

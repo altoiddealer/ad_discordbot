@@ -1051,11 +1051,11 @@ class BotVars():
             self.prompt = input.prompt
             # TODO Add more updates            
 
-    def format_overrides_into_payload(self):
-        if "__overrides__" not in self.payload:
+    def format_overrides_into_payload(self, payload):
+        if "__overrides__" not in payload:
             return
         # Extract and remove overrides from the payload
-        overrides = self.payload.pop("__overrides__")
+        overrides = payload.pop("__overrides__")
         # Helper to to replace placeholders like {pos_prompt} with overrides["pos_prompt"]
         def recursive_replace(obj):
             if isinstance(obj, dict):
@@ -1067,8 +1067,8 @@ class BotVars():
             else:
                 return obj
 
-        update_dict_matched_keys(overrides, vars(self))
-        self.payload = recursive_replace(self.payload)
+        update_dict_matched_keys(overrides, vars(self), skip_none=True)
+        return recursive_replace(payload)
 
 bot_vars = BotVars()
 
@@ -2268,18 +2268,10 @@ class TaskProcessing(TaskAttributes):
         reactor_args = self.payload.get('alwayson_scripts', {}).get('reactor', {}).get('args', [])
         last_item = reactor_args[-1] if reactor_args else None
         reactor_mask = reactor_args.pop() if isinstance(last_item, dict) else None
+        images = []
+        png_info = None
         try:
-            # Start progress task and generation task concurrently
-            images_task = asyncio.create_task(api.imggen.save_images_and_return(self.payload, self.params.mode))
-            progress_task = asyncio.create_task(api.imggen.track_t2i_i2i_progress(ictx=self.ictx))
-            # Wait for images_task to complete
-            images, pnginfo = await images_task
-            # Once images_task is done, cancel progress_task
-            progress_task.cancel()
-            try:
-                await progress_task
-            except asyncio.CancelledError:
-                pass
+            images, pnginfo = await api.imggen.main_imggen(self.payload, self.params.mode, self.ictx)
         except Exception as e:
             e_prefix = f'[{api.imggen.name}] Error processing images'
             log.error(f'{e_prefix}: {e}')
@@ -6464,7 +6456,8 @@ class ImgModel(SettingsBase):
         self.tags:TAG_LIST = []
 
     def apply_payload_overrides(self, payload) -> dict:
-        return deep_merge(payload, self.payload_mods)
+        updated = deep_merge(payload, self.payload_mods)
+        return bot_vars.format_overrides_into_payload(updated)
 
     def collect_names(self, imgmodels:list):
         if not imgmodels:
@@ -6827,10 +6820,15 @@ class ComfyImgModel(ImgModel):
         self._filename_key = api.imggen.get_imgmodels.imgmodel_filename_key or ''
         self._any_key = self._name_key or self._value_key or ''
 
-    def apply_payload_overrides(self, payload) -> dict:
+    def apply_payload_overrides(self, payload:dict) -> dict:
+        #payload.pop('_comment', None)
         if not '__overrides__' in payload:
-            return payload
-        return deep_merge(payload['__overrides__'], self.payload_mods)
+            return 
+        # Update __overrides__ dict in user's default payload with any imgmodel payload mods
+        payload['__overrides__'] = deep_merge(payload['__overrides__'], self.payload_mods)
+        
+        formatted = bot_vars.format_overrides_into_payload(payload)
+        return formatted
 
     async def get_imgmodel_data(self, imgmodel_value:str, ictx:CtxInteraction=None) -> dict:
         return {self._name_key: imgmodel_value,
