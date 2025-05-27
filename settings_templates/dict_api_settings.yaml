@@ -5,18 +5,22 @@
 # - workflows: For executing custom logic beyond default bahviors (ei: add additional post-processing from a 'post_txt2img' endpoint call). For non-main functions only (N/A to main functions)
 
 bot_api_functions:
+  # Purpose: Establish which API the bot will use for each "main function", including unknown APIs so long as instructions are followed carefully.
   # Instructions:
-  # - Define your APIs in "all_apis" (below this section), then link them via "name" (Note: case sensitive!!)
-  # - Comment out or set null value for any data in this section which is N/A for the API (ex: Commenting/removing 'get_progress' will disable progress checking for main ImgGen tasks)
-  # - You may need to research the input/output structure for your API endpoints to configure "_key" values. ('response_handling' can also be used to return expected value types - more on this below)
-  # - The extra "_key" values in this section (ei: 'output_file_path_key') are intended to simplify common expected API behavior, but **ARE NOT REQUIRED**.
-  #   Example scenario: Your main TTS client's 'post_generate' endpoint returns raw data (bytes). The bot's main functions need the file path. ...What should I do?
-  #                   - Set 'output_file_path_key: null' (or remove the line)
-  #                   - Define a "response_handling" for this endpoint (in 'all_apis') so it returns a file path after the last 'step'
+  #   Required:
+  #     - Define new APIs in main section "all_apis", then link them by name (**case sensitive!!**)
+  #     - Ensure each "endpoint_name" matches
+  #   For unknown APIs:
+  #   - Comment out or set null value for any data in this section which is N/A for the API (ex: Commenting/removing 'post_options' will disable posting imgmodel change params)
+  #   - You may need to research the input/output structure for your API endpoints to configure "_key" values. ('response_handling' can also be used to return expected value types - more on this below)
+  #   - The extra "_key" values in this section (ei: 'output_file_path_key') are intended to simplify common expected API behavior, but **ARE NOT REQUIRED**.
+  #     Example scenario: Your main TTS client's 'post_generate' endpoint returns raw data (bytes). The bot's main functions need the file path. ...What should I do?
+  #                     - Set 'output_file_path_key: null' (or remove the line)
+  #                     - Define a "response_handling" for this endpoint (in 'all_apis') so it returns a file path after the last 'step'
 
   imggen:
-    # Note: Some client-specific integrations require 'Forge', 'Reforge', 'Comfy' to be included in name.
-    api_name: Stable Diffusion WebUI
+    # This section can be mostly ignored if using known APIs: 'Forge', 'Reforge', 'Comfy', or 'A1111' (must include this in the name!!).
+    api_name: SD Forge
     post_txt2img:
       endpoint_name: Post txt2img
       prompt_key: prompt              # ex: payload = {'prompt': 'This is my prompt', ...}
@@ -28,6 +32,7 @@ bot_api_functions:
       endpoint_name: Get Progress
       progress_key: progress          # ex: response = {'progress': 0.2, ...}
       eta_key: eta_relative           # ex: response = {'eta_relative': 163.53, ...}
+      max_key: max                    # ex: response = {'max': 20, ...}
     post_pnginfo:
       endpoint_name: Post PNG Info
       pnginfo_image_key: image        # ex: payload = {'image': '<the image data>', ...}
@@ -36,7 +41,7 @@ bot_api_functions:
       endpoint_name: Post Options
       imgmodel_input_key: sd_model_checkpoint
     get_imgmodels:
-      endpoint_name: Get ImgModels
+      endpoint_name: Get Checkpoints
       imgmodel_name_key: model_name
       imgmodel_value_key: title
       imgmodel_filename_key: filename
@@ -47,6 +52,9 @@ bot_api_functions:
     get_controlnet_control_types:
       endpoint_name: Get Cnet Control Types
       control_types_key: control_types # ex: response = {'control_types': <Beautifully organized controlnet model dictionary>, ...}
+    # ComfyUI specific
+    get_history: {endpoint_name: History}
+    get_view: {endpoint_name: View}
 
   # Bot currently cannot use textgen APIs for main functions - TextGen API Support coming soon!
   textgen:
@@ -71,7 +79,7 @@ bot_api_functions:
 all_apis:
   # You may define any number of APIs and Endpoints here (a list of dictionaries), making them available to use for various bot functions,
   #   including the "main" apis above, the Tags system (dict_tags.yaml), user defined commands (dict_commands.yaml *WIP feature*), etc.
-  - name: Stable Diffusion WebUI
+  - name: SD Forge
     url: http://127.0.0.1:7860
     enabled: true
     default_headers: {Content-Type: application/json} # will apply to all endpoints unless 'headers' defined in endpoint.
@@ -87,7 +95,7 @@ all_apis:
         preset: sd-txt2img-img2img-endpoints
       - {name: Get Progress, path: /sdapi/v1/progress, method: GET}
       - {name: Post PNG Info, path: /sdapi/v1/png-info, method: POST}
-      - {name: Get ImgModels, path: /sdapi/v1/sd-models, method: GET}
+      - {name: Get Checkpoints, path: /sdapi/v1/sd-models, method: GET}
       - {name: Get Options, path: /sdapi/v1/options, method: GET}
       - {name: Post Options, path: /sdapi/v1/options, method: POST, payload_type: json}
       - {name: Get Cnet Models, path: /controlnet/model_list, method: GET}
@@ -150,17 +158,16 @@ all_apis:
         method: POST
         payload_base: comfyui_text2image.json
         payload_type: json
-      - {name: History, path: "/history/{prompt_id}", method: GET}
+      - {name: History, path: "/history/{}", method: GET} # "/history/{prompt_id}"
+      - {name: View, path: /view, method: GET, payload_type: query, response_type: bytes}
+      - {name: Upload, path: "/upload/{}", method: POST} # "/upload/{image_type}"
+      - {name: Cancel, path: /interrupt, method: POST}
       - name: Get Checkpoints
         path: "/object_info/CheckpointLoaderSimple"
         method: GET
         response_handling:
           - extract_key: CheckpointLoaderSimple.input.required.ckpt_name[0] # list of models
-          - map: {as: dict, key: model_name} # convert list to a list of dicts [{'model_name': 'leosamsHelloworldXL_helloworldXL70.safetensors'}, {'model_name': ...}]
-      - {name: View, path: view, method: POST}
-      - {name: Upload, path: "/upload/{image_type}", method: POST}
-      - {name: Get Models, path: "/models/{folder}", method: GET}
-      - {name: Cancel, path: /interrupt, method: POST}
+        #  - map: {as: dict, key: model_name} # convert list to a list of dicts [{'model_name': 'leosamsHelloworldXL_helloworldXL70.safetensors'}, {'model_name': ...}]
       # 'method: null' will skip API call, and simply return the payload as the result. In this case, user needs to manually configure a '/user/payload/cnet_data.yaml'
       - {name: Get Cnet Control Types, path: /anything/at/all, method: null, payload_base: cnet_data.yaml}
 

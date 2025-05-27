@@ -209,6 +209,12 @@ def get_normalized_weights(target:float, list_len:int, strength:float=1.0) -> li
     total_weight = sum(weights)
     return [weight / total_weight for weight in weights]
 
+def split_at_first_comma(data: str, return_before: bool = False) -> str:
+    if "," in data:
+        before, after = data.split(",", 1)
+        return before if return_before else after
+    return data
+
 def is_base64(s: str) -> bool:
     try:
         return base64.b64encode(base64.b64decode(s)) == s.encode()

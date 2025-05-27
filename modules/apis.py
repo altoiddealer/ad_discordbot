@@ -14,9 +14,9 @@ from PIL import Image, PngImagePlugin
 import io
 import base64
 import copy
-from typing import Any, Dict, Tuple, List, Optional, Union, Type, Callable, Awaitable, AsyncGenerator
+from typing import Any, Tuple, Optional, Union, Type, AsyncGenerator, Callable, Awaitable
 from modules.utils_shared import shared_path, patterns, load_file, get_api
-from modules.utils_misc import valueparser, progress_bar, extract_key, deep_merge, is_base64, guess_format_from_headers, guess_format_from_data
+from modules.utils_misc import valueparser, progress_bar, extract_key, deep_merge, split_at_first_comma, is_base64, guess_format_from_headers, guess_format_from_data
 import modules.utils_processing as processing
 
 from modules.logs import import_track, get_logger; import_track(__file__, fp=True); log = get_logger(__name__)  # noqa: E702
@@ -409,7 +409,7 @@ class APIClient:
                  enabled: bool,
                  url: str,
                  websocket_config = None,
-                 default_headers: Optional[Dict[str, str]] = None,
+                 default_headers: Optional[dict[str, str]] = None,
                  default_timeout: int = 60,
                  auth: Optional[dict] = None,
                  endpoints_config=None):
@@ -812,18 +812,18 @@ class APIClient:
         self,
         endpoint: str,
         method: str = "GET",
-        json: Optional[Dict[str, Any]] = None,
-        data: Optional[Union[Dict[str, Any], str, bytes]] = None,
-        params: Optional[Dict[str, Any]] = None,
-        headers: Optional[Dict[str, str]] = None,
-        files: Optional[Dict[str, Any]] = None,
+        json: Optional[dict[str, Any]] = None,
+        data: Optional[Union[dict[str, Any], str, bytes]] = None,
+        params: Optional[dict[str, Any]] = None,
+        headers: Optional[dict[str, str]] = None,
+        files: Optional[dict[str, Any]] = None,
         auth: Optional[aiohttp.BasicAuth] = None,
         retry: int = 0,
         timeout: Optional[int] = None,
         response_type: Optional[str] = None,
         stream: bool = False,
         path_vars: Optional[Union[str, tuple, list, dict]] = None,
-    ) -> Union[Dict[str, Any], str, bytes, None]:
+    ) -> Union[dict[str, Any], str, bytes, None]:
         
         # Format endpoint with path variables
         if path_vars:
@@ -907,11 +907,11 @@ class APIClient:
 
     async def _send_ws_message(
         self,
-        json: Optional[Dict[str, Any]],
+        json: Optional[dict[str, Any]],
         timeout: Optional[int],
         expect_response: bool,
         response_type: Optional[str],
-    ) -> Union[Dict[str, Any], str, bytes, None]:
+    ) -> Union[dict[str, Any], str, bytes, None]:
         if not json:
             raise ValueError("WebSocket messages must be JSON serializable.")
 
@@ -1009,8 +1009,8 @@ class APIClient:
                         continue
 
                 now = time.monotonic()
-                if interval > 0 and (now - last_yield_time) < interval:
-                    continue  # Delay yielding
+                # if interval > 0 and (now - last_yield_time) < interval:
+                #     continue  # Delay yielding
                 last_yield_time = now
 
                 if result:
@@ -1032,14 +1032,18 @@ class APIClient:
                              duration: int = -1,
                              num_yields: int = -1,
                              progress_key: str = "progress",
+                             max_key: Optional[str] = None,
                              eta_key: Optional[str] = None,
-                             message: str = '',
+                             message: str = 'Generating',
                              ictx=None,
                              type_filter: list[str] = ["progress", "executed"], # websocket
                              data_filter: Optional[dict] = None, # websocket
                              **kwargs) -> list[dict]:
         """
         Polls an endpoint while sending a progress Embed to discord.
+        Pops and manages 'return_values' to ensure polling method only returns progress data
+        If `max` is specified, progress is interpreted as a step count and normalized as (progress / max).
+        Otherwise, progress is assumed to be a float between 0.0 and 1.0.
         """
         from modules.utils_discord import Embeds
         embeds = Embeds(ictx)
@@ -1052,10 +1056,16 @@ class APIClient:
                 use_ws = True
 
         # Resolve progress_values
-        kwargs.pop("return_values", None)
-        progress_values = {'progress': progress_key}
-        if eta_key:
-            progress_values['eta'] = eta_key
+        return_values:dict = kwargs.pop("return_values", {})
+
+        progress_values = {}
+        progress_values['progress'] = return_values.get('progress') or progress_key or "progress"
+        max_value_key = return_values.get('max') or max_key or None
+        if max_value_key:
+            progress_values['max'] = max_value_key
+        eta_value_key = return_values.get('eta') or return_values.get('eta_relative') or eta_key or None
+        if eta_value_key:
+            progress_values['eta'] = eta_value_key
 
         STALL_THRESHOLD = 5.0
         last_progress = 0.0
@@ -1093,12 +1103,18 @@ class APIClient:
                     updates.append(update)
 
                     # Read progress safely
-                    progress = update.get("progress", 0.0)
+                    raw_progress = update.get("progress", 0.0)
+                    raw_max = update.get("max", 1.0)  # default to 1.0
+
                     try:
-                        progress = float(progress)
-                    except (TypeError, ValueError):
+                        progress = float(raw_progress)
+                        max_value = float(raw_max)
+                        progress = progress / max_value
+                    except (TypeError, ValueError, ZeroDivisionError):
                         progress = 0.0
-                    progress = max(0.0, min(progress, 1.0))
+
+                    progress = max(0.0, min(progress, 1.0))  # Clamp between 0.0 and 1.0
+
                     eta = update.get('eta')
 
                     # Check if complete
@@ -1158,12 +1174,29 @@ class ImgGenClient(APIClient):
         self.get_controlnet_models: Optional[ImgGenEndpoint] = None
         self.get_controlnet_control_types: Optional[ImgGenEndpoint] = None
         self.post_server_restart: Optional[ImgGenEndpoint] = None
-        
-        self._bind_main_endpoints(imggen_config) 
+
+        self.get_history: Optional[ImgGenEndpoint] = None
+        self.get_view: Optional[ImgGenEndpoint] = None
+        self.post_upload: Optional[ImgGenEndpoint] = None
+        self._bind_main_endpoints(imggen_config)
 
     # class override to subclass Endpoint()
     def _get_self_ep_class(self):
         return ImgGenEndpoint
+    
+    def decode_and_save_for_index(i:int, base64_str:str, pnginfo=None) -> Image.Image:
+        decoded = base64.b64decode(base64_str)
+        image = Image.open(io.BytesIO(decoded))
+        image.save(f"{shared_path.dir_temp_images}/temp_img_{i}.png", pnginfo=pnginfo)
+        return image
+
+    async def post_image_for_pnginfo_data(self, image_data:str):
+        # Build payload
+        pnginfo_payload = self.post_pnginfo.get_payload()
+        if self.post_pnginfo.pnginfo_image_key:
+            pnginfo_payload[self.post_pnginfo.pnginfo_image_key] = image_data
+        # post for image gen data
+        return await self.post_pnginfo.call(input_data=pnginfo_payload, extract_keys="pnginfo_result_key")
 
     async def track_t2i_i2i_progress(self, ictx=None):
         from modules.utils_discord import Embeds
@@ -1185,56 +1218,52 @@ class ImgGenClient(APIClient):
         finally:
             await embeds.delete('img_gen')
 
-    async def save_images_and_return(self, img_payload:dict, mode:str="txt2img") -> Tuple[List[Image.Image], Optional[PngImagePlugin.PngInfo]]:
-        images = []
-        pnginfo = None
-
+    async def post_for_images(self, img_payload:dict, mode:str="txt2img") -> list[str]:
         ep_for_mode:ImgGenEndpoint = getattr(self, f'post_{mode}')
-        images_list = await ep_for_mode.call(input_data=img_payload, extract_keys='images_result_key')
+        return await ep_for_mode.call(input_data=img_payload, extract_keys='images_result_key')
 
-        for i, img_data in enumerate(images_list):
-            i_pnginfo = None
+    async def main_imggen(self, img_payload:dict, mode:str="txt2img", ictx=None) -> Tuple[list[Image.Image], Optional[PngImagePlugin.PngInfo]]:
+        try:
+            # Start progress task and generation task concurrently
+            images_task = asyncio.create_task(self.post_for_images(img_payload, mode))
+            progress_task = None
+            if self.get_progress:
+                progress_task = asyncio.create_task(self.track_t2i_i2i_progress(ictx=ictx))
+            # Wait for images_task to complete
+            headered_images_list = await images_task
+            # Once images_task is done, cancel progress_task
+            if progress_task and not progress_task.done():
+                progress_task.cancel()
+                try:
+                    await progress_task
+                except asyncio.CancelledError:
+                    pass
 
-            if "," in img_data:
-                img_data = img_data.split(",", 1)[1]
-            raw_data = base64.b64decode(img_data)
-
-            # Call PNGInfo endpoint if applicable
-            if self.post_pnginfo:
-                # Build payload
-                pnginfo_payload = self.post_pnginfo.get_payload()
-                if self.post_pnginfo.pnginfo_image_key:
-                    pnginfo_payload[self.post_pnginfo.pnginfo_image_key] = img_data
-                # post for image gen data
-                png_info_data = await self.post_pnginfo.call(input_data=pnginfo_payload, extract_keys="pnginfo_result_key")
-                # Process info and add it to image data before saving
-                if png_info_data:
-                    i_pnginfo = PngImagePlugin.PngInfo()
-                    i_pnginfo.add_text("parameters", png_info_data)
-                    # For first result
-                    if i == 0:
-                        # return png info
-                        pnginfo = i_pnginfo
-                        # Retain seed
+            images = []
+            # Process raw image list
+            for i, base64_with_header in enumerate(headered_images_list):
+                base64_str = split_at_first_comma(base64_with_header)
+                # Get PNG Info for first image
+                if i == 0 and self.post_pnginfo:
+                    pnginfo_data = await self.post_image_for_pnginfo_data(base64_str)
+                    if pnginfo_data:
+                        pnginfo = PngImagePlugin.PngInfo()
+                        pnginfo.add_text("parameters", pnginfo_data)
                         if self.post_pnginfo.seed_key:
-                            seed_match = patterns.seed_value.search(str(png_info_data))
+                            seed_match = patterns.seed_value.search(str(pnginfo_data))
                             if seed_match:
                                 self.last_img_payload[self.post_pnginfo.seed_key] = int(seed_match.group(1))
+                images.append(self.decode_and_save_for_index(i, base64_str, pnginfo))
+            return images, pnginfo
 
-            image = Image.open(io.BytesIO(raw_data))
-            image.save(f"{shared_path.dir_temp_images}/temp_img_{i}.png", pnginfo=i_pnginfo)
-            images.append(image)
-
-        return images, pnginfo
-
-    async def main_imggen(self, img_payload:dict, mode:str="txt2img", ictx=None) -> Tuple[List[Image.Image], Optional[PngImagePlugin.PngInfo]]:
-        # Start progress task and generation task concurrently
-        images_task = asyncio.create_task(self.save_images_and_return(img_payload, mode))
-        progress_task = asyncio.create_task(self.track_t2i_i2i_progress(ictx=ictx))
-        # Wait for images_task to complete
-        images, pnginfo = await images_task
-        # Once images_task is done, cancel progress_task
-        progress_task.cancel()
+        except Exception as e:
+            from modules.utils_discord import Embeds
+            embeds = Embeds()
+            e_prefix = f'[{self.name}] Error processing images'
+            log.error(f'{e_prefix}: {e}')
+            restart_msg = f'\nIf {self.name} remains unresponsive, consider using "/restart_sd_client" command.' if self.post_server_restart else ''
+            await embeds.send('img_send', e_prefix, f'{e}{restart_msg}')
+            return [], None        
 
     def is_comfy(self) -> bool:
         return isinstance(self, ComfyImgGenClient)
@@ -1258,10 +1287,52 @@ class SDWebUIImgGenClient(ImgGenClient):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
+    async def post_for_images(self, img_payload:dict, mode:str="txt2img") -> list[str]:
+        ep_for_mode:ImgGenEndpoint = getattr(self, f'post_{mode}')
+        response = await ep_for_mode.call(input_data=img_payload)
+        return response['images']
+
 class ComfyImgGenClient(ImgGenClient):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
+    async def main_imggen(self, img_payload:dict, mode:str="txt2img", ictx=None) -> Tuple[list[Image.Image], None]:
+        try:
+            ep_for_mode:ImgGenEndpoint = getattr(self, f'post_{mode}')
+            queued = await ep_for_mode.call(input_data=img_payload)
+            prompt_id = queued['prompt_id']
+            await self.track_progress(endpoint=None,
+                                      use_ws=True,
+                                      ictx=ictx,
+                                      message="Generating image",
+                                      return_values={'progress': 'data.value', 'max': 'data.max'},
+                                      type_filter=["progress", "executed"],
+                                      data_filter={'prompt_id': prompt_id})
+            if not (self.get_history and self.get_view):
+                log.warning(f'[{self.name}] For progress tracking, "get_history" and "get_view" endpoints must be properly linked to "main_bot_functions" from "all_apis".')
+                return [], None
+
+            images = []
+            history = await self.get_history.call(path_vars=prompt_id)
+            outputs = history[prompt_id]['outputs']
+            for i, node_id in enumerate(outputs):
+                node_output = outputs[node_id]
+                if "images" in node_output:
+                    for image_data in node_output["images"]:
+                        base64_str = await self.get_view.call(input_data=image_data)
+                        #base64_with_header = await self.get_view.call(input_data=image_data)
+                        #base64_str = split_at_first_comma(base64_with_header)
+                        images.append(self.decode_and_save_for_index(i, base64_str))
+            return images, None
+
+        except Exception as e:
+            from modules.utils_discord import Embeds
+            embeds = Embeds()
+            e_prefix = f'[{self.name}] Error processing images'
+            log.error(f'{e_prefix}: {e}')
+            restart_msg = f'\nIf {self.name} remains unresponsive, consider using "/restart_sd_client" command.' if self.post_server_restart else ''
+            await embeds.send('img_send', e_prefix, f'{e}{restart_msg}')
+        return images, None
 
 class TextGenClient(APIClient):
     def __init__(self, *args, **kwargs):
@@ -1313,7 +1384,7 @@ class Endpoint:
                  payload_type: str = "any",
                  payload_config: Optional[str|dict] = None,
                  response_handling: Optional[list] = None,
-                 headers: Optional[Dict[str, str]] = None,
+                 headers: Optional[dict[str, str]] = None,
                  stream: bool = False,
                  timeout: int = 10,
                  retry: int = 0,
@@ -1449,7 +1520,7 @@ class Endpoint:
 
         return None
 
-    def sanitize_payload(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+    def sanitize_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
         """
         Recursively sanitizes the payload using the OpenAPI schema by removing unknown keys.
         """
@@ -1556,7 +1627,7 @@ class Endpoint:
                    input_data: dict = None,
                    payload_map: dict = None,
                    sanitize:bool=False,
-                   extract_keys:str|List[str]|None=None,
+                   extract_keys:str|list[str]|None=None,
                    ictx=None,
                    **kwargs
                    ) -> Any:
@@ -1715,7 +1786,7 @@ class Endpoint:
     async def return_main_data(self, response):
         pass
 
-    def can_extract(self, extract_keys: str | List[str]) -> bool:
+    def can_extract(self, extract_keys: str | list[str]) -> bool:
         """Check if all keys in 'extract_keys' are present as self attributes"""
         if isinstance(extract_keys, str):
             return getattr(self, extract_keys, None) is not None
@@ -1724,7 +1795,7 @@ class Endpoint:
         return False
 
     # Extracts the key values from the API response, for the Endpoint's key names defined in user API settings
-    def extract_main_keys(self, response, ep_keys: str|List[str] = None):
+    def extract_main_keys(self, response, ep_keys: str|list[str] = None):
         if not ep_keys or not isinstance(response, dict):
             if not isinstance(response, dict):
                 log.warning(f'[{self.client.name}] tried to extract value(s) for "{ep_keys}" from the response, but response was non-dict format.')
@@ -1758,7 +1829,7 @@ def deep_get(d: dict, path: str) -> Any:
             return None
     return d
 
-def try_paths(response: dict, paths: Union[str, List[str]]) -> Any:
+def try_paths(response: dict, paths: Union[str, list[str]]) -> Any:
     """Try one or more deep key paths and return the first match."""
     if isinstance(paths, str):
         return deep_get(response, paths)
@@ -1818,6 +1889,7 @@ class ImgGenEndpoint(Endpoint):
         self.pnginfo_result_key:Optional[str] = None
         self.pnginfo_image_key:Optional[str] = None
         self.progress_key:Optional[str] = None
+        self.max_key:Optional[str] = None
         self.eta_key:Optional[str] = None
         self.imgmodel_input_key:Optional[str] = None
         self.imgmodel_value_key:Optional[str] = None
@@ -1833,7 +1905,7 @@ class APIResponse:
     def __init__(
         self,
         body: Union[str, bytes, dict, list],
-        headers: Dict[str, str],
+        headers: dict[str, str],
         status: int,
         content_type: str = None,
         raw: bytes = None,
@@ -2191,7 +2263,7 @@ class StepExecutor:
         return extract_key(data, config)
 
     @step_returns("data", "input", default="data")
-    def _step_extract_values(self, data: Any, config: Dict[str, Union[str, dict]]) -> Dict[str, Any]:
+    def _step_extract_values(self, data: Any, config: dict[str, Union[str, dict]]) -> dict[str, Any]:
         result = {}
         for key, path_config in config.items():
             result[key] = extract_key(data, path_config)

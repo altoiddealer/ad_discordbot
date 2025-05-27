@@ -2268,15 +2268,7 @@ class TaskProcessing(TaskAttributes):
         reactor_args = self.payload.get('alwayson_scripts', {}).get('reactor', {}).get('args', [])
         last_item = reactor_args[-1] if reactor_args else None
         reactor_mask = reactor_args.pop() if isinstance(last_item, dict) else None
-        images = []
-        png_info = None
-        try:
-            images, pnginfo = await api.imggen.main_imggen(self.payload, self.params.mode, self.ictx)
-        except Exception as e:
-            e_prefix = f'[{api.imggen.name}] Error processing images'
-            log.error(f'{e_prefix}: {e}')
-            await self.embeds.send('img_send', e_prefix, f'{e}\nIf {api.imggen.name} remains unresponsive, consider using "/restart_sd_client" command.')
-            return []
+        images, pnginfo = await api.imggen.main_imggen(self.payload, self.params.mode, self.ictx)
         # Apply ReActor mask
         reactor = self.payload.get('alwayson_scripts', {}).get('reactor', {})
         if len(images) > 1 and reactor and reactor_mask:
@@ -6660,7 +6652,7 @@ class ImgModel(SettingsBase):
         imgmodel_settings, imgmodel_tags = await self.update_imgmodel_settings(imgmodel_data)
 
         # Collect options payload
-        options_payload:dict = api.imggen.post_options.get_payload() if hasattr(api.imggen, 'post_options') else {}
+        options_payload = api.imggen.post_options.get_payload() if getattr(api.imggen, 'post_options', None) else {}
         if self._imgmodel_input_key:
             options_payload[self._imgmodel_input_key] = imgmodel_data[self._any_key]
         
