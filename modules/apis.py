@@ -855,8 +855,6 @@ class APIClient:
             if json is not None:
                 request_kwargs["json"] = json
 
-        print(f"[{self.name}] request_kwargs:", request_kwargs)
-
         # Ensure session exists
         if not self.session:
             self.session = aiohttp.ClientSession()
@@ -953,21 +951,19 @@ class APIClient:
         data_filter: Optional[dict] = None,
     ) -> AsyncGenerator[dict, None]:
         """
-        Stream messages from WebSocket and yield structured data at most once per `yield_interval` seconds.
+        Stream messages from WebSocket and yield structured data at most once per yield_interval seconds.
         
-        - `return_values`: Dict of key -> dotpath to extract
-        - `type_filter`: List of message types to process
-        - `data_filter`: Dict of required key-values in data field
-        - `duration`: Time in seconds before polling stops
-        - `timeout`: Timeout per WS receive
-        - `interval`: Minimum time in seconds between yields
+        - return_values: Dict of key -> dotpath to extract
+        - type_filter: List of message types to process
+        - data_filter: Dict of required key-values in data field
+        - duration: Time in seconds before polling stops
+        - timeout: Timeout per WS receive
+        - interval: Minimum time in seconds between yields
         """
         from json import loads as json_loads
         start_time = time.monotonic()
         yield_count = 0
         last_yield_time = 0.0
-
-        print("RETURN VALUES:", return_values)
 
         while True:
             if duration > 0 and (time.monotonic() - start_time) >= duration:
@@ -979,7 +975,6 @@ class APIClient:
                     await self._connect_websocket()
 
                 msg = await self.ws.receive(timeout=timeout)
-                print(msg)
 
                 if msg.type != aiohttp.WSMsgType.TEXT:
                     continue
@@ -1001,7 +996,6 @@ class APIClient:
 
                 result = {}
                 for key, path in return_values.items():
-                    print("key:", key, "path:", path)
                     try:
                         result[key] = extract_key(payload, path)
                     except Exception as e:
@@ -1014,7 +1008,6 @@ class APIClient:
                 last_yield_time = now
 
                 if result:
-                    print("result:", result)
                     yield result
                     yield_count += 1
                     if num_yields > 0 and yield_count >= num_yields:
@@ -1184,8 +1177,22 @@ class ImgGenClient(APIClient):
     def _get_self_ep_class(self):
         return ImgGenEndpoint
     
-    def decode_and_save_for_index(i:int, base64_str:str, pnginfo=None) -> Image.Image:
-        decoded = base64.b64decode(base64_str)
+    def decode_and_save_for_index(self, i: int, data: str | bytes | list, pnginfo=None) -> Image.Image:
+        if isinstance(data, str):
+            try:
+                decoded = base64.b64decode(data)
+            except Exception as e:
+                raise ValueError(f"Failed to decode base64 string: {e}")
+        elif isinstance(data, list):
+            try:
+                decoded = bytes(data)
+            except Exception as e:
+                raise ValueError(f"Failed to convert list of ints to bytes: {e}")
+        elif isinstance(data, bytes):
+            decoded = data
+        else:
+            raise TypeError(f"Expected str, bytes, or list of ints, got {type(data)}")
+
         image = Image.open(io.BytesIO(decoded))
         image.save(f"{shared_path.dir_temp_images}/temp_img_{i}.png", pnginfo=pnginfo)
         return image
@@ -1319,10 +1326,9 @@ class ComfyImgGenClient(ImgGenClient):
                 node_output = outputs[node_id]
                 if "images" in node_output:
                     for image_data in node_output["images"]:
-                        base64_str = await self.get_view.call(input_data=image_data)
-                        #base64_with_header = await self.get_view.call(input_data=image_data)
-                        #base64_str = split_at_first_comma(base64_with_header)
-                        images.append(self.decode_and_save_for_index(i, base64_str))
+                        image_bytes = await self.get_view.call(input_data=image_data)
+                        image = self.decode_and_save_for_index(i, image_bytes)
+                        images.append(image)
             return images, None
 
         except Exception as e:
@@ -1690,7 +1696,6 @@ class Endpoint:
             return self.extract_main_keys(results, extract_keys)
 
         # ws_response = await self.process_ws_request(json_payload, data_payload, input_data, **kwargs)
-        print("RESULTS:", results)
         # Hand off full response to StepExecutor
         if isinstance(self.response_handling, list):
             log.info(f'[{self.name}] Executing "response_handling" ({len(self.response_handling)} processing steps)')
