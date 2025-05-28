@@ -14,7 +14,7 @@ from PIL import Image, PngImagePlugin
 import io
 import base64
 import copy
-from typing import Any, Tuple, Optional, Union, Type, AsyncGenerator, Callable, Awaitable
+from typing import get_type_hints, get_type_hints, get_origin, get_args, Any, Tuple, Optional, Union, Type, AsyncGenerator, Callable, Awaitable
 from modules.utils_shared import shared_path, patterns, load_file, get_api
 from modules.utils_misc import valueparser, progress_bar, extract_key, deep_merge, split_at_first_comma, is_base64, guess_format_from_headers, guess_format_from_data
 import modules.utils_processing as processing
@@ -221,18 +221,20 @@ class API:
         else:
             api_client = self.clients.get(client_name)
 
+        msg_prefix = f'API Client "{client_name}"' if client_type is None else f'Main API Client "{client_type}"'
+
         if not api_client:
             if strict:
-                raise ValueError(f"API client '{client_name}' not found or invalid.")
+                raise ValueError(f"{msg_prefix} not found or invalid.")
             else:
-                log.warning(f"API client '{client_name}' not found or invalid.")
+                log.warning(f"{msg_prefix} not found or invalid.")
             return None
 
         elif not api_client.enabled:
             if strict:
-                raise RuntimeError(f'API Client "{client_name}" is currently disabled.')
+                raise RuntimeError(f'{msg_prefix} is currently disabled.')
             else:
-                log.warning(f'API Client "{client_name}" is currently disabled.')
+                log.warning(f'{msg_prefix} is currently disabled.')
             return None
 
         return api_client
@@ -1141,36 +1143,54 @@ class APIClient:
 
         return updates
 
+# Dummy main objects to allow graceful evaluation
+def _unwrap_optional(type_hint):
+    origin = get_origin(type_hint)
+    if origin is Union:
+        # Remove NoneType from Union
+        non_none = [t for t in get_args(type_hint) if t is not type(None)]
+        if len(non_none) == 1:
+            return non_none[0]
+    return type_hint
+
+class DummyEndpoint:
+    def __init__(self, endpoint_cls: type):
+        self.name = "dummy"
+    def __getattr__(self, item):
+        return None
+    def __bool__(self):
+        return False
+
 class DummyClient:
     def __init__(self, target_cls: type):
-        annotations = getattr(target_cls, '__annotations__', {})
-        for attr_name in annotations:
-            setattr(self, attr_name, None)
+        annotations = get_type_hints(target_cls)
+        for attr_name, attr_type in annotations.items():
+            real_type = _unwrap_optional(attr_type)
+            if isinstance(real_type, type) and issubclass(real_type, Endpoint):
+                setattr(self, attr_name, DummyEndpoint(real_type))
+            else:
+                setattr(self, attr_name, None)
     def __getattr__(self, name):
-        return None # Return None for any missing attribute
+        return None
     def __bool__(self):
-        return False  # Makes instances evaluate False
+        return False
 
 
 class ImgGenClient(APIClient):
+    last_img_payload = {}
+    post_txt2img: Optional["ImgGenEndpoint"] = None
+    post_img2img: Optional["ImgGenEndpoint"] = None
+    get_progress: Optional["ImgGenEndpoint"] = None
+    post_pnginfo: Optional["ImgGenEndpoint"] = None
+    post_options: Optional["ImgGenEndpoint"] = None
+    get_imgmodels: Optional["ImgGenEndpoint"] = None
+    get_controlnet_models: Optional["ImgGenEndpoint"] = None
+    get_controlnet_control_types: Optional["ImgGenEndpoint"] = None
+    post_server_restart: Optional["ImgGenEndpoint"] = None
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         imggen_config:dict = apisettings.get_config_for("imggen")
-        self.last_img_payload = {}
-
-        self.post_txt2img: Optional[ImgGenEndpoint] = None
-        self.post_img2img: Optional[ImgGenEndpoint] = None
-        self.get_progress: Optional[ImgGenEndpoint] = None
-        self.post_pnginfo: Optional[ImgGenEndpoint] = None
-        self.post_options: Optional[ImgGenEndpoint] = None
-        self.get_imgmodels: Optional[ImgGenEndpoint] = None
-        self.get_controlnet_models: Optional[ImgGenEndpoint] = None
-        self.get_controlnet_control_types: Optional[ImgGenEndpoint] = None
-        self.post_server_restart: Optional[ImgGenEndpoint] = None
-
-        self.get_history: Optional[ImgGenEndpoint] = None
-        self.get_view: Optional[ImgGenEndpoint] = None
-        self.post_upload: Optional[ImgGenEndpoint] = None
         self._bind_main_endpoints(imggen_config)
 
     # class override to subclass Endpoint()
@@ -1294,12 +1314,10 @@ class SDWebUIImgGenClient(ImgGenClient):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
-    async def post_for_images(self, img_payload:dict, mode:str="txt2img") -> list[str]:
-        ep_for_mode:ImgGenEndpoint = getattr(self, f'post_{mode}')
-        response = await ep_for_mode.call(input_data=img_payload)
-        return response['images']
-
 class ComfyImgGenClient(ImgGenClient):
+    get_history: Optional["ImgGenEndpoint"] = None
+    get_view: Optional["ImgGenEndpoint"] = None
+    post_upload: Optional["ImgGenEndpoint"] = None
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
@@ -1354,14 +1372,12 @@ class TextGenClient(APIClient):
         return TextGenEndpoint
 
 class TTSGenClient(APIClient):
+    get_voices: Optional["TTSGenEndpoint"] = None
+    get_languages: Optional["TTSGenEndpoint"] = None
+    post_generate: Optional["TTSGenEndpoint"] = None
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         ttsgen_config:dict = apisettings.get_config_for("ttsgen")
-
-        self.get_voices: Optional[TTSGenEndpoint] = None
-        self.get_languages: Optional[TTSGenEndpoint] = None
-        self.post_generate: Optional[TTSGenEndpoint] = None
-
         self._bind_main_endpoints(ttsgen_config)
 
     # class override to subclass Endpoint()
@@ -1904,6 +1920,11 @@ class ImgGenEndpoint(Endpoint):
 
     async def return_main_data(self, response):
         pass
+
+    def get_prompt_keys(self):
+        if isinstance(self.client, ComfyImgGenClient):
+            return None, None
+        return self.prompt_key, self.neg_prompt_key
 
 
 class APIResponse:

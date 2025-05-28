@@ -1053,7 +1053,7 @@ class BotVars():
 
     def format_overrides_into_payload(self, payload):
         if "__overrides__" not in payload:
-            return
+            return payload
         # Extract and remove overrides from the payload
         overrides = payload.pop("__overrides__")
         # Helper to to replace placeholders like {pos_prompt} with overrides["pos_prompt"]
@@ -2946,7 +2946,7 @@ class TaskProcessing(TaskAttributes):
 
             if imggen_ep:
                 base_payload = imggen_ep.get_payload()
-                prompt_key, neg_prompt_key = imggen_ep.prompt_key, imggen_ep.neg_prompt_key
+                prompt_key, neg_prompt_key = imggen_ep.get_prompt_keys()
             else:
                 raise RuntimeError(f"Error initializing img payload: No valid endpoint available for imggen post_{mode}")
 
