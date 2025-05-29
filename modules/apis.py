@@ -28,6 +28,11 @@ class APISettings():
         self.presets:dict = {}
         self.workflows:dict = {}
 
+    def get_client_type_map(self):
+        return {"imggen": ImgGenClient,
+                "textgen": TextGenClient,
+                "ttsgen": TTSGenClient}
+
     def get_config_for(self, section: str, default=None) -> dict:
         return self.main_settings.get(section, default or {})
 
@@ -143,9 +148,7 @@ class API:
         main_api_name_map = {v.get("api_name"): k for k, v in apisettings.main_settings.items()
                              if isinstance(v, dict) and v.get("api_name")}
         # Map function type to specialized client class
-        client_type_map = {"imggen": ImgGenClient,
-                           "textgen": TextGenClient,
-                           "ttsgen": TTSGenClient}
+        client_type_map = apisettings.get_client_type_map()
         
         check_clients_online = []
 
@@ -406,6 +409,8 @@ class WebSocketConnectionConfig:
 
 
 class APIClient:
+    _endpoint_class_map: dict[str, type] = {}
+
     def __init__(self,
                  name: str,
                  enabled: bool,
@@ -522,8 +527,7 @@ class APIClient:
             await self.session.close()
             self.session = None
 
-
-    def _create_endpoint(self, EPClass: Type[Union["Endpoint", "TextGenEndpoint", "ImgGenEndpoint", "TTSGenEndpoint"]], ep_dict: dict):
+    def _create_endpoint(self, EPClass: type, ep_dict: dict):
         return EPClass(name=ep_dict["name"],
                         path=ep_dict.get("path", ""),
                         method=ep_dict.get("method", "GET"),
@@ -536,20 +540,40 @@ class APIClient:
                         timeout=ep_dict.get("timeout", self.default_timeout),
                         retry=ep_dict.get("retry", 0),
                         concurrency_limit=ep_dict.get("concurrency_limit", None))
-    
-    def _get_self_ep_class(self):
+
+    def _default_endpoint_class(self):
         return Endpoint
 
-    def _collect_endpoints(self, endpoints_config:list[dict]):
+    def _get_endpoint_class_map(self) -> dict[str, type]:
+        return {}
+
+    def _collect_endpoints(self, endpoints_config: list[dict]):
+        # Determine applicable settings and endpoint class mappings
+        client_type_map = apisettings.get_client_type_map()
+        ep_class_map = self._get_endpoint_class_map()
+        default = self._default_endpoint_class()
+
+        # Determine client key (e.g., 'imggen', 'textgen', etc.)
+        client_key = next((k for k, cls in client_type_map.items() if isinstance(self, cls)), None)
+        endpoint_config_block = apisettings.main_settings.get(client_key, {}) if client_key else {}
+
+        # Map from endpoint_name → config key (e.g., "Prompt" → "post_txt2img")
+        name_to_config_key = {cfg["endpoint_name"]: key
+                              for key, cfg in endpoint_config_block.items()
+                              if isinstance(cfg, dict) and "endpoint_name" in cfg}
+
         for ep_dict in endpoints_config:
             try:
-                ep_class:Endpoint = self._get_self_ep_class()
-                endpoint:Endpoint = self._create_endpoint(ep_class, ep_dict)
-                # link APIClient to Endpoint
+                ep_name = ep_dict["name"]
+                config_key = name_to_config_key.get(ep_name)
+                ep_class = ep_class_map.get(config_key, default)
+
+                endpoint = self._create_endpoint(ep_class, ep_dict)
                 endpoint.client = self
-                # get deferred payloads after collecting all endpoints
+
                 if hasattr(endpoint, "_deferred_payload_source"):
                     self._endpoint_fetch_payloads.append(endpoint)
+
                 self.endpoints[endpoint.name] = endpoint
             except KeyError as e:
                 log.warning(f"[{self.name}] Skipping endpoint due to missing key: {e}")
@@ -1126,11 +1150,11 @@ class APIClient:
                                    num_yields=num_yields,
                                    **kwargs)
             
-            if use_ws and not bot_database.was_warned('websocket_polling'):
-                log.info('[Track Progress] Websocket polling exploits "interval" and "timeout" to prevent discord edit embed slowdown. '
+            if use_ws and not bot_database.was_warned('websocket_progress'):
+                log.info(f'[{self.name}] Tracking progress via Websocket exploits "interval" and "timeout" to prevent discord edit embed slowdown. '
                          'The default "interval" is 1.0 secs. If progress never appears, or if the bot is not updating the embed every second, '
                          'try increasing "interval". If you want more frequent progress, you can reduce the value but the bot may be throttled by Discord.')
-                bot_database.update_was_warned('websocket_polling')
+                bot_database.update_was_warned('websocket_progress')
             async for update in poller:
                 try:
                     # Collect updates
@@ -1217,23 +1241,37 @@ class DummyClient:
 
 class ImgGenClient(APIClient):
     last_img_payload = {}
-    post_txt2img: Optional["ImgGenEndpoint"] = None
-    post_img2img: Optional["ImgGenEndpoint"] = None
-    get_progress: Optional["ImgGenEndpoint"] = None
-    post_pnginfo: Optional["ImgGenEndpoint"] = None
-    post_options: Optional["ImgGenEndpoint"] = None
-    get_imgmodels: Optional["ImgGenEndpoint"] = None
-    get_controlnet_models: Optional["ImgGenEndpoint"] = None
-    get_controlnet_control_types: Optional["ImgGenEndpoint"] = None
-    post_server_restart: Optional["ImgGenEndpoint"] = None
+    post_txt2img: Optional["ImgGenEndpoint_PostTxt2Img"] = None
+    post_img2img: Optional["ImgGenEndpoint_PostImg2Img"] = None
+    get_progress: Optional["ImgGenEndpoint_GetProgress"] = None
+    post_pnginfo: Optional["ImgGenEndpoint_PostPNGInfo"] = None
+    post_options: Optional["ImgGenEndpoint_PostOptions"] = None
+    get_imgmodels: Optional["ImgGenEndpoint_GetImgModels"] = None
+    get_controlnet_models: Optional["ImgGenEndpoint_GetControlNetModels"] = None
+    post_server_restart: Optional["ImgGenEndpoint_PostServerRestart"] = None
+    get_controlnet_control_types: Optional["ImgGenEndpoint_GetControlNetControlTypes"] = None
+    get_history: Optional["ImgGenEndpoint_GetHistory"] = None
+    get_view: Optional["ImgGenEndpoint_GetView"] = None
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         imggen_config:dict = apisettings.get_config_for("imggen")
         self._bind_main_endpoints(imggen_config)
 
-    # class override to subclass Endpoint()
-    def _get_self_ep_class(self):
+    def _get_endpoint_class_map(self) -> dict[str, type]:
+        return {"post_txt2img": ImgGenEndpoint_PostTxt2Img,
+                "post_img2img": ImgGenEndpoint_PostImg2Img,
+                "get_progress": ImgGenEndpoint_GetProgress,
+                "post_pnginfo": ImgGenEndpoint_PostPNGInfo,
+                "post_options": ImgGenEndpoint_PostOptions,
+                "get_imgmodels": ImgGenEndpoint_GetImgModels,
+                "get_controlnet_models": ImgGenEndpoint_GetControlNetModels,
+                "post_server_restart": ImgGenEndpoint_PostServerRestart,
+                "get_controlnet_control_types": ImgGenEndpoint_GetControlNetControlTypes,
+                "get_history": ImgGenEndpoint_GetHistory,
+                "get_view": ImgGenEndpoint_GetView}
+
+    def _default_endpoint_class(self):
         return ImgGenEndpoint
     
     def decode_and_save_for_index(self, i: int, data: str | bytes | list, pnginfo=None) -> Image.Image:
@@ -1290,14 +1328,14 @@ class ImgGenClient(APIClient):
         finally:
             await embeds.delete('img_gen')
 
-    async def post_for_images(self, img_payload:dict, mode:str="txt2img") -> list[str]:
-        ep_for_mode:ImgGenEndpoint = getattr(self, f'post_{mode}')
-        return await ep_for_mode.call(input_data=img_payload, extract_keys='images_result_key')
+    async def post_for_images(self, endpoint:"ImgGenEndpoint", img_payload:dict) -> list[str]:
+        return await endpoint.call(input_data=img_payload, extract_keys='images_result_key')
 
     async def main_imggen(self, img_payload:dict, mode:str="txt2img", ictx=None) -> Tuple[list[Image.Image], Optional[PngImagePlugin.PngInfo]]:
         try:
+            ep_for_mode:Union[ImgGenEndpoint_PostTxt2Img, ImgGenEndpoint_PostImg2Img] = getattr(self, f'post_{mode}')
             # Start progress task and generation task concurrently
-            images_task = asyncio.create_task(self.post_for_images(img_payload, mode))
+            images_task = asyncio.create_task(self.post_for_images(ep_for_mode, img_payload))
             progress_task = asyncio.create_task(self.track_t2i_i2i_progress(ictx=ictx))
             # Wait for images_task to complete
             headered_images_list = await images_task
@@ -1319,10 +1357,10 @@ class ImgGenClient(APIClient):
                     if pnginfo_data:
                         pnginfo = PngImagePlugin.PngInfo()
                         pnginfo.add_text("parameters", pnginfo_data)
-                        if self.post_pnginfo.seed_key:
+                        if ep_for_mode.seed_key:
                             seed_match = patterns.seed_value.search(str(pnginfo_data))
                             if seed_match:
-                                self.last_img_payload[self.post_pnginfo.seed_key] = int(seed_match.group(1))
+                                self.last_img_payload[ep_for_mode.seed_key] = int(seed_match.group(1))
                 images.append(self.decode_and_save_for_index(i, base64_str, pnginfo))
             return images, pnginfo
 
@@ -1401,6 +1439,7 @@ class ComfyImgGenClient(ImgGenClient):
             await embeds.send('img_send', e_prefix, f'{e}{restart_msg}')
         return images, None
 
+
 class TextGenClient(APIClient):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -1410,21 +1449,29 @@ class TextGenClient(APIClient):
         # Collect endpoints used for main TextGen functions
         self._bind_main_endpoints(textgen_config)
 
-    # class override to subclass Endpoint()
-    def _get_self_ep_class(self):
+    def _get_endpoint_class_map(self) -> dict[str, type]:
+        return {}
+
+    def _default_endpoint_class(self):
         return TextGenEndpoint
 
+
 class TTSGenClient(APIClient):
-    get_voices: Optional["TTSGenEndpoint"] = None
-    get_languages: Optional["TTSGenEndpoint"] = None
-    post_generate: Optional["TTSGenEndpoint"] = None
+    get_voices: Optional["TTSGenEndpoint_GetVoices"] = None
+    get_languages: Optional["TTSGenEndpoint_GetLanguages"] = None
+    post_generate: Optional["TTSGenEndpoint_PostGenerate"] = None
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         ttsgen_config:dict = apisettings.get_config_for("ttsgen")
         self._bind_main_endpoints(ttsgen_config)
 
-    # class override to subclass Endpoint()
-    def _get_self_ep_class(self):
+    def _get_endpoint_class_map(self) -> dict[str, type]:
+        return {"get_voices": TTSGenEndpoint_GetVoices,
+                "get_languages": TTSGenEndpoint_GetLanguages,
+                "post_generate": TTSGenEndpoint_PostGenerate}
+
+    def _default_endpoint_class(self):
         return TTSGenEndpoint
 
     async def fetch_speak_options(self):
@@ -1914,16 +1961,10 @@ class TextGenEndpoint(Endpoint):
     async def return_main_data(self, response):
         pass
 
+
 class TTSGenEndpoint(Endpoint):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        # Defaults
-        self.get_voices_key:Optional[str] = None
-        self.get_languages_key:Optional[str] = None
-        self.text_input_key:Optional[str] = None
-        self.language_input_key:Optional[str] = None
-        self.voice_input_key:Optional[str] = None
-        self.output_file_path_key:Optional[str] = None
 
     async def return_main_data(self, response):
         pass
@@ -1942,32 +1983,103 @@ class TTSGenEndpoint(Endpoint):
         #         return audio_fp
         # return None
 
+class TTSGenEndpoint_GetVoices(TTSGenEndpoint):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.get_voices_key: Optional[str] = None
+
+class TTSGenEndpoint_GetLanguages(TTSGenEndpoint):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.get_languages_key: Optional[str] = None
+
+class TTSGenEndpoint_PostGenerate(TTSGenEndpoint):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.text_input_key: Optional[str] = None
+        self.output_file_path_key: Optional[str] = None
+        self.language_input_key: Optional[str] = None
+        self.voice_input_key: Optional[str] = None
+
+
 class ImgGenEndpoint(Endpoint):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        # Defaults
-        self.prompt_key:Optional[str] = None
-        self.neg_prompt_key:Optional[str] = None
-        self.seed_key:Optional[str] = None
-        self.images_result_key:Optional[str] = None
-        self.pnginfo_result_key:Optional[str] = None
-        self.pnginfo_image_key:Optional[str] = None
-        self.progress_key:Optional[str] = None
-        self.max_key:Optional[str] = None
-        self.eta_key:Optional[str] = None
-        self.imgmodel_input_key:Optional[str] = None
-        self.imgmodel_value_key:Optional[str] = None
-        self.imgmodel_name_key:Optional[str] = None
-        self.imgmodel_filename_key:Optional[str] = None
-        self.control_types_key:Optional[str] = None
 
     async def return_main_data(self, response):
         pass
+
+class ImgGenEndpoint_PostTxt2Img(ImgGenEndpoint):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.prompt_key: Optional[str] = None
+        self.neg_prompt_key: Optional[str] = None
+        self.seed_key: Optional[str] = None
+        self.images_result_key: Optional[str] = None
 
     def get_prompt_keys(self):
         if isinstance(self.client, ComfyImgGenClient):
             return None, None
         return self.prompt_key, self.neg_prompt_key
+
+class ImgGenEndpoint_PostImg2Img(ImgGenEndpoint):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.prompt_key: Optional[str] = None
+        self.neg_prompt_key: Optional[str] = None
+        self.seed_key: Optional[str] = None
+        self.images_result_key: Optional[str] = None
+
+    def get_prompt_keys(self):
+        if isinstance(self.client, ComfyImgGenClient):
+            return None, None
+        return self.prompt_key, self.neg_prompt_key
+
+class ImgGenEndpoint_GetProgress(ImgGenEndpoint):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.progress_key: Optional[str] = None
+        self.eta_key: Optional[str] = None
+        self.max_key: Optional[str] = None
+
+class ImgGenEndpoint_PostPNGInfo(ImgGenEndpoint):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.pnginfo_image_key: Optional[str] = None
+        self.pnginfo_result_key: Optional[str] = None
+
+class ImgGenEndpoint_PostOptions(ImgGenEndpoint):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.imgmodel_input_key: Optional[str] = None
+
+class ImgGenEndpoint_GetImgModels(ImgGenEndpoint):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.imgmodel_name_key: Optional[str] = None
+        self.imgmodel_value_key: Optional[str] = None
+        self.imgmodel_filename_key: Optional[str] = None
+
+class ImgGenEndpoint_GetControlNetModels(ImgGenEndpoint):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+class ImgGenEndpoint_PostServerRestart(ImgGenEndpoint):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+class ImgGenEndpoint_GetControlNetControlTypes(ImgGenEndpoint):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.control_types_key: Optional[str] = None
+
+class ImgGenEndpoint_GetHistory(ImgGenEndpoint):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+class ImgGenEndpoint_GetView(ImgGenEndpoint):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
 
 
 class APIResponse:
