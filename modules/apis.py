@@ -15,7 +15,7 @@ import io
 import base64
 import copy
 from typing import get_type_hints, get_type_hints, get_origin, get_args, Any, Tuple, Optional, Union, Type, AsyncGenerator, Callable, Awaitable
-from modules.utils_shared import shared_path, patterns, load_file, get_api
+from modules.utils_shared import shared_path, patterns, bot_database, load_file, get_api
 from modules.utils_misc import valueparser, progress_bar, extract_key, deep_merge, split_at_first_comma, is_base64, guess_format_from_headers, guess_format_from_data
 import modules.utils_processing as processing
 
@@ -945,7 +945,7 @@ class APIClient:
     async def poll_ws(
         self,
         return_values: dict,
-        interval: float = 0.0,
+        interval: float = 1.0,
         duration: int = -1,
         num_yields: int = -1,
         timeout: int = 30,
@@ -964,19 +964,49 @@ class APIClient:
         """
         from json import loads as json_loads
         start_time = time.monotonic()
+        last_successful_yield = time.monotonic()
         yield_count = 0
         last_yield_time = 0.0
+        buffered_result = None
 
         while True:
-            if duration > 0 and (time.monotonic() - start_time) >= duration:
-                log.info(f"[{self.name}] WebSocket polling stopped after {duration}s")
+            now = time.monotonic()
+            elapsed = now - start_time
+            time_since_last_yield = now - last_successful_yield
+
+            # Stop polling after duration
+            if duration > 0 and elapsed >= duration:
+                if buffered_result:
+                    yield buffered_result
+                log.info(f"[{self.name}] WebSocket polling stopped after duration {duration}s")
+                break
+
+            # Stop polling after timeout of no yields
+            if timeout > 0 and time_since_last_yield >= timeout:
+                if buffered_result:
+                    yield buffered_result
+                log.info(f"[{self.name}] WebSocket polling stopped after inactivity timeout {timeout}s")
                 break
 
             try:
                 if not self.ws or self.ws.closed:
                     await self._connect_websocket()
 
-                msg = await self.ws.receive(timeout=timeout)
+                try:
+                    MIN_RECEIVE_TIMEOUT = 1.0
+                    msg = await self.ws.receive(timeout=(interval if interval >= MIN_RECEIVE_TIMEOUT else timeout))
+                except asyncio.TimeoutError:
+                    # Flush buffered result if yield interval has passed
+                    if buffered_result and (interval == 0.0 or (time.monotonic() - last_yield_time) >= interval):
+                        yield buffered_result
+                        yield_count += 1
+                        last_successful_yield = time.monotonic()
+                        last_yield_time = last_successful_yield
+                        buffered_result = None
+                        if num_yields > 0 and yield_count >= num_yields:
+                            log.info(f"[{self.name}] WebSocket polling stopped after num_yields {num_yields}")
+                            break
+                    continue
 
                 if msg.type != aiohttp.WSMsgType.TEXT:
                     continue
@@ -992,7 +1022,6 @@ class APIClient:
 
                 if type_filter and msg_type not in type_filter:
                     continue
-
                 if data_filter and any(data.get(k) != v for k, v in data_filter.items()):
                     continue
 
@@ -1004,21 +1033,26 @@ class APIClient:
                         log.debug(f"[{self.name}] Extraction failed for {key}: {e}")
                         continue
 
-                now = time.monotonic()
-                # if interval > 0 and (now - last_yield_time) < interval:
-                #     continue  # Delay yielding
-                last_yield_time = now
+                if not result:
+                    continue
 
-                if result:
-                    yield result
-                    yield_count += 1
-                    if num_yields > 0 and yield_count >= num_yields:
-                        log.info(f"[{self.name}] WebSocket polling stopped after num_yields limit ({num_yields}).")
-                        break
+                now = time.monotonic()
+                if interval > 0 and (now - last_yield_time) < interval:
+                    buffered_result = result  # Buffer until interval is met
+                    continue
+
+                yield result
+                yield_count += 1
+                last_successful_yield = now
+                last_yield_time = now
+                buffered_result = None
+
+                if num_yields > 0 and yield_count >= num_yields:
+                    log.info(f"[{self.name}] WebSocket polling stopped after num_yields {num_yields}")
+                    break
 
             except Exception as e:
                 log.exception(f"[{self.name}] WebSocket polling failed: {e}")
-                break
 
     async def track_progress(self,
                              endpoint: Optional["Endpoint"] = None,
@@ -1092,6 +1126,11 @@ class APIClient:
                                    num_yields=num_yields,
                                    **kwargs)
             
+            if use_ws and not bot_database.was_warned('websocket_polling'):
+                log.info('[Track Progress] Websocket polling exploits "interval" and "timeout" to prevent discord edit embed slowdown. '
+                         'The default "interval" is 1.0 secs. If progress never appears, or if the bot is not updating the embed every second, '
+                         'try increasing "interval". If you want more frequent progress, you can reduce the value but the bot may be throttled by Discord.')
+                bot_database.update_was_warned('websocket_polling')
             async for update in poller:
                 try:
                     # Collect updates
@@ -1231,6 +1270,12 @@ class ImgGenClient(APIClient):
         try:
             if not self.get_progress:
                 await embeds.send('img_gen', f'Generating an image with {self.name} ...', '')
+                if self.ws:
+                    if not bot_database.was_warned("imggen_websocket_progress"):
+                        log.warning(f"[{self.name}] If websocket supports tracking progress, and you want to use it for 'main txt2img/img2img', "
+                                    "you'll have to omit/null the 'images_result_key' and instead use the 'response_handling' (advanced). "
+                                    "Refer to the wiki for more info (https://github.com/altoiddealer/ad_discordbot/wiki).")
+                        bot_database.update_was_warned("imggen_websocket_progress")
             else:
                 progress_key = self.get_progress.progress_key
                 eta_key = self.get_progress.eta_key
@@ -1253,9 +1298,7 @@ class ImgGenClient(APIClient):
         try:
             # Start progress task and generation task concurrently
             images_task = asyncio.create_task(self.post_for_images(img_payload, mode))
-            progress_task = None
-            if self.get_progress:
-                progress_task = asyncio.create_task(self.track_t2i_i2i_progress(ictx=ictx))
+            progress_task = asyncio.create_task(self.track_t2i_i2i_progress(ictx=ictx))
             # Wait for images_task to complete
             headered_images_list = await images_task
             # Once images_task is done, cancel progress_task
