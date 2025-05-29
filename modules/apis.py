@@ -1791,10 +1791,10 @@ class Endpoint:
                 return response
 
             # Legacy compatibility step (uses only the response body)
-            main_ep_response = await self.return_main_data(response.body)
+            main_ep_response = await self.return_expected_data(response.body)
             if main_ep_response:
                 return main_ep_response
-            
+
             results = response.body
 
         # Optional key extraction (bypasses StepExecutor)
@@ -1894,8 +1894,8 @@ class Endpoint:
             **kwargs
         )
 
-    async def return_main_data(self, response):
-        pass
+    async def return_expected_data(self, response):
+        return None
 
     def can_extract(self, extract_keys: str | list[str]) -> bool:
         """Check if all keys in 'extract_keys' are present as self attributes"""
@@ -1958,30 +1958,11 @@ class TextGenEndpoint(Endpoint):
         super().__init__(*args, **kwargs)
         # Defaults
 
-    async def return_main_data(self, response):
-        pass
 
-
+# TTSGen Endpoint Subclasses
 class TTSGenEndpoint(Endpoint):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-
-    async def return_main_data(self, response):
-        pass
-        # if self == self.client.post_generate:
-        #     if isinstance(response, bytes):
-        #         resp_format = self.response_handling.get('type', 'unknown')
-        #         if resp_format == 'unknown':
-        #             resp_format = processing.detect_audio_format(response)
-        #             if resp_format == 'unknown':
-        #                 log.error(f'[{self.name}] Expected response to be mp3 or wav (bytes), but received an unexpected format.')
-        #                 return None
-        #         output_dir = os.path.join(shared_path.output_dir, self.response_handling.get('save_dir', ''))
-        #         save_prefix = os.path.join(shared_path.output_dir, self.response_handling.get('save_prefix', ''))
-        #         save_format = self.response_handling.get('save_format', resp_format)         
-        #         audio_fp:str = processing.save_audio_bytes(response, output_dir, input_format=resp_format, file_prefix=save_prefix, output_format=save_format)
-        #         return audio_fp
-        # return None
 
 class TTSGenEndpoint_GetVoices(TTSGenEndpoint):
     def __init__(self, *args, **kwargs):
@@ -2001,13 +1982,27 @@ class TTSGenEndpoint_PostGenerate(TTSGenEndpoint):
         self.language_input_key: Optional[str] = None
         self.voice_input_key: Optional[str] = None
 
+    async def return_expected_data(self, response):
+        return None
+        # if self == self.client.post_generate:
+        #     if isinstance(response, bytes):
+        #         resp_format = self.response_handling.get('type', 'unknown')
+        #         if resp_format == 'unknown':
+        #             resp_format = processing.detect_audio_format(response)
+        #             if resp_format == 'unknown':
+        #                 log.error(f'[{self.name}] Expected response to be mp3 or wav (bytes), but received an unexpected format.')
+        #                 return None
+        #         output_dir = os.path.join(shared_path.output_dir, self.response_handling.get('save_dir', ''))
+        #         save_prefix = os.path.join(shared_path.output_dir, self.response_handling.get('save_prefix', ''))
+        #         save_format = self.response_handling.get('save_format', resp_format)         
+        #         audio_fp:str = processing.save_audio_bytes(response, output_dir, input_format=resp_format, file_prefix=save_prefix, output_format=save_format)
+        #         return audio_fp
+        # return None
 
+# ImgGen Endpoint Subclasses
 class ImgGenEndpoint(Endpoint):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-
-    async def return_main_data(self, response):
-        pass
 
 class ImgGenEndpoint_PostTxt2Img(ImgGenEndpoint):
     def __init__(self, *args, **kwargs):
