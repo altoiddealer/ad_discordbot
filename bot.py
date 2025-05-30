@@ -2859,7 +2859,9 @@ class TaskProcessing(TaskAttributes):
             self.prompt     = positive_style.format(self.prompt)
             self.neg_prompt = f"{neg_prompt}, {negative_style}" if negative_style else neg_prompt
 
-            # Update bot_vars from Params
+            # Update bot_vars
+            imgmodel_settings:ImgModel = get_imgmodel_settings(self.ictx)
+            imgmodel_settings.update_bot_vars(self.bot_vars)
             self.update_bot_vars_from_imgcmd()
 
             # Get endpoint for mode
@@ -6400,6 +6402,10 @@ class ImgModel(SettingsBase):
 
     def clean_payload(self, payload:dict):
         pass
+
+    def update_bot_vars(self, bot_vars:"BotVars"):
+        for key, value in self.payload_mods.items():
+            setattr(bot_vars, key, value)
 
     # Update __overrides__ dict in user's default payload with any imgmodel payload mods
     def apply_overrides(self, payload:dict) -> dict:
