@@ -69,6 +69,48 @@ def extract_key(data: Any, config: Union[str, dict]) -> Any:
             return default
         raise ValueError(f"Failed to extract path '{path}': {e}")
 
+def set_key(data: Any, config: dict) -> None:
+    path = config.get("path", None)
+    value = config.get("value", None)
+
+    if not isinstance(path, str):
+        raise ValueError("Path must be a string.")
+
+    parts = re.findall(r'[^.\[\]]+|\[\d+\]', path)
+    current = data
+
+    for i, part in enumerate(parts):
+        is_last = i == len(parts) - 1
+
+        if re.fullmatch(r'\[\d+\]', part):  # list index
+            idx = int(part[1:-1])
+            if not isinstance(current, list):
+                raise TypeError(f"Expected list at {'.'.join(parts[:i])}, got {type(current).__name__}")
+
+            # If it's the last part, set the value
+            if is_last:
+                # Extend list if necessary
+                while len(current) <= idx:
+                    current.append(None)
+                current[idx] = value
+            else:
+                # Ensure index exists and is a container
+                while len(current) <= idx:
+                    current.append({})
+                if not isinstance(current[idx], (dict, list)):
+                    current[idx] = {}
+                current = current[idx]
+
+        else:  # dict key
+            if not isinstance(current, dict):
+                raise TypeError(f"Expected dict at {'.'.join(parts[:i])}, got {type(current).__name__}")
+            if is_last:
+                current[part] = value
+            else:
+                if part not in current or not isinstance(current[part], (dict, list)):
+                    current[part] = {}
+                current = current[part]
+
 # Safer version of update_dict
 def deep_merge(base: dict, override: dict) -> dict:
     '''merge 2 dicts. "override" dict has priority'''

@@ -279,7 +279,6 @@ tag_presets:
 #   negative_prompt_prefix: 'string'  Insert text at the beginning of the image negative prompt
 #   negative_prompt: 'string'         Insert text at the end of the image negative prompt ('_suffix' also works)
 #   img_text_joining: ', '            Relevant to all insertion methods except "replace"
-#   last_img_payload: (true, [list])  If value is 'true' (boolean), the last image payload will be applied. If a ['list', 'of', 'key_names'], it will use apply only those key values from the last img payload. Note: This Tag is applied before other payload related tags.
 #   payload: {dictionary}             Replacements for Stable Diffusion payload. Must be formatted as a dictionary.
 #   aspect_ratio: 'string'            This a shortcut to dynamically set the payload width/height dimensions based on the current average dimensions. Valid values examples: '4:3', '16:9', '2:3', etc. A special value 'from img2img' may be used, requiring a valid 'img2img' tag param to be triggered in tandem.
 #   img_param_variances: {dictionary} Randomization ranges for Stable Diffusion payload parameters. Must be formatted as a dictionary.

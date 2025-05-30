@@ -38,7 +38,7 @@ from functools import partial
 from modules.utils_files import load_file, merge_base, save_yaml_file  # noqa: F401
 from modules.utils_shared import bot_args, is_tgwui_integrated, shared_path, bg_task_queue, task_event, flows_queue, flows_event, patterns, bot_emojis, config, bot_database, get_api
 from modules.database import StarBoard, Statistics, BaseFileMemory
-from modules.utils_misc import check_probability, fix_dict, deep_merge, update_dict, sum_update_dict, update_dict_matched_keys, random_value_from_range, convert_lists_to_tuples, \
+from modules.utils_misc import check_probability, fix_dict, set_key, deep_merge, update_dict, sum_update_dict, update_dict_matched_keys, random_value_from_range, convert_lists_to_tuples, \
     get_time, format_time, format_time_difference, get_normalized_weights, valueparser  # noqa: F401
 from modules.utils_discord import Embeds, guild_only, guild_or_owner_only, configurable_for_dm_if, is_direct_message, ireply, sleep_delete_message, send_long_message, \
     EditMessageModal, SelectedListItem, SelectOptionsView, get_user_ctx_inter, get_message_ctx_inter, apply_reactions_to_messages, replace_msg_in_history_and_discord, MAX_MESSAGE_LENGTH, muffled_send  # noqa: F401
@@ -1053,46 +1053,8 @@ class BotVars():
         imgmodel_settings:ImgModel = get_imgmodel_settings(ictx)
         self.ckpt_name = imgmodel_settings.last_imgmodel_value
 
-    def update_from_cnet_dict(self, cnet_dict: dict):
-        for key, value in cnet_dict.items():
-            attr_name = f'cnet_{key}'
-            if hasattr(self, attr_name):
-                setattr(self, attr_name, value)
-
-    def update_from_params(self, params:"Params"):
-        imgcmd_params = params.imgcmd
-        if imgcmd_params['neg_prompt']:
-            self.neg_prompt = imgcmd_params['neg_prompt']
-        if imgcmd_params.get('size_dict'):
-            self.width = imgcmd_params['size_dict'].get('width')
-            self.height = imgcmd_params['size_dict'].get('height')
-        if imgcmd_params.get('img2img'):
-            self.i2i_image = imgcmd_params['img2img'].get('image')
-            self.i2i_mask = imgcmd_params['img2img'].get('mask')
-            self.denoising_strength = imgcmd_params['img2img'].get('denoising_strength')
-        if imgcmd_params.get('cnet_dict'):
-            self.update_from_cnet_dict(imgcmd_params['cnet_dict'])
-        self.face_image = imgcmd_params['face_swap']
-
-    def update_all_with_task_or_params(self, input:Union["Task", "Params"]):
-        try:
-            ictx = None
-            params = input if isinstance(input, Params) else None
-
-            if isinstance(input, Task):
-                ictx = input.ictx
-                if params is None:
-                    params = input.params
-                self.prompt = input.prompt
-
-            if params:
-                self.update_from_params(params)
-
-            self.update(ictx)
-        except Exception as e:
-            log.error(f"An error occurred while updating bot vars: {e}")
-
-    def format_overrides_into_payload(self, payload) -> dict:
+    def apply_overrides(self, payload:dict) -> dict:
+        payload.pop('_comment', None)
         if "__overrides__" not in payload:
             return payload
         # Extract and remove overrides from the payload
@@ -1168,6 +1130,13 @@ class Params:
         # /Speak cmd
         self.tts_args: dict        = kwargs.get('tts_args', {})
         self.user_voice: str       = kwargs.get('user_voice', None)
+
+    def get_active_imggen_mode(self) -> str:
+        return 'img2img' if self.imgcmd.get('img2img') else 'txt2img'
+
+    def get_active_imggen_ep(self) -> Optional[ImgGenEndpoint]:
+        mode = self.get_active_imggen_mode()
+        return getattr(api.imggen, f'post_{mode}', None)
 
     def update_bot_should_do(self, tags:Tags):
         actions = ['should_gen_text', 'should_send_text', 'should_gen_image', 'should_send_image']
@@ -1732,9 +1701,10 @@ class TaskProcessing(TaskAttributes):
         self.process_prompt_formatting(self.prompt, **formatting)
         # apply params from /prompt command
         self.apply_prompt_params()
-        # Update payload with bot vars from self (Task)
-        bot_vars.update_all_with_task_or_params(self)
-        self.payload = self.settings.imgmodel.apply_bot_var_overrides(self.payload)
+        # Update bot vars from self (Task)
+        self.update_bot_vars()
+        # Apply bot_vars overrides
+        self.payload = self.bot_vars.apply_overrides(self.payload)
         # assign finalized prompt to payload
         self.payload['text'] = self.prompt
 
@@ -2366,83 +2336,6 @@ class TaskProcessing(TaskAttributes):
         except Exception as e:
             log.error(f"An error occurred when processing image generation: {e}")
 
-    def clean_img_payload(self:Union["Task","Tasks"]):
-        try:
-            # Resolves an edge case scenario when using 'last_img_payload' tag
-            stashed_prompt = getattr(self, 'stashed_prompt', None)
-            if stashed_prompt:
-                self.payload['prompt'] = stashed_prompt
-
-            # Remove duplicate negative prompts while preserving original order
-            negative_prompt_list = self.payload.get('negative_prompt', '').split(', ')
-            unique_values_set = set()
-            unique_values_list = []
-            for value in negative_prompt_list:
-                if value not in unique_values_set:
-                    unique_values_set.add(value)
-                    unique_values_list.append(value)
-            processed_negative_prompt = ', '.join(unique_values_list)
-            self.payload['negative_prompt'] = processed_negative_prompt
-
-            ## Clean up extension keys
-            # get alwayson_scripts dict
-            extensions = config.imggen['extensions']
-            alwayson_scripts:dict = self.payload.get('alwayson_scripts', {})
-            # Clean ControlNet
-            if alwayson_scripts.get('controlnet'):
-                # Delete all 'controlnet' keys if disabled
-                if not extensions.get('controlnet_enabled'):
-                    del alwayson_scripts['controlnet']
-                else:
-                    # Delete all 'controlnet' keys if empty
-                    if not alwayson_scripts['controlnet']['args']:
-                        del alwayson_scripts['controlnet']
-                    # Compatibility fix for 'resize_mode' and 'control_mode'
-                    else:
-                        for index, cnet_module in enumerate(copy.deepcopy(alwayson_scripts['controlnet']['args'])):
-                            cnet_enabled = cnet_module.get('enabled', False)
-                            if not cnet_enabled:
-                                del alwayson_scripts['controlnet']['args'][index]
-                                continue
-                            resize_mode = cnet_module.get('resize_mode')
-                            if resize_mode is not None and isinstance(resize_mode, int):
-                                resize_mode_string = 'Just Resize' if resize_mode == 0 else 'Crop and Resize' if resize_mode == 1 else 'Resize and Fill'
-                                alwayson_scripts['controlnet']['args'][index]['resize_mode'] = resize_mode_string
-                            control_mode = cnet_module.get('control_mode')
-                            if control_mode is not None and isinstance(control_mode, int):
-                                cnet_mode_str = 'Balanced' if control_mode == 0 else 'My prompt is more important' if control_mode == 1 else 'ControlNet is more important'
-                                alwayson_scripts['controlnet']['args'][index]['control_mode'] = cnet_mode_str
-            # Clean Forge Couple
-            if alwayson_scripts.get('forge_couple'):
-                # Delete all 'forge_couple' keys if disabled by config
-                if not extensions.get('forgecouple_enabled') or self.payload.get('init_images'):
-                    del alwayson_scripts['forge_couple']
-                else:
-                    # convert dictionary to list
-                    if isinstance(self.payload['alwayson_scripts']['forge_couple']['args'], dict):
-                        self.payload['alwayson_scripts']['forge_couple']['args'] = list(self.payload['alwayson_scripts']['forge_couple']['args'].values())
-                    # Add the required space between "forge" and "couple" ("forge couple")
-                    self.payload['alwayson_scripts']['forge couple'] = self.payload['alwayson_scripts'].pop('forge_couple')
-            # Clean layerdiffuse
-            if alwayson_scripts.get('layerdiffuse'):
-                # Delete all 'layerdiffuse' keys if disabled by config
-                if not extensions.get('layerdiffuse_enabled'):
-                    del alwayson_scripts['layerdiffuse']
-                # convert dictionary to list
-                elif isinstance(self.payload['alwayson_scripts']['layerdiffuse']['args'], dict):
-                    self.payload['alwayson_scripts']['layerdiffuse']['args'] = list(self.payload['alwayson_scripts']['layerdiffuse']['args'].values())
-            # Clean ReActor
-            if alwayson_scripts.get('reactor'):
-                # Delete all 'reactor' keys if disabled by config
-                if not extensions.get('reactor_enabled'):
-                    del alwayson_scripts['reactor']
-                # convert dictionary to list
-                elif isinstance(self.payload['alwayson_scripts']['reactor']['args'], dict):
-                    self.payload['alwayson_scripts']['reactor']['args'] = list(self.payload['alwayson_scripts']['reactor']['args'].values())
-
-        except Exception as e:
-            log.error(f"An error occurred when cleaning imggen payload: {e}")
-
     def apply_loractl(self:Union["Task","Tasks"]):
         matched_tags: list = self.tags.matches
         try:
@@ -2520,9 +2413,9 @@ class TaskProcessing(TaskAttributes):
 
     def process_img_prompt_tags(self:Union["Task","Tasks"]):
         try:
-            self.prompt = self.tags.process_tag_insertions(self.payload['prompt'])
+            self.prompt = self.tags.process_tag_insertions(self.prompt)
             updated_positive_prompt = self.prompt
-            updated_negative_prompt = self.payload['negative_prompt']
+            updated_negative_prompt = self.neg_prompt
             for tag in self.tags.matches:
                 join = tag.get('img_text_joining', ' ')
                 if 'imgtag_uninserted' in tag: # was flagged as a trigger match but not inserted
@@ -2541,8 +2434,8 @@ class TaskProcessing(TaskAttributes):
                 if 'negative_prompt_suffix' in tag:
                     join = join if updated_negative_prompt else ''
                     updated_negative_prompt = updated_negative_prompt + join + tag['negative_prompt_suffix']
-            self.payload['prompt'] = updated_positive_prompt
-            self.payload['negative_prompt'] = updated_negative_prompt
+            self.prompt = updated_positive_prompt
+            self.neg_prompt = updated_negative_prompt
 
         except Exception as e:
             log.error(f"Error processing Img prompt tags: {e}")
@@ -2681,7 +2574,6 @@ class TaskProcessing(TaskAttributes):
         try:
             change_imgmodel: str  = mods.pop('change_imgmodel', None)
             swap_imgmodel: str    = mods.pop('swap_imgmodel', None)
-            last_img_payload: bool|list = mods.pop('last_img_payload', None)
             payload: dict         = mods.pop('payload', None)
             aspect_ratio: str     = mods.pop('aspect_ratio', None)
             param_variances: dict = mods.pop('param_variances', {})
@@ -2694,10 +2586,11 @@ class TaskProcessing(TaskAttributes):
             self.params.sd_output_dir = (mods.pop('sd_output_dir', self.params.sd_output_dir)).lstrip('/')  # Remove leading slash if it exists
             self.params.img_censoring = mods.pop('img_censoring', self.params.img_censoring)
 
+            imgmodel_settings:ImgModel = get_imgmodel_settings(self.ictx)
+
             # Imgmodel handling
             new_imgmodel = change_imgmodel or swap_imgmodel or None
             if new_imgmodel:
-                imgmodel_settings:ImgModel = get_imgmodel_settings(self.ictx)
                 current_imgmodel_name = imgmodel_settings.last_imgmodel_name
                 current_imgmodel_value = imgmodel_settings.last_imgmodel_value
                 mode = 'change' if change_imgmodel else 'swap'
@@ -2710,21 +2603,6 @@ class TaskProcessing(TaskAttributes):
                     self.params.imgmodel = await imgmodel_settings.get_params(imgmodel=new_imgmodel, mode=mode, verb=verb)
                     log.info(f'[TAGS] {verb} Img model: "{new_imgmodel}"')
             # Payload handling
-            if last_img_payload:
-                if isinstance(last_img_payload, bool):
-                    last_img_payload_dict = copy.deepcopy(api.imggen.last_img_payload)
-                    setattr(self, 'stashed_prompt', last_img_payload_dict.pop('prompt', '')) # Retains the prompt to re-apply later
-                    update_dict(self.payload, last_img_payload_dict)
-                    log.info("[TAGS] Applying the previous image payload as the starting point (may be modified by other tags). Note: The previous 'prompt' will be identical.")
-                elif isinstance(last_img_payload, list):
-                    # Filter api.imggen.payload based on keys in last_img_payload
-                    last_img_payload_dict = {key:api.imggen.last_img_payload[key] for key in last_img_payload if key in api.imggen.last_img_payload}
-                    if last_img_payload_dict:
-                        log.info("[TAGS] Applying the following settings from the previous image payload (may be modified by other tags):")
-                        log.info(f"{', '.join(last_img_payload_dict.keys())}")
-                        update_dict(self.payload, last_img_payload_dict)
-                else:
-                    log.error("[TAGS] A tag was matched with invalid 'last_img_payload'; must be boolean ('true') or a ['list', 'of', 'key_names'].")
             if payload:
                 if isinstance(payload, dict):
                     log.info(f"[TAGS] Updated payload: '{payload}'")
@@ -2866,7 +2744,7 @@ class TaskProcessing(TaskAttributes):
         layerdiffuse_args = {}
         reactor_args = {}
         extensions = config.imggen.get('extensions', {})
-        accept_only_first = ['aspect_ratio', 'img2img', 'img2img_mask', 'sd_output_dir', 'last_img_payload']
+        accept_only_first = ['aspect_ratio', 'img2img', 'img2img_mask', 'sd_output_dir']
         try:
             for tag in self.tags.matches:
                 tag_dict:TAG = self.tags.untuple(tag)
@@ -2971,35 +2849,29 @@ class TaskProcessing(TaskAttributes):
 
     def init_img_payload(self:Union["Task","Tasks"]):
         try:
-            self.payload = {}
-
-            # Apply values set by /image command (Additional /image cmd values are applied later)
+            # Apply values set by /image command to prompt/neg_prompt (Additional /image cmd values are applied later)
             imgcmd_params   = self.params.imgcmd
             neg_prompt: str = imgcmd_params['neg_prompt']
             style: dict     = imgcmd_params['style']
             positive_style: str = style.get('positive', "{}")
             negative_style: str = style.get('negative', '')
+
             self.prompt     = positive_style.format(self.prompt)
-            neg_prompt = f"{neg_prompt}, {negative_style}" if negative_style else neg_prompt
+            self.neg_prompt = f"{neg_prompt}, {negative_style}" if negative_style else neg_prompt
+
+            # Update bot_vars from Params
+            self.update_bot_vars_from_imgcmd()
 
             # Get endpoint for mode
-            is_img2img = imgcmd_params.get('img2img')
-            mode = 'img2img' if is_img2img else 'txt2img'
+            imggen_ep = self.params.get_active_imggen_ep()
 
-            imggen_ep:ImgGenEndpoint = getattr(api.imggen, f'post_{mode}', None)
-
-            if imggen_ep:
-                base_payload = imggen_ep.get_payload()
-                prompt_key, neg_prompt_key = imggen_ep.get_prompt_keys()
+            if isinstance(imggen_ep, ImgGenEndpoint):
+                endpoint_payload = imggen_ep.get_payload()
             else:
-                raise RuntimeError(f"Error initializing img payload: No valid endpoint available for imggen post_{mode}")
-
-            # Update with prompt, neg prompt, and randomize seed
-            update_data = {k: v for k, v in [(prompt_key, self.prompt), (neg_prompt_key, neg_prompt)] if k is not None}
-            request_payload = deep_merge(base_payload, update_data)
+                raise RuntimeError(f"Error initializing img payload: No valid endpoint available for main imggen task.")
 
             # Apply settings from imgmodel configuration
-            self.payload = self.settings.imgmodel.apply_payload_overrides(request_payload)
+            self.payload = self.settings.imgmodel.apply_overrides(endpoint_payload)
 
         except Exception as e:
             log.error(f"Error initializing img payload: {e}")
@@ -3806,6 +3678,7 @@ class Tasks(TaskProcessing):
     ######################## IMAGE GEN TASK #########################
     #################################################################
     async def img_gen_task(self:"Task"):
+        imgmodel_settings:ImgModel = get_imgmodel_settings(self.ictx)
         try:
             if not self.tags:
                 self.tags = Tags(self.ictx)
@@ -3825,26 +3698,30 @@ class Tasks(TaskProcessing):
             self.process_img_prompt_tags()
             # Apply menu selections from /image command
             self.apply_imgcmd_params()
-            # Update payload with bot vars from self (Task)
-            bot_vars.update_all_with_task_or_params(self)
-            self.payload = self.settings.imgmodel.apply_bot_var_overrides(self.payload)
-            # Retain last payload before clean_img_payload() - which creates issues when recycling
-            api.imggen.last_img_payload = copy.deepcopy(self.payload)
+
+            # Update bot_vars
+            self.update_bot_vars()
+            # Apply updated prompt/negative prompt to payload
+            imgmodel_settings.apply_prompts_to_task(self)
+            # Apply bot_vars overrides
+            self.payload = self.bot_vars.apply_overrides(self.payload)
             # Clean anything up that gets messy
-            self.clean_img_payload()
+            imgmodel_settings.clean_payload(self.payload)
+
             # Change imgmodel if triggered by tags
             swap_imgmodel_params = None
             if self.params.imgmodel:
                 if getattr(self.params.imgmodel, 'mode', 'change') == 'swap':
                     # Prepare params for the secondary model change
-                    imgmodel_settings:ImgModel = get_imgmodel_settings(self.ictx)
                     current_imgmodel = imgmodel_settings.last_imgmodel_value
                     swap_imgmodel_params = await imgmodel_settings.get_params(imgmodel=current_imgmodel, mode='swap_back', verb='Swapping back to')
                 # RUN A CHANGE IMGMODEL SUBTASK
                 new_options = await self.run_subtask('change_imgmodel')
                 self.payload = deep_merge(self.payload, new_options)
+
             # Generate images
             await self.process_image_gen()
+
             # Send images, user's prompt, and any params from "/image" cmd
             imgcmd_task = getattr(self, 'imgcmd_task', False)
             if imgcmd_task or (self.params.should_send_text and not self.params.should_gen_text):
@@ -3854,8 +3731,10 @@ class Tasks(TaskProcessing):
                     await self.embeds.send('img_send', f"{self.user_name} requested an image:", '', footer=imgcmd_message, nonembed_text=original_prompt)
                 else:
                     await self.channel.send(original_prompt)
+
             # send any extra content
             await bg_task_queue.put(self.send_extra_results())
+
             # If switching back to original Img model
             if swap_imgmodel_params:
                 # RUN A CHANGE IMGMODEL SUBTASK
@@ -4055,9 +3934,11 @@ class Task(Tasks):
         self.embeds: Embeds          = kwargs.pop('embeds', None)
         self.text: str               = kwargs.pop('text', None)
         self.prompt: str             = kwargs.pop('prompt', None)
+        self.neg_prompt: str         = kwargs.pop('neg_prompt', None)
         self.payload: dict           = kwargs.pop('payload', None)
 
         self.params: Params          = kwargs.pop('params', None)
+        self.bot_vars: BotVars       = kwargs.pop('bot_vars', None)
         self.tags: Tags              = kwargs.pop('tags', None)
         self.llm_resp: str           = kwargs.pop('llm_resp', None)
         self.tts_resps: list         = kwargs.pop('tts_resps', None)
@@ -4086,10 +3967,12 @@ class Task(Tasks):
         self.text: str               = self.text if self.text else ""
         # for updating prompt key in gen tasks
         self.prompt: str             = self.prompt if self.prompt else ''
+        self.neg_prompt: str         = self.neg_prompt if self.neg_prompt else ''
         # payload for TGWUI / API call
         self.payload: dict           = self.payload if self.payload else {}
         # Misc parameters
         self.params: Params          = self.params if self.params else Params()
+        self.bot_vars: BotVars       = self.bot_vars if self.bot_vars else BotVars()
         self.tags: Tags              = self.tags if self.tags else Tags(self.ictx)
         # Bot response attributes
         self.llm_resp: str           = self.llm_resp if self.llm_resp else ''
@@ -4127,6 +4010,27 @@ class Task(Tasks):
         channel = getattr(self.ictx, 'channel', None)
         return getattr(channel, 'id', default)
 
+    def update_bot_vars_from_imgcmd(self):
+        imgcmd_params = self.params.imgcmd
+        if imgcmd_params.get('size_dict'):
+            self.bot_vars.width = imgcmd_params['size_dict'].get('width')
+            self.bot_vars.height = imgcmd_params['size_dict'].get('height')
+        if imgcmd_params.get('img2img'):
+            self.bot_vars.i2i_image = imgcmd_params['img2img'].get('image')
+            self.bot_vars.i2i_mask = imgcmd_params['img2img'].get('mask')
+            self.bot_vars.denoising_strength = imgcmd_params['img2img'].get('denoising_strength')
+        if imgcmd_params.get('cnet_dict'):
+            cnet_dict = imgcmd_params['cnet_dict']
+            for key, value in cnet_dict.items():
+                attr_name = f'cnet_{key}'
+                if hasattr(self, attr_name):
+                    setattr(self, attr_name, value)
+        self.bot_vars.face_image = imgcmd_params['face_swap']
+
+    def update_bot_vars(self):
+        self.bot_vars.update(self.ictx)
+        self.bot_vars.prompt = self.prompt
+        self.bot_vars.neg_prompt = self.neg_prompt
 
     def init_typing(self, start_time=None, end_time=None):
         '''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
@@ -6494,11 +6398,24 @@ class ImgModel(SettingsBase):
         self.payload_mods:dict = {}
         self.tags:TAG_LIST = []
 
-    def apply_payload_overrides(self, payload) -> dict:
-        return deep_merge(payload, self.payload_mods)
+    def clean_payload(self, payload:dict):
+        pass
+
+    # Update __overrides__ dict in user's default payload with any imgmodel payload mods
+    def apply_overrides(self, payload:dict) -> dict:
+        if '__overrides__' in payload:
+            payload['__overrides__'] = deep_merge(payload['__overrides__'], self.payload_mods)
+            return payload
+        else:
+            return update_dict(payload, self.payload_mods)
     
-    def apply_bot_var_overrides(self, payload:dict) -> dict:
-        return bot_vars.format_overrides_into_payload(payload)
+    def apply_prompts_to_task(self, task:"Task"):
+        active_ep = task.params.get_active_imggen_ep()
+        prompt_key, neg_prompt_key = active_ep.get_prompt_keys()
+        if prompt_key:
+            set_key(task.payload, {'path': prompt_key, 'value': task.prompt})
+        if neg_prompt_key:
+            set_key(task.payload, {'path': neg_prompt_key, 'value': task.neg_prompt})
 
     def collect_names(self, imgmodels:list):
         if not imgmodels:
@@ -6861,20 +6778,10 @@ class ComfyImgModel(ImgModel):
         self._filename_key = api.imggen.get_imgmodels.imgmodel_filename_key or ''
         self._any_key = self._name_key or self._value_key or ''
 
-    def apply_payload_overrides(self, payload:dict) -> dict:
-        payload.pop('_comment', None)
-        if not '__overrides__' in payload:
-            return payload
-        # Update __overrides__ dict in user's default payload with any imgmodel payload mods
-        payload['__overrides__'] = deep_merge(payload['__overrides__'], self.payload_mods)
-        return payload
-    
-    def apply_bot_var_overrides(self, payload:dict) -> dict:
-        payload.pop('_comment', None)
-        if not '__overrides__' in payload:
-            return payload
-        formatted = bot_vars.format_overrides_into_payload(payload)
-        return formatted
+    def clean_payload(self, payload: dict):
+        prompt_value = payload.get('prompt')
+        payload.clear()
+        payload['prompt'] = prompt_value
 
     async def get_imgmodel_data(self, imgmodel_value:str, ictx:CtxInteraction=None) -> dict:
         return {self._name_key: imgmodel_value,
@@ -6890,6 +6797,78 @@ class SDWebUIImgModel(ImgModel):
         self._any_key = self._name_key or self._value_key or self._filename_key or ''
         if hasattr(api.imggen, 'post_options') and api.imggen.post_options:
             self._imgmodel_input_key:str = api.imggen.post_options.imgmodel_input_key or 'sd_model_checkpoint'
+    
+    def clean_payload(self, payload:dict):
+        try:
+            # Remove duplicate negative prompts while preserving original order
+            negative_prompt_list = payload.get('negative_prompt', '').split(', ')
+            unique_values_set = set()
+            unique_values_list = []
+            for value in negative_prompt_list:
+                if value not in unique_values_set:
+                    unique_values_set.add(value)
+                    unique_values_list.append(value)
+            processed_negative_prompt = ', '.join(unique_values_list)
+            payload['negative_prompt'] = processed_negative_prompt
+
+            ## Clean up extension keys
+            # get alwayson_scripts dict
+            extensions = config.imggen['extensions']
+            alwayson_scripts:dict = payload.get('alwayson_scripts', {})
+            # Clean ControlNet
+            if alwayson_scripts.get('controlnet'):
+                # Delete all 'controlnet' keys if disabled
+                if not extensions.get('controlnet_enabled'):
+                    del alwayson_scripts['controlnet']
+                else:
+                    # Delete all 'controlnet' keys if empty
+                    if not alwayson_scripts['controlnet']['args']:
+                        del alwayson_scripts['controlnet']
+                    # Compatibility fix for 'resize_mode' and 'control_mode'
+                    else:
+                        for index, cnet_module in enumerate(copy.deepcopy(alwayson_scripts['controlnet']['args'])):
+                            cnet_enabled = cnet_module.get('enabled', False)
+                            if not cnet_enabled:
+                                del alwayson_scripts['controlnet']['args'][index]
+                                continue
+                            resize_mode = cnet_module.get('resize_mode')
+                            if resize_mode is not None and isinstance(resize_mode, int):
+                                resize_mode_string = 'Just Resize' if resize_mode == 0 else 'Crop and Resize' if resize_mode == 1 else 'Resize and Fill'
+                                alwayson_scripts['controlnet']['args'][index]['resize_mode'] = resize_mode_string
+                            control_mode = cnet_module.get('control_mode')
+                            if control_mode is not None and isinstance(control_mode, int):
+                                cnet_mode_str = 'Balanced' if control_mode == 0 else 'My prompt is more important' if control_mode == 1 else 'ControlNet is more important'
+                                alwayson_scripts['controlnet']['args'][index]['control_mode'] = cnet_mode_str
+            # Clean Forge Couple
+            if alwayson_scripts.get('forge_couple'):
+                # Delete all 'forge_couple' keys if disabled by config
+                if not extensions.get('forgecouple_enabled') or payload.get('init_images'):
+                    del alwayson_scripts['forge_couple']
+                else:
+                    # convert dictionary to list
+                    if isinstance(payload['alwayson_scripts']['forge_couple']['args'], dict):
+                        payload['alwayson_scripts']['forge_couple']['args'] = list(payload['alwayson_scripts']['forge_couple']['args'].values())
+                    # Add the required space between "forge" and "couple" ("forge couple")
+                    payload['alwayson_scripts']['forge couple'] = payload['alwayson_scripts'].pop('forge_couple')
+            # Clean layerdiffuse
+            if alwayson_scripts.get('layerdiffuse'):
+                # Delete all 'layerdiffuse' keys if disabled by config
+                if not extensions.get('layerdiffuse_enabled'):
+                    del alwayson_scripts['layerdiffuse']
+                # convert dictionary to list
+                elif isinstance(payload['alwayson_scripts']['layerdiffuse']['args'], dict):
+                    payload['alwayson_scripts']['layerdiffuse']['args'] = list(payload['alwayson_scripts']['layerdiffuse']['args'].values())
+            # Clean ReActor
+            if alwayson_scripts.get('reactor'):
+                # Delete all 'reactor' keys if disabled by config
+                if not extensions.get('reactor_enabled'):
+                    del alwayson_scripts['reactor']
+                # convert dictionary to list
+                elif isinstance(payload['alwayson_scripts']['reactor']['args'], dict):
+                    payload['alwayson_scripts']['reactor']['args'] = list(payload['alwayson_scripts']['reactor']['args'].values())
+
+        except Exception as e:
+            log.error(f"An error occurred when cleaning imggen payload: {e}")
 
     # Manage override_settings for A1111-like APIs. returns override_settings
     def get_extra_settings(self, imgmodel_data:dict) -> dict:

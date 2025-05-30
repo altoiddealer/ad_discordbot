@@ -224,7 +224,7 @@ class API:
         else:
             api_client = self.clients.get(client_name)
 
-        msg_prefix = f'API Client "{client_name}"' if client_type is None else f'Main API Client "{client_type}"'
+        msg_prefix = f'API Client "{client_name}"' if client_type is None else f'Main {client_type.upper()} API Client "{client_name}"'
 
         if not api_client:
             if strict:
@@ -1240,7 +1240,6 @@ class DummyClient:
 
 
 class ImgGenClient(APIClient):
-    last_img_payload = {}
     post_txt2img: Optional["ImgGenEndpoint_PostTxt2Img"] = None
     post_img2img: Optional["ImgGenEndpoint_PostImg2Img"] = None
     get_progress: Optional["ImgGenEndpoint_GetProgress"] = None
@@ -1357,10 +1356,6 @@ class ImgGenClient(APIClient):
                     if pnginfo_data:
                         pnginfo = PngImagePlugin.PngInfo()
                         pnginfo.add_text("parameters", pnginfo_data)
-                        if ep_for_mode.seed_key:
-                            seed_match = patterns.seed_value.search(str(pnginfo_data))
-                            if seed_match:
-                                self.last_img_payload[ep_for_mode.seed_key] = int(seed_match.group(1))
                 images.append(self.decode_and_save_for_index(i, base64_str, pnginfo))
             return images, pnginfo
 
@@ -1419,6 +1414,7 @@ class ComfyImgGenClient(ImgGenClient):
                 return [], None
 
             images = []
+            await asyncio.sleep(1)
             history = await self.get_history.call(path_vars=prompt_id)
             outputs = history[prompt_id]['outputs']
             for i, node_id in enumerate(outputs):
@@ -1984,19 +1980,18 @@ class TTSGenEndpoint_PostGenerate(TTSGenEndpoint):
 
     async def return_expected_data(self, response):
         return None
-        # if self == self.client.post_generate:
-        #     if isinstance(response, bytes):
-        #         resp_format = self.response_handling.get('type', 'unknown')
+        # if isinstance(response, bytes):
+        #     resp_format = self.response_handling.get('type', 'unknown')
+        #     if resp_format == 'unknown':
+        #         resp_format = processing.detect_audio_format(response)
         #         if resp_format == 'unknown':
-        #             resp_format = processing.detect_audio_format(response)
-        #             if resp_format == 'unknown':
-        #                 log.error(f'[{self.name}] Expected response to be mp3 or wav (bytes), but received an unexpected format.')
-        #                 return None
-        #         output_dir = os.path.join(shared_path.output_dir, self.response_handling.get('save_dir', ''))
-        #         save_prefix = os.path.join(shared_path.output_dir, self.response_handling.get('save_prefix', ''))
-        #         save_format = self.response_handling.get('save_format', resp_format)         
-        #         audio_fp:str = processing.save_audio_bytes(response, output_dir, input_format=resp_format, file_prefix=save_prefix, output_format=save_format)
-        #         return audio_fp
+        #             log.error(f'[{self.name}] Expected response to be mp3 or wav (bytes), but received an unexpected format.')
+        #             return None
+        #     output_dir = os.path.join(shared_path.output_dir, self.response_handling.get('save_dir', ''))
+        #     save_prefix = os.path.join(shared_path.output_dir, self.response_handling.get('save_prefix', ''))
+        #     save_format = self.response_handling.get('save_format', resp_format)
+        #     audio_fp:str = processing.save_audio_bytes(response, output_dir, input_format=resp_format, file_prefix=save_prefix, output_format=save_format)
+        #     return audio_fp
         # return None
 
 # ImgGen Endpoint Subclasses
