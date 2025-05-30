@@ -1033,6 +1033,7 @@ class BotVars():
         self.ckpt_name:Optional[str] = None
         self.seed:Optional[int] = None
         self.i2i_image:Optional[str] = None
+        self.i2i_mask:Optional[str] = None
         self.denoising_strength:Optional[float] = None
         self.cnet_image:Optional[str] = None
         self.cnet_mask:Optional[str] = None
@@ -1045,18 +1046,58 @@ class BotVars():
         self.cnet_threshold_a:Optional[int] = None
         self.cnet_threshold_b:Optional[int] = None
         self.face_image:Optional[str] = None
+    
+    def update(self, ictx:Optional[CtxInteraction]=None):
+        self.character = bot_settings.get_last_setting_for("last_character", ictx)
+        self.seed = random.randint(10**14, 10**15 - 1)
+        imgmodel_settings:ImgModel = get_imgmodel_settings(ictx)
+        self.ckpt_name = imgmodel_settings.last_imgmodel_value
 
-    def update_from(self, input:Any):
-        if isinstance(input, "Task"):
-            self.prompt = input.prompt
-            # TODO Add more updates            
+    def update_from_cnet_dict(self, cnet_dict: dict):
+        for key, value in cnet_dict.items():
+            attr_name = f'cnet_{key}'
+            if hasattr(self, attr_name):
+                setattr(self, attr_name, value)
 
-    def format_overrides_into_payload(self, payload):
+    def update_from_params(self, params:"Params"):
+        imgcmd_params = params.imgcmd
+        if imgcmd_params['neg_prompt']:
+            self.neg_prompt = imgcmd_params['neg_prompt']
+        if imgcmd_params.get('size_dict'):
+            self.width = imgcmd_params['size_dict'].get('width')
+            self.height = imgcmd_params['size_dict'].get('height')
+        if imgcmd_params.get('img2img'):
+            self.i2i_image = imgcmd_params['img2img'].get('image')
+            self.i2i_mask = imgcmd_params['img2img'].get('mask')
+            self.denoising_strength = imgcmd_params['img2img'].get('denoising_strength')
+        if imgcmd_params.get('cnet_dict'):
+            self.update_from_cnet_dict(imgcmd_params['cnet_dict'])
+        self.face_image = imgcmd_params['face_swap']
+
+    def update_all_with_task_or_params(self, input:Union["Task", "Params"]):
+        try:
+            ictx = None
+            params = input if isinstance(input, Params) else None
+
+            if isinstance(input, Task):
+                ictx = input.ictx
+                if params is None:
+                    params = input.params
+                self.prompt = input.prompt
+
+            if params:
+                self.update_from_params(params)
+
+            self.update(ictx)
+        except Exception as e:
+            log.error(f"An error occurred while updating bot vars: {e}")
+
+    def format_overrides_into_payload(self, payload) -> dict:
         if "__overrides__" not in payload:
             return payload
         # Extract and remove overrides from the payload
         overrides = payload.pop("__overrides__")
-        # Helper to to replace placeholders like {pos_prompt} with overrides["pos_prompt"]
+        # Helper to to replace placeholders like {prompt} with overrides["prompt"]
         def recursive_replace(obj):
             if isinstance(obj, dict):
                 return {k: recursive_replace(v) for k, v in obj.items()}
@@ -1691,6 +1732,9 @@ class TaskProcessing(TaskAttributes):
         self.process_prompt_formatting(self.prompt, **formatting)
         # apply params from /prompt command
         self.apply_prompt_params()
+        # Update payload with bot vars from self (Task)
+        bot_vars.update_all_with_task_or_params(self)
+        self.payload = self.settings.imgmodel.apply_bot_var_overrides(self.payload)
         # assign finalized prompt to payload
         self.payload['text'] = self.prompt
 
@@ -3781,6 +3825,9 @@ class Tasks(TaskProcessing):
             self.process_img_prompt_tags()
             # Apply menu selections from /image command
             self.apply_imgcmd_params()
+            # Update payload with bot vars from self (Task)
+            bot_vars.update_all_with_task_or_params(self)
+            self.payload = self.settings.imgmodel.apply_bot_var_overrides(self.payload)
             # Retain last payload before clean_img_payload() - which creates issues when recycling
             api.imggen.last_img_payload = copy.deepcopy(self.payload)
             # Clean anything up that gets messy
@@ -6448,8 +6495,10 @@ class ImgModel(SettingsBase):
         self.tags:TAG_LIST = []
 
     def apply_payload_overrides(self, payload) -> dict:
-        updated = deep_merge(payload, self.payload_mods)
-        return bot_vars.format_overrides_into_payload(updated)
+        return deep_merge(payload, self.payload_mods)
+    
+    def apply_bot_var_overrides(self, payload:dict) -> dict:
+        return bot_vars.format_overrides_into_payload(payload)
 
     def collect_names(self, imgmodels:list):
         if not imgmodels:
@@ -6813,12 +6862,17 @@ class ComfyImgModel(ImgModel):
         self._any_key = self._name_key or self._value_key or ''
 
     def apply_payload_overrides(self, payload:dict) -> dict:
-        #payload.pop('_comment', None)
+        payload.pop('_comment', None)
         if not '__overrides__' in payload:
-            return 
+            return payload
         # Update __overrides__ dict in user's default payload with any imgmodel payload mods
         payload['__overrides__'] = deep_merge(payload['__overrides__'], self.payload_mods)
-        
+        return payload
+    
+    def apply_bot_var_overrides(self, payload:dict) -> dict:
+        payload.pop('_comment', None)
+        if not '__overrides__' in payload:
+            return payload
         formatted = bot_vars.format_overrides_into_payload(payload)
         return formatted
 
