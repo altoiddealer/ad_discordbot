@@ -1,22 +1,18 @@
 import aiohttp
-import aiofiles
 import json
 import asyncio
 import os
 import jsonschema
 import jsonref
-import yaml
 import time
-from datetime import datetime
-from pathlib import Path
 import re
 from PIL import Image, PngImagePlugin
 import io
 import base64
 import copy
-from typing import get_type_hints, get_type_hints, get_origin, get_args, Any, Tuple, Optional, Union, Type, AsyncGenerator, Callable, Awaitable
+from typing import get_type_hints, get_type_hints, get_origin, get_args, Any, Tuple, Optional, Union, AsyncGenerator
 from modules.utils_shared import shared_path, patterns, bot_database, load_file, get_api
-from modules.utils_misc import valueparser, progress_bar, extract_key, deep_merge, split_at_first_comma, is_base64, guess_format_from_headers, guess_format_from_data
+from modules.utils_misc import valueparser, progress_bar, extract_key, save_any_file, deep_merge, split_at_first_comma, is_base64, guess_format_from_headers, guess_format_from_data
 import modules.utils_processing as processing
 
 from modules.logs import import_track, get_logger; import_track(__file__, fp=True); log = get_logger(__name__)  # noqa: E702
@@ -126,6 +122,12 @@ def resolve_imggen_subclassing(name: str) -> type["ImgGenClient"]:
         return SDWebUIImgGenClient
     return ImgGenClient
 
+def resolve_ttsgen_subclassing(name: str) -> type["TTSGenClient"]:
+    name = name.lower()
+    if 'alltalk' in name:
+        return TTSGenClient_AllTalk
+    return TTSGenClient
+
 class API:
     def __init__(self):
         # ALL API clients
@@ -174,6 +176,8 @@ class API:
             # Determine which client class to use
             if api_func_type == "imggen":
                 ClientClass = resolve_imggen_subclassing(name)
+            elif api_func_type == "ttsgen":
+                ClientClass = resolve_ttsgen_subclassing(name)
             else:
                 ClientClass = client_type_map.get(api_func_type, APIClient)
 
@@ -1482,6 +1486,10 @@ class TTSGenClient(APIClient):
             log.error(f'Error fetching options for "/speak" command via API: {e}')
             return None, None
 
+class TTSGenClient_AllTalk(TTSGenClient):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
 
 class Endpoint:
     def __init__(self,
@@ -1786,10 +1794,10 @@ class Endpoint:
             if not isinstance(response, APIResponse):
                 return response
 
-            # Legacy compatibility step (uses only the response body)
-            main_ep_response = await self.return_expected_data(response.body)
-            if main_ep_response:
-                return main_ep_response
+            # Automatically handle responses from known APIs
+            expected_response_data = await self.get_expected_response_data(response)
+            if expected_response_data:
+                return expected_response_data
 
             results = response.body
 
@@ -1890,7 +1898,7 @@ class Endpoint:
             **kwargs
         )
 
-    async def return_expected_data(self, response):
+    async def get_expected_response_data(self, response):
         return None
 
     def can_extract(self, extract_keys: str | list[str]) -> bool:
@@ -1974,25 +1982,26 @@ class TTSGenEndpoint_PostGenerate(TTSGenEndpoint):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.text_input_key: Optional[str] = None
-        self.output_file_path_key: Optional[str] = None
         self.language_input_key: Optional[str] = None
         self.voice_input_key: Optional[str] = None
 
-    async def return_expected_data(self, response):
+    async def get_expected_response_data(self, response:"APIResponse"):
         return None
-        # if isinstance(response, bytes):
-        #     resp_format = self.response_handling.get('type', 'unknown')
-        #     if resp_format == 'unknown':
+        # if isinstance(self.client, TTSGenClient_AllTalk):
+        #     if isinstance(response.body, dict):
+        #         output_file_path = response.body.get('output_file_path')
+        #     if isinstance(response.body, bytes):
+        #         config = {
+
+        #         }
+        #         return await save_any_file(response.body, config)
         #         resp_format = processing.detect_audio_format(response)
-        #         if resp_format == 'unknown':
-        #             log.error(f'[{self.name}] Expected response to be mp3 or wav (bytes), but received an unexpected format.')
-        #             return None
-        #     output_dir = os.path.join(shared_path.output_dir, self.response_handling.get('save_dir', ''))
-        #     save_prefix = os.path.join(shared_path.output_dir, self.response_handling.get('save_prefix', ''))
-        #     save_format = self.response_handling.get('save_format', resp_format)
-        #     audio_fp:str = processing.save_audio_bytes(response, output_dir, input_format=resp_format, file_prefix=save_prefix, output_format=save_format)
-        #     return audio_fp
-        # return None
+        #         output_dir = os.path.join(shared_path.output_dir, self.response_handling.get('save_dir', ''))
+        #         save_prefix = os.path.join(shared_path.output_dir, self.response_handling.get('save_prefix', ''))
+        #         save_format = self.response_handling.get('save_format', resp_format)
+        #         audio_fp:str = processing.save_audio_bytes(response, output_dir, input_format=resp_format, file_prefix=save_prefix, output_format=save_format)
+        #         return audio_fp
+        #     return None
 
 # ImgGen Endpoint Subclasses
 class ImgGenEndpoint(Endpoint):
@@ -2596,94 +2605,13 @@ class StepExecutor:
         - file_path: Relative directory inside output_dir.
         - returns: 'path' (default), 'data', or 'dict'.
         """
-
-        # 1. Setup file path & naming
-        timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
-        file_name = config.get("file_name", timestamp)
-        if file_name != timestamp and config.get("timestamp") == True:
-            file_name = f'{file_name}_{timestamp}'
-        file_path = Path(config.get("file_path", ""))
-        output_path = shared_path.output_dir / file_path
-        output_path.mkdir(parents=True, exist_ok=True)
-
-        # 2. Guess format: config > headers > data
-        file_format = config.get("file_format")
-        if not file_format:
-            if isinstance(self.response, APIResponse):
-                file_format = guess_format_from_headers(self.response.headers)
-            if not file_format:
-                file_format = guess_format_from_data(data)
-            if file_format:
-                log.info(f'[StepExecutor] Guessed output file format for "save" step by analyzing headers/data: "{file_format}"')
-
-        full_path = output_path / f"{file_name}.{file_format}"
-        binary_formats = {"jpg", "jpeg", "png", "webp", "gif", "mp3", "wav", "mp4", "webm", "bin"}
-
-        # 3. Base64 decoding if applicable
-        if isinstance(data, str) and is_base64(data):
-            try:
-                data = base64.b64decode(data)
-                log.info("[StepExecutor] Detected base64 input; decoded to binary.")
-            except Exception as e:
-                log.error(f"[StepExecutor] Failed to decode base64 string: {e}")
-                raise
-
-        # 4. Select write mode
-        mode = "wb" if file_format in binary_formats else "w"
-
-        # 5. Save logic
-        try:
-            async with aiofiles.open(full_path, mode) as f:
-        # 5a. Special case: Handle PIL images with optional PngInfo
-                if isinstance(data, Image.Image) and file_format.lower() in {"png", "jpeg", "jpg", "webp"}:
-                    pnginfo = data.info.get("pnginfo") if file_format.lower() == "png" else None
-                    data.save(full_path, format=file_format.upper(), pnginfo=pnginfo)
-                    log.info(f"[StepExecutor] Saved image using PIL to {full_path}")
-                    return {
-                        "path": str(full_path),
-                        "format": file_format,
-                        "name": file_name,
-                        "data": data
-                    }
-
-                if file_format == "json":
-                    if isinstance(data, (dict, list)):
-                        await f.write(json.dumps(data, indent=2))
-                    else:
-                        raise TypeError("[StepExecutor] JSON format requires dict or list.")
-                elif file_format == "yaml":
-                    if isinstance(data, (dict, list)):
-                        await f.write(yaml.dump(data))
-                    else:
-                        raise TypeError("[StepExecutor] YAML format requires dict or list.")
-                elif file_format == "csv":
-                    if isinstance(data, list) and all(isinstance(row, (list, tuple)) for row in data):
-                        csv_content = "\n".join([",".join(map(str, row)) for row in data])
-                        await f.write(csv_content)
-                    else:
-                        raise TypeError("[StepExecutor] CSV format requires list of lists/tuples.")
-                elif mode == "w":
-                    if not isinstance(data, (str, int, float)):
-                        raise TypeError(f"[StepExecutor] Text format requires str/number, got {type(data).__name__}")
-                    await f.write(str(data))
-                elif mode == "wb":
-                    if isinstance(data, bytes):
-                        await f.write(data)
-                    elif isinstance(data, str):
-                        await f.write(data.encode())
-                    else:
-                        raise TypeError(f"[StepExecutor] Binary format requires bytes or str, got {type(data).__name__}")
-
-        except Exception as e:
-            log.error(f"[StepExecutor] Failed to save data as {file_format}: {e}")
-            raise
-
-        log.info(f"[StepExecutor] Saved data to {full_path}")
-
-        return {"path": str(full_path),
-                "format": file_format,
-                "name": file_name,
-                "data": data}
+        return await save_any_file(data=data,
+                                   file_format=config.get('file_format'),
+                                   file_name=config.get('file_name'),
+                                   file_path=config.get('file_path', ''),
+                                   use_timestamp=config.get('timestamp', True),
+                                   response=self.response,
+                                   msg_prefix='[StepExecutor] ')
 
 # async def _process_file_input(self, path: str, input_type: str):
 #     if input_type == "text":
