@@ -1,5 +1,5 @@
 # Overview:
-# - bot_api_functions: defines APIs/endpoints for the bot's "main functions" (bot commands, message responses, etc). Only one "main client" allowed for each: ImgGen / TextGem / TTSGen
+# - bot_api_functions: defines APIs/endpoints for the bot's "main functions" (bot commands, message responses, etc). Only one "main client" allowed for each: ImgGen / TextGen / TTSGen
 # - all_apis: A list of ALL APIs/endpoints including ones being used for main functions, and non-main bot functions (via the Tags system / "user commands", etc)
 # - presets: Most 'dict' values in this config can include a 'preset_name' key (linked to a preset dict), to limit redundancy.
 # - workflows: For executing custom logic beyond default bahviors (ei: add additional post-processing from a 'post_txt2img' endpoint call). For non-main functions only (N/A to main functions)

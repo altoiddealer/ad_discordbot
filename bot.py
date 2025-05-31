@@ -6419,9 +6419,9 @@ class ImgModel(SettingsBase):
         active_ep = task.params.get_active_imggen_ep()
         prompt_key, neg_prompt_key = active_ep.get_prompt_keys()
         if prompt_key:
-            set_key(task.payload, {'path': prompt_key, 'value': task.prompt})
+            set_key(data=task.payload, path=prompt_key, value=task.prompt)
         if neg_prompt_key:
-            set_key(task.payload, {'path': neg_prompt_key, 'value': task.neg_prompt})
+            set_key(data=task.payload, path=neg_prompt_key, value=task.neg_prompt)
 
     def collect_names(self, imgmodels:list):
         if not imgmodels:

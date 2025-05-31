@@ -2,17 +2,12 @@ from modules.logs import import_track, get_logger; import_track(__file__, fp=Tru
 logging = log
 
 from datetime import datetime, timedelta
-import json
-import yaml
-import aiofiles
-from PIL import Image, PngImagePlugin
 import math
 import random
 import copy
 import base64
 import mimetypes
 import re
-from pathlib import Path
 from typing import Union, Optional, Any
 
 def progress_bar(value, length=15):
@@ -74,10 +69,7 @@ def extract_key(data: Any, config: Union[str, dict]) -> Any:
             return default
         raise ValueError(f"Failed to extract path '{path}': {e}")
 
-def set_key(data: Any, config: dict) -> None:
-    path = config.get("path", None)
-    value = config.get("value", None)
-
+def set_key(data: Any, path: str, value: Any) -> None:
     if not isinstance(path, str):
         raise ValueError("Path must be a string.")
 
@@ -115,115 +107,6 @@ def set_key(data: Any, config: dict) -> None:
                 if part not in current or not isinstance(current[part], (dict, list)):
                     current[part] = {}
                 current = current[part]
-
-async def save_any_file(data: Any,
-                        file_format:Optional[str]=None,
-                        file_name:Optional[str]=None,
-                        file_path:str='',
-                        use_timestamp:bool=True,
-                        response = None,
-                        msg_prefix:str = ''):
-    """
-    Save input data to a file and returns dict.
-
-    - file_format: Explicit format (e.g. 'json', 'jpg').
-    - file_name: Optional file name (without extension).
-    - file_path: Relative directory inside output_dir.
-    - response: optional APIResponse object (if data type is APIResponse.body)
-    - msg_prefix: to prefix logging messages
-    """
-    from modules.apis import APIResponse
-    response:Optional[APIResponse] = response
-
-    # 1. Setup file path & naming
-    from modules.utils_shared import shared_path
-
-    timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
-    file_name = file_name or timestamp
-    if file_name != timestamp and use_timestamp == True:
-        file_name = f'{file_name}_{timestamp}'
-    file_path = Path(file_path)
-    output_path = shared_path.output_dir / file_path
-    output_path.mkdir(parents=True, exist_ok=True)
-
-    # 2. Guess format: config > headers > data
-    file_format = file_format
-    if not file_format:
-        if isinstance(response, APIResponse):
-            file_format = guess_format_from_headers(response.headers)
-        if not file_format:
-            file_format = guess_format_from_data(data)
-        if file_format:
-            log.info(f'{msg_prefix}Guessed output file format for "save" step by analyzing headers/data: "{file_format}"')
-
-    full_path = output_path / f"{file_name}.{file_format}"
-    binary_formats = {"jpg", "jpeg", "png", "webp", "gif", "mp3", "wav", "mp4", "webm", "bin"}
-
-    # 3. Base64 decoding if applicable
-    if isinstance(data, str) and is_base64(data):
-        try:
-            data = base64.b64decode(data)
-            log.info(f"{msg_prefix}Detected base64 input; decoded to binary.")
-        except Exception as e:
-            log.error(f"{msg_prefix}Failed to decode base64 string: {e}")
-            raise
-
-    # 4. Select write mode
-    mode = "wb" if file_format in binary_formats else "w"
-
-    # 5. Save logic
-    try:
-        async with aiofiles.open(full_path, mode) as f:
-    # 5a. Special case: Handle PIL images with optional PngInfo
-            if isinstance(data, Image.Image) and file_format.lower() in {"png", "jpeg", "jpg", "webp"}:
-                pnginfo = data.info.get("pnginfo") if file_format.lower() == "png" else None
-                data.save(full_path, format=file_format.upper(), pnginfo=pnginfo)
-                log.info(f"{msg_prefix}Saved image using PIL to {full_path}")
-                return {
-                    "path": str(full_path),
-                    "format": file_format,
-                    "name": file_name,
-                    "data": data
-                }
-
-            if file_format == "json":
-                if isinstance(data, (dict, list)):
-                    await f.write(json.dumps(data, indent=2))
-                else:
-                    raise TypeError(f"{msg_prefix}JSON format requires dict or list.")
-            elif file_format == "yaml":
-                if isinstance(data, (dict, list)):
-                    await f.write(yaml.dump(data))
-                else:
-                    raise TypeError(f"{msg_prefix}YAML format requires dict or list.")
-            elif file_format == "csv":
-                if isinstance(data, list) and all(isinstance(row, (list, tuple)) for row in data):
-                    csv_content = "\n".join([",".join(map(str, row)) for row in data])
-                    await f.write(csv_content)
-                else:
-                    raise TypeError(f"{msg_prefix}CSV format requires list of lists/tuples.")
-            elif mode == "w":
-                if not isinstance(data, (str, int, float)):
-                    raise TypeError(f"{msg_prefix}Text format requires str/number, got {type(data).__name__}")
-                await f.write(str(data))
-            elif mode == "wb":
-                if isinstance(data, bytes):
-                    await f.write(data)
-                elif isinstance(data, str):
-                    await f.write(data.encode())
-                else:
-                    raise TypeError(f"{msg_prefix}Binary format requires bytes or str, got {type(data).__name__}")
-
-    except Exception as e:
-        log.error(f"{msg_prefix}Failed to save data as {file_format}: {e}")
-        raise
-
-    log.info(f"{msg_prefix}Saved data to {full_path}")
-
-    return {"path": str(full_path),
-            "format": file_format,
-            "name": file_name,
-            "data": data}
 
 # Safer version of update_dict
 def deep_merge(base: dict, override: dict) -> dict:

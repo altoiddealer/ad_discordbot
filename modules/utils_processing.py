@@ -3,64 +3,130 @@ import os
 import uuid
 import aiofiles
 import re
+import json
+import yaml
+import aiofiles
+from PIL import Image, PngImagePlugin
+from pathlib import Path
 from datetime import datetime
 from pathlib import Path
 from pydub import AudioSegment
 import io
-from modules.typing import Any
+from typing import Any, Optional
+from modules.utils_misc import guess_format_from_headers, guess_format_from_data, is_base64
 
 from modules.logs import import_track, get_logger; import_track(__file__, fp=True); log = get_logger(__name__)  # noqa: E702
 logging = log
 
-def extract_nested_value(data: Any, path: str | list[str]) -> Any:
-    if isinstance(path, str):
-        # Split by dots, handle [index] if present
-        path = re.split(r'\.(?![^\[]*\])', path)
+async def save_any_file(data: Any,
+                        file_format:Optional[str]=None,
+                        file_name:Optional[str]=None,
+                        file_path:str='',
+                        use_timestamp:bool=True,
+                        response = None,
+                        msg_prefix:str = ''):
+    """
+    Save input data to a file and returns dict.
 
-    current = data
-    for part in path:
-        # Handle list indexing e.g. "images[0]"
-        match = re.match(r"^([^\[\]]+)(?:\[(\d+)\])?$", part)
-        if not match:
-            raise KeyError(f"Invalid key part: '{part}'")
+    - file_format: Explicit format (e.g. 'json', 'jpg').
+    - file_name: Optional file name (without extension).
+    - file_path: Relative directory inside output_dir.
+    - response: optional APIResponse object (if data type is APIResponse.body)
+    - msg_prefix: to prefix logging messages
+    """
+    from modules.apis import APIResponse
+    response:Optional[APIResponse] = response
 
-        key, idx = match.groups()
+    # 1. Setup file path & naming
+    from modules.utils_shared import shared_path
 
-        if isinstance(current, dict):
-            current = current.get(key)
-        else:
-            raise KeyError(f"Expected dict, got {type(current)} at '{key}'")
+    timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
+    file_name = file_name or timestamp
+    if file_name != timestamp and use_timestamp == True:
+        file_name = f'{file_name}_{timestamp}'
+    file_path = Path(file_path)
+    output_path = shared_path.output_dir / file_path
+    output_path.mkdir(parents=True, exist_ok=True)
 
-        if idx is not None:
-            if isinstance(current, list):
-                index = int(idx)
-                current = current[index]
-            else:
-                raise KeyError(f"Expected list at '{key}', got {type(current)}")
+    # 2. Guess format: config > headers > data
+    file_format = file_format
+    if not file_format:
+        if isinstance(response, APIResponse):
+            file_format = guess_format_from_headers(response.headers)
+        if not file_format:
+            file_format = guess_format_from_data(data)
+        if file_format:
+            log.info(f'{msg_prefix}Guessed output file format for "save" step by analyzing headers/data: "{file_format}"')
 
-    return current
+    full_path = output_path / f"{file_name}.{file_format}"
+    binary_formats = {"jpg", "jpeg", "png", "webp", "gif", "mp3", "wav", "mp4", "webm", "bin"}
 
-async def save(data, config):
-    path = Path(config.get("file_path", "./saved"))
-    path.mkdir(parents=True, exist_ok=True)
-    file_name = config.get("file_name", "output")
-    ext = config.get("file_format", "txt")
-    full_path = path / f"{file_name}.{ext}"
-    mode = "wb" if isinstance(data, bytes) else "w"
+    # 3. Base64 decoding if applicable
+    if isinstance(data, str) and is_base64(data):
+        try:
+            data = base64.b64decode(data)
+            log.info(f"{msg_prefix}Detected base64 input; decoded to binary.")
+        except Exception as e:
+            log.error(f"{msg_prefix}Failed to decode base64 string: {e}")
+            raise
 
-    async with aiofiles.open(full_path, mode) as f:
-        await f.write(data if isinstance(data, str) else data.decode())
-    log.info(f"Saved response to {full_path}")
-    return data
+    # 4. Select write mode
+    mode = "wb" if file_format in binary_formats else "w"
 
-def extract_keys(data, keys):
-    keys = keys.split(".") if isinstance(keys, str) else keys
-    for key in keys:
-        if isinstance(data, dict):
-            data = data.get(key)
-        else:
-            raise ValueError("Cannot extract key from non-dict response")
-    return data
+    # 5. Save logic
+    try:
+        async with aiofiles.open(full_path, mode) as f:
+    # 5a. Special case: Handle PIL images with optional PngInfo
+            if isinstance(data, Image.Image) and file_format.lower() in {"png", "jpeg", "jpg", "webp"}:
+                pnginfo = data.info.get("pnginfo") if file_format.lower() == "png" else None
+                data.save(full_path, format=file_format.upper(), pnginfo=pnginfo)
+                log.info(f"{msg_prefix}Saved image using PIL to {full_path}")
+                return {
+                    "path": str(full_path),
+                    "format": file_format,
+                    "name": file_name,
+                    "data": data
+                }
+
+            if file_format == "json":
+                if isinstance(data, (dict, list)):
+                    await f.write(json.dumps(data, indent=2))
+                else:
+                    raise TypeError(f"{msg_prefix}JSON format requires dict or list.")
+            elif file_format == "yaml":
+                if isinstance(data, (dict, list)):
+                    await f.write(yaml.dump(data))
+                else:
+                    raise TypeError(f"{msg_prefix}YAML format requires dict or list.")
+            elif file_format == "csv":
+                if isinstance(data, list) and all(isinstance(row, (list, tuple)) for row in data):
+                    csv_content = "\n".join([",".join(map(str, row)) for row in data])
+                    await f.write(csv_content)
+                else:
+                    raise TypeError(f"{msg_prefix}CSV format requires list of lists/tuples.")
+            elif mode == "w":
+                if not isinstance(data, (str, int, float)):
+                    raise TypeError(f"{msg_prefix}Text format requires str/number, got {type(data).__name__}")
+                await f.write(str(data))
+            elif mode == "wb":
+                if isinstance(data, bytes):
+                    await f.write(data)
+                elif isinstance(data, str):
+                    await f.write(data.encode())
+                else:
+                    raise TypeError(f"{msg_prefix}Binary format requires bytes or str, got {type(data).__name__}")
+
+    except Exception as e:
+        log.error(f"{msg_prefix}Failed to save data as {file_format}: {e}")
+        raise
+
+    log.info(f"{msg_prefix}Saved data to {full_path}")
+
+    return {"path": str(full_path),
+            "format": file_format,
+            "name": file_name,
+            "data": data}
+
 
 def decode_base64(data, _config=None):
     return base64.b64decode(data) if isinstance(data, str) else data
@@ -78,8 +144,8 @@ def save_base64(base64_str, output_format="png", save_to="./", prefix="file"):
         f.write(binary_data)
     return filepath
 
-def extract_and_save_base64(response_json, key, output_format, save_to, prefix="file"):
-    base64_str = response_json.get(key)
+def extract_and_save_base64(data:dict, key:str, output_format:str, save_to:str, prefix="file"):
+    base64_str = data.get(key)
     if base64_str:
         return save_base64(base64_str, output_format, save_to, prefix)
     return None

@@ -11,8 +11,8 @@ import io
 import base64
 import copy
 from typing import get_type_hints, get_type_hints, get_origin, get_args, Any, Tuple, Optional, Union, AsyncGenerator
-from modules.utils_shared import shared_path, patterns, bot_database, load_file, get_api
-from modules.utils_misc import valueparser, progress_bar, extract_key, save_any_file, deep_merge, split_at_first_comma, is_base64, guess_format_from_headers, guess_format_from_data
+from modules.utils_shared import shared_path, bot_database, load_file, get_api
+from modules.utils_misc import valueparser, progress_bar, extract_key, deep_merge, split_at_first_comma
 import modules.utils_processing as processing
 
 from modules.logs import import_track, get_logger; import_track(__file__, fp=True); log = get_logger(__name__)  # noqa: E702
@@ -1994,7 +1994,7 @@ class TTSGenEndpoint_PostGenerate(TTSGenEndpoint):
         #         config = {
 
         #         }
-        #         return await save_any_file(response.body, config)
+        #         return await processing.save_any_file(response.body, config)
         #         resp_format = processing.detect_audio_format(response)
         #         output_dir = os.path.join(shared_path.output_dir, self.response_handling.get('save_dir', ''))
         #         save_prefix = os.path.join(shared_path.output_dir, self.response_handling.get('save_prefix', ''))
@@ -2605,13 +2605,13 @@ class StepExecutor:
         - file_path: Relative directory inside output_dir.
         - returns: 'path' (default), 'data', or 'dict'.
         """
-        return await save_any_file(data=data,
-                                   file_format=config.get('file_format'),
-                                   file_name=config.get('file_name'),
-                                   file_path=config.get('file_path', ''),
-                                   use_timestamp=config.get('timestamp', True),
-                                   response=self.response,
-                                   msg_prefix='[StepExecutor] ')
+        return await processing.save_any_file(data=data,
+                                              file_format=config.get('file_format'),
+                                              file_name=config.get('file_name'),
+                                              file_path=config.get('file_path', ''),
+                                              use_timestamp=config.get('timestamp', True),
+                                              response=self.response,
+                                              msg_prefix='[StepExecutor] ')
 
 # async def _process_file_input(self, path: str, input_type: str):
 #     if input_type == "text":
