@@ -298,10 +298,10 @@ class API:
         # Not found
         return None, config
       
-    async def run_workflow(self, name:str, input_data=None, ictx=None):
+    async def run_workflow(self, name:str, input_data=None, task=None):
         workflow_steps = apisettings.get_workflow_steps_for(name)
         log.info(f'[API Workflows] Running "{name}" with ({len(workflow_steps)} processing steps)')
-        handler = StepExecutor(steps=workflow_steps, input_data=input_data, ictx=ictx)
+        handler = StepExecutor(steps=workflow_steps, input_data=input_data, task=task)
         return await handler.run()
 
 class WebSocketConnectionConfig:
@@ -1744,6 +1744,7 @@ class Endpoint:
                    payload_map: dict = None,
                    sanitize:bool=False,
                    extract_keys:str|list[str]|None=None,
+                   task=None,
                    ictx=None,
                    **kwargs
                    ) -> Any:
@@ -1809,7 +1810,7 @@ class Endpoint:
         # Hand off full response to StepExecutor
         if isinstance(self.response_handling, list):
             log.info(f'[{self.name}] Executing "response_handling" ({len(self.response_handling)} processing steps)')
-            handler = StepExecutor(steps=self.response_handling, input_data=response or results, ictx=ictx)
+            handler = StepExecutor(steps=self.response_handling, input_data=response or results, task=task, ictx=ictx)
             results = await handler.run()
 
         return results
@@ -2117,7 +2118,7 @@ class APIResponse:
 
 
 class StepExecutor:
-    def __init__(self, steps: list[dict], input_data: Any = None, ictx=None):
+    def __init__(self, steps: list[dict], input_data: Any = None, task=None, ictx=None):
         """
         Executes a sequence of data transformation steps with optional context storage.
 
@@ -2131,7 +2132,10 @@ class StepExecutor:
         self.context: dict[str, Any] = {}
         self.original_input_data = input_data
         self.response = input_data if isinstance(input_data, APIResponse) else None
+        self.task = task
         self.ictx = ictx
+        if task:
+            self.ictx = task.ictx
 
     def _split_step(self, step: dict) -> tuple[str, dict, dict]:
         step = step.copy()
@@ -2251,29 +2255,8 @@ class StepExecutor:
         return decorator
 
     def _resolve_context_placeholders(self, data: Any, config: Any) -> Any:
-        def _stringify(value):
-            if isinstance(value, (dict, list)):
-                return json.dumps(value)  # Structured and safe
-            if value is None:
-                return ""
-            return str(value)
+        return processing.resolve_placeholders(data, config, self.context)
 
-        # current result can be injected via "{result}"
-        context = {k: _stringify(v) for k, v in {**self.context, "result": data}.items()}
-        if not context:
-            return config
-        if isinstance(config, str):
-            return config.format(**context)
-        elif isinstance(config, dict):
-            return {k: self._resolve_context_placeholders(data, v) for k, v in config.items()}
-        elif isinstance(config, list):
-            return [self._resolve_context_placeholders(data, i) for i in config]
-        return config
-    
-    def _substitute(self, value):
-        if isinstance(value, str) and "{" in value:
-            return value.format(**self.context)
-        return value
     
     @step_returns("data", "input", default="data")
     async def _step_for_each(self, data: Any, config: dict) -> list:
@@ -2312,7 +2295,7 @@ class StepExecutor:
         results = []
 
         for index, item in iterable:
-            sub_executor = StepExecutor(steps, ictx=self.ictx)
+            sub_executor = StepExecutor(steps, task=self.task, ictx=self.ictx)
             sub_executor.response = self.response
 
             sub_executor.context = {
@@ -2341,7 +2324,7 @@ class StepExecutor:
             raise ValueError("step_group config must be a list of lists of steps")
 
         async def run_subgroup(steps: list[dict], index: int):
-            sub_executor = StepExecutor(steps, ictx=self.ictx)
+            sub_executor = StepExecutor(steps, task=self.task, ictx=self.ictx)
             sub_executor.response = self.response
             sub_executor.context = self.context.copy()
             return await sub_executor.run(data)
@@ -2540,12 +2523,12 @@ class StepExecutor:
             return data
         return match.group(1) if match.lastindex else match.group(0)
 
+    # Formats bot_vars from Task into strings
     @step_returns("data", "input", default="data")
-    def _step_format(self, data, formatted_value:str):
-        # TODO: Add bot variables
-        if not isinstance(formatted_value, str):
-            raise ValueError("[StepExecutor] The format step requires a string input.")
-        return formatted_value
+    def _step_format(self, data, config: Any):
+        if not self.task:
+            raise RuntimeError("[StepExecutor] The format step requires a Task object.")
+        return processing.resolve_placeholders(data, config, vars(self.task.bot_vars))
 
     @step_returns("data", "input", default="data")
     def _step_eval(self, data, expression):

@@ -127,6 +127,27 @@ async def save_any_file(data: Any,
             "name": file_name,
             "data": data}
 
+def resolve_placeholders(data: Any, config: Any, context: dict) -> Any:
+    def _stringify(value):
+        if isinstance(value, (dict, list)):
+            return json.dumps(value)  # Structured and safe
+        if value is None:
+            return ""
+        return str(value)
+
+    # Prepare context with formatted strings
+    formatted_context = {k: _stringify(v) for k, v in {**context, "result": data}.items()}
+    
+    if not formatted_context:
+        return config
+
+    if isinstance(config, str):
+        return config.format(**formatted_context)
+    elif isinstance(config, dict):
+        return {k: resolve_placeholders(data, v, context) for k, v in config.items()}
+    elif isinstance(config, list):
+        return [resolve_placeholders(data, i, context) for i in config]
+    return config
 
 def decode_base64(data, _config=None):
     return base64.b64decode(data) if isinstance(data, str) else data

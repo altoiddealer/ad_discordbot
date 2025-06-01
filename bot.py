@@ -3095,7 +3095,7 @@ class Tasks(TaskProcessing):
         # formats bot syntax like '{prompt}', {llm_0}, etc
         formatted_payload = self.format_api_payload(config)
         # Run workflow and collect results
-        workflow_results = await api.run_workflow(ictx=self.ictx, **formatted_payload)
+        workflow_results = await api.run_workflow(task=self, **formatted_payload)
         if workflow_results:
             self.handle_api_results(workflow_results)
             await self.send_extra_results()
