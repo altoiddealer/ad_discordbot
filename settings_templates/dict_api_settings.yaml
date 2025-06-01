@@ -153,11 +153,16 @@ all_apis:
       reconnect_on_failure: true
       retry: 1
     endpoints:
-      - name: Prompt
+      - name: Post txt2img
         path: /prompt
         method: POST
         payload_base: comfyui_text2image.json
         payload_type: json
+      # - name: Post img2img
+      #   path: /prompt
+      #   method: POST
+      #   payload_base: comfyui_img2image.json
+      #   payload_type: json
       - {name: History, path: "/history/{}", method: GET} # "/history/{prompt_id}"
       - {name: View, path: /view, method: GET, payload_type: query, response_type: bytes}
       - {name: Upload, path: "/upload/{}", method: POST} # "/upload/{image_type}"

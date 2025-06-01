@@ -117,9 +117,9 @@ apisettings = APISettings()
 def resolve_imggen_subclassing(name: str) -> type["ImgGenClient"]:
     name = name.lower()
     if 'comfy' in name:
-        return ComfyImgGenClient
+        return ImgGenClient_Comfy
     elif any(x in name for x in ['stable', 'a1111', 'sdwebui', 'forge']):
-        return SDWebUIImgGenClient
+        return ImgGenClient_SDWebUI
     return ImgGenClient
 
 def resolve_ttsgen_subclassing(name: str) -> type["TTSGenClient"]:
@@ -1373,10 +1373,10 @@ class ImgGenClient(APIClient):
             return [], None        
 
     def is_comfy(self) -> bool:
-        return isinstance(self, ComfyImgGenClient)
+        return isinstance(self, ImgGenClient_Comfy)
 
     def is_sdwebui_variant(self) -> bool:
-        return isinstance(self, SDWebUIImgGenClient)
+        return isinstance(self, ImgGenClient_SDWebUI)
 
     def is_sdwebui(self) -> bool:
         return any(substring in self.name.lower() for substring in ['stable', 'a1111', 'sdwebui'])
@@ -1390,11 +1390,11 @@ class ImgGenClient(APIClient):
     def supports_loractrl(self) -> bool:
         return (self.is_sdwebui() or self.is_reforge()) and not self.is_forge()
 
-class SDWebUIImgGenClient(ImgGenClient):
+class ImgGenClient_SDWebUI(ImgGenClient):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
-class ComfyImgGenClient(ImgGenClient):
+class ImgGenClient_Comfy(ImgGenClient):
     get_history: Optional["ImgGenEndpoint"] = None
     get_view: Optional["ImgGenEndpoint"] = None
     post_upload: Optional["ImgGenEndpoint"] = None
@@ -2017,7 +2017,7 @@ class ImgGenEndpoint_PostTxt2Img(ImgGenEndpoint):
         self.images_result_key: Optional[str] = None
 
     def get_prompt_keys(self):
-        if isinstance(self.client, ComfyImgGenClient):
+        if isinstance(self.client, ImgGenClient_Comfy):
             return None, None
         return self.prompt_key, self.neg_prompt_key
 
@@ -2030,7 +2030,7 @@ class ImgGenEndpoint_PostImg2Img(ImgGenEndpoint):
         self.images_result_key: Optional[str] = None
 
     def get_prompt_keys(self):
-        if isinstance(self.client, ComfyImgGenClient):
+        if isinstance(self.client, ImgGenClient_Comfy):
             return None, None
         return self.prompt_key, self.neg_prompt_key
 

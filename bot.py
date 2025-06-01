@@ -6775,7 +6775,7 @@ class ImgModel(SettingsBase):
             traceback.print_exc()
             return False
 
-class ComfyImgModel(ImgModel):
+class ImgModel_Comfy(ImgModel):
     def __init__(self):
         super().__init__()
         # Convenience keys
@@ -6793,7 +6793,7 @@ class ComfyImgModel(ImgModel):
         return {self._name_key: imgmodel_value,
                 self._value_key: imgmodel_value}
 
-class SDWebUIImgModel(ImgModel):
+class ImgModel_SDWebUI(ImgModel):
     def __init__(self):
         super().__init__()
         # Convenience keys
@@ -6886,15 +6886,15 @@ class SDWebUIImgModel(ImgModel):
             override_settings[self._value_key] = imgmodel_data[self._value_key]
         return override_settings
 
-class A1111ImgModel(SDWebUIImgModel):
+class ImgModel_A1111(ImgModel_SDWebUI):
     def __init__(self):
         super().__init__()
 
-class ReForgeImgModel(SDWebUIImgModel):
+class ImgModel_ReForge(ImgModel_SDWebUI):
     def __init__(self):
         super().__init__()
 
-class ForgeImgModel(SDWebUIImgModel):
+class ImgModel_Forge(ImgModel_SDWebUI):
     def __init__(self):
         super().__init__()
 
@@ -7069,16 +7069,16 @@ class Settings(BaseFileMemory):
             log.info(f"Checking if '{api.imggen.name}' is a known API (name has 'Comfy', 'A1111', 'Forge', 'ReForge', etc)")
             if api.imggen.is_comfy():
                 log.info(f"[{api.imggen.name}] recognized as ComfyUI.")
-                self.imgmodel = ComfyImgModel()
+                self.imgmodel = ImgModel_Comfy()
             elif api.imggen.is_reforge():
                 log.info(f"[{api.imggen.name}] recognized as ReForge.")
-                self.imgmodel = ReForgeImgModel()
+                self.imgmodel = ImgModel_ReForge()
             elif api.imggen.is_forge():
                 log.info(f"[{api.imggen.name}] recognized as Forge.")
-                self.imgmodel = ForgeImgModel()
+                self.imgmodel = ImgModel_Forge()
             elif api.imggen.is_sdwebui():
                 log.info(f"[{api.imggen.name}] recognized as A1111.")
-                self.imgmodel = A1111ImgModel()
+                self.imgmodel = ImgModel_A1111()
             else:
                 log.info(f'[{api.imggen.name}] is an unknown API. "main bot functions" will rely heavily on user configuration.')
                 self.imgmodel = ImgModel()
