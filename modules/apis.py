@@ -10,6 +10,7 @@ from PIL import Image, PngImagePlugin
 import io
 import base64
 import copy
+from modules.typing import CtxInteraction
 from typing import get_type_hints, get_type_hints, get_origin, get_args, Any, Tuple, Optional, Union, AsyncGenerator
 from modules.utils_shared import shared_path, bot_database, load_file, get_api
 from modules.utils_misc import valueparser, progress_bar, extract_key, deep_merge, split_at_first_comma
@@ -2133,7 +2134,7 @@ class StepExecutor:
         self.original_input_data = input_data
         self.response = input_data if isinstance(input_data, APIResponse) else None
         self.task = task
-        self.ictx = ictx
+        self.ictx:Optional[CtxInteraction] = ictx
         if task:
             self.ictx = task.ictx
 
@@ -2420,6 +2421,50 @@ class StepExecutor:
             log.error(f"[StepExecutor] Error in 'poll_api' step: {e}")
 
         return results
+
+    @step_returns("input", "type", default="input")
+    async def _step_prompt_user(self, data, config):
+        """
+        Prompts the user for input via Discord interaction.
+
+        "prompt": "Please upload an image or reply with text",
+        "type": "text" | "file",
+        "timeout": 60
+        """
+        if not self.ictx:
+            raise RuntimeError("[StepExecutor] Cannot prompt user: 'ictx' (interaction context) is not set")
+        
+        from discord import Message, Attachment
+
+        prompt_text = config.get("prompt", "Please respond.")
+        expected_type = config.get("type", "text")
+        timeout = config.get("timeout", 60)
+
+        # Send the prompt
+        await self.ictx.followup.send(prompt_text, ephemeral=True)
+
+        def check(msg: Message):
+            return (
+                msg.author.id == self.ictx.user.id and
+                msg.channel.id == self.ictx.channel.id
+            )
+
+        try:
+            msg: Message = await self.ictx.client.wait_for("message", check=check, timeout=timeout)
+
+            if expected_type == "text":
+                return msg.content.strip()
+            elif expected_type == "file":
+                if msg.attachments:
+                    attachment: Attachment = msg.attachments[0]
+                    return await attachment.read() # returns bytes
+                else:
+                    raise ValueError("[StepExecutor] Expected file attachment but none provided.")
+            else:
+                raise ValueError(f"[StepExecutor] Unknown input type: {expected_type}")
+
+        except asyncio.TimeoutError:
+            raise TimeoutError("[StepExecutor] User did not respond in time.")
 
     @step_returns("data", "input", default="data")
     def _step_extract_key(self, data: Any, config: Union[str, dict]) -> Any:
