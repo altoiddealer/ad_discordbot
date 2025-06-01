@@ -2282,7 +2282,7 @@ class TaskProcessing(TaskAttributes):
         reactor_args = self.payload.get('alwayson_scripts', {}).get('reactor', {}).get('args', [])
         last_item = reactor_args[-1] if reactor_args else None
         reactor_mask = reactor_args.pop() if isinstance(last_item, dict) else None
-        images, pnginfo = await api.imggen.main_imggen(self.payload, self.params.mode, self.ictx)
+        images, pnginfo = await api.imggen.main_imggen(self.payload, self.params.mode, self)
         # Apply ReActor mask
         reactor = self.payload.get('alwayson_scripts', {}).get('reactor', {})
         if len(images) > 1 and reactor and reactor_mask:
@@ -4643,9 +4643,8 @@ if imggen_enabled:
                 log_msg += f"\nNegative Prompt: {neg_prompt}"
             if img2img:
                 async def process_image_img2img(img2img, img2img_dict, mode, log_msg):
-                    #Convert attached image to base64
-                    attached_i2i_img = await img2img.read()
-                    i2i_image = base64.b64encode(attached_i2i_img).decode('utf-8')
+                    imgmodel_settings:ImgModel = get_imgmodel_settings(ctx)
+                    i2i_image = await imgmodel_settings.handle_image_attachment(img2img)
                     img2img_dict['image'] = i2i_image
                     # Ask user to select a Denoise Strength
                     denoise_options = []
@@ -6423,6 +6422,11 @@ class ImgModel(SettingsBase):
         if neg_prompt_key:
             set_key(data=task.payload, path=neg_prompt_key, value=task.neg_prompt)
 
+    async def handle_image_attachment(self, attachment:discord.Attachment):
+        #Convert attached image to base64
+        file_bytes = await attachment.read()
+        return base64.b64encode(file_bytes).decode('utf-8')
+
     def collect_names(self, imgmodels:list):
         if not imgmodels:
             return []
@@ -6792,6 +6796,16 @@ class ImgModel_Comfy(ImgModel):
     async def get_imgmodel_data(self, imgmodel_value:str, ictx:CtxInteraction=None) -> dict:
         return {self._name_key: imgmodel_value,
                 self._value_key: imgmodel_value}
+    
+    async def handle_image_attachment(self, attachment:discord.Attachment):
+        file_bytes = await attachment.read()
+        filename = attachment.filename or "img2img_image.png"
+
+        # Prepare a file-like object (BytesIO)
+        file_obj = io.BytesIO(file_bytes)
+        file_obj.name = filename  # aiohttp expects .name for file uploads
+
+        return {"file": file_obj, "filename": filename}
 
 class ImgModel_SDWebUI(ImgModel):
     def __init__(self):

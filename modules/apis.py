@@ -1402,10 +1402,18 @@ class ImgGenClient_Comfy(ImgGenClient):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
-    async def main_imggen(self, img_payload:dict, mode:str="txt2img", ictx=None) -> Tuple[list[Image.Image], None]:
+    async def apply_img2img(self, img_payload:dict, task):
+        base64 = task.img
+
+    async def main_imggen(self, img_payload:dict, mode:str="txt2img", task=None) -> Tuple[list[Image.Image], None]:
+        ictx = None
+        if task:
+            ictx = task.ictx
+        if mode == 'img2img':
+            img_payload = self.apply_img2img(img_payload, task)
         try:
             ep_for_mode:ImgGenEndpoint = getattr(self, f'post_{mode}')
-            queued = await ep_for_mode.call(input_data=img_payload)
+            queued = await ep_for_mode.call(input_data=img_payload, task=task)
             prompt_id = queued['prompt_id']
             await self.track_progress(endpoint=None,
                                       use_ws=True,
@@ -1420,13 +1428,13 @@ class ImgGenClient_Comfy(ImgGenClient):
 
             images = []
             await asyncio.sleep(1)
-            history = await self.get_history.call(path_vars=prompt_id)
+            history = await self.get_history.call(path_vars=prompt_id, task=task)
             outputs = history[prompt_id]['outputs']
             for i, node_id in enumerate(outputs):
                 node_output = outputs[node_id]
                 if "images" in node_output:
                     for image_data in node_output["images"]:
-                        image_bytes = await self.get_view.call(input_data=image_data)
+                        image_bytes = await self.get_view.call(input_data=image_data, task=task)
                         image = self.decode_and_save_for_index(i, image_bytes)
                         images.append(image)
             return images, None
@@ -2457,7 +2465,15 @@ class StepExecutor:
             elif expected_type == "file":
                 if msg.attachments:
                     attachment: Attachment = msg.attachments[0]
-                    return await attachment.read() # returns bytes
+                    file_bytes = await attachment.read()
+                    filename = attachment.filename
+
+                    # Option A: Use in-memory BytesIO
+                    file_obj = io.BytesIO(file_bytes)
+                    file_obj.name = filename  # Required by aiohttp
+
+                    # Optionally store metadata too
+                    return {"file": file_obj, "filename": filename}
                 else:
                     raise ValueError("[StepExecutor] Expected file attachment but none provided.")
             else:

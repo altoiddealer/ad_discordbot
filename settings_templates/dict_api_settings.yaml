@@ -165,7 +165,7 @@ all_apis:
       #   payload_type: json
       - {name: History, path: "/history/{}", method: GET} # "/history/{prompt_id}"
       - {name: View, path: /view, method: GET, payload_type: query, response_type: bytes}
-      - {name: Upload, path: "/upload/{}", method: POST} # "/upload/{image_type}"
+      - {name: Upload, path: "/upload/{}", method: POST, payload_type: multipart} # "/upload/{image_type}"
       - {name: Cancel, path: /interrupt, method: POST}
       - name: Get Checkpoints
         path: "/object_info/CheckpointLoaderSimple"
