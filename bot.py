@@ -6505,24 +6505,22 @@ class ImgModel(SettingsBase):
                 exclude_list = preset_copy.pop('exclude', [])
                 match_count = 0
 
-                # Only apply filename-dependent filters if filename is available
+                if filter_list:
+                    if all(re.search(re.escape(filter_text), imgmodel, re.IGNORECASE) for filter_text in filter_list):
+                        match_count += 1
+                    else:
+                        match_count -= 1
+                if exclude_list:
+                    if not any(re.search(re.escape(exclude_text), imgmodel, re.IGNORECASE) for exclude_text in exclude_list):
+                        match_count += 1
+                    else:
+                        match_count -= 1
                 if filename_available:
-                    if filter_list:
-                        if all(re.search(re.escape(filter_text), filename, re.IGNORECASE) for filter_text in filter_list):
-                            match_count += 1
-                        else:
-                            match_count -= 1
-                    if exclude_list:
-                        if not any(re.search(re.escape(exclude_text), filename, re.IGNORECASE) for exclude_text in exclude_list):
-                            match_count += 1
-                        else:
-                            match_count -= 1
                     if 'max_filesize' in preset_copy and preset_copy['max_filesize'] > file_size_gb:
                         match_count += 1
                         del preset_copy['max_filesize']
-                else:
-                    # Ignore max_filesize if we can't get it
-                    preset_copy.pop('max_filesize', None)
+
+                preset_copy.pop('max_filesize', None)
 
                 match_counts.append((preset_copy, match_count))
 
@@ -6548,21 +6546,21 @@ class ImgModel(SettingsBase):
         self.payload_mods = new_imgmodel_options
         self.tags = imgmodel_tags
 
-        settings:Settings = get_settings(ictx)
-
         # Check if old/new average resolution is different
         if self.payload_mods.get('width') and self.payload_mods.get('height'):
             new_avg = avg_from_dims(self.payload_mods['width'], self.payload_mods['height'])
-            if new_avg != self.last_imgmodel_res:
+            if new_avg != self.last_imgmodel_res or new_avg != bot_database.last_imgmodel_res: # legacy check
                 self.last_imgmodel_res = new_avg
                 bot_database.last_imgmodel_res = new_avg
                 # update /image cmd res options
                 await bg_task_queue.put(update_size_options(new_avg))
 
+        settings:Settings = get_settings(ictx)
         # Fix any invalid settings
         settings.fix_settings()
-        # Save file
-        settings.save()
+        if ictx:
+            # Save file. Don't save from auto-select imgmodels task.
+            settings.save()
 
     # subclass behavior
     def get_extra_settings(self, imgmodel_data:dict) -> dict:

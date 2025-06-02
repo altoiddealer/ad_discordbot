@@ -173,9 +173,9 @@ all_apis:
         method: GET
         response_handling:
           - extract_key: CheckpointLoaderSimple.input.required.ckpt_name[0] # list of models
-        #  - map: {as: dict, key: model_name} # convert list to a list of dicts [{'model_name': 'leosamsHelloworldXL_helloworldXL70.safetensors'}, {'model_name': ...}]
+
       # 'method: null' will skip API call, and simply return the payload as the result. In this case, user needs to manually configure a '/user/payload/cnet_data.yaml'
-      - {name: Get Cnet Control Types, path: /anything/at/all, method: null, payload_base: cnet_data.yaml}
+      - {name: Get Cnet Control Types, path: /anything/at/all, method: null, payload_base: cnet_data.json}
 
 
 # Create presets here which can be injected in any 'endpoint', or in any 'response_handling' / 'workflow' steps.
