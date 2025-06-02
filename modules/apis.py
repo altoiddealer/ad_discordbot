@@ -874,17 +874,14 @@ class APIClient:
                           "headers": headers,
                           "auth": auth or self.auth,
                           "timeout": aiohttp.ClientTimeout(total=timeout)}
-        
-        if files:
-            form_data = aiohttp.FormData()
-            for key, val in files.items():
-                form_data.add_field(key, val, filename=getattr(val, "name", key))
-            request_kwargs["data"] = form_data
-        else:
-            if data is not None:
-                request_kwargs["data"] = data
-            if json is not None:
-                request_kwargs["json"] = json
+
+        if data is not None:
+            request_kwargs["data"] = data
+            # Content-Type will be set in Form automatically
+            if isinstance(data, aiohttp.FormData) and headers:
+                request_kwargs['headers'].pop("Content-Type", None)
+        if json is not None:
+            request_kwargs["json"] = json
 
         # Ensure session exists
         if not self.session:
@@ -1403,43 +1400,23 @@ class ImgGenClient_Comfy(ImgGenClient):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
-    async def upload_image(self, file_tuple, data_fields):
-        form = aiohttp.FormData()
-        url = 'http://127.0.0.1:8188/upload/image'
-
-        # Add normal form data fields
-        for key, value in data_fields.items():
-            form.add_field(key, str(value))
-
-        # Add file field
-        filename, fileobj, content_type = file_tuple
-        form.add_field('image', fileobj, filename=filename, content_type=content_type)
-
-        async with aiohttp.ClientSession() as session:
-            async with session.post(url, data=form) as resp:
-                text = await resp.text()
-                print(f"Status: {resp.status}, response: {text}")
-                resp.raise_for_status()
-                return await resp.json()
-
-    async def apply_img2img(self, img_payload:dict, task):
-        img2img_file = task.params.imgcmd['img2img'].get('image') # {'image': (<filename>, <file_obj>, 'image/png')}
-        if not img2img_file:
+    async def apply_img2img(self, task):
+        if not task.params.imgcmd['img2img'].get('image'):
             raise RuntimeError(f'[{self.name}] Img2img missing required image input')
+
+        img2img_file = {'image':  task.params.imgcmd['img2img']['image']}
         data = {'type': 'input', 'overwrite': 'false'}
-        await self.upload_image(img2img_file, data)
-        print("img2img_file:", img2img_file)
-        print("data:", data)
-        response = await self.post_upload.call(payload_map={'files': img2img_file, 'data': data}, 
-                                               path_vars='image')
-        print("Upload response:", response)
+
+        await self.post_upload.call(payload_map={'files': img2img_file, 
+                                                 'data': data}, 
+                                    path_vars='image')
 
     async def main_imggen(self, img_payload:dict, mode:str="txt2img", task=None) -> Tuple[list[Image.Image], None]:
         ictx = None
         if task:
             ictx = task.ictx
         if mode == 'img2img':
-            img_payload = await self.apply_img2img(img_payload, task)
+            await self.apply_img2img(task)
         try:
             ep_for_mode:ImgGenEndpoint = getattr(self, f'post_{mode}')
             queued = await ep_for_mode.call(input_data=img_payload, task=task)
@@ -1725,27 +1702,34 @@ class Endpoint:
 
         return final_cleaned
 
-    def prepare_aiohttp_formdata(self, data_payload: dict, files_payload: dict) -> aiohttp.FormData:
+    def prepare_aiohttp_formdata(self, data_payload: dict = None, files_payload: dict = None) -> aiohttp.FormData:
         form = aiohttp.FormData()
 
-        # Add regular fields
+        # Add standard form fields
         if data_payload:
             for key, value in data_payload.items():
-                form.add_field(key, str(value))
+                form.add_field(name=key, value=str(value))
 
         # Add file fields
         if files_payload:
-            for key, file_tuple in files_payload.items():
-                if isinstance(file_tuple, tuple) and len(file_tuple) == 3:
-                    filename, file_obj, content_type = file_tuple
-                    form.add_field(
-                        name=key,
-                        value=file_obj,
-                        filename=filename,
-                        content_type=content_type
-                    )
+            for field_name, file_info in files_payload.items():
+                if isinstance(file_info, dict):
+                    # Single file for this field
+                    fileobj = file_info["file"]
+                    filename = file_info.get("filename", "file")
+                    content_type = file_info.get("content_type", "application/octet-stream")
+                    form.add_field(name=field_name, value=fileobj, filename=filename, content_type=content_type)
+
+                elif isinstance(file_info, list):
+                    # Multiple files for this field
+                    for i, file_entry in enumerate(file_info):
+                        fileobj = file_entry["file"]
+                        filename = file_entry.get("filename", f"file_{i}")
+                        content_type = file_entry.get("content_type", "application/octet-stream")
+                        form.add_field(name=field_name, value=fileobj, filename=filename, content_type=content_type)
+
                 else:
-                    raise ValueError(f"Invalid file tuple for key '{key}': {file_tuple}")
+                    raise ValueError(f"Unsupported file payload type for field '{field_name}': {type(file_info)}")
 
         return form
 
@@ -1813,11 +1797,6 @@ class Endpoint:
 
         json_payload, data_payload, params_payload, files_payload = self.resolve_input_data(input_data, payload_type, payload_map)
 
-        print("json_payload:", json_payload)
-        print("data_payload:", data_payload)
-        print("params_payload:", params_payload)
-        print("files_payload:", files_payload)
-
         response:Optional[APIResponse] = None
         results = {}
 
@@ -1832,16 +1811,16 @@ class Endpoint:
                     data_payload = self.sanitize_payload(data_payload)
 
             request_kwargs = {"endpoint": self.path,
-                            "method": self.method,
-                            "json": json_payload,
-                            "data": data_payload,
-                            "params": params_payload,
-                            "files": files_payload,
-                            "headers": headers,
-                            "timeout": timeout,
-                            "retry": retry,
-                            "response_type": response_type,
-                            **kwargs}
+                              "method": self.method,
+                              "json": json_payload,
+                              "data": data_payload,
+                              "params": params_payload,
+                              "files": files_payload,
+                              "headers": headers,
+                              "timeout": timeout,
+                              "retry": retry,
+                              "response_type": response_type,
+                              **kwargs}
 
             if self._semaphore:
                 async with self._semaphore:  # Waits if limit is reached

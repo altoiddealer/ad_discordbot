@@ -34,6 +34,7 @@ from modules.typing import ChannelID, UserID, MessageID, CtxInteraction  # noqa:
 import signal
 from typing import Union, Literal
 from functools import partial
+import filetype
 
 from modules.utils_files import load_file, merge_base, save_yaml_file  # noqa: F401
 from modules.utils_shared import bot_args, is_tgwui_integrated, shared_path, bg_task_queue, task_event, flows_queue, flows_event, patterns, bot_emojis, config, bot_database, get_api
@@ -1052,6 +1053,10 @@ class BotVars():
         self.seed = random.randint(10**14, 10**15 - 1)
         imgmodel_settings:ImgModel = get_imgmodel_settings(ictx)
         self.ckpt_name = imgmodel_settings.last_imgmodel_value
+
+    def update_from_dict(self, input:dict):
+        for k, v in input.items():
+            setattr(self, k, v)
 
     def override_payload(self, payload:dict) -> dict:
         payload.pop('_comment', None)
@@ -3980,9 +3985,9 @@ class Task(Tasks):
 
     def update_vars_from_imgcmd(self):
         imgcmd_params = self.params.imgcmd
-        if imgcmd_params.get('size_dict'):
-            self.vars.width = imgcmd_params['size_dict'].get('width')
-            self.vars.height = imgcmd_params['size_dict'].get('height')
+        if imgcmd_params.get('size'):
+            self.vars.width = imgcmd_params['size'].get('width')
+            self.vars.height = imgcmd_params['size'].get('height')
         if imgcmd_params.get('img2img'):
             self.vars.i2i_image = imgcmd_params['img2img'].get('image')
             self.vars.i2i_mask = imgcmd_params['img2img'].get('mask')
@@ -4483,7 +4488,6 @@ if imggen_enabled:
             sizes = options.get('sizes', {})
             aspect_ratios = [size.get("ratio") for size in sizes.get('ratios', [])]
             # Calculate the average and aspect ratio sizes
-            # current_avg = bot_settings.imgmodel.last_imgmodel_res
             current_avg = bot_database.last_imgmodel_res
             ratio_options = calculate_aspect_ratio_sizes(current_avg, aspect_ratios)
             # Collect any defined static sizes
@@ -6530,18 +6534,18 @@ class ImgModel(SettingsBase):
             return {}
 
     # Save new Img model data
-    async def save_new_imgmodel_settings(self, ictx:CtxInteraction, new_imgmodel_settings:dict, imgmodel_tags):
+    async def save_new_imgmodel_options(self, ictx:CtxInteraction, new_imgmodel_options:dict, imgmodel_tags):
         # Remove options we do not want to retain in Settings
-        override_settings:dict = new_imgmodel_settings.get('override_settings', {})
+        override_settings:dict = new_imgmodel_options.get('override_settings', {})
         if override_settings and not config.is_per_server_imgmodels():
             imgmodel_options = list(override_settings.keys())  # list all options
             if imgmodel_options:
                 log.info(f"[Change Imgmodel] Applying Options which won't be retained for next bot startup: {imgmodel_options}")
             # Remove override_settings
-            new_imgmodel_settings.pop('override_settings')
+            new_imgmodel_options.pop('override_settings')
 
         # Update settings
-        self.payload_mods = new_imgmodel_settings
+        self.payload_mods = new_imgmodel_options
         self.tags = imgmodel_tags
 
         settings:Settings = get_settings(ictx)
@@ -6551,6 +6555,7 @@ class ImgModel(SettingsBase):
             new_avg = avg_from_dims(self.payload_mods['width'], self.payload_mods['height'])
             if new_avg != self.last_imgmodel_res:
                 self.last_imgmodel_res = new_avg
+                bot_database.last_imgmodel_res = new_avg
                 # update /image cmd res options
                 await bg_task_queue.put(update_size_options(new_avg))
 
@@ -6564,8 +6569,8 @@ class ImgModel(SettingsBase):
         return {}
 
     # Merge selected imgmodel/tag data with base settings
-    async def update_imgmodel_settings(self, imgmodel_data:dict) -> Tuple[dict, list]:
-        imgmodel_settings = {}
+    async def update_imgmodel_options(self, imgmodel_data:dict) -> Tuple[dict, list]:
+        imgmodel_options = {}
         imgmodel_tags = []
         try:
             # Get extra model information
@@ -6575,12 +6580,18 @@ class ImgModel(SettingsBase):
                 matched_preset = await self.guess_model_data(imgmodel_data, imgmodel_presets)
                 if matched_preset:
                     imgmodel_tags = matched_preset.pop('tags', [])
-                    imgmodel_settings = matched_preset.get('payload', {})
+                    imgmodel_options = matched_preset.get('payload', {})
             # Unpack any tag presets
             imgmodel_tags = base_tags.update_tags(imgmodel_tags)
         except Exception as e:
             log.error(f"Error merging selected imgmodel data with base imgmodel data: {e}")
-        return imgmodel_settings, imgmodel_tags
+        return imgmodel_options, imgmodel_tags
+
+    async def post_options(self, options_payload:dict):
+        try:
+            await api.imggen.post_options.call(input_data=options_payload, sanitize=True)
+        except Exception as e:
+            log.error(f"Error posting updated imgmodel settings to API: {e}")
 
     async def change_imgmodel(self, imgmodel_data:dict, ictx:CtxInteraction=None, save:bool=True) -> dict:
         # Retain model details
@@ -6588,7 +6599,7 @@ class ImgModel(SettingsBase):
         self.last_imgmodel_value = imgmodel_data.get(self._value_key, '')
 
         # Guess model params, merge with basesettings
-        imgmodel_settings, imgmodel_tags = await self.update_imgmodel_settings(imgmodel_data)
+        imgmodel_options, imgmodel_tags = await self.update_imgmodel_options(imgmodel_data)
 
         # Collect options payload
         options_payload = api.imggen.post_options.get_payload() if getattr(api.imggen, 'post_options', None) else {}
@@ -6596,18 +6607,15 @@ class ImgModel(SettingsBase):
             options_payload[self._imgmodel_input_key] = imgmodel_data[self._any_key]
         
         # Factors extras (override_settings, etc) if applicable
-        options_payload.update(self.get_extra_settings(imgmodel_settings))
+        options_payload.update(self.get_extra_settings(imgmodel_options))
 
         # Post new settings to API (Per-server must be payload-driven)
         if not config.is_per_server_imgmodels():
-            try:
-                await api.imggen.post_options.call(input_data=options_payload, sanitize=True)
-            except Exception as e:
-                log.error(f"Error posting updated imgmodel settings to API: {e}")
+            await self.post_options(options_payload)
 
         # Save settings
         if save:
-            await self.save_new_imgmodel_settings(ictx, imgmodel_settings, imgmodel_tags)
+            await self.save_new_imgmodel_options(ictx, imgmodel_options, imgmodel_tags)
             # Restart auto-change imgmodel task if triggered by a user interaction
             if ictx:
                 if self._imgmodel_update_task and not self._imgmodel_update_task.done():
@@ -6756,22 +6764,48 @@ class ImgModel_Comfy(ImgModel):
         payload.clear()
         payload['prompt'] = prompt_value
 
+    async def post_options(self, options_payload:dict):
+        pass
+
     async def get_imgmodel_data(self, imgmodel_value:str, ictx:CtxInteraction=None) -> dict:
         return {self._name_key: imgmodel_value,
                 self._value_key: imgmodel_value}
     
-    async def handle_file_attachment(self, attachment:discord.Attachment):
+    async def handle_file_attachment(self, attachment: discord.Attachment):
         file_bytes = await attachment.read()
-        filename = attachment.filename # or "img2img_image.png"
-
-        # Prepare a file-like object (BytesIO)
+        filename = attachment.filename
+        # Detect MIME type
+        kind = filetype.guess(file_bytes)
+        mime_type = kind.mime if kind else 'application/octet-stream'
+        # Prepare a file-like object
         file_obj = io.BytesIO(file_bytes)
-        file_obj.name = filename  # aiohttp expects .name for file uploads
+        file_obj.name = filename
+        # Return file dict
+        return {"file": file_obj, "filename": filename, "content_type": mime_type}
 
-      #  return {"file": file_obj, "filename": filename}
-        return (filename, file_obj, 'image/png')
+    def apply_imgcmd_params(self, task:"Task"):
+        imgcmd_vars = {}
+        imgcmd_params = task.params.imgcmd
+        if imgcmd_params.get('size'):
+            imgcmd_vars['width'] = imgcmd_params['size']['width']
+            imgcmd_vars['height'] = imgcmd_params['size']['height']
+        if imgcmd_params.get('img2img'):
+            if imgcmd_params['img2img'].get('image'):
+                imgcmd_vars['i2i_image'] = imgcmd_params['img2img']['image']['filename']
+            if imgcmd_params['img2img'].get('mask'):
+                imgcmd_vars['i2i_mask'] = imgcmd_params['img2img']['mask']['filename']
+            if imgcmd_params['img2img'].get('denoising_strength'):
+                imgcmd_vars['denoising_strength'] = imgcmd_params['img2img']['denoising_strength']
+        if imgcmd_params.get('cnet_dict'):
+            cnet_dict = imgcmd_params['cnet_dict']
+            for key, value in cnet_dict.items():
+                attr_name = f'cnet_{key}'
+                if hasattr(self, attr_name):
+                    setattr(self, attr_name, value)
+        if imgcmd_params.get('face_swap'):
+            imgcmd_vars['face_swap'] = imgcmd_params['face_swap']['filename']
 
-
+        task.vars.update_from_dict(imgcmd_vars)
 
 class ImgModel_SDWebUI(ImgModel):
     def __init__(self):
