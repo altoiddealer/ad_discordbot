@@ -2579,7 +2579,7 @@ class TaskProcessing(TaskAttributes):
             if payload:
                 if isinstance(payload, dict):
                     log.info(f"[TAGS] Updated payload: '{payload}'")
-                    update_dict(self.payload, payload)
+                    self.imgmodel_settings.update_task_payload(payload, self)
                 else:
                     log.warning("[TAGS] A tag was matched with invalid 'payload'; must be a dictionary.")
             # Aspect Ratio
@@ -2598,7 +2598,8 @@ class TaskProcessing(TaskAttributes):
                     else:
                         n, d = get_aspect_ratio_parts(aspect_ratio)
                     w, h = dims_from_ar(current_avg, n, d)
-                    self.payload['width'], self.payload['height'] = w, h
+                    size_update = {'width': w, 'height': h}
+                    self.imgmodel_settings.update_task_payload(size_update, self)
                     log.info(f'[TAGS] Applied aspect ratio "{aspect_ratio}" (Width: "{w}", Height: "{h}").')
                 except Exception as e:
                     log.error(f"[TAGS] Error applying aspect ratio: {e}")
@@ -6396,6 +6397,10 @@ class ImgModel(SettingsBase):
 
     async def handle_file_attachment(self, attachment:discord.Attachment) -> bytes:
         return await attachment.read()
+    
+    def update_task_payload(self, updates:dict, task:"Task"):
+        update_dict(task.payload, updates)
+        task.vars.update_from_dict(updates)
 
     def collect_names(self, imgmodels:list):
         if not imgmodels:
@@ -6781,6 +6786,9 @@ class ImgModel_Comfy(ImgModel):
         # Return file dict
         return {"file": file_obj, "filename": filename, "content_type": mime_type}
 
+    def update_task_payload(self, updates:dict, task:"Task"):
+        task.vars.update_from_dict(updates)
+
     def apply_imgcmd_params(self, task:"Task"):
         imgcmd_vars = {}
         imgcmd_params = task.params.imgcmd
@@ -6819,6 +6827,9 @@ class ImgModel_SDWebUI(ImgModel):
     async def handle_file_attachment(self, attachment):
         file_bytes = await attachment.read()
         return base64.b64encode(file_bytes).decode('utf-8')
+
+    def update_task_payload(self, updates:dict, task:"Task"):
+        update_dict(task.payload, updates)
 
     def apply_imgcmd_params(self, task:"Task"):
         try:
