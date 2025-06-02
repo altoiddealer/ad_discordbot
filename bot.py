@@ -1053,7 +1053,7 @@ class BotVars():
         imgmodel_settings:ImgModel = get_imgmodel_settings(ictx)
         self.ckpt_name = imgmodel_settings.last_imgmodel_value
 
-    def apply_overrides(self, payload:dict) -> dict:
+    def override_payload(self, payload:dict) -> dict:
         payload.pop('_comment', None)
         if "__overrides__" not in payload:
             return payload
@@ -1702,9 +1702,9 @@ class TaskProcessing(TaskAttributes):
         # apply params from /prompt command
         self.apply_prompt_params()
         # Update bot vars from self (Task)
-        self.update_bot_vars()
-        # Apply bot_vars overrides
-        self.payload = self.bot_vars.apply_overrides(self.payload)
+        self.update_vars()
+        # Apply vars overrides
+        self.payload = self.vars.override_payload(self.payload)
         # assign finalized prompt to payload
         self.payload['text'] = self.prompt
 
@@ -2381,36 +2381,6 @@ class TaskProcessing(TaskAttributes):
         except Exception as e:
             log.error(f"Error processing lrctl: {e}")
 
-    def apply_imgcmd_params(self:Union["Task","Tasks"]):
-        try:
-            imgcmd_params = self.params.imgcmd
-            size: Optional[dict]       = imgcmd_params['size']
-            face_swap :Optional[str]   = imgcmd_params['face_swap']
-            controlnet: Optional[dict] = imgcmd_params['controlnet']
-            img2img: dict              = imgcmd_params['img2img']
-            img2img_mask               = img2img.get('mask', '')
-
-            if img2img:
-                self.payload['init_images'] = [img2img['image']]
-                self.payload['denoising_strength'] = img2img['denoising_strength']
-            if img2img_mask:
-                self.payload['mask'] = img2img_mask
-            if size:
-                self.payload.update(size)
-            if face_swap or controlnet:
-                alwayson_scripts:dict = self.payload.setdefault('alwayson_scripts', {})
-                if face_swap:
-                    alwayson_scripts.setdefault('reactor', {}).setdefault('args', {})['image'] = face_swap # image in base64 format
-                    alwayson_scripts['reactor']['args']['enabled'] = True # Enable
-            if controlnet:
-                cnet_dict = alwayson_scripts.setdefault('controlnet', {})
-                cnet_args = cnet_dict.setdefault('args', [])
-                if len(cnet_args) == 0:
-                    cnet_args.append({})
-                cnet_args[0].update(controlnet)
-        except Exception as e:
-            log.error(f"Error initializing imgcmd params: {e}")
-
     def process_img_prompt_tags(self:Union["Task","Tasks"]):
         try:
             self.prompt = self.tags.process_tag_insertions(self.prompt)
@@ -2469,7 +2439,7 @@ class TaskProcessing(TaskAttributes):
             log.error(f"Error processing param variances: {e}")
             return {}
 
-    def select_random_image_or_subdir(self, directory=None, root_dir=None, key=None):
+    def select_random_image_or_subdir(self:Union["Task","Tasks"], directory=None, root_dir=None, key=None):
         image_file_path = None
         contents = os.listdir(directory)    # List all files and directories in the given directory
         # Filter files to include only .png and .jpg extensions
@@ -2503,7 +2473,7 @@ class TaskProcessing(TaskAttributes):
         # If neither image files nor subdirectories found, return None
         return None, None
 
-    def get_image_tag_args(self, extension, value, key=None, set_dir=None):
+    def get_image_tag_args(self:Union["Task","Tasks"], extension, value, key=None, set_dir=None):
         args = {}
         image_file_path = ''
         method = ''
@@ -2570,7 +2540,7 @@ class TaskProcessing(TaskAttributes):
             log.error(f"[TAGS] Error processing {extension} tag: {e}")
             return {}
 
-    async def process_img_payload_tags(self, mods:dict):
+    async def process_img_payload_tags(self:Union["Task","Tasks"], mods:dict):
         try:
             change_imgmodel: str  = mods.pop('change_imgmodel', None)
             swap_imgmodel: str    = mods.pop('swap_imgmodel', None)
@@ -2586,13 +2556,11 @@ class TaskProcessing(TaskAttributes):
             self.params.sd_output_dir = (mods.pop('sd_output_dir', self.params.sd_output_dir)).lstrip('/')  # Remove leading slash if it exists
             self.params.img_censoring = mods.pop('img_censoring', self.params.img_censoring)
 
-            imgmodel_settings:ImgModel = get_imgmodel_settings(self.ictx)
-
             # Imgmodel handling
             new_imgmodel = change_imgmodel or swap_imgmodel or None
             if new_imgmodel:
-                current_imgmodel_name = imgmodel_settings.last_imgmodel_name
-                current_imgmodel_value = imgmodel_settings.last_imgmodel_value
+                current_imgmodel_name = self.imgmodel_settings.last_imgmodel_name
+                current_imgmodel_value = self.imgmodel_settings.last_imgmodel_value
                 mode = 'change' if change_imgmodel else 'swap'
                 verb = 'Changing' if change_imgmodel else 'Swapping'
                 # Check if new model same as current model
@@ -2600,7 +2568,7 @@ class TaskProcessing(TaskAttributes):
                     log.info(f'[TAGS] Img model was triggered to {mode}, but it is the same as current.')
                 else:
                     # Add values to Params. Will trigger model change
-                    self.params.imgmodel = await imgmodel_settings.get_params(imgmodel=new_imgmodel, mode=mode, verb=verb)
+                    self.params.imgmodel = await self.imgmodel_settings.get_params(imgmodel=new_imgmodel, mode=mode, verb=verb)
                     log.info(f'[TAGS] {verb} Img model: "{new_imgmodel}"')
             # Payload handling
             if payload:
@@ -2612,7 +2580,7 @@ class TaskProcessing(TaskAttributes):
             # Aspect Ratio
             if aspect_ratio:
                 try:
-                    current_avg = bot_settings.get_last_setting_for("last_imgmodel_res", self.ictx)
+                    current_avg = self.imgmodel_settings.last_imgmodel_res
                     # Use AR from input image, while adhering to current model res
                     if img2img and aspect_ratio.lower() in ['use img2img', 'from img2img']:
                         from io import BytesIO
@@ -2859,10 +2827,8 @@ class TaskProcessing(TaskAttributes):
             self.prompt     = positive_style.format(self.prompt)
             self.neg_prompt = f"{neg_prompt}, {negative_style}" if negative_style else neg_prompt
 
-            # Update bot_vars
-            imgmodel_settings:ImgModel = get_imgmodel_settings(self.ictx)
-            imgmodel_settings.update_bot_vars(self.bot_vars)
-            self.update_bot_vars_from_imgcmd()
+            # Update vars
+            self.imgmodel_settings.update_vars(self.vars)
 
             # Get endpoint for mode
             imggen_ep = self.params.get_active_imggen_ep()
@@ -2873,7 +2839,7 @@ class TaskProcessing(TaskAttributes):
                 raise RuntimeError(f"Error initializing img payload: No valid endpoint available for main imggen task.")
 
             # Apply settings from imgmodel configuration
-            self.payload = self.settings.imgmodel.apply_overrides(endpoint_payload)
+            self.payload = self.settings.imgmodel.override_payload(endpoint_payload)
 
         except Exception as e:
             log.error(f"Error initializing img payload: {e}")
@@ -3563,9 +3529,8 @@ class Tasks(TaskProcessing):
     #################### CHANGE IMG MODEL TASK ######################
     #################################################################
     async def change_imgmodel_task(self:"Task"):
-        imgmodel_settings:ImgModel = get_imgmodel_settings(self.ictx)
         # delegate to ImgModel()
-        await imgmodel_settings.change_imgmodel_task(task=self)
+        await self.imgmodel_settings.change_imgmodel_task(task=self)
 
     #################################################################
     #################### CHANGE LLM MODEL TASK ######################
@@ -3680,7 +3645,6 @@ class Tasks(TaskProcessing):
     ######################## IMAGE GEN TASK #########################
     #################################################################
     async def img_gen_task(self:"Task"):
-        imgmodel_settings:ImgModel = get_imgmodel_settings(self.ictx)
         try:
             if not self.tags:
                 self.tags = Tags(self.ictx)
@@ -3699,24 +3663,24 @@ class Tasks(TaskProcessing):
             # Apply tags relevant to Img prompts
             self.process_img_prompt_tags()
             # Apply menu selections from /image command
-            self.apply_imgcmd_params()
+            self.imgmodel_settings.apply_imgcmd_params(task=self)
 
-            # Update bot_vars
-            self.update_bot_vars()
+            # Update vars
+            self.update_vars()
             # Apply updated prompt/negative prompt to payload
-            imgmodel_settings.apply_prompts_to_task(self)
-            # Apply bot_vars overrides
-            self.payload = self.bot_vars.apply_overrides(self.payload)
+            self.imgmodel_settings.apply_prompts_to_task(self)
+            # Apply vars overrides
+            self.payload = self.vars.override_payload(self.payload)
             # Clean anything up that gets messy
-            imgmodel_settings.clean_payload(self.payload)
+            self.imgmodel_settings.clean_payload(self.payload)
 
             # Change imgmodel if triggered by tags
             swap_imgmodel_params = None
             if self.params.imgmodel:
                 if getattr(self.params.imgmodel, 'mode', 'change') == 'swap':
                     # Prepare params for the secondary model change
-                    current_imgmodel = imgmodel_settings.last_imgmodel_value
-                    swap_imgmodel_params = await imgmodel_settings.get_params(imgmodel=current_imgmodel, mode='swap_back', verb='Swapping back to')
+                    current_imgmodel = self.imgmodel_settings.last_imgmodel_value
+                    swap_imgmodel_params = await self.imgmodel_settings.get_params(imgmodel=current_imgmodel, mode='swap_back', verb='Swapping back to')
                 # RUN A CHANGE IMGMODEL SUBTASK
                 new_options = await self.run_subtask('change_imgmodel')
                 self.payload = deep_merge(self.payload, new_options)
@@ -3940,7 +3904,7 @@ class Task(Tasks):
         self.payload: dict           = kwargs.pop('payload', None)
 
         self.params: Params          = kwargs.pop('params', None)
-        self.bot_vars: BotVars       = kwargs.pop('bot_vars', None)
+        self.vars: BotVars           = kwargs.pop('vars', None)
         self.tags: Tags              = kwargs.pop('tags', None)
         self.llm_resp: str           = kwargs.pop('llm_resp', None)
         self.tts_resps: list         = kwargs.pop('tts_resps', None)
@@ -3948,6 +3912,7 @@ class Task(Tasks):
         self.bot_hmessage: HMessage  = kwargs.pop('bot_hmessage', None)
         self.local_history           = kwargs.pop('local_history', None)
         self.settings: Settings      = kwargs.pop('settings', None)
+        self.imgmodel_settings:ImgModel = kwargs.pop('imgmodel_settings', None)
         self.istyping: IsTyping      = kwargs.pop('istyping', None)
         self.message: Message        = kwargs.pop('message', None)
         self.extra_text: list        = kwargs.pop('extra_text', None)
@@ -3974,7 +3939,7 @@ class Task(Tasks):
         self.payload: dict           = self.payload if self.payload else {}
         # Misc parameters
         self.params: Params          = self.params if self.params else Params()
-        self.bot_vars: BotVars       = self.bot_vars if self.bot_vars else BotVars()
+        self.vars: BotVars           = self.vars if self.vars else BotVars()
         self.tags: Tags              = self.tags if self.tags else Tags(self.ictx)
         # Bot response attributes
         self.llm_resp: str           = self.llm_resp if self.llm_resp else ''
@@ -3986,6 +3951,7 @@ class Task(Tasks):
         non_history_tasks = ['change_char', 'change_imgmodel', 'change_llmmodel', 'toggle_tts'] # tasks that definitely do not need history
         # Establish correct Settings instance and Local History values
         self.settings: Settings      = self.settings if self.settings else None
+        self.imgmodel_settings: ImgModel = self.imgmodel_settings if self.imgmodel_settings else get_imgmodel_settings(self.ictx)
         if self.ictx:
             is_dm = is_direct_message(self.ictx)
             if not self.settings and not is_dm:
@@ -4012,27 +3978,27 @@ class Task(Tasks):
         channel = getattr(self.ictx, 'channel', None)
         return getattr(channel, 'id', default)
 
-    def update_bot_vars_from_imgcmd(self):
+    def update_vars_from_imgcmd(self):
         imgcmd_params = self.params.imgcmd
         if imgcmd_params.get('size_dict'):
-            self.bot_vars.width = imgcmd_params['size_dict'].get('width')
-            self.bot_vars.height = imgcmd_params['size_dict'].get('height')
+            self.vars.width = imgcmd_params['size_dict'].get('width')
+            self.vars.height = imgcmd_params['size_dict'].get('height')
         if imgcmd_params.get('img2img'):
-            self.bot_vars.i2i_image = imgcmd_params['img2img'].get('image')
-            self.bot_vars.i2i_mask = imgcmd_params['img2img'].get('mask')
-            self.bot_vars.denoising_strength = imgcmd_params['img2img'].get('denoising_strength')
+            self.vars.i2i_image = imgcmd_params['img2img'].get('image')
+            self.vars.i2i_mask = imgcmd_params['img2img'].get('mask')
+            self.vars.denoising_strength = imgcmd_params['img2img'].get('denoising_strength')
         if imgcmd_params.get('cnet_dict'):
             cnet_dict = imgcmd_params['cnet_dict']
             for key, value in cnet_dict.items():
                 attr_name = f'cnet_{key}'
                 if hasattr(self, attr_name):
                     setattr(self, attr_name, value)
-        self.bot_vars.face_image = imgcmd_params['face_swap']
+        self.vars.face_image = imgcmd_params['face_swap']
 
-    def update_bot_vars(self):
-        self.bot_vars.update(self.ictx)
-        self.bot_vars.prompt = self.prompt
-        self.bot_vars.neg_prompt = self.neg_prompt
+    def update_vars(self):
+        self.vars.update(self.ictx)
+        self.vars.prompt = self.prompt
+        self.vars.neg_prompt = self.neg_prompt
 
     def init_typing(self, start_time=None, end_time=None):
         '''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
@@ -4517,6 +4483,7 @@ if imggen_enabled:
             sizes = options.get('sizes', {})
             aspect_ratios = [size.get("ratio") for size in sizes.get('ratios', [])]
             # Calculate the average and aspect ratio sizes
+            # current_avg = bot_settings.imgmodel.last_imgmodel_res
             current_avg = bot_database.last_imgmodel_res
             ratio_options = calculate_aspect_ratio_sizes(current_avg, aspect_ratios)
             # Collect any defined static sizes
@@ -4617,6 +4584,8 @@ if imggen_enabled:
         face_swap = selections.get('face_swap', None) if reactor_enabled else None
         cnet = selections.get('cnet', None) if cnet_enabled else None
 
+        imgmodel_settings:ImgModel = get_imgmodel_settings(ctx)
+
         # Defaults
         mode = 'txt2img'
         size_dict = {}
@@ -4643,8 +4612,7 @@ if imggen_enabled:
                 log_msg += f"\nNegative Prompt: {neg_prompt}"
             if img2img:
                 async def process_image_img2img(img2img, img2img_dict, mode, log_msg):
-                    imgmodel_settings:ImgModel = get_imgmodel_settings(ctx)
-                    i2i_image = await imgmodel_settings.handle_image_attachment(img2img)
+                    i2i_image = await imgmodel_settings.handle_file_attachment(img2img)
                     img2img_dict['image'] = i2i_image
                     # Ask user to select a Denoise Strength
                     denoise_options = []
@@ -4672,25 +4640,20 @@ if imggen_enabled:
                     log.error(f"An error occurred while configuring Img2Img for /image command: {e}")
             if img2img_mask:
                 if img2img:
-                    attached_img2img_mask_img = await img2img_mask.read()
-                    img2img_mask_img = base64.b64encode(attached_img2img_mask_img).decode('utf-8')
+                    img2img_mask_img = await imgmodel_settings.handle_file_attachment(img2img_mask)
                     img2img_dict['mask'] = img2img_mask_img
                     log_msg += "\nInpainting Mask Provided"
                 else:
                     await ctx.send("Inpainting requires im2img. Not applying img2img_mask mask...", ephemeral=True)
             if face_swap:
-                attached_face_img = await face_swap.read()
-                faceswapimg = base64.b64encode(attached_face_img).decode('utf-8')
+                faceswapimg = await imgmodel_settings.handle_file_attachment(face_swap)
                 log_msg += "\nFace Swap Image Provided"
             if cnet:
                 # Get filtered ControlNet data
                 cnet_data = await get_cnet_data()
                 async def process_image_controlnet(cnet, cnet_dict, log_msg):
                     try:
-                        # Convert attached image to base64
-                        attached_cnet_img = await cnet.read()
-                        cnetimage = base64.b64encode(attached_cnet_img).decode('utf-8')
-                        cnet_dict['image'] = cnetimage
+                        cnet_dict['image'] = await imgmodel_settings.handle_file_attachment(cnet)
                     except Exception as e:
                         log.error(f"Error decoding ControlNet input image for '/image' command: {e}")
                     try:
@@ -6197,7 +6160,8 @@ def get_settings(ictx:CtxInteraction|None=None) -> "Settings":
 
 def get_imgmodel_settings(ictx:CtxInteraction|None=None) -> "ImgModel":
     if config.is_per_server_imgmodels():
-        return get_settings(ictx)
+        settings = get_settings(ictx)
+        return settings.imgmodel
     return bot_settings.imgmodel
 
 class SettingsBase:
@@ -6402,17 +6366,17 @@ class ImgModel(SettingsBase):
     def clean_payload(self, payload:dict):
         pass
 
-    def update_bot_vars(self, bot_vars:"BotVars"):
+    def update_vars(self, vars:"BotVars"):
         for key, value in self.payload_mods.items():
-            setattr(bot_vars, key, value)
+            setattr(vars, key, value)
 
     # Update __overrides__ dict in user's default payload with any imgmodel payload mods
-    def apply_overrides(self, payload:dict) -> dict:
+    def override_payload(self, payload:dict) -> dict:
         if '__overrides__' in payload:
             payload['__overrides__'] = deep_merge(payload['__overrides__'], self.payload_mods)
             return payload
         else:
-            return update_dict(payload, self.payload_mods)
+            return deep_merge(payload, self.payload_mods)
     
     def apply_prompts_to_task(self, task:"Task"):
         active_ep = task.params.get_active_imggen_ep()
@@ -6422,10 +6386,12 @@ class ImgModel(SettingsBase):
         if neg_prompt_key:
             set_key(data=task.payload, path=neg_prompt_key, value=task.neg_prompt)
 
-    async def handle_image_attachment(self, attachment:discord.Attachment):
-        #Convert attached image to base64
-        file_bytes = await attachment.read()
-        return base64.b64encode(file_bytes).decode('utf-8')
+    def apply_imgcmd_params(self, task:"Task"):
+        # Just update vars for unknown clients (expected to be injected via __overrides__)
+        task.update_vars_from_imgcmd()
+
+    async def handle_file_attachment(self, attachment:discord.Attachment) -> bytes:
+        return await attachment.read()
 
     def collect_names(self, imgmodels:list):
         if not imgmodels:
@@ -6575,26 +6541,23 @@ class ImgModel(SettingsBase):
             new_imgmodel_settings.pop('override_settings')
 
         # Update settings
-        settings:Settings = bot_settings
-        if config.is_per_server_imgmodels():
-            settings:Settings = get_settings(ictx)
+        self.payload_mods = new_imgmodel_settings
+        self.tags = imgmodel_tags
 
-        settings.imgmodel.payload_mods = new_imgmodel_settings
-        settings.imgmodel.tags = imgmodel_tags
+        settings:Settings = get_settings(ictx)
+
+        # Check if old/new average resolution is different
+        if self.payload_mods.get('width') and self.payload_mods.get('height'):
+            new_avg = avg_from_dims(self.payload_mods['width'], self.payload_mods['height'])
+            if new_avg != self.last_imgmodel_res:
+                self.last_imgmodel_res = new_avg
+                # update /image cmd res options
+                await bg_task_queue.put(update_size_options(new_avg))
 
         # Fix any invalid settings
         settings.fix_settings()
         # Save file
         settings.save()
-
-        # Check if old/new average resolution is different
-        if settings.imgmodel.payload_mods.get('width') and settings.imgmodel.payload_mods.get('height'):
-            new_avg = avg_from_dims(settings.imgmodel.payload_mods['width'], settings.imgmodel.payload_mods['height'])
-            if new_avg != bot_settings.get_last_setting_for("last_imgmodel_res", ictx):
-                # save new res to bot database
-                bot_settings.set_last_setting_for("last_imgmodel_res", new_avg, ictx, save_now=True)
-                # update /image cmd res options
-                await bg_task_queue.put(update_size_options(new_avg))
 
     # subclass behavior
     def get_extra_settings(self, imgmodel_data:dict) -> dict:
@@ -6797,15 +6760,18 @@ class ImgModel_Comfy(ImgModel):
         return {self._name_key: imgmodel_value,
                 self._value_key: imgmodel_value}
     
-    async def handle_image_attachment(self, attachment:discord.Attachment):
+    async def handle_file_attachment(self, attachment:discord.Attachment):
         file_bytes = await attachment.read()
-        filename = attachment.filename or "img2img_image.png"
+        filename = attachment.filename # or "img2img_image.png"
 
         # Prepare a file-like object (BytesIO)
         file_obj = io.BytesIO(file_bytes)
         file_obj.name = filename  # aiohttp expects .name for file uploads
 
-        return {"file": file_obj, "filename": filename}
+      #  return {"file": file_obj, "filename": filename}
+        return (filename, file_obj, 'image/png')
+
+
 
 class ImgModel_SDWebUI(ImgModel):
     def __init__(self):
@@ -6817,7 +6783,41 @@ class ImgModel_SDWebUI(ImgModel):
         self._any_key = self._name_key or self._value_key or self._filename_key or ''
         if hasattr(api.imggen, 'post_options') and api.imggen.post_options:
             self._imgmodel_input_key:str = api.imggen.post_options.imgmodel_input_key or 'sd_model_checkpoint'
-    
+
+    async def handle_file_attachment(self, attachment):
+        file_bytes = await attachment.read()
+        return base64.b64encode(file_bytes).decode('utf-8')
+
+    def apply_imgcmd_params(self, task:"Task"):
+        try:
+            imgcmd_params = task.params.imgcmd
+            size: Optional[dict]       = imgcmd_params['size']
+            face_swap :Optional[str]   = imgcmd_params['face_swap']
+            controlnet: Optional[dict] = imgcmd_params['controlnet']
+            img2img: dict              = imgcmd_params['img2img']
+            img2img_mask               = img2img.get('mask', '')
+
+            if img2img:
+                task.payload['init_images'] = [img2img['image']]
+                task.payload['denoising_strength'] = img2img['denoising_strength']
+            if img2img_mask:
+                task.payload['mask'] = img2img_mask
+            if size:
+                task.payload.update(size)
+            if face_swap or controlnet:
+                alwayson_scripts:dict = task.payload.setdefault('alwayson_scripts', {})
+                if face_swap:
+                    alwayson_scripts.setdefault('reactor', {}).setdefault('args', {})['image'] = face_swap # image in base64 format
+                    alwayson_scripts['reactor']['args']['enabled'] = True # Enable
+            if controlnet:
+                cnet_dict = alwayson_scripts.setdefault('controlnet', {})
+                cnet_args = cnet_dict.setdefault('args', [])
+                if len(cnet_args) == 0:
+                    cnet_args.append({})
+                cnet_args[0].update(controlnet)
+        except Exception as e:
+            log.error(f"Error initializing imgcmd params: {e}")
+
     def clean_payload(self, payload:dict):
         try:
             # Remove duplicate negative prompts while preserving original order

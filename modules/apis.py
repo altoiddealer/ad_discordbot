@@ -1273,7 +1273,8 @@ class ImgGenClient(APIClient):
                 "post_server_restart": ImgGenEndpoint_PostServerRestart,
                 "get_controlnet_control_types": ImgGenEndpoint_GetControlNetControlTypes,
                 "get_history": ImgGenEndpoint_GetHistory,
-                "get_view": ImgGenEndpoint_GetView}
+                "get_view": ImgGenEndpoint_GetView,
+                "post_upload": ImgGenEndpoint_PostUpload}
 
     def _default_endpoint_class(self):
         return ImgGenEndpoint
@@ -1402,15 +1403,43 @@ class ImgGenClient_Comfy(ImgGenClient):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
+    async def upload_image(self, file_tuple, data_fields):
+        form = aiohttp.FormData()
+        url = 'http://127.0.0.1:8188/upload/image'
+
+        # Add normal form data fields
+        for key, value in data_fields.items():
+            form.add_field(key, str(value))
+
+        # Add file field
+        filename, fileobj, content_type = file_tuple
+        form.add_field('image', fileobj, filename=filename, content_type=content_type)
+
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, data=form) as resp:
+                text = await resp.text()
+                print(f"Status: {resp.status}, response: {text}")
+                resp.raise_for_status()
+                return await resp.json()
+
     async def apply_img2img(self, img_payload:dict, task):
-        base64 = task.img
+        img2img_file = task.params.imgcmd['img2img'].get('image') # {'image': (<filename>, <file_obj>, 'image/png')}
+        if not img2img_file:
+            raise RuntimeError(f'[{self.name}] Img2img missing required image input')
+        data = {'type': 'input', 'overwrite': 'false'}
+        await self.upload_image(img2img_file, data)
+        print("img2img_file:", img2img_file)
+        print("data:", data)
+        response = await self.post_upload.call(payload_map={'files': img2img_file, 'data': data}, 
+                                               path_vars='image')
+        print("Upload response:", response)
 
     async def main_imggen(self, img_payload:dict, mode:str="txt2img", task=None) -> Tuple[list[Image.Image], None]:
         ictx = None
         if task:
             ictx = task.ictx
         if mode == 'img2img':
-            img_payload = self.apply_img2img(img_payload, task)
+            img_payload = await self.apply_img2img(img_payload, task)
         try:
             ep_for_mode:ImgGenEndpoint = getattr(self, f'post_{mode}')
             queued = await ep_for_mode.call(input_data=img_payload, task=task)
@@ -1696,6 +1725,30 @@ class Endpoint:
 
         return final_cleaned
 
+    def prepare_aiohttp_formdata(self, data_payload: dict, files_payload: dict) -> aiohttp.FormData:
+        form = aiohttp.FormData()
+
+        # Add regular fields
+        if data_payload:
+            for key, value in data_payload.items():
+                form.add_field(key, str(value))
+
+        # Add file fields
+        if files_payload:
+            for key, file_tuple in files_payload.items():
+                if isinstance(file_tuple, tuple) and len(file_tuple) == 3:
+                    filename, file_obj, content_type = file_tuple
+                    form.add_field(
+                        name=key,
+                        value=file_obj,
+                        filename=filename,
+                        content_type=content_type
+                    )
+                else:
+                    raise ValueError(f"Invalid file tuple for key '{key}': {file_tuple}")
+
+        return form
+
     def resolve_input_data(self, input_data, payload_type, payload_map):
         json_payload = None
         data_payload = None
@@ -1706,24 +1759,22 @@ class Endpoint:
         preferred_content = self.get_preferred_content_type()
         # Use explicit payload map if given
         if payload_map:
-            json_payload = {k: input_data[k] for k in payload_map.get("json", []) if k in input_data}
-            data_payload = {k: input_data[k] for k in payload_map.get("data", []) if k in input_data}
-            params_payload = {k: input_data[k] for k in payload_map.get("params", []) if k in input_data}
-            files_payload = {k: input_data[k] for k in payload_map.get("files", []) if k in input_data}
+            # Fully structured override
+            json_payload = payload_map.get("json")
+            data_payload = payload_map.get("data")
+            params_payload = payload_map.get("params")
+            files_payload = payload_map.get("files")
+            if files_payload and data_payload:
+                data_payload = self.prepare_aiohttp_formdata(data_payload, files_payload)
+                files_payload = None
         else:
+            if payload_type == "multipart" or preferred_content.startswith("multipart/form-data"):
+                raise ValueError(f"[{self.name}] 'payload_map=' is required for multipart/form-data payloads (cannot be accomplished with 'input_data=').")
             if explicit_type:
                 if payload_type == "json":
                     json_payload = input_data
                 elif payload_type == "form":
                     data_payload = input_data
-                elif payload_type == "multipart":
-                    files_payload = {}
-                    data_payload = {}
-                    for k, v in input_data.items():
-                        if hasattr(v, 'read'):
-                            files_payload[k] = v
-                        else:
-                            data_payload[k] = v
                 elif payload_type == "query":
                     params_payload = input_data
             else:
@@ -1731,14 +1782,6 @@ class Endpoint:
                     json_payload = input_data
                 elif preferred_content == "application/x-www-form-urlencoded":
                     data_payload = input_data
-                elif preferred_content and preferred_content.startswith("multipart/form-data"):
-                    files_payload = {}
-                    data_payload = {}
-                    for k, v in input_data.items():
-                        if hasattr(v, 'read'):
-                            files_payload[k] = v
-                        else:
-                            data_payload[k] = v
                 elif preferred_content == "application/octet-stream":
                     data_payload = input_data
                 elif preferred_content == "text/plain":
@@ -1769,6 +1812,11 @@ class Endpoint:
         response_type = kwargs.pop('response_type', self.response_type)
 
         json_payload, data_payload, params_payload, files_payload = self.resolve_input_data(input_data, payload_type, payload_map)
+
+        print("json_payload:", json_payload)
+        print("data_payload:", data_payload)
+        print("params_payload:", params_payload)
+        print("files_payload:", files_payload)
 
         response:Optional[APIResponse] = None
         results = {}
@@ -2090,6 +2138,9 @@ class ImgGenEndpoint_GetView(ImgGenEndpoint):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
+class ImgGenEndpoint_PostUpload(ImgGenEndpoint):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
 
 class APIResponse:
     def __init__(

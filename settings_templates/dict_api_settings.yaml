@@ -52,7 +52,8 @@ bot_api_functions:
     get_controlnet_control_types:
       endpoint_name: Get Cnet Control Types
       control_types_key: control_types # ex: response = {'control_types': <Beautifully organized controlnet model dictionary>, ...}
-    # ComfyUI specific
+    # ComfyUI specific (may work for similar APIs)
+    post_upload: {endpoint_name: Upload}
     get_history: {endpoint_name: History}
     get_view: {endpoint_name: View}
 
@@ -158,14 +159,14 @@ all_apis:
         method: POST
         payload_base: comfyui_text2image.json
         payload_type: json
-      # - name: Post img2img
-      #   path: /prompt
-      #   method: POST
-      #   payload_base: comfyui_img2image.json
-      #   payload_type: json
+      - name: Post img2img
+        path: /prompt
+        method: POST
+        payload_base: comfyui_image2image.json
+        payload_type: json
       - {name: History, path: "/history/{}", method: GET} # "/history/{prompt_id}"
       - {name: View, path: /view, method: GET, payload_type: query, response_type: bytes}
-      - {name: Upload, path: "/upload/{}", method: POST, payload_type: multipart} # "/upload/{image_type}"
+      - {name: Upload, path: "/upload/{}", method: POST, headers: {Content-Type: multipart/form-data}, payload_type: multipart} # "/upload/{image_type}"
       - {name: Cancel, path: /interrupt, method: POST}
       - name: Get Checkpoints
         path: "/object_info/CheckpointLoaderSimple"
