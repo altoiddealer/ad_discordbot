@@ -12,7 +12,7 @@ from datetime import datetime
 from pathlib import Path
 from pydub import AudioSegment
 import io
-from typing import Any, Optional
+from typing import Any, Optional, Callable
 from modules.utils_misc import guess_format_from_headers, guess_format_from_data, is_base64
 
 from modules.logs import import_track, get_logger; import_track(__file__, fp=True); log = get_logger(__name__)  # noqa: E702
@@ -148,6 +148,58 @@ def resolve_placeholders(data: Any, config: Any, context: dict) -> Any:
     elif isinstance(config, list):
         return [resolve_placeholders(data, i, context) for i in config]
     return config
+
+def build_completion_condition(condition_config: dict, context_vars: dict = None) -> Callable[[dict], bool]:
+    """
+    Builds a callable that checks if a websocket message meets a user-defined condition.
+
+    Example input:
+    {
+        "type": "executed",
+        "data": {
+            "prompt_id": "{prompt_id}"
+        }
+    }
+    """
+    from copy import deepcopy
+
+    # Fill context vars into placeholders like "{prompt_id}"
+    def resolve_placeholders(value):
+        if isinstance(value, str) and value.startswith("{") and value.endswith("}"):
+            key = value.strip("{}")
+            return context_vars.get(key, value)
+        return value
+
+    # Deep-copy and resolve context
+    condition = deepcopy(condition_config or {})
+    if context_vars:
+        for k, v in condition.items():
+            if isinstance(v, dict):
+                for sub_k, sub_v in v.items():
+                    condition[k][sub_k] = resolve_placeholders(sub_v)
+            else:
+                condition[k] = resolve_placeholders(v)
+
+    # Return the actual checker function
+    def condition_func(msg: dict) -> bool:
+        try:
+            for key, expected in condition.items():
+                actual = msg.get(key)
+                if isinstance(expected, dict):
+                    if not isinstance(actual, dict):
+                        return False
+                    for sub_key, sub_expected in expected.items():
+                        if actual.get(sub_key) != sub_expected:
+                            return False
+                else:
+                    if actual != expected:
+                        return False
+            return True
+        except Exception:
+            return False
+
+    return condition_func
+
 
 def decode_base64(data, _config=None):
     return base64.b64decode(data) if isinstance(data, str) else data

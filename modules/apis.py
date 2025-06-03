@@ -11,7 +11,7 @@ import io
 import base64
 import copy
 from modules.typing import CtxInteraction
-from typing import get_type_hints, get_type_hints, get_origin, get_args, Any, Tuple, Optional, Union, AsyncGenerator
+from typing import get_type_hints, get_type_hints, get_origin, get_args, Any, Tuple, Optional, Union, Callable, AsyncGenerator
 from modules.utils_shared import shared_path, bot_database, load_file, get_api
 from modules.utils_misc import valueparser, progress_bar, extract_key, deep_merge, split_at_first_comma
 import modules.utils_processing as processing
@@ -977,6 +977,7 @@ class APIClient:
         timeout: int = 30,
         type_filter: Optional[list[str]] = None,
         data_filter: Optional[dict] = None,
+        completion_condition: Optional[Callable[[dict], bool]] = None,
     ) -> AsyncGenerator[dict, None]:
         """
         Stream messages from WebSocket and yield structured data at most once per yield_interval seconds.
@@ -1042,6 +1043,12 @@ class APIClient:
                 except Exception:
                     log.warning(f"[{self.name}] Invalid JSON in WebSocket message")
                     continue
+                
+                # Check for completion condition
+                if completion_condition and completion_condition(payload):
+                    log.info(f"[{self.name}] Completion condition matched.")
+                    yield payload
+                    break
 
                 msg_type = payload.get("type")
                 data = payload.get("data", {})
@@ -1093,6 +1100,7 @@ class APIClient:
                              ictx=None,
                              type_filter: list[str] = ["progress", "executed"], # websocket
                              data_filter: Optional[dict] = None, # websocket
+                             completion_condition: Optional[Callable[[dict], bool]] = None,
                              **kwargs) -> list[dict]:
         """
         Polls an endpoint while sending a progress Embed to discord.
@@ -1125,6 +1133,7 @@ class APIClient:
         STALL_THRESHOLD = 5.0
         last_progress = 0.0
         stall_time = 0.0
+        saw_completion_flag = False
 
         updates = []
 
@@ -1144,19 +1153,16 @@ class APIClient:
                                   duration=duration,
                                   num_yields=num_yields,
                                   type_filter=type_filter,
-                                  data_filter=data_filter) \
+                                  data_filter=data_filter,
+                                  completion_condition=completion_condition) \
                      if use_ws else \
                      endpoint.poll(return_values=progress_values,
                                    interval=interval,
                                    duration=duration,
                                    num_yields=num_yields,
+                                   completion_condition=completion_condition,
                                    **kwargs)
-            
-            if use_ws and not bot_database.was_warned('websocket_progress'):
-                log.info(f'[{self.name}] Tracking progress via Websocket exploits "interval" and "timeout" to prevent discord edit embed slowdown. '
-                         'The default "interval" is 1.0 secs. If progress never appears, or if the bot is not updating the embed every second, '
-                         'try increasing "interval". If you want more frequent progress, you can reduce the value but the bot may be throttled by Discord.')
-                bot_database.update_was_warned('websocket_progress')
+
             async for update in poller:
                 try:
                     # Collect updates
@@ -1177,8 +1183,10 @@ class APIClient:
 
                     eta = update.get('eta')
 
-                    # Check if complete
-                    if progress >= 1.0:
+                    # Completion check
+                    if completion_condition and completion_condition(update):
+                        break
+                    elif not completion_condition and progress >= 1.0:
                         break
 
                     # Check for stalled condition
@@ -1419,15 +1427,22 @@ class ImgGenClient_Comfy(ImgGenClient):
             await self.apply_img2img(task)
         try:
             ep_for_mode:ImgGenEndpoint = getattr(self, f'post_{mode}')
+            # Add client_id to payload
+            img_payload['client_id'] = self.ws_config.client_id
             queued = await ep_for_mode.call(input_data=img_payload, task=task)
             prompt_id = queued['prompt_id']
+            completion_config = {'type': 'executed',
+                                 'data': {'prompt_id': prompt_id}}
+            # Create a callable condition check based on a completion config
+            completion_condition = processing.build_completion_condition(completion_config, None)
             await self.track_progress(endpoint=None,
                                       use_ws=True,
                                       ictx=ictx,
                                       message="Generating image",
                                       return_values={'progress': 'data.value', 'max': 'data.max'},
                                       type_filter=["progress", "executed"],
-                                      data_filter={'prompt_id': prompt_id})
+                                      data_filter={'prompt_id': prompt_id},
+                                      completion_condition=completion_condition)
             if not (self.get_history and self.get_view):
                 log.warning(f'[{self.name}] For progress tracking, "get_history" and "get_view" endpoints must be properly linked to "main_bot_functions" from "all_apis".')
                 return [], None
@@ -1856,6 +1871,7 @@ class Endpoint:
                    interval: float = 1.0,
                    duration: int = -1,
                    num_yields: int = -1,
+                   completion_condition: Optional[Callable[[dict], bool]] = None,
                    **kwargs) -> AsyncGenerator[dict, None]:
         """
         Poll an API repeatedly, extracting specified values from each response.
@@ -1886,6 +1902,12 @@ class Endpoint:
             if not response_data:
                 await asyncio.sleep(interval)
                 continue
+
+            # Check for completion condition
+            if completion_condition and completion_condition(response_data):
+                log.info(f"[{self.name}] Completion condition matched.")
+                yield response_data
+                break
             
             # Process response
             if not return_values:
@@ -2422,6 +2444,11 @@ class StepExecutor:
         client_name, endpoint_name, use_ws = self.resolve_api_names(config, 'track_progress')
         api_client:APIClient = api.get_client(client_name=client_name, strict=True)
 
+        completion_config = config.pop("completion_condition", None)
+        completion_condition = None
+        if completion_config:
+            completion_condition = processing.build_completion_condition(completion_config, self.context)
+
         # Resolve polling method
         endpoint:Optional[Endpoint] = None
         if not use_ws:
@@ -2430,6 +2457,7 @@ class StepExecutor:
         return await api_client.track_progress(endpoint=endpoint,
                                                use_ws=use_ws,
                                                ictx=ictx,
+                                               completion_condition=completion_condition,
                                                **config)
 
     @step_returns("data", "input", default="data")
