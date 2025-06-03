@@ -153,6 +153,23 @@ async def process_tasks_in_background():
 #################################################################
 ########################## BOT STARTUP ##########################
 #################################################################
+def disable_unsupported_features():
+    if config.controlnet_enabled() and not api.imggen.is_sdwebui_variant():
+        log.warning('ControlNet is enabled in config.yaml, but is currently only supported by A1111-like WebUIs (A1111/Forge/ReForge). Disabling.')
+        config.imggen['extensions']['controlnet_enabled'] = False
+    if config.reactor_enabled() and not api.imggen.is_sdwebui_variant():
+        log.warning('ReActor is enabled in config.yaml, but is currently only supported by A1111-like WebUIs (A1111/Forge/ReForge). Disabling.')
+        config.imggen['extensions']['reactor_enabled'] = False
+    if config.forgecouple_enabled() and not api.imggen.is_forge():
+        log.warning('Forge Couple is enabled in config.yaml, but is currently only supported by SD Forge. Disabling.')
+        config.imggen['extensions']['forgecouple_enabled'] = False
+    if config.layerdiffuse_enabled() and not api.imggen.is_forge():
+        log.warning('Layerdiffuse is enabled in config.yaml, but is currently only supported by SD Forge. Disabling.')
+        config.imggen['extensions']['layerdiffuse_enabled'] = False
+    if config.imggen.get('extensions', {}).get('loractl', {}).get('enabled', False) and not api.imggen.supports_loractrl():
+        log.warning('Loractrl feature is enabled in config.yaml, but is currently only supported by SD Forge/ReForge. Disabling.')
+        config.imggen['extensions']['loractl']['enabled'] = False
+
 # Feature to automatically change imgmodels periodically
 async def init_auto_change_imgmodels():
     imgmodels_data:dict = load_file(shared_path.img_models, {})
@@ -292,6 +309,9 @@ async def on_ready():
 
             # Setup API clients
             await api.setup_all_clients()
+
+            # womp womp
+            disable_unsupported_features()
 
             # Build options for /speak command
             await speak_cmd_options.build_options(sync=False)
@@ -2351,14 +2371,14 @@ class TaskProcessing(TaskAttributes):
                 return
             if api.imggen.is_reforge():
                 self.payload.setdefault('alwayson_scripts', {}).setdefault('dynamic lora weights (reforge)', {}).setdefault('args', []).append({'Enable Dynamic Lora Weights': True})
-            scaling_settings = [v for k, v in config.imggen['extensions'].get('lrctl', {}).items() if 'scaling' in k]
+            scaling_settings = [v for k, v in config.imggen['extensions'].get('loractl', {}).items() if 'scaling' in k]
             scaling_settings = scaling_settings if scaling_settings else ['']
             # Flatten the matches dictionary values to get a list of all tags (including those within tuples)
             matched_tags.sort(key=lambda x: (isinstance(x, tuple), x[1] if isinstance(x, tuple) else float('inf')))
             all_matched_tags = [tag if isinstance(tag, dict) else tag[0] for tag in matched_tags]
             # Filter the matched tags to include only those with certain patterns in their text fields
             lora_tags = [tag for tag in all_matched_tags if any(patterns.sd_lora.findall(text) for text in (tag.get('positive_prompt', ''), tag.get('positive_prompt_prefix', ''), tag.get('positive_prompt_suffix', '')))]
-            if len(lora_tags) >= config.imggen['extensions']['lrctl']['min_loras']:
+            if len(lora_tags) >= config.imggen['extensions']['loractl']['min_loras']:
                 for index, tag in enumerate(lora_tags):
                     # Determine the key with a non-empty value among the specified keys
                     used_key = next((key for key in ['positive_prompt', 'positive_prompt_prefix', 'positive_prompt_suffix'] if tag.get(key, '')), None)
@@ -2372,7 +2392,7 @@ class TaskProcessing(TaskAttributes):
                                     lora_weight = float(lora_weight_match.group())
                                     # Selecting the appropriate scaling based on the index
                                     scaling_key = f'lora_{index + 1}_scaling' if index+1 < len(scaling_settings) else 'additional_loras_scaling'
-                                    scaling_values = config.imggen['extensions']['lrctl'].get(scaling_key, '')
+                                    scaling_values = config.imggen['extensions']['loractl'].get(scaling_key, '')
                                     if scaling_values:
                                         scaling_factors = [round(float(factor.split('@')[0]) * lora_weight, 2) for factor in scaling_values.split(',')]
                                         scaling_steps = [float(step.split('@')[1]) for step in scaling_values.split(',')]
@@ -2384,7 +2404,7 @@ class TaskProcessing(TaskAttributes):
                                         tag[used_key] = new_positive_prompt
                                         log.info(f'''[TAGS] loractl applied: "{lora_match}" > "{updated_lora_match}"''')
         except Exception as e:
-            log.error(f"Error processing lrctl: {e}")
+            log.error(f"Error processing loractl: {e}")
 
     def process_img_prompt_tags(self:Union["Task","Tasks"]):
         try:
@@ -2609,23 +2629,17 @@ class TaskProcessing(TaskAttributes):
                 log.info(f"[TAGS] Applied Param Variances: '{processed_params}'")
                 sum_update_dict(self.payload, processed_params)
             # Controlnet handling
-            if controlnet and config.imggen['extensions'].get('controlnet_enabled', False):
-                self.payload['alwayson_scripts']['controlnet']['args'] = controlnet
+            if controlnet and config.controlnet_enabled():
+                self.imgmodel_settings.apply_controlnet(controlnet, self)
             # forge_couple handling
-            if forge_couple and config.imggen['extensions'].get('forgecouple_enabled', False):
-                self.payload['alwayson_scripts']['forge_couple']['args'].update(forge_couple)
-                self.payload['alwayson_scripts']['forge_couple']['args']['enable'] = True
-                log.info(f"[TAGS] Enabled forge_couple: {forge_couple}")
+            if forge_couple and config.forgecouple_enabled():
+                self.imgmodel_settings.apply_forge_couple(forge_couple, self)
             # layerdiffuse handling
-            if layerdiffuse and config.imggen['extensions'].get('layerdiffuse_enabled', False):
-                self.payload['alwayson_scripts']['layerdiffuse']['args'].update(layerdiffuse)
-                self.payload['alwayson_scripts']['layerdiffuse']['args']['enabled'] = True
-                log.info(f"[TAGS] Enabled layerdiffuse: {layerdiffuse}")
+            if layerdiffuse and config.layerdiffuse_enabled():
+                self.imgmodel_settings.apply_layerdiffuse(layerdiffuse, self)
             # ReActor face swap handling
-            if reactor and config.imggen['extensions'].get('reactor_enabled', False):
-                self.payload['alwayson_scripts']['reactor']['args'].update(reactor)
-                if reactor.get('mask'):
-                    self.payload['alwayson_scripts']['reactor']['args']['save_original'] = True
+            if reactor and config.reactor_enabled():
+                self.imgmodel_settings.apply_reactor(reactor, self)
             # Img2Img handling
             if img2img:
                 self.payload['init_images'] = [str(img2img)]
@@ -2717,7 +2731,6 @@ class TaskProcessing(TaskAttributes):
         forge_couple_args = {}
         layerdiffuse_args = {}
         reactor_args = {}
-        extensions = config.imggen.get('extensions', {})
         accept_only_first = ['aspect_ratio', 'img2img', 'img2img_mask', 'sd_output_dir']
         try:
             for tag in self.tags.matches:
@@ -2757,33 +2770,33 @@ class TaskProcessing(TaskAttributes):
                         except Exception:
                             log.warning(f"[TAGS] Error processing a matched 'img_param_variances' {tag_print}; ensure it is a dictionary.")
                     # get any ControlNet extension params
-                    elif key.startswith('controlnet') and extensions.get('controlnet_enabled'):
+                    elif key.startswith('controlnet') and config.controlnet_enabled():
                         index = int(key[len('controlnet'):]) if key != 'controlnet' else 0  # Determine the index (cnet unit) for main controlnet args
                         controlnet_args.setdefault(index, {}).update({'image': value, 'enabled': True})         # Update controlnet args at the specified index
-                    elif key.startswith('cnet') and extensions.get('controlnet_enabled'):
+                    elif key.startswith('cnet') and config.controlnet_enabled():
                         # Determine the index for controlnet_args sublist
                         if key.startswith('cnet_'):
                             index = int(key.split('_')[0][len('cnet'):]) if not key.startswith('cnet_') else 0  # Determine the index (cnet unit) for additional controlnet args
                         controlnet_args.setdefault(index, {}).update({key.split('_', 1)[-1]: value})   # Update controlnet args at the specified index
                     # get any layerdiffuse extension params
-                    elif key == 'layerdiffuse' and extensions.get('layerdiffuse_enabled'):
+                    elif key == 'layerdiffuse' and config.layerdiffuse_enabled():
                         layerdiffuse_args['method'] = str(value)
-                    elif key.startswith('laydiff_') and extensions.get('layerdiffuse_enabled'):
+                    elif key.startswith('laydiff_') and config.layerdiffuse_enabled():
                         laydiff_key = key[len('laydiff_'):]
                         layerdiffuse_args[laydiff_key] = value
                     # get any ReActor extension params
-                    elif key == 'reactor' and extensions.get('reactor_enabled'):
+                    elif key == 'reactor' and config.reactor_enabled():
                         reactor_args['image'] = value
-                    elif key.startswith('reactor_') and extensions.get('reactor_enabled'):
+                    elif key.startswith('reactor_') and config.reactor_enabled():
                         reactor_key = key[len('reactor_'):]
                         reactor_args[reactor_key] = value
                     # get any Forge Couple extension params
-                    elif key == 'forge_couple' and extensions.get('forgecouple_enabled'):
+                    elif key == 'forge_couple' and config.forgecouple_enabled():
                         if value.startswith('['):
                             forge_couple_args['maps'] = list(value)
                         else: 
                             forge_couple_args['direction'] = str(value)
-                    elif key.startswith('couple_') and extensions.get('forgecouple_enabled'):
+                    elif key.startswith('couple_') and config.forgecouple_enabled():
                         forge_couple_key = key[len('couple_'):]
                         if value.startswith('['):
                             forge_couple_args[forge_couple_key] = list(value)
@@ -3664,7 +3677,7 @@ class Tasks(TaskProcessing):
             # Apply tags relevant to Img gen
             await self.process_img_payload_tags(img_payload_mods)
             # Process loractl
-            if config.imggen['extensions'].get('lrctl', {}).get('enabled', False):
+            if config.imggen['extensions'].get('loractl', {}).get('enabled', False):
                 self.apply_loractl()
             # Apply tags relevant to Img prompts
             self.process_img_prompt_tags()
@@ -4517,7 +4530,7 @@ if imggen_enabled:
                 log.warning(f"ControlNet is enabled in config.yaml, but was not responsive from {api.imggen.name} API.")
             return False
 
-        if config.imggen['extensions'].get('controlnet_enabled', False):
+        if config.controlnet_enabled():
             try:
                 all_control_types:dict = await api.imggen.get_controlnet_control_types.call(retry=0, extract_keys='control_types_key')
                 for key, value in all_control_types.items():
@@ -4541,11 +4554,9 @@ if imggen_enabled:
     size_choices, style_choices, use_llm_choices = asyncio.run(get_imgcmd_choices(size_options, style_options))
 
     # Check if ControlNet enabled in config
-    cnet_enabled = config.imggen['extensions'].get('controlnet_enabled', False)
-    cnet_status = 'Guides image diffusion using an input image or map.' if cnet_enabled else '**option disabled** (ControlNet not available)'
+    cnet_status = 'Guides image diffusion using an input image or map.' if config.controlnet_enabled() else '**option disabled** (ControlNet not available)'
     # Check if ReActor enabled in config
-    reactor_enabled = config.imggen['extensions'].get('reactor_enabled', False)
-    reactor_status = 'For best results, attach a square (1:1) cropped image of a face, to swap into the output.' if reactor_enabled else '**option disabled** (ReActor not available)'
+    reactor_status = 'For best results, attach a square (1:1) cropped image of a face, to swap into the output.' if config.reactor_enabled() else '**option disabled** (ReActor not available)'
 
     use_llm_status = 'Whether to send your prompt to LLM. Results may vary!' if tgwui_enabled else '**option disabled** (LLM is not integrated)'
 
@@ -4586,8 +4597,8 @@ if imggen_enabled:
         neg_prompt = selections.get('neg_prompt', '')
         img2img = selections.get('img2img', None)
         img2img_mask = selections.get('img2img_mask', None)
-        face_swap = selections.get('face_swap', None) if reactor_enabled else None
-        cnet = selections.get('cnet', None) if cnet_enabled else None
+        face_swap = selections.get('face_swap', None) if config.reactor_enabled() else None
+        cnet = selections.get('cnet', None) if config.controlnet_enabled() else None
 
         imgmodel_settings:ImgModel = get_imgmodel_settings(ctx)
 
@@ -6401,6 +6412,23 @@ class ImgModel(SettingsBase):
     def handle_payload_updates(self, updates:dict, task:"Task"):
         update_dict(task.payload, updates)
         task.vars.update_from_dict(updates)
+    
+    def apply_controlnet(self, controlnet, task:"Task"):
+        if not bot_database.was_warned('controlnet_unsupported'):
+            log.warning("[TAGS] ControlNet was triggered, but is currently only supported by A1111-like Web UIs (A1111/Forge/ReForge)")
+            bot_database.update_was_warned('controlnet_unsupported')
+    def apply_forge_couple(self, forge_couple, task:"Task"):
+        if not bot_database.was_warned('forge_couple_unsupported'):
+            log.warning("[TAGS] Forge Couple was triggered, but is currently only supported by SD Forge")
+            bot_database.update_was_warned('forge_couple_unsupported')
+    def apply_layerdiffuse(self, layerdiffuse, task:"Task"):
+        if not bot_database.was_warned('layerdiffuse_unsupported'):
+            log.warning("[TAGS] Layerdiffuse was triggered, but is currently only supported by SD Forge")
+            bot_database.update_was_warned('layerdiffuse_unsupported')
+    def apply_reactor(self, reactor, task:"Task"):
+        if not bot_database.was_warned('reactor_unsupported'):
+            log.warning("[TAGS] ReActor was triggered, but is currently only supported by A1111-like Web UIs (A1111/Forge/ReForge)")
+            bot_database.update_was_warned('reactor_unsupported')
 
     def collect_names(self, imgmodels:list):
         if not imgmodels:
@@ -6876,12 +6904,11 @@ class ImgModel_SDWebUI(ImgModel):
 
             ## Clean up extension keys
             # get alwayson_scripts dict
-            extensions = config.imggen['extensions']
             alwayson_scripts:dict = payload.get('alwayson_scripts', {})
             # Clean ControlNet
             if alwayson_scripts.get('controlnet'):
                 # Delete all 'controlnet' keys if disabled
-                if not extensions.get('controlnet_enabled'):
+                if not config.controlnet_enabled():
                     del alwayson_scripts['controlnet']
                 else:
                     # Delete all 'controlnet' keys if empty
@@ -6905,7 +6932,7 @@ class ImgModel_SDWebUI(ImgModel):
             # Clean Forge Couple
             if alwayson_scripts.get('forge_couple'):
                 # Delete all 'forge_couple' keys if disabled by config
-                if not extensions.get('forgecouple_enabled') or payload.get('init_images'):
+                if not config.forgecouple_enabled() or payload.get('init_images'):
                     del alwayson_scripts['forge_couple']
                 else:
                     # convert dictionary to list
@@ -6916,7 +6943,7 @@ class ImgModel_SDWebUI(ImgModel):
             # Clean layerdiffuse
             if alwayson_scripts.get('layerdiffuse'):
                 # Delete all 'layerdiffuse' keys if disabled by config
-                if not extensions.get('layerdiffuse_enabled'):
+                if not config.layerdiffuse_enabled():
                     del alwayson_scripts['layerdiffuse']
                 # convert dictionary to list
                 elif isinstance(payload['alwayson_scripts']['layerdiffuse']['args'], dict):
@@ -6924,7 +6951,7 @@ class ImgModel_SDWebUI(ImgModel):
             # Clean ReActor
             if alwayson_scripts.get('reactor'):
                 # Delete all 'reactor' keys if disabled by config
-                if not extensions.get('reactor_enabled'):
+                if not config.reactor_enabled():
                     del alwayson_scripts['reactor']
                 # convert dictionary to list
                 elif isinstance(payload['alwayson_scripts']['reactor']['args'], dict):
@@ -6943,6 +6970,14 @@ class ImgModel_SDWebUI(ImgModel):
             override_settings[self._value_key] = imgmodel_data[self._value_key]
         return override_settings
 
+    def apply_controlnet(self, controlnet, task: "Task"):
+        task.payload['alwayson_scripts']['controlnet']['args'] = controlnet
+
+    def apply_reactor(self, reactor, task: "Task"):
+        task.payload['alwayson_scripts']['reactor']['args'].update(reactor)
+        if reactor.get('mask'):
+            task.payload['alwayson_scripts']['reactor']['args']['save_original'] = True
+
 class ImgModel_A1111(ImgModel_SDWebUI):
     def __init__(self):
         super().__init__()
@@ -6954,6 +6989,16 @@ class ImgModel_ReForge(ImgModel_SDWebUI):
 class ImgModel_Forge(ImgModel_SDWebUI):
     def __init__(self):
         super().__init__()
+
+    def apply_forge_couple(self, forge_couple, task: "Task"):
+        task.payload['alwayson_scripts']['forge_couple']['args'].update(forge_couple)
+        task.payload['alwayson_scripts']['forge_couple']['args']['enable'] = True
+        log.info(f"[TAGS] Enabled forge_couple: {forge_couple}")
+
+    def apply_layerdiffuse(self, layerdiffuse, task: "Task"):
+        task.payload['alwayson_scripts']['layerdiffuse']['args'].update(layerdiffuse)
+        task.payload['alwayson_scripts']['layerdiffuse']['args']['enabled'] = True
+        log.info(f"[TAGS] Enabled layerdiffuse: {layerdiffuse}")
 
     # Manage override_settings for Forge. returns override_settings
     def get_extra_settings(self, imgmodel_data:dict) -> dict:

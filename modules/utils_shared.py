@@ -166,6 +166,15 @@ class Config(BaseFileMemory):
     
     def tts_enabled(self) -> bool:
         return self.get('ttsgen', {}).get('enabled')
+    
+    def controlnet_enabled(self) -> bool:
+        return self.imggen.get('extensions', {}).get('controlnet_enabled', False)
+    def forgecouple_enabled(self) -> bool:
+        return self.imggen.get('extensions', {}).get('forgecouple_enabled', False)
+    def layerdiffuse_enabled(self) -> bool:
+        return self.imggen.get('extensions', {}).get('layerdiffuse_enabled', False)
+    def reactor_enabled(self) -> bool:
+        return self.imggen.get('extensions', {}).get('reactor_enabled', False)
 
 config = Config()
 
