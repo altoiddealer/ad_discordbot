@@ -127,26 +127,32 @@ async def save_any_file(data: Any,
             "name": file_name,
             "data": data}
 
-def resolve_placeholders(data: Any, config: Any, context: dict) -> Any:
+def resolve_placeholders(config: Any, context: dict) -> Any:
     def _stringify(value):
         if isinstance(value, (dict, list)):
-            return json.dumps(value)  # Structured and safe
+            return json.dumps(value)
         if value is None:
             return ""
         return str(value)
 
-    # Prepare context with formatted strings
-    formatted_context = {k: _stringify(v) for k, v in {**context, "result": data}.items()}
-    
-    if not formatted_context:
-        return config
-
     if isinstance(config, str):
-        return config.format(**formatted_context)
+        stripped = config.strip()
+        # Check if this is a full single placeholder like "{key}"
+        if stripped.startswith("{") and stripped.endswith("}") and stripped.count("{") == 1 and stripped.count("}") == 1:
+            key = stripped[1:-1]
+            return context.get(key, config)
+        else:
+            # String with embedded placeholders – use stringified values
+            formatted_context = {k: _stringify(v) for k, v in context.items()}
+            try:
+                return config.format(**formatted_context)
+            except KeyError:
+                return config  # Or raise, if you prefer
     elif isinstance(config, dict):
-        return {k: resolve_placeholders(data, v, context) for k, v in config.items()}
+        return {k: resolve_placeholders(v, context) for k, v in config.items()}
     elif isinstance(config, list):
-        return [resolve_placeholders(data, i, context) for i in config]
+        return [resolve_placeholders(item, context) for item in config]
+    
     return config
 
 def build_completion_condition(condition_config: dict, context_vars: dict = None) -> Callable[[dict], bool]:

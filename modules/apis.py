@@ -2316,7 +2316,9 @@ class StepExecutor:
         return decorator
 
     def _resolve_context_placeholders(self, data: Any, config: Any) -> Any:
-        return processing.resolve_placeholders(data, config, self.context)
+        # Merge context with 'result'
+        full_context = {**self.context, "result": data}
+        return processing.resolve_placeholders(config, full_context)
 
     
     @step_returns("data", "input", default="data")
@@ -2647,7 +2649,7 @@ class StepExecutor:
     def _step_format(self, data, config: Any):
         if not self.task:
             raise RuntimeError("[StepExecutor] The format step requires a Task object.")
-        return processing.resolve_placeholders(data, config, vars(self.task.bot_vars))
+        return processing.resolve_placeholders(config, vars(self.task.bot_vars))
 
     @step_returns("data", "input", default="data")
     def _step_eval(self, data, expression):
