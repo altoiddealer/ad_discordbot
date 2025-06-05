@@ -13,7 +13,7 @@ from pathlib import Path
 from pydub import AudioSegment
 import io
 from typing import Any, Optional, Callable
-from modules.utils_misc import guess_format_from_headers, guess_format_from_data, is_base64
+from modules.utils_misc import guess_format_from_headers, guess_format_from_data, is_base64, valueparser
 
 from modules.logs import import_track, get_logger; import_track(__file__, fp=True); log = get_logger(__name__)  # noqa: E702
 logging = log
@@ -155,7 +155,13 @@ def resolve_placeholders(config: Any, context: dict, log_prefix: str='', log_suf
                         for k in context:
                             if f"{{{k}}}" in config:
                                 formatted_keys.append(k)
-                    return formatted
+                        try:
+                            # Parse formatted value if it's not exactly the same as the original input
+                            parsed = valueparser.parse_value(formatted)
+                            return parsed
+                        except Exception:
+                            # Fall back to raw formatted string if parsing fails
+                            return formatted
                 except KeyError:
                     return config
         elif isinstance(config, dict):

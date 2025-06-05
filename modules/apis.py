@@ -2635,12 +2635,6 @@ class StepExecutor:
             raise ValueError(f"[StepExecutor] Unknown transform type: {transform_type}")
 
     @step_returns("data", "input", default="data")
-    def _step_evaluate(self, data, value: str) -> Any:
-        if not isinstance(value, str):
-            raise ValueError("[StepExecutor] The evaluate step requires a string input.")
-        return valueparser.parse_value(value)
-
-    @step_returns("data", "input", default="data")
     def _step_regex(self, data, pattern):
         match = re.search(pattern, data)
         if not match:

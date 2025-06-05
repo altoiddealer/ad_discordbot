@@ -322,16 +322,25 @@ class ValueParser:
     def parse_value(self, value_str: str) -> Optional[Union[bool, int, float, str, list, dict]]:
         """Main entry point to parse any string value into a Python object."""
         try:
+            original = value_str
             value_str = value_str.strip()
 
             if value_str.startswith('{') and value_str.endswith('}'):
-                return self._parse_dict(value_str)
+                parsed = self._parse_dict(value_str)
             elif value_str.startswith('[') and value_str.endswith(']'):
-                return self._parse_list(value_str)
+                parsed = self._parse_list(value_str)
             else:
-                return self._parse_scalar(value_str)
+                parsed = self._parse_scalar(value_str)
+
+            if not isinstance(parsed, str) or parsed != original:
+                def _shorten(val, max_len=80):
+                    val_str = str(val)
+                    return val_str if len(val_str) <= max_len else val_str[:max_len] + "..."
+                log.info(f"[ValueParser] Parsed '{_shorten(original)}' → {_shorten(parsed)!r}")
+
+            return parsed
         except Exception as e:
-            log.error(f"Error parsing value: '{value_str}' — {e}")
+            log.error(f"[ValueParser] Error parsing value: '{value_str}' — {e}")
             return None
 
     def _parse_scalar(self, value_str: str) -> Union[bool, int, float, str]:
@@ -378,10 +387,12 @@ class ValueParser:
 
         for pair in pairs:
             if ':' not in pair:
-                log.warning(f"Skipping invalid dict pair: '{pair}'")
+                log.warning(f"[ValueParser] Skipping invalid dict pair: '{pair}'")
                 continue
             key_str, value_str = pair.split(':', 1)
             key = key_str.strip()
+            if (key.startswith('"') and key.endswith('"')) or (key.startswith("'") and key.endswith("'")):
+                key = key[1:-1]
             value = self.parse_value(value_str.strip())
             result[key] = value
 
