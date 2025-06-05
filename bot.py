@@ -1288,10 +1288,6 @@ class TaskProcessing(TaskAttributes):
             # If path to a file
             if target_path.exists():
                 target_path = target_path.resolve()
-                base_dir = Path(shared_path.bot_root_dir).resolve()
-
-                if base_dir not in target_path.parents and base_dir != target_path:
-                    raise ValueError("The file path is outside the allowed output directory.")
 
                 if target_path.is_file():
                     if target_path.suffix.lower() in [".mp3", ".wav"]:
@@ -2302,8 +2298,8 @@ class TaskProcessing(TaskAttributes):
             else:
                 output_dir = os.path.join(shared_path.output_dir, self.params.sd_output_dir)
             # backwards compatibility (user defined output dir was originally expected to include the base directory)
-            if not os.path.commonpath([base_dir, output_dir]).startswith(base_dir):
-                log.warning("Tried setting the SD output directory outside the bot. Defaulting to '/output'.")
+            if not config.save_path_allowed(output_dir):
+                log.warning(f"Tried saving Imggen output results to a path which is not allowed: {output_dir}. Defaulting to '/output'.")
                 output_dir = shared_path.output_dir
             # Create custom output dir if not already existing
             os.makedirs(output_dir, exist_ok=True)
@@ -5575,16 +5571,18 @@ async def process_speak_args(ctx: commands.Context, selected_voice=None, lang=No
         await ctx.send(f"Error processing tts options: {e}", ephemeral=True)
     return tts_args
 
-async def convert_and_resample_mp3(ctx, mp3_file, output_directory=None):
+async def convert_and_resample_mp3(ctx, mp3_file):
     try:
         audio = AudioSegment.from_mp3(mp3_file)
         if audio.channels == 2:
             audio = audio.set_channels(1)   # should be Mono
         audio = audio.set_frame_rate(22050) # ideal sample rate
         audio = audio.set_sample_width(2)   # 2 bytes for 16 bits
-        output_directory = output_directory or os.path.dirname(mp3_file)
+        output_dir = os.path.dirname(mp3_file)
+        if not config.save_path_allowed(output_dir):
+            raise RuntimeError(f"Tried saving audio file to a path which is not in config.yaml 'allowed_save_paths': {output_dir}")
         wav_filename = os.path.splitext(os.path.basename(mp3_file))[0] + '.wav'
-        wav_path = f"{output_directory}/{wav_filename}"
+        wav_path = f"{output_dir}/{wav_filename}"
         audio.export(wav_path, format="wav")
         log.info(f'User provided file "{mp3_file}" was converted to .wav for "/speak" command')
         return wav_path
@@ -5625,7 +5623,7 @@ async def process_user_voice(ctx: commands.Context, voice_input=None):
                     return ''
         if voice_data_ext == '.mp3':
             try:
-                user_voice = await convert_and_resample_mp3(ctx, user_voice, output_directory=None)
+                user_voice = await convert_and_resample_mp3(ctx, user_voice)
             except Exception:
                 if user_voice: 
                     os.remove(user_voice)

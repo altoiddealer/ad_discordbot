@@ -14,6 +14,7 @@ from pydub import AudioSegment
 import io
 from typing import Any, Optional, Callable
 from modules.utils_misc import guess_format_from_headers, guess_format_from_data, is_base64, valueparser
+from modules.utils_shared import config
 
 from modules.logs import import_track, get_logger; import_track(__file__, fp=True); log = get_logger(__name__)  # noqa: E702
 logging = log
@@ -46,6 +47,8 @@ async def save_any_file(data: Any,
         file_name = f'{file_name}_{timestamp}'
     file_path = Path(file_path)
     output_path = shared_path.output_dir / file_path
+    if not config.save_path_allowed(output_path):
+        raise RuntimeError(f"Tried saving to a path which is not in config.yaml 'allowed_save_paths': {output_path}")
     output_path.mkdir(parents=True, exist_ok=True)
 
     # 2. Guess format: config > headers > data
@@ -245,6 +248,8 @@ def save_base64(base64_str, output_format="png", save_to="./", prefix="file"):
     binary_data = base64.b64decode(base64_str)
     filename = f"{prefix}_{uuid.uuid4().hex[:8]}.{output_format}"
     filepath = os.path.join(save_to, filename)
+    if not config.save_path_allowed(filepath):
+        raise RuntimeError(f"Tried saving to a path which is not in config.yaml 'allowed_save_paths': {filepath}")
     with open(filepath, "wb") as f:
         f.write(binary_data)
     return filepath
@@ -291,6 +296,8 @@ def save_audio_bytes(
         timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         file_prefix = file_prefix or "audio"
         output_dir = Path(output_path)
+        if not config.save_path_allowed(output_dir):
+            raise RuntimeError(f"Tried saving to a path which is not in config.yaml 'allowed_save_paths': {output_dir}")
         output_dir.mkdir(parents=True, exist_ok=True)  # Ensure directory exists
         output_file = output_dir / f"{file_prefix}_{timestamp}.{output_format}"
         audio.export(output_file, format=output_format)

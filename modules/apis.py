@@ -2066,7 +2066,9 @@ class TTSGenEndpoint_PostGenerate(TTSGenEndpoint):
         #         }
         #         return await processing.save_any_file(response.body, config)
         #         resp_format = processing.detect_audio_format(response)
-        #         output_dir = os.path.join(shared_path.output_dir, self.response_handling.get('save_dir', ''))
+        #        output_dir = os.path.join(shared_path.output_dir, self.response_handling.get('save_dir', ''))
+        #        if not config.save_path_allowed(output_dir):
+        #            raise RuntimeError(f"Tried saving to a path which is not in config.yaml 'allowed_save_paths': {output_dir}")
         #         save_prefix = os.path.join(shared_path.output_dir, self.response_handling.get('save_prefix', ''))
         #         save_format = self.response_handling.get('save_format', resp_format)
         #         audio_fp:str = processing.save_audio_bytes(response, output_dir, input_format=resp_format, file_prefix=save_prefix, output_format=save_format)
