@@ -2931,7 +2931,7 @@ class Tasks(TaskProcessing):
 
                 # Log message exchange
                 log.info(f'''{self.user_name}: "{self.payload['text']}"''')
-                log.info(f'''{self.payload['state']['name2']}: "{self.llm_resp}"''')
+                log.info(f'''{self.payload['state']['name2']}: "{self.llm_resp.strip()}"''')
 
                 # Create messages in History
                 await self.create_hmessages()

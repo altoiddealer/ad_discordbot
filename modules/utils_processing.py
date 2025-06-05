@@ -127,7 +127,9 @@ async def save_any_file(data: Any,
             "name": file_name,
             "data": data}
 
-def resolve_placeholders(config: Any, context: dict) -> Any:
+def resolve_placeholders(config: Any, context: dict, log_prefix: str='', log_suffix: str='') -> Any:
+    formatted_keys = []
+
     def _stringify(value):
         if isinstance(value, (dict, list)):
             return json.dumps(value)
@@ -135,25 +137,43 @@ def resolve_placeholders(config: Any, context: dict) -> Any:
             return ""
         return str(value)
 
-    if isinstance(config, str):
-        stripped = config.strip()
-        # Check if this is a full single placeholder like "{key}"
-        if stripped.startswith("{") and stripped.endswith("}") and stripped.count("{") == 1 and stripped.count("}") == 1:
-            key = stripped[1:-1]
-            return context.get(key, config)
-        else:
-            # String with embedded placeholders – use stringified values
-            formatted_context = {k: _stringify(v) for k, v in context.items()}
-            try:
-                return config.format(**formatted_context)
-            except KeyError:
-                return config  # Or raise, if you prefer
-    elif isinstance(config, dict):
-        return {k: resolve_placeholders(v, context) for k, v in config.items()}
-    elif isinstance(config, list):
-        return [resolve_placeholders(item, context) for item in config]
-    
-    return config
+    def _resolve(config: Any) -> Any:
+        if isinstance(config, str):
+            stripped = config.strip()
+            # Exact placeholder, e.g. "{key}"
+            if (stripped.startswith("{") and stripped.endswith("}") and stripped.count("{") == 1 and stripped.count("}") == 1):
+                key = stripped[1:-1]
+                if key in context:
+                    formatted_keys.append(key)
+                    return context.get(key, config)
+                return config
+            else:
+                formatted_context = {k: _stringify(v) for k, v in context.items()}
+                try:
+                    formatted = config.format(**formatted_context)
+                    if formatted != config:
+                        for k in context:
+                            if f"{{{k}}}" in config:
+                                formatted_keys.append(k)
+                    return formatted
+                except KeyError:
+                    return config
+        elif isinstance(config, dict):
+            return {k: _resolve(v) for k, v in config.items()}
+        elif isinstance(config, list):
+            return [_resolve(item) for item in config]
+
+        return config
+
+    result = _resolve(config)
+
+    if formatted_keys:
+        unique_keys = sorted(set(formatted_keys))
+        prefix = f"{log_prefix} " if log_prefix else ""
+        suffix = f" {log_suffix}" if log_suffix else ""
+        log.info(f'{prefix}Formatted the following keys{suffix}: {", ".join(unique_keys)}')
+
+    return result
 
 def build_completion_condition(condition_config: dict, context_vars: dict = None) -> Callable[[dict], bool]:
     """

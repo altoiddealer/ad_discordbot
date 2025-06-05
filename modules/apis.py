@@ -333,19 +333,16 @@ class WebSocketConnectionConfig:
 
         self.client_id: Optional[str] = None
 
-    def resolve_placeholders(self, data: dict[str, str]) -> dict[str, str]:
-        context = {
-            "token": self.auth_token or "",
-            "client_id": self.client_id or "",
-            "session_id": self.session_id or "",
-            "channel": self.channel or "",
-            "version": self.version or "",
-        }
-        return {key: (value.format(**context) if isinstance(value, str) else value)
-                for key, value in data.items()}
+    def get_context(self) -> dict[str, str]:
+        return {"token": self.auth_token or "",
+                "client_id": self.client_id or "",
+                "session_id": self.session_id or "",
+                "channel": self.channel or "",
+                "version": self.version or ""}
 
     def build_headers(self) -> dict[str, str]:
-        return self.resolve_placeholders(self.headers)
+        context = self.get_context()
+        return processing.resolve_placeholders(self.headers, context, log_prefix='[Websocket]', log_suffix='for headers')
 
     def generate_client_id(self, format: str) -> str:
         import secrets
@@ -401,8 +398,8 @@ class WebSocketConnectionConfig:
             final_params[self.version_name] = self.version
 
         # Replace placeholders (e.g., {client_id}) in query_params
-        resolved_query = self.resolve_placeholders(final_params)
-
+        context = self.get_context()
+        resolved_query = processing.resolve_placeholders(final_params, context, log_prefix='[Websocket]', log_suffix='for query parameters')
         original_params = parse_qs(parsed.query)
         for k, v in resolved_query.items():
             original_params[k] = [v]
@@ -1185,6 +1182,7 @@ class APIClient:
 
                     # Completion check
                     if completion_condition and completion_condition(update):
+                        updates.pop() # Remove completion condition
                         break
                     elif not completion_condition and progress >= 1.0:
                         break
@@ -1861,7 +1859,7 @@ class Endpoint:
         # Hand off full response to StepExecutor
         if isinstance(self.response_handling, list):
             log.info(f'[{self.name}] Executing "response_handling" ({len(self.response_handling)} processing steps)')
-            handler = StepExecutor(steps=self.response_handling, input_data=response or results, task=task, ictx=ictx)
+            handler = StepExecutor(steps=self.response_handling, input_data=response or results, task=task, ictx=ictx, endpoint=self)
             results = await handler.run()
 
         return results
@@ -2179,7 +2177,7 @@ class APIResponse:
 
 
 class StepExecutor:
-    def __init__(self, steps: list[dict], input_data: Any = None, task=None, ictx=None):
+    def __init__(self, steps: list[dict], input_data: Any = None, task=None, ictx=None, endpoint=None):
         """
         Executes a sequence of data transformation steps with optional context storage.
 
@@ -2193,6 +2191,7 @@ class StepExecutor:
         self.context: dict[str, Any] = {}
         self.original_input_data = input_data
         self.response = input_data if isinstance(input_data, APIResponse) else None
+        self.endpoint:Optional[Endpoint] = endpoint
         self.task = task
         self.ictx:Optional[CtxInteraction] = ictx
         if task:
@@ -2317,9 +2316,14 @@ class StepExecutor:
 
     def _resolve_context_placeholders(self, data: Any, config: Any) -> Any:
         # Merge context with 'result'
-        full_context = {**self.context, "result": data}
-        return processing.resolve_placeholders(config, full_context)
-
+        config = processing.resolve_placeholders(config, {"result": data}, log_prefix='[StepExecutor]', log_suffix='from prior step "result"')
+        config = processing.resolve_placeholders(config, **self.context, log_prefix='[StepExecutor]', log_suffix='from saved context')
+        if self.task:
+            config = processing.resolve_placeholders(config, vars(self.task.bot_vars), log_prefix='[StepExecutor]', log_suffix=f'from Task "{self.task.name}" context')
+        if self.endpoint and self.endpoint.client.ws_config:
+            ws_context = self.endpoint.client.ws_config.get_context
+            config = processing.resolve_placeholders(config, ws_context, log_prefix='[StepExecutor]', log_suffix=f'from "{self.endpoint.client.name}" Websocket context')
+        return config
     
     @step_returns("data", "input", default="data")
     async def _step_for_each(self, data: Any, config: dict) -> list:
@@ -2358,7 +2362,7 @@ class StepExecutor:
         results = []
 
         for index, item in iterable:
-            sub_executor = StepExecutor(steps, task=self.task, ictx=self.ictx)
+            sub_executor = StepExecutor(steps, task=self.task, ictx=self.ictx, endpoint=self.endpoint)
             sub_executor.response = self.response
 
             sub_executor.context = {
@@ -2387,7 +2391,7 @@ class StepExecutor:
             raise ValueError("step_group config must be a list of lists of steps")
 
         async def run_subgroup(steps: list[dict], index: int):
-            sub_executor = StepExecutor(steps, task=self.task, ictx=self.ictx)
+            sub_executor = StepExecutor(steps, task=self.task, ictx=self.ictx, endpoint=self.endpoint)
             sub_executor.response = self.response
             sub_executor.context = self.context.copy()
             return await sub_executor.run(data)
@@ -2643,13 +2647,6 @@ class StepExecutor:
             log.warning("[StepExecutor] No regex match found")
             return data
         return match.group(1) if match.lastindex else match.group(0)
-
-    # Formats bot_vars from Task into strings
-    @step_returns("data", "input", default="data")
-    def _step_format(self, data, config: Any):
-        if not self.task:
-            raise RuntimeError("[StepExecutor] The format step requires a Task object.")
-        return processing.resolve_placeholders(config, vars(self.task.bot_vars))
 
     @step_returns("data", "input", default="data")
     def _step_eval(self, data, expression):
