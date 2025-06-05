@@ -37,7 +37,7 @@ from functools import partial
 import filetype
 
 from modules.utils_files import load_file, merge_base, save_yaml_file  # noqa: F401
-from modules.utils_shared import bot_args, is_tgwui_integrated, shared_path, bg_task_queue, task_event, flows_queue, flows_event, patterns, bot_emojis, config, bot_database, get_api
+from modules.utils_shared import bot_args, bot_token, is_tgwui_integrated, shared_path, bg_task_queue, task_event, flows_queue, flows_event, patterns, bot_emojis, config, bot_database, get_api
 from modules.database import StarBoard, Statistics, BaseFileMemory
 from modules.utils_misc import check_probability, fix_dict, set_key, deep_merge, update_dict, sum_update_dict, update_dict_matched_keys, random_value_from_range, convert_lists_to_tuples, \
     get_time, format_time, format_time_difference, get_normalized_weights, valueparser  # noqa: F401
@@ -71,33 +71,7 @@ bot_statistics = Statistics()
 bot_embeds = Embeds()
 
 # Set Discord bot token from config, or args, or prompt for it, or exit
-TOKEN = config.discord.get('TOKEN', None)
-
-bot_token = bot_args.token if bot_args.token else TOKEN
-if not bot_token:
-    print(
-        '''A Discord bot token is required. You may enter it now or manually in 'config.yaml'.
-          You may also use '--token {token}' in 'CMD_FLAGS.txt.
-          If you enter it here, #comments will be cleared from 'config.yaml'.
-          Clean settings templates always available in '/settings_templates/'
-        
-          For help regarding Discord bot token, see Install instructions on the project page
-          (https://github.com/altoiddealer/ad_discordbot)'''
-          )
-
-    print('\nDiscord bot token (enter "0" to exit):\n')
-    bot_token = (input().strip())
-    print()
-    if bot_token == '0':
-        log.error("Discord bot token is required. Exiting.")
-        sys.exit(2)
-    elif bot_token:
-        config.discord['TOKEN'] = bot_token
-        config.save()
-        log.info("Discord bot token saved to 'config.yaml'")
-    else:
-        log.error("Discord bot token is required. Exiting.")
-        sys.exit(2)
+TOKEN = bot_token.TOKEN
 
 os.environ['GRADIO_ANALYTICS_ENABLED'] = 'False'
 os.environ["BITSANDBYTES_NOWELCOME"] = "1"
@@ -7522,7 +7496,7 @@ else:
 async def runner():
     async with client:
         try:
-            await client.start(bot_token, reconnect=True)
+            await client.start(TOKEN, reconnect=True)
         except discord.errors.PrivilegedIntentsRequired:
             log.error("The bot requires the privileged intent 'message_content' to be enabled in your discord developer portal.")
             log.error("Please update the intents for the bot and try again.")
