@@ -116,17 +116,30 @@ apisettings = APISettings()
 
 
 def resolve_imggen_subclassing(name: str) -> type["ImgGenClient"]:
-    name = name.lower()
-    if 'comfy' in name:
+    log.info(f"Checking if '{name}' is a known API (name has 'Comfy', 'A1111', 'Forge', 'ReForge')")
+    name_lower = name.lower()
+    if 'comfy' in name_lower:
+        log.info(f"{name} recognized as ComfyUI.")
         return ImgGenClient_Comfy
-    elif any(x in name for x in ['stable', 'a1111', 'sdwebui', 'forge']):
-        return ImgGenClient_SDWebUI
+    elif any(x in name_lower for x in ['stable', 'a1111', 'sdwebui', 'forge']):
+        if 'reforge' in name_lower:
+            log.info(f"{name} recognized as ReForge.")
+        elif 'forge' in name_lower:
+            log.info(f"{name} recognized as Forge.")
+        else:
+            log.info(f"{name} recognized as A1111.")
+        return ImgGenClient_SDWebUI # Don't need to subclass these API objects... yet
+    else:
+        log.info(f'{name} is an unknown Imggen client. "main bot functions" will rely heavily on user configuration. Please report any issues on the Github project page.')
     return ImgGenClient
 
 def resolve_ttsgen_subclassing(name: str) -> type["TTSGenClient"]:
-    name = name.lower()
-    if 'alltalk' in name:
+    log.info(f"Checking if '{name}' is a known API (name has 'Alltalk')")
+    name_lower = name.lower()
+    if 'alltalk' in name_lower:
+        log.info(f"{name} recognized as Alltalk.")
         return TTSGenClient_AllTalk
+    log.info(f'{name} is an unknown TTS client. "main bot functions" will rely heavily on user configuration. Please report any issues on the Github project page.')
     return TTSGenClient
 
 class API:

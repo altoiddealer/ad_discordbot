@@ -7142,21 +7142,15 @@ class Settings(BaseFileMemory):
         if not api.imggen:
             self.imgmodel = ImgModel()
         else:
-            log.info(f"Checking if '{api.imggen.name}' is a known API (name has 'Comfy', 'A1111', 'Forge', 'ReForge', etc)")
             if api.imggen.is_comfy():
-                log.info(f"[{api.imggen.name}] recognized as ComfyUI.")
                 self.imgmodel = ImgModel_Comfy()
             elif api.imggen.is_reforge():
-                log.info(f"[{api.imggen.name}] recognized as ReForge.")
                 self.imgmodel = ImgModel_ReForge()
             elif api.imggen.is_forge():
-                log.info(f"[{api.imggen.name}] recognized as Forge.")
                 self.imgmodel = ImgModel_Forge()
             elif api.imggen.is_sdwebui():
-                log.info(f"[{api.imggen.name}] recognized as A1111.")
                 self.imgmodel = ImgModel_A1111()
             else:
-                log.info(f'[{api.imggen.name}] is an unknown API. "main bot functions" will rely heavily on user configuration.')
                 self.imgmodel = ImgModel()
 
     def load_defaults(self):
