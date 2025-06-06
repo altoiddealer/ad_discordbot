@@ -3947,7 +3947,7 @@ class Task(Tasks):
         # Extract and remove overrides from the payload
         overrides = self.payload.pop("__overrides__")
         # Update the default overrides with current vars
-        updated_overrides = deep_merge(overrides, vars(self.vars))
+        updated_overrides = update_dict_matched_keys(overrides, vars(self.vars), skip_none=True)
         # Replace placeholders like {prompt} with overrides["prompt"]
         self.payload = resolve_placeholders(self.payload, updated_overrides, log_prefix=f'[{self.name}_task]', log_suffix='into payload')
 
