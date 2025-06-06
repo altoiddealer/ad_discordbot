@@ -163,8 +163,7 @@ class Config(BaseFileMemory):
 
     def load_defaults(self, data: dict):
         self.discord = data.pop('discord', {})
-        raw_paths = data.pop('allowed_save_paths', [])
-        self.allowed_save_paths = [Path(p) for p in raw_paths]
+        self.allowed_save_paths = data.pop('allowed_save_paths', [])
         self.task_queues = data.pop('task_queues', {})
         self.per_server_settings = data.pop('per_server_settings', {})
         self.dynamic_prompting_enabled = data.pop('dynamic_prompting_enabled', True)
@@ -180,9 +179,11 @@ class Config(BaseFileMemory):
         fix_dict(config_dict, config_template, 'config.yaml')
 
     def _sanitize_save_paths(self):
-        """Resolve and validate allowed save paths."""
+        raw_paths = self.allowed_save_paths + [shared_path.output_dir]
+        paths = [Path(p) for p in raw_paths]
+
         sanitized = []
-        for path in self.allowed_save_paths:
+        for path in paths:
             path:Path
             abs_path = (shared_path.dir_root / path).resolve() if not path.is_absolute() else path.resolve()
             if abs_path.exists():
@@ -192,8 +193,12 @@ class Config(BaseFileMemory):
         self.allowed_save_paths = sanitized
 
     def save_path_allowed(self, path: str) -> bool:
+        """Check if the input path (relative or absolute) is allowed. Symlinks permitted."""
         input_path = Path(path)
-        abs_path = (shared_path.dir_root / input_path).resolve() if not input_path.is_absolute() else input_path.resolve()
+        if not input_path.is_absolute():
+            abs_path = (shared_path.dir_root / input_path).absolute()
+        else:
+            abs_path = input_path.absolute()
 
         for allowed_base in self.allowed_save_paths:
             if abs_path.is_relative_to(allowed_base):
