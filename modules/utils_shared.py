@@ -241,10 +241,20 @@ class BotToken(BaseFileMemory):
         super().__init__(shared_path.bot_token, version=1, missing_okay=True)
 
     def load_defaults(self, data: dict):
-        self.TOKEN = bot_args.token if bot_args.token else config.discord.get('TOKEN')
-        saved = data.pop('TOKEN', None)
-        if self.TOKEN and not saved:
+        # Don't save token to file if provided via args
+        self.TOKEN = bot_args.token if bot_args.token else None
+        if self.TOKEN:
+            return
+
+        saved_token = data.pop('TOKEN', None)
+        if saved_token:
+            self.TOKEN = saved_token
+            return
+        
+        self.TOKEN = config.discord.get('TOKEN') # deprecated
+        if self.TOKEN and not saved_token:
             self.save()
+
         if not self.TOKEN:
             self.prompt_for_token()
 
