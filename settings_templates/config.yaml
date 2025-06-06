@@ -30,8 +30,8 @@ discord:
     react_emojis: ['✅', '👏']             # for if 'emoji_specific: true'
     target_channel_id: 11111111111111111111 # bot requires message / msg management permissions
 
-# Whitelist for locations the bot may save files to (in addition to local '/output' dir which is allowed by default)
-allowed_save_paths: []
+# Whitelist for locations the bot may read/write files (in addition to local dir which is allowed by default)
+allowed_paths: []
 #  - 'C:\ComfyUI_windows_portable\ComfyUI\input'
 
 # Your setup may allow more/less requests to be processed than default. Food for thought: using light/medium weight AI models can allow you to significantly increase these numbers.

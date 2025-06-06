@@ -2289,7 +2289,7 @@ class TaskProcessing(TaskAttributes):
             else:
                 output_dir = os.path.join(shared_path.output_dir, self.params.sd_output_dir)
             # backwards compatibility (user defined output dir was originally expected to include the base directory)
-            if not config.save_path_allowed(output_dir):
+            if not config.path_allowed(output_dir):
                 log.warning(f"Tried saving Imggen output results to a path which is not allowed: {output_dir}. Defaulting to '/output'.")
                 output_dir = shared_path.output_dir
             # Create custom output dir if not already existing
@@ -5261,28 +5261,29 @@ async def delayed_profile_update(display_name, avatar_fp, remaining_cooldown, gu
     except Exception as e:
         log.error(f"Error while changing character username or avatar: {e}")
 
-def get_avatar_for(char_name:str, ictx:CtxInteraction):
-    # Avatar defaults
-    avatar_p = os.path.join(shared_path.dir_tgwui, 'characters')
-    avatar_fn = char_name
-    # If guild specific characters
-    if config.is_per_character():
-        avatar_fn = config.per_server_settings.get("character_avatar")
-        if avatar_fn:
-            avatar_p = shared_path.dir_user_images
-        else:
-            avatar_fn = char_name
-    # Try accepted formats
+def find_avatar_in_paths(base_name: str, paths: list[str]) -> str | None:
+    for path in paths:
+        for ext in ['png', 'jpg', 'gif']:
+            full_path = os.path.join(path, f"{base_name}.{ext}")
+            if os.path.exists(full_path):
+                return full_path
+    return None
+
+def get_avatar_for(char_name: str, ictx: CtxInteraction):
+    character_paths: list[str] = get_all_character_paths()
     avatar_fp = None
-    for ext in ['png', 'jpg', 'gif']:
-        tried_p = os.path.join(avatar_p, f'{avatar_fn}.{ext}')
-        if os.path.exists(tried_p):
-            avatar_fp = tried_p
-            break
-    # Only update avatar if different from previous
+
+    if config.is_per_character():
+        avatar_fn = config.per_server_settings.get("character_avatar") or char_name
+        search_paths = [shared_path.dir_user_images] if avatar_fn else []
+        avatar_fp = find_avatar_in_paths(avatar_fn, search_paths)
+    else:
+        avatar_fp = find_avatar_in_paths(char_name, character_paths)
+
     last_avatar = bot_settings.get_last_setting_for("last_avatar", guild_id=ictx.guild.id)
-    if (avatar_fp == last_avatar):
-        avatar_fp = None
+    if avatar_fp == last_avatar:
+        return None
+
     return avatar_fp
 
 async def update_client_profile(char_name:str, ictx:CtxInteraction):
@@ -5343,19 +5344,28 @@ async def process_character(ctx, selected_character_value):
     except Exception as e:
         log.error(f"Error processing selected character from /character command: {e}")
 
+def get_tgwui_character_path() -> str|None:
+    if tgwui_enabled:
+        # default to old location
+        tgwui_chars = os.path.join(shared_path.dir_tgwui, "characters")
+        # check for new nested location
+        new_tgwui_chars = os.path.join(shared_path.dir_tgwui, "user_data", "characters")
+        if os.path.exists(new_tgwui_chars):
+            tgwui_chars = new_tgwui_chars
+        return tgwui_chars
+    return None
+
+def get_all_character_paths() -> list:
+    character_paths = [shared_path.dir_user_characters]
+    tgwui_char_path = get_tgwui_character_path()
+    if tgwui_char_path:
+        character_paths.append(tgwui_char_path)
+    return character_paths
+        
 def get_all_characters():
     all_characters = []
     filtered_characters = []
-    character_paths = [shared_path.dir_user_characters]
-    if tgwui_enabled:
-        # Check for new nested location first
-        new_tgwui_chars = os.path.join(shared_path.dir_tgwui, "user_data", "characters")
-        if os.path.exists(new_tgwui_chars):
-            character_paths.append(new_tgwui_chars)
-        else:
-            # Fallback to old path
-            old_tgwui_chars = os.path.join(shared_path.dir_tgwui, "characters")
-            character_paths.append(old_tgwui_chars)
+    character_paths = get_all_character_paths()
     try:
         for character_path in character_paths:
             for file in sorted(Path(character_path).glob("*")):
@@ -5570,8 +5580,8 @@ async def convert_and_resample_mp3(ctx, mp3_file):
         audio = audio.set_frame_rate(22050) # ideal sample rate
         audio = audio.set_sample_width(2)   # 2 bytes for 16 bits
         output_dir = os.path.dirname(mp3_file)
-        if not config.save_path_allowed(output_dir):
-            raise RuntimeError(f"Tried saving audio file to a path which is not in config.yaml 'allowed_save_paths': {output_dir}")
+        if not config.path_allowed(output_dir):
+            raise RuntimeError(f"Tried saving audio file to a path which is not in config.yaml 'allowed_paths': {output_dir}")
         wav_filename = os.path.splitext(os.path.basename(mp3_file))[0] + '.wav'
         wav_path = f"{output_dir}/{wav_filename}"
         audio.export(wav_path, format="wav")
@@ -5603,6 +5613,9 @@ async def process_user_voice(ctx: commands.Context, voice_input=None):
             return ''
         voice_data_ext = voiceurl_without_params[-4:]
         user_voice = f'extensions/{tgwui.tts.extension}/voices/temp_voice{voice_data_ext}'
+        if not config.path_allowed(user_voice):
+            await ctx.send(f'The bot is not configured to allow writing the audio file to the required location, "{user_voice}"', ephemeral=True)
+            return ''
         async with aiohttp.ClientSession() as session:
             async with session.get(voiceurl) as resp:
                 if resp.status == 200:

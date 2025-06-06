@@ -150,7 +150,7 @@ bot_database = Database()
 class Config(BaseFileMemory):
     def __init__(self) -> None:
         self.discord: dict
-        self.allowed_save_paths: list
+        self.allowed_paths: list
         self.task_queues: dict
         self.per_server_settings: dict
         self.dynamic_prompting_enabled: bool
@@ -159,11 +159,11 @@ class Config(BaseFileMemory):
         self.imggen: dict
         super().__init__(shared_path.config, version=2, missing_okay=True)
         self._fix_config()
-        self._sanitize_save_paths()
+        self._sanitize_paths()
 
     def load_defaults(self, data: dict):
         self.discord = data.pop('discord', {})
-        self.allowed_save_paths = data.pop('allowed_save_paths', [])
+        self.allowed_paths = data.pop('allowed_paths', [])
         self.task_queues = data.pop('task_queues', {})
         self.per_server_settings = data.pop('per_server_settings', {})
         self.dynamic_prompting_enabled = data.pop('dynamic_prompting_enabled', True)
@@ -178,8 +178,8 @@ class Config(BaseFileMemory):
         # Update the user config with any missing values from the template
         fix_dict(config_dict, config_template, 'config.yaml')
 
-    def _sanitize_save_paths(self):
-        raw_paths = self.allowed_save_paths + [shared_path.output_dir]
+    def _sanitize_paths(self):
+        raw_paths = self.allowed_paths + [shared_path.output_dir]
         paths = [Path(p) for p in raw_paths]
 
         sanitized = []
@@ -189,10 +189,10 @@ class Config(BaseFileMemory):
             if abs_path.exists():
                 sanitized.append(abs_path)
             else:
-                log.warning(f"Allowed save path does not exist and will be ignored from save checks: {abs_path}")
-        self.allowed_save_paths = sanitized
+                log.warning(f"'allowed_path' does not exist and will be ignored from save checks: {abs_path}")
+        self.allowed_paths = sanitized
 
-    def save_path_allowed(self, path: str) -> bool:
+    def path_allowed(self, path: str) -> bool:
         """Check if the input path (relative or absolute) is allowed. Symlinks permitted."""
         input_path = Path(path)
         if not input_path.is_absolute():
@@ -200,7 +200,7 @@ class Config(BaseFileMemory):
         else:
             abs_path = input_path.absolute()
 
-        for allowed_base in self.allowed_save_paths:
+        for allowed_base in self.allowed_paths:
             if abs_path.is_relative_to(allowed_base):
                 return True
         return False
