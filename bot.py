@@ -1053,18 +1053,6 @@ class BotVars():
         for k, v in input.items():
             setattr(self, k, v)
 
-    def override_payload(self, payload:dict) -> dict:
-        payload.pop('_comment', None)
-        if "__overrides__" not in payload:
-            return payload
-        # Extract and remove overrides from the payload
-        overrides = payload.pop("__overrides__")
-        # Update the default overrides with current vars
-        updated_overrides = deep_merge(overrides, vars(self))
-        # Replace placeholders like {prompt} with overrides["prompt"]
-        resolved = resolve_placeholders(payload, updated_overrides, log_prefix='[Task Vars]', log_suffix='for payload')
-        return resolved
-
 bot_vars = BotVars()
 
 #################################################################
@@ -1397,7 +1385,7 @@ class TaskProcessing(TaskAttributes):
                 if param_variances:
                     processed_params = self.process_param_variances(param_variances)
                     log.info(f'[TAGS] LLM Param Variances: {processed_params}')
-                    sum_update_dict(self.payload['state'], processed_params) # Updates dictionary while adding floats + ints
+                    self.payload['state'] = sum_update_dict(self.payload['state'], processed_params) # Updates dictionary while adding floats + ints
                 if state:
                     update_dict(self.payload['state'], state)
                     log.info('[TAGS] LLM State was modified')
@@ -1687,16 +1675,18 @@ class TaskProcessing(TaskAttributes):
         await self.process_llm_payload_tags(llm_payload_mods)
         # apply formatting tags to LLM prompt
         self.process_prompt_formatting(self.prompt, **formatting)
-        # apply params from /prompt command
-        self.apply_prompt_params()
+
         # Update bot vars from self (Task)
         self.update_vars()
+        # apply params from /prompt command
+        self.apply_prompt_params()
         # Apply vars overrides
-        self.payload = self.vars.override_payload(self.payload)
+        self.override_payload()
         # assign finalized prompt to payload
         self.payload['text'] = self.prompt
 
     def apply_server_mode(self:Union["Task","Tasks"]):
+        # TODO Server Mode
         if self.ictx and config.textgen.get('server_mode', False):
             try:
                 name1 = f'Server: {self.ictx.guild}'
@@ -2523,7 +2513,7 @@ class TaskProcessing(TaskAttributes):
         try:
             change_imgmodel: str  = mods.pop('change_imgmodel', None)
             swap_imgmodel: str    = mods.pop('swap_imgmodel', None)
-            payload: dict         = mods.pop('payload', None)
+            payload_updates: dict = mods.pop('payload', None)
             aspect_ratio: str     = mods.pop('aspect_ratio', None)
             param_variances: dict = mods.pop('param_variances', {})
             controlnet: list      = mods.pop('controlnet', [])
@@ -2550,10 +2540,10 @@ class TaskProcessing(TaskAttributes):
                     self.params.imgmodel = await self.imgmodel_settings.get_model_params(imgmodel=new_imgmodel, mode=mode, verb=verb)
                     log.info(f'[TAGS] {verb} Img model: "{new_imgmodel}"')
             # Payload handling
-            if payload:
-                if isinstance(payload, dict):
-                    log.info(f"[TAGS] Updated payload: '{payload}'")
-                    self.imgmodel_settings.handle_payload_updates(payload, self)
+            if payload_updates:
+                if isinstance(payload_updates, dict):
+                    log.info(f"[TAGS] Updated payload: '{payload_updates}'")
+                    self.imgmodel_settings.handle_payload_updates(payload_updates, self)
                 else:
                     log.warning("[TAGS] A tag was matched with invalid 'payload'; must be a dictionary.")
             # Aspect Ratio
@@ -2581,7 +2571,7 @@ class TaskProcessing(TaskAttributes):
             if param_variances:
                 processed_params = self.process_param_variances(param_variances)
                 log.info(f"[TAGS] Applied Param Variances: '{processed_params}'")
-                sum_update_dict(self.payload, processed_params)
+                self.imgmodel_settings.apply_payload_param_variances(processed_params, self)
             # Controlnet handling
             if controlnet and config.controlnet_enabled():
                 self.imgmodel_settings.apply_controlnet(controlnet, self)
@@ -2594,13 +2584,15 @@ class TaskProcessing(TaskAttributes):
             # ReActor face swap handling
             if reactor and config.reactor_enabled():
                 self.imgmodel_settings.apply_reactor(reactor, self)
-            # Img2Img handling
-            if img2img:
-                self.payload['init_images'] = [str(img2img)]
-                self.params.mode = 'img2img'
-            # Inpaint Mask handling
-            if img2img_mask:
-                self.payload['mask'] = str(img2img_mask)
+            # Tags currently only supported by SDWebUI clients
+            if api.imggen.is_sdwebui_variant():
+                # Img2Img handling
+                if img2img:
+                    self.payload['init_images'] = [str(img2img)]
+                    self.params.mode = 'img2img'
+                # Inpaint Mask handling
+                if img2img_mask:
+                    self.payload['mask'] = str(img2img_mask)
         except Exception as e:
             log.error(f"[TAGS] Error processing Img tags: {e}")
             traceback.print_exc()
@@ -2800,19 +2792,16 @@ class TaskProcessing(TaskAttributes):
             self.prompt     = positive_style.format(self.prompt)
             self.neg_prompt = f"{neg_prompt}, {negative_style}" if negative_style else neg_prompt
 
-            # Update vars
-            self.imgmodel_settings.update_vars(self.vars)
-
             # Get endpoint for mode
             imggen_ep = self.params.get_active_imggen_ep()
 
             if isinstance(imggen_ep, ImgGenEndpoint):
-                endpoint_payload = imggen_ep.get_payload()
+                self.payload = imggen_ep.get_payload()
             else:
                 raise RuntimeError(f"Error initializing img payload: No valid endpoint available for main imggen task.")
 
             # Apply settings from imgmodel configuration
-            self.payload = self.settings.imgmodel.override_payload(endpoint_payload)
+            self.settings.imgmodel.override_payload(task=self)
 
         except Exception as e:
             log.error(f"Error initializing img payload: {e}")
@@ -3635,15 +3624,15 @@ class Tasks(TaskProcessing):
                 self.apply_loractl()
             # Apply tags relevant to Img prompts
             self.process_img_prompt_tags()
-            # Apply menu selections from /image command
-            self.imgmodel_settings.apply_imgcmd_params(task=self)
 
             # Update vars
             self.update_vars()
+            # Apply menu selections from /image command
+            self.imgmodel_settings.apply_imgcmd_params(task=self)
             # Apply updated prompt/negative prompt to payload
             self.imgmodel_settings.apply_prompts_to_task(self)
             # Apply vars overrides
-            self.payload = self.vars.override_payload(self.payload)
+            self.override_payload()
             # Clean anything up that gets messy
             self.imgmodel_settings.clean_payload(self.payload)
 
@@ -3950,6 +3939,17 @@ class Task(Tasks):
     def get_channel_id(self, default=None) -> int|None:
         channel = getattr(self.ictx, 'channel', None)
         return getattr(channel, 'id', default)
+
+    def override_payload(self):
+        self.payload.pop('_comment', None)
+        if "__overrides__" not in self.payload:
+            return
+        # Extract and remove overrides from the payload
+        overrides = self.payload.pop("__overrides__")
+        # Update the default overrides with current vars
+        updated_overrides = deep_merge(overrides, vars(self.vars))
+        # Replace placeholders like {prompt} with overrides["prompt"]
+        self.payload = resolve_placeholders(self.payload, updated_overrides, log_prefix=f'[{self.name}_task]', log_suffix='into payload')
 
     def update_vars_from_imgcmd(self):
         imgcmd_params = self.params.imgcmd
@@ -6351,17 +6351,17 @@ class ImgModel(SettingsBase):
     def clean_payload(self, payload:dict):
         pass
 
-    def update_vars(self, vars:"BotVars"):
-        for key, value in self.payload_mods.items():
-            setattr(vars, key, value)
-
-    # Update __overrides__ dict in user's default payload with any imgmodel payload mods
-    def override_payload(self, payload:dict) -> dict:
-        if '__overrides__' in payload:
-            payload['__overrides__'] = deep_merge(payload['__overrides__'], self.payload_mods)
-            return payload
+    def handle_payload_updates(self, updates:dict, task:"Task") -> dict:
+        task.vars.update_from_dict(updates)
+        if '__overrides__' in task.payload:
+            task.payload['__overrides__'] = deep_merge(task.payload['__overrides__'], updates)
+            return task.payload
         else:
-            return deep_merge(payload, self.payload_mods)
+            return deep_merge(task.payload, updates)
+
+    # Update vars and __overrides__ dict in user's default payload with any imgmodel payload mods
+    def override_payload(self, task:"Task") -> dict:
+        self.handle_payload_updates(self.payload_mods, task)
     
     def apply_prompts_to_task(self, task:"Task"):
         active_ep = task.params.get_active_imggen_ep()
@@ -6375,13 +6375,14 @@ class ImgModel(SettingsBase):
         # Just update vars for unknown clients (expected to be injected via __overrides__)
         task.update_vars_from_imgcmd()
 
-    async def handle_file_attachment(self, attachment:discord.Attachment) -> bytes:
-        return await attachment.read()
-    
-    def handle_payload_updates(self, updates:dict, task:"Task"):
-        update_dict(task.payload, updates)
-        task.vars.update_from_dict(updates)
-    
+    def apply_payload_param_variances(self, updates:dict, task:"Task"):
+        target = task.payload
+        if '__overrides__' in task.payload:
+            target = task.payload['__overrides__']
+        # returned dict contains summed up 'updates' (not a complete payload merge)
+        summed_updates = sum_update_dict(target, updates, merge_unmatched=False)
+        self.handle_payload_updates(summed_updates)
+
     def apply_controlnet(self, controlnet, task:"Task"):
         if not bot_database.was_warned('controlnet_unsupported'):
             log.warning("[TAGS] ControlNet was triggered, but is currently only supported for A1111-like Web UIs (A1111/Forge/ReForge)")
@@ -6398,6 +6399,9 @@ class ImgModel(SettingsBase):
         if not bot_database.was_warned('reactor_unsupported'):
             log.warning("[TAGS] ReActor was triggered, but is currently only supported for A1111-like Web UIs (A1111/Forge/ReForge)")
             bot_database.update_was_warned('reactor_unsupported')
+
+    async def handle_file_attachment(self, attachment:discord.Attachment) -> bytes:
+        return await attachment.read()
 
     def collect_model_names(self, imgmodels:list):
         if not imgmodels:
@@ -6786,6 +6790,10 @@ class ImgModel_Comfy(ImgModel):
     def handle_payload_updates(self, updates:dict, task:"Task"):
         task.vars.update_from_dict(updates)
 
+    def apply_payload_param_variances(self, updates:dict, task:"Task"):
+        summed_updates = sum_update_dict(vars(task.vars), updates, merge_unmatched=False)
+        task.vars.update_from_dict(summed_updates)
+
     def apply_imgcmd_params(self, task:"Task"):
         imgcmd_vars = {}
         imgcmd_params = task.params.imgcmd
@@ -6800,11 +6808,12 @@ class ImgModel_Comfy(ImgModel):
             if imgcmd_params['img2img'].get('denoising_strength'):
                 imgcmd_vars['denoising_strength'] = imgcmd_params['img2img']['denoising_strength']
         if imgcmd_params.get('cnet_dict'):
-            cnet_dict = imgcmd_params['cnet_dict']
-            for key, value in cnet_dict.items():
-                attr_name = f'cnet_{key}'
-                if hasattr(self, attr_name):
-                    setattr(self, attr_name, value)
+            # TODO support ControlNet in /image cmd for ComfyUI
+            log.warning("ControlNet not yet supported for ComfyUI via /image command")
+            # cnet_dict = imgcmd_params['cnet_dict']
+            # for key, value in cnet_dict.items():
+            #     attr_name = f'cnet_{key}'
+            #     imgcmd_vars[attr_name] = value
         if imgcmd_params.get('face_swap'):
             imgcmd_vars['face_swap'] = imgcmd_params['face_swap']['filename']
 
@@ -6827,6 +6836,9 @@ class ImgModel_SDWebUI(ImgModel):
 
     def handle_payload_updates(self, updates:dict, task:"Task"):
         update_dict(task.payload, updates)
+
+    def apply_payload_param_variances(self, updates:dict, task:"Task"):
+        task.payload = sum_update_dict(task.payload, updates)
 
     def apply_imgcmd_params(self, task:"Task"):
         try:

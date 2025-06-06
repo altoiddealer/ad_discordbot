@@ -124,36 +124,66 @@ def deep_merge(base: dict, override: dict) -> dict:
     return result
 
 # Updates matched keys, AND adds missing keys
-def update_dict(d, u):
-    '''dict "u" has priority'''
+def update_dict(d, u, merge_unmatched=True):
+    """
+    Recursively updates a dictionary with another dictionary, giving priority to the update dictionary `u`.
+
+    Optionally, unmatched keys from `d` are added to `u` if `merge_unmatched` is True.
+
+    Args:
+        d (dict): The original dictionary to update.
+        u (dict): The dictionary containing update values (has priority).
+        merge_unmatched (bool): If True, includes keys from `d` that are not in `u`.
+
+    Returns:
+        dict: The updated dictionary `u`
+    """
     for k, v in u.items():
         if isinstance(v, dict):
-            d[k] = update_dict(d.get(k, {}), v)
+            d[k] = update_dict(d.get(k, {}), v, merge_unmatched)
         else:
             d[k] = v
-    for k in d.keys() - u.keys():
-        u[k] = d[k]
+
+    if merge_unmatched:
+        for k in d.keys() - u.keys():
+            u[k] = d[k]
+
     return u
 
-# Updates matched keys, AND adds missing keys, BUT sums together number values
-def sum_update_dict(d, u):
+def sum_update_dict(d, u, merge_unmatched=True):
+    """
+    Recursively updates matched keys in two dictionaries, summing numeric values when applicable.
+    
+    Optionally, unmatched keys from the original dictionary `d` can be added to `u`.
+
+    Args:
+        d (dict): The original dictionary to update.
+        u (dict): The dictionary containing update values.
+        merge_unmatched (bool): If True, includes keys from `d` that are not in `u`.
+
+    Returns:
+        dict: The updated dictionary `u`
+    """
     def get_decimal_places(value):
-        # Function to get the number of decimal places in a float.
         if isinstance(value, float):
             return len(str(value).split('.')[1])
         else:
             return 0
+
     for k, v in u.items():
         if isinstance(v, dict):
-            d[k] = sum_update_dict(d.get(k, {}), v)
+            d[k] = sum_update_dict(d.get(k, {}), v, merge_unmatched)
         elif isinstance(v, (int, float)) and not isinstance(v, bool):
             current_value = d.get(k, 0)
             max_decimal_places = max(get_decimal_places(current_value), get_decimal_places(v))
             d[k] = round(current_value + v, max_decimal_places)
         else:
             d[k] = v
-    for k in d.keys() - u.keys():
-        u[k] = d[k]
+
+    if merge_unmatched:
+        for k in d.keys() - u.keys():
+            u[k] = d[k]
+
     return u
 
 # Updates matched keys, but DOES NOT add missing keys (optional skip of None values)
