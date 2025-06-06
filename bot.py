@@ -41,6 +41,7 @@ from modules.utils_shared import bot_args, bot_token, is_tgwui_integrated, share
 from modules.database import StarBoard, Statistics, BaseFileMemory
 from modules.utils_misc import check_probability, fix_dict, set_key, deep_merge, update_dict, sum_update_dict, update_dict_matched_keys, random_value_from_range, convert_lists_to_tuples, \
     get_time, format_time, format_time_difference, get_normalized_weights, valueparser  # noqa: F401
+from modules.utils_processing import resolve_placeholders
 from modules.utils_discord import Embeds, guild_only, guild_or_owner_only, configurable_for_dm_if, is_direct_message, ireply, sleep_delete_message, send_long_message, \
     EditMessageModal, SelectedListItem, SelectOptionsView, get_user_ctx_inter, get_message_ctx_inter, apply_reactions_to_messages, replace_msg_in_history_and_discord, MAX_MESSAGE_LENGTH, muffled_send  # noqa: F401
 from modules.utils_aspect_ratios import ar_parts_from_dims, dims_from_ar, avg_from_dims, get_aspect_ratio_parts, calculate_aspect_ratio_sizes  # noqa: F401
@@ -1058,19 +1059,11 @@ class BotVars():
             return payload
         # Extract and remove overrides from the payload
         overrides = payload.pop("__overrides__")
-        # Helper to to replace placeholders like {prompt} with overrides["prompt"]
-        def recursive_replace(obj):
-            if isinstance(obj, dict):
-                return {k: recursive_replace(v) for k, v in obj.items()}
-            elif isinstance(obj, list):
-                return [recursive_replace(v) for v in obj]
-            elif isinstance(obj, str):
-                return re.sub(r'\{(\w+)\}', lambda m: str(overrides.get(m.group(1), m.group(0))), obj)
-            else:
-                return obj
-
-        update_dict_matched_keys(overrides, vars(self), skip_none=True)
-        return recursive_replace(payload)
+        # Update the default overrides with current vars
+        updated_overrides = deep_merge(overrides, vars(self))
+        # Replace placeholders like {prompt} with overrides["prompt"]
+        resolved = resolve_placeholders(payload, updated_overrides, log_prefix='[Task Vars]', log_suffix='for payload')
+        return resolved
 
 bot_vars = BotVars()
 
@@ -2554,7 +2547,7 @@ class TaskProcessing(TaskAttributes):
                     log.info(f'[TAGS] Img model was triggered to {mode}, but it is the same as current.')
                 else:
                     # Add values to Params. Will trigger model change
-                    self.params.imgmodel = await self.imgmodel_settings.get_params(imgmodel=new_imgmodel, mode=mode, verb=verb)
+                    self.params.imgmodel = await self.imgmodel_settings.get_model_params(imgmodel=new_imgmodel, mode=mode, verb=verb)
                     log.info(f'[TAGS] {verb} Img model: "{new_imgmodel}"')
             # Payload handling
             if payload:
@@ -3660,7 +3653,7 @@ class Tasks(TaskProcessing):
                 if getattr(self.params.imgmodel, 'mode', 'change') == 'swap':
                     # Prepare params for the secondary model change
                     current_imgmodel = self.imgmodel_settings.last_imgmodel_value
-                    swap_imgmodel_params = await self.imgmodel_settings.get_params(imgmodel=current_imgmodel, mode='swap_back', verb='Swapping back to')
+                    swap_imgmodel_params = await self.imgmodel_settings.get_model_params(imgmodel=current_imgmodel, mode='swap_back', verb='Swapping back to')
                 # RUN A CHANGE IMGMODEL SUBTASK
                 new_options = await self.run_subtask('change_imgmodel')
                 self.payload = deep_merge(self.payload, new_options)
@@ -5362,7 +5355,7 @@ def get_all_character_paths() -> list:
         character_paths.append(tgwui_char_path)
     return character_paths
         
-def get_all_characters():
+def get_all_characters() -> Tuple[list, list]:
     all_characters = []
     filtered_characters = []
     character_paths = get_all_character_paths()
@@ -5438,7 +5431,7 @@ if imggen_enabled:
             log.info(f'{user_name} used "/imgmodel": "{selected_imgmodel}"')
             # offload to TaskManager() queue
             imgmodel_settings:ImgModel = get_imgmodel_settings(ctx)
-            imgmodel_params = await imgmodel_settings.get_params(selected_imgmodel)
+            imgmodel_params = await imgmodel_settings.get_model_params(selected_imgmodel)
             change_imgmodel_task = Task('change_imgmodel', ctx, params=Params(imgmodel=imgmodel_params))
             await task_manager.queue_task(change_imgmodel_task, 'gen_queue')
 
@@ -5451,7 +5444,7 @@ if imggen_enabled:
         imgmodel_settings:ImgModel = get_imgmodel_settings(ctx)
         imgmodels = await imgmodel_settings.get_filtered_imgmodels_list(ctx)
         if imgmodels:
-            imgmodel_names = imgmodel_settings.collect_names(imgmodels)
+            imgmodel_names = imgmodel_settings.collect_model_names(imgmodels)
             warned_too_many_imgmodel = False # TODO use the warned_once feature?
             imgmodels_view = SelectOptionsView(imgmodel_names,
                                                custom_id_prefix='imgmodels',
@@ -6391,22 +6384,22 @@ class ImgModel(SettingsBase):
     
     def apply_controlnet(self, controlnet, task:"Task"):
         if not bot_database.was_warned('controlnet_unsupported'):
-            log.warning("[TAGS] ControlNet was triggered, but is currently only supported by A1111-like Web UIs (A1111/Forge/ReForge)")
+            log.warning("[TAGS] ControlNet was triggered, but is currently only supported for A1111-like Web UIs (A1111/Forge/ReForge)")
             bot_database.update_was_warned('controlnet_unsupported')
     def apply_forge_couple(self, forge_couple, task:"Task"):
         if not bot_database.was_warned('forge_couple_unsupported'):
-            log.warning("[TAGS] Forge Couple was triggered, but is currently only supported by SD Forge")
+            log.warning("[TAGS] Forge Couple was triggered, but is currently only supported for SD Forge")
             bot_database.update_was_warned('forge_couple_unsupported')
     def apply_layerdiffuse(self, layerdiffuse, task:"Task"):
         if not bot_database.was_warned('layerdiffuse_unsupported'):
-            log.warning("[TAGS] Layerdiffuse was triggered, but is currently only supported by SD Forge")
+            log.warning("[TAGS] Layerdiffuse was triggered, but is currently only supported for SD Forge")
             bot_database.update_was_warned('layerdiffuse_unsupported')
     def apply_reactor(self, reactor, task:"Task"):
         if not bot_database.was_warned('reactor_unsupported'):
-            log.warning("[TAGS] ReActor was triggered, but is currently only supported by A1111-like Web UIs (A1111/Forge/ReForge)")
+            log.warning("[TAGS] ReActor was triggered, but is currently only supported for A1111-like Web UIs (A1111/Forge/ReForge)")
             bot_database.update_was_warned('reactor_unsupported')
 
-    def collect_names(self, imgmodels:list):
+    def collect_model_names(self, imgmodels:list):
         if not imgmodels:
             return []
         first = imgmodels[0]
@@ -6418,7 +6411,7 @@ class ImgModel(SettingsBase):
         else:
             raise ValueError("Unsupported element type in imgmodels list")
     
-    async def get_params(self, imgmodel:str|dict, mode:str='change', verb:str='Changing') -> dict:
+    async def get_model_params(self, imgmodel:str|dict, mode:str='change', verb:str='Changing') -> dict:
         if isinstance(imgmodel, str):
             params = await self.get_imgmodel_data(imgmodel)
         elif isinstance(imgmodel, dict):
@@ -6654,7 +6647,7 @@ class ImgModel(SettingsBase):
     async def auto_select_imgmodel(self, mode='random') -> str|dict:
         try:
             all_imgmodels:list = await self.get_filtered_imgmodels_list()
-            all_imgmodel_names = self.collect_names(all_imgmodels)
+            all_imgmodel_names = self.collect_model_names(all_imgmodels)
 
             current_index = None
             if self.last_imgmodel_name and self.last_imgmodel_name in all_imgmodel_names:
@@ -6683,7 +6676,7 @@ class ImgModel(SettingsBase):
                 await asyncio.sleep(duration)
                 # Select an imgmodel automatically
                 imgmodel = await self.auto_select_imgmodel(mode)
-                imgmodel_params = await self.get_params(imgmodel=imgmodel)
+                imgmodel_params = await self.get_model_params(imgmodel=imgmodel)
                 # CREATE TASK AND QUEUE IT
                 change_imgmodel_task = Task('change_imgmodel', ictx=None, params=Params(imgmodel=imgmodel_params))
                 await task_manager.queue_task(change_imgmodel_task, 'gen_queue')

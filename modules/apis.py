@@ -2332,11 +2332,11 @@ class StepExecutor:
     def _resolve_context_placeholders(self, data: Any, config: Any) -> Any:
         # Merge context with 'result'
         config = processing.resolve_placeholders(config, {"result": data}, log_prefix='[StepExecutor]', log_suffix='from prior step "result"')
-        config = processing.resolve_placeholders(config, **self.context, log_prefix='[StepExecutor]', log_suffix='from saved context')
+        config = processing.resolve_placeholders(config, self.context, log_prefix='[StepExecutor]', log_suffix='from saved context')
         if self.task:
-            config = processing.resolve_placeholders(config, vars(self.task.bot_vars), log_prefix='[StepExecutor]', log_suffix=f'from Task "{self.task.name}" context')
+            config = processing.resolve_placeholders(config, vars(self.task.vars), log_prefix='[StepExecutor]', log_suffix=f'from Task "{self.task.name}" context')
         if self.endpoint and self.endpoint.client.ws_config:
-            ws_context = self.endpoint.client.ws_config.get_context
+            ws_context = self.endpoint.client.ws_config.get_context()
             config = processing.resolve_placeholders(config, ws_context, log_prefix='[StepExecutor]', log_suffix=f'from "{self.endpoint.client.name}" Websocket context')
         return config
     
