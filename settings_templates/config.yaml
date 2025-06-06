@@ -48,9 +48,9 @@ per_server_settings:
   enabled: false
   # The following settings only apply if 'enabled = true'
   per_server_characters: false # **If enabled, all characters must share the same avatar.**
-  character_avatar: '' # The name of an image file in your 'user_images' directory. Do not include the extension (.png/.jpg/.gif)
+  character_avatar: '' # The name of an image file in your '/user/images' directory. Do not include the extension (.png/.jpg/.gif)
   # Only enable the following if: (1) You have lots of free VRAM (2) Your client settings allow multiple models to be loaded in VRAM.
-  per_server_imgmodel_settings: false # In addition to separate settings, this uses the payload to drive model handling (instead of /models API).
+  per_server_imgmodel_settings: false # In addition to separate internal settings, this uses the payload to drive model handling (instead of /models API).
 
 # Dynamic Prompting feature. Uses similar syntax and usage as the SD WebUI extension 'sd-dynamic-prompts'.
 # More details here: https://github.com/altoiddealer/ad_discordbot/wiki/dynamic-prompting
@@ -58,48 +58,46 @@ dynamic_prompting_enabled: true
 
 
 # Textgen settings
-# Note: Many native textgen-webui settings are honored: 'CMD_FLAGS.txt' (extensions) / 'settings.yaml' / 'models/config-user.yaml' (LLM model settings)
+# Note: Many native textgen-webui settings are honored: 'CMD_FLAGS.txt' (extensions) / 'user_data/settings.yaml' / 'user_data/models/config-user.yaml' (LLM model settings)
 textgen:
-  enabled: true                     # Controls whether TGWUI is part of the bot (does not register relavent commands for discord, etc)
-  api_name: Text Generation WebUI   # The name of an API in 'dict_api_settings.yaml'. textgen API WILL BE IGNORED (for main textgen functions) if the bot is installed as TGWUI integrated!!
+  enabled: true                     # Controls whether the script initializes with text generation features
   # History handling settings.
   chat_history:
-    limit_history: true             # Recommended to keep as true. This will limit the stored history to roughly the current 'truncation_length' (more than enough retained). You may have performance issues if set to false.
+    limit_history: true             # Limits the stored history to roughly the current 'truncation_length' (more than enough retained). You may have performance issues if set to false.
     export_for_tgwui: true          # Defines if your history save can be later imported into standalone text-generation-webui.
     autoload_history: false         # Set to true if you want the character to load with the most recently saved chat history.
     change_char_history_method: new # 'new' - start new history; 'keep' - retain history for next character (only applicable if 'autoload_history: true')
-    greeting_or_history: history    # 'history' - Sends copy of most recent message exchange whenever history is loaded; 'greeting' - Only send character's greeting
     per_channel_history: true       # If true, each channel will have its own chat history. Log files will not be compatible with text-generation-webui unless processed by .bat in '/utils/'
 
 
 # TTS settings. Use command '/set_server_voice_channel' in each server that you want to connect to voice channel for playing TTS
-# If enabled, either: use 'tgwui_extension' (below), OR check API configuration in 'dict_api_settings.yaml'
+# If enabled, either: check API configuration in 'dict_api_settings.yaml' OR use 'tgwui_extension' (below)
 ttsgen:
   enabled: false
-  play_mode: 2                      # 0 = use voice channel / 1 = upload file to chat channel / 2 = both (use voice & upload file)
-  mp3_bit_rate: 128                 # If play_mode = 1 or 2, and the output (.wav) exceeds 8MB (discord limit), it will convert to .mp3 before uploading.
-  save_mode: 1                      # 0 = save outputs / 1 = try deleting outputs. Note: Can't delete outputs uploaded to channel. (../extensions/coqui_tts/outputs)
-  tts_greeting: true                # Whether to generate TTS for greeting when using '/character' or '/reset_conversation'
-  tts_streaming: true               # Setting only valid if character behavior has `chance_to_stream_reply`. Set to "false" if you want text streaming and TTS, but not TTS streaming.
+  play_mode: 2                  # 0 = use voice channel / 1 = upload file to chat channel / 2 = both (use voice & upload file)
+  mp3_bit_rate: 128             # If play_mode = 1 or 2, and the output (.wav) exceeds 8MB (discord limit), it will convert to .mp3 before uploading.
+  save_mode: 1                  # 0 = save outputs / 1 = try deleting outputs. Note: Can't delete outputs uploaded to channel. (../extensions/coqui_tts/outputs)
+  tts_greeting: true            # Whether to generate TTS for greeting when using '/character' or '/reset_conversation'
+  tts_streaming: true           # Only valid if character behavior has `chance_to_stream_reply`. Set to "false" if you want text streaming and TTS, but not TTS streaming.
   # Extension method (non-API) only works with TGWUI integrated install.
   # Supported TTS extensions: 'alltalk_tts', 'coqui_tts', 'silero_tts', 'edge_tts' and 'elevenlabs_tts' have been tested. Additional tts extensions may work.
-  tgwui_extension: ''               # '' = Disabled. Ex: 'alltalk_tts' (Loads automatically! Don't include in '--extensions' launch flag!)
+  tgwui_extension: ''           # '' = Disabled.   Example: 'alltalk_tts' (Loads automatically! Don't include in '--extensions' launch flag!)
 
 
 # Imggen settings. If enabled, check API configuration in 'dict_api_settings.yaml'
 imggen:
-  enabled: true                     # Controls whether SD WebUI is part of the bot (does not register relavent commands for discord, etc)
+  enabled: true                 # Controls whether SD WebUI is part of the bot (does not register relavent commands for discord, etc)
   # The following are only applicable for A1111 / Forge / ReForge (the bot will detect this via API)
-  extensions:                       # Only set extensions as True if they are installed AND active in your A1111.
-    controlnet_enabled: false       # Requires: sd-webui-controlnet (https://github.com/Mikubill/sd-webui-controlnet) AND configuring 'dict_cmdoptions.yaml'
-    forgecouple_enabled: false      # Requires: sd-forge-couple (https://github.com/Haoming02/sd-forge-couple) **Only works for Forge**
-    layerdiffuse_enabled: false     # Requires: sd-forge-layerdiffuse (https://github.com/layerdiffusion/sd-forge-layerdiffuse) **Only works for Forge**
-    reactor_enabled: false          # Requires: sd-webui-reactor (https://github.com/Gourieff/sd-webui-reactor)
+  extensions:                   # Only set extensions as True if they are installed AND active in your A1111.
+    controlnet_enabled: false   # Requires: sd-webui-controlnet (https://github.com/Mikubill/sd-webui-controlnet) AND configuring 'dict_cmdoptions.yaml'
+    forgecouple_enabled: false  # Requires: sd-forge-couple (https://github.com/Haoming02/sd-forge-couple) **Only works for Forge**
+    layerdiffuse_enabled: false # Requires: sd-forge-layerdiffuse (https://github.com/layerdiffusion/sd-forge-layerdiffuse) **Only works for Forge**
+    reactor_enabled: false      # Requires: sd-webui-reactor (https://github.com/Gourieff/sd-webui-reactor)
     # 'sd-loractl' extension enhances LORA processing by allowing adjustable weights during image generation.
     # This bot can automatically calculate and apply weight scaling as defined below.
-    loractl:                        # Requires: sd-webui-loractl (https://github.com/cheald/sd-webui-loractl) OR ReForge (it's built in!)
-      enabled: false                # **Only works for A1111 and ReForge, not Forge**
-      min_loras: 2                  # Minimum number of loras in the prompt to trigger the following weight scaling definitions.
+    loractl:                    # Requires: sd-webui-loractl (https://github.com/cheald/sd-webui-loractl) OR ReForge (it's built in!)
+      enabled: false
+      min_loras: 2              # Minimum number of loras in the prompt to trigger the following weight scaling definitions.
       # format is (% of existing lora weight)@(step percent),(more step definitions). These are not static weights- these are multiplied by the existing LORA weight. '1.0@0' = begin generation with existing LORA weight.
       # You can define as many steps as you want. ex1: '0.5@0' would just cut the LORA weight in half. ex2: '0.0@0,1.0@0.5,0.0@1.0' would look like a pyramid on the graph.
       lora_1_scaling: '1.0@0,0.5@0.5'

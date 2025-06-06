@@ -2196,26 +2196,17 @@ class TaskProcessing(TaskAttributes):
         except Exception as e:
             log.error(f'An error occurred while saving LLM gen statistics: {e}')
 
-    async def send_char_greeting_or_history(self:Union["Task","Tasks"], char_name:str):
+    async def send_char_greeting(self:Union["Task","Tasks"], char_name:str):
         try:
-            # Send last_exchange to channel
             greeting_msg = ''
             bot_text = None
-            if bot_history.greeting_or_history == 'history':
-                history_char, history_mode = get_char_mode_for_history(settings=self.settings)
-                last_user_hmessage, last_bot_hmessage = bot_history.get_history_for(self.ictx.channel.id, history_char, history_mode).last_exchange()
-                if last_user_hmessage:
-                    last_character = bot_settings.get_last_setting_for("last_character", self.ictx)
-                    bot_text = last_bot_hmessage.text
-                    greeting_msg = f'__**Last message exchange**__:\n>>> **User**: "{last_user_hmessage.text}"\n **{last_character}**: "{bot_text}"'
-            if not greeting_msg:
-                greeting:str = self.settings.llmcontext.greeting
-                if greeting:
-                    greeting_msg = greeting.replace('{{user}}', 'user')
-                    greeting_msg = greeting_msg.replace('{{char}}', char_name)
-                else:
-                    greeting_msg = f'**{char_name}** has entered the chat"'
-                bot_text = greeting_msg
+            greeting:str = self.settings.llmcontext.greeting
+            if greeting:
+                greeting_msg = greeting.replace('{{user}}', 'user')
+                greeting_msg = greeting_msg.replace('{{char}}', char_name)
+            else:
+                greeting_msg = f'**{char_name}** has entered the chat"'
+            bot_text = greeting_msg
             await send_long_message(self.channel, greeting_msg)
             # Play TTS Greeting
             if tts_is_enabled(and_online=True) and config.ttsgen.get('tts_greeting', False):
@@ -2227,7 +2218,7 @@ class TaskProcessing(TaskAttributes):
             raise
         except Exception as e:
             print(traceback.format_exc())
-            log.error(f'An error occurred while sending greeting or history for "{char_name}": {e}')
+            log.error(f'An error occurred while sending greeting for "{char_name}": {e}')
 
 ####################### MOSTLY IMAGE GEN PROCESSING #########################
 
@@ -3592,7 +3583,7 @@ class Tasks(TaskProcessing):
                 else:
                     history.fresh().replace()
             log.info(f"Character loaded: {char_name}")
-            await self.send_char_greeting_or_history(char_name)
+            await self.send_char_greeting(char_name)
 
             # Announce change
             if self.embeds.enabled('change'):
