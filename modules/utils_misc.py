@@ -123,80 +123,86 @@ def deep_merge(base: dict, override: dict) -> dict:
             result[k] = v
     return result
 
-# Updates matched keys, AND adds missing keys
-def update_dict(d, u, merge_unmatched=True):
+def update_dict(d:dict, u:dict, in_place=True, merge_unmatched=True, skip_none=False) -> dict:
     """
-    Recursively updates a dictionary with another dictionary, giving priority to the update dictionary `u`.
+    Recursively updates dictionary `d` with dictionary `u`.
 
-    Optionally, unmatched keys from `d` are added to `u` if `merge_unmatched` is True.
-
-    Args:
-        d (dict): The original dictionary to update.
-        u (dict): The dictionary containing update values (has priority).
-        merge_unmatched (bool): If True, includes keys from `d` that are not in `u`.
+    Arguments:
+        d (dict): The original dictionary to be updated.
+        u (dict): The update dictionary.
+        merge_unmatched (bool): If True, include all keys from both `d` and `u`.
+                                If False, only update keys in `d` that are also in `u`.
+        skip_none (bool): If True, ignore keys in `u` with value None.
+        in_place (bool): If True, modifies `d` in-place. If False, returns a new updated dictionary.
 
     Returns:
-        dict: The updated dictionary `u`
+        dict: The updated dictionary (either new or `d`, depending on `in_place`).
     """
-    for k, v in u.items():
-        if isinstance(v, dict):
-            d[k] = update_dict(d.get(k, {}), v, merge_unmatched)
+    target = d if in_place else d.copy()
+
+    keys = set(d) | set(u) if merge_unmatched else set(d) & set(u)
+
+    for k in keys:
+        d_val = d.get(k)
+        u_val = u.get(k, d_val)
+
+        if isinstance(d_val, dict) and isinstance(u_val, dict):
+            target[k] = update_dict(
+                d_val, u_val,
+                merge_unmatched=merge_unmatched,
+                skip_none=skip_none,
+                in_place=in_place
+            )
+        elif skip_none and u.get(k) is None:
+            target[k] = d_val
         else:
-            d[k] = v
+            target[k] = u_val
 
-    if merge_unmatched:
-        for k in d.keys() - u.keys():
-            u[k] = d[k]
+    return target
 
-    return u
-
-def sum_update_dict(d, u, merge_unmatched=True):
+def sum_update_dict(d, u, updates_only=False, merge_unmatched=False):
     """
-    Recursively updates matched keys in two dictionaries, summing numeric values when applicable.
-    
-    Optionally, unmatched keys from the original dictionary `d` can be added to `u`.
+    Recursively updates dictionary `d` by summing numeric values from dictionary `u`.
 
-    Args:
-        d (dict): The original dictionary to update.
-        u (dict): The dictionary containing update values.
-        merge_unmatched (bool): If True, includes keys from `d` that are not in `u`.
+    Arguments:
+        d (dict): The target dictionary to be updated (mutated in-place).
+        u (dict): The update dictionary containing values to add or override.
+        updates_only (bool): If True, return only keys from `u` with updated values.
+                             If False, return the fully updated `d` dictionary.
+        merge_unmatched (bool): If True, include keys from `u` not found in `d`.
+                                If False, ignore such keys.
 
     Returns:
-        dict: The updated dictionary `u`
+        dict: A dictionary containing either the full merged result or just the updated keys.
     """
     def get_decimal_places(value):
         if isinstance(value, float):
             return len(str(value).split('.')[1])
-        else:
-            return 0
+        return 0
+
+    result = {} if updates_only else d
 
     for k, v in u.items():
+        if k not in d and not merge_unmatched:
+            continue  # skip keys not in d if merge_unmatched is False
+
         if isinstance(v, dict):
-            d[k] = sum_update_dict(d.get(k, {}), v, merge_unmatched)
+            d[k] = sum_update_dict(d.get(k, {}), v, updates_only=False, merge_unmatched=merge_unmatched)
+            if updates_only:
+                result[k] = d[k]
         elif isinstance(v, (int, float)) and not isinstance(v, bool):
             current_value = d.get(k, 0)
             max_decimal_places = max(get_decimal_places(current_value), get_decimal_places(v))
-            d[k] = round(current_value + v, max_decimal_places)
+            new_value = round(current_value + v, max_decimal_places)
+            d[k] = new_value
+            if updates_only:
+                result[k] = new_value
         else:
             d[k] = v
+            if updates_only:
+                result[k] = v
 
-    if merge_unmatched:
-        for k in d.keys() - u.keys():
-            u[k] = d[k]
-
-    return u
-
-# Updates matched keys, but DOES NOT add missing keys (optional skip of None values)
-def update_dict_matched_keys(d, u, skip_none=False):
-    for k, v in u.items():
-        if k not in d:
-            continue  # Do not add missing keys
-
-        if isinstance(v, dict) and isinstance(d.get(k), dict):
-            update_dict_matched_keys(d[k], v, skip_none=skip_none)
-        elif not (skip_none and v is None):
-            d[k] = v
-    return d
+    return result
 
 def random_value_from_range(value_range):
     if isinstance(value_range, (list, tuple)) and len(value_range) == 2:

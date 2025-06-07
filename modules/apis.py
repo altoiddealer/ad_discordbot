@@ -116,7 +116,7 @@ apisettings = APISettings()
 
 
 def resolve_imggen_subclassing(name: str) -> type["ImgGenClient"]:
-    log.info(f"Checking if '{name}' is a known API (name has 'Comfy', 'A1111', 'Forge', 'ReForge')")
+    log.info(f"Checking if main ImgGen client '{name}' is a known API (name has Comfy / A1111 / Forge / ReForge)")
     name_lower = name.lower()
     if 'comfy' in name_lower:
         log.info(f"{name} recognized as ComfyUI.")
@@ -134,7 +134,7 @@ def resolve_imggen_subclassing(name: str) -> type["ImgGenClient"]:
     return ImgGenClient
 
 def resolve_ttsgen_subclassing(name: str) -> type["TTSGenClient"]:
-    log.info(f"Checking if '{name}' is a known API (name has 'Alltalk')")
+    log.info(f"Checking if main TTSGen client '{name}' is a known API (name has Alltalk)")
     name_lower = name.lower()
     if 'alltalk' in name_lower:
         log.info(f"{name} recognized as Alltalk.")

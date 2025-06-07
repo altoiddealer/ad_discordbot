@@ -39,7 +39,7 @@ import filetype
 from modules.utils_files import load_file, merge_base, save_yaml_file  # noqa: F401
 from modules.utils_shared import bot_args, bot_token, is_tgwui_integrated, shared_path, bg_task_queue, task_event, flows_queue, flows_event, patterns, bot_emojis, config, bot_database, get_api
 from modules.database import StarBoard, Statistics, BaseFileMemory
-from modules.utils_misc import check_probability, fix_dict, set_key, deep_merge, update_dict, sum_update_dict, update_dict_matched_keys, random_value_from_range, convert_lists_to_tuples, \
+from modules.utils_misc import check_probability, fix_dict, set_key, deep_merge, update_dict, sum_update_dict, random_value_from_range, convert_lists_to_tuples, \
     get_time, format_time, format_time_difference, get_normalized_weights, valueparser  # noqa: F401
 from modules.utils_processing import resolve_placeholders
 from modules.utils_discord import Embeds, guild_only, guild_or_owner_only, configurable_for_dm_if, is_direct_message, ireply, sleep_delete_message, send_long_message, \
@@ -1385,7 +1385,7 @@ class TaskProcessing(TaskAttributes):
                 if param_variances:
                     processed_params = self.process_param_variances(param_variances)
                     log.info(f'[TAGS] LLM Param Variances: {processed_params}')
-                    self.payload['state'] = sum_update_dict(self.payload['state'], processed_params) # Updates dictionary while adding floats + ints
+                    sum_update_dict(self.payload['state'], processed_params) # Updates dictionary while adding floats + ints
                 if state:
                     update_dict(self.payload['state'], state)
                     log.info('[TAGS] LLM State was modified')
@@ -2703,8 +2703,7 @@ class TaskProcessing(TaskAttributes):
                         try:
                             if img_payload_mods.get('payload'):
                                 payload_order_hack = dict(value)
-                                update_dict(payload_order_hack, img_payload_mods['payload'])
-                                img_payload_mods['payload'] = payload_order_hack
+                                img_payload_mods['payload'] = update_dict(payload_order_hack, img_payload_mods['payload'], in_place=False)
                             else:
                                 img_payload_mods['payload'] = dict(value)
                         except Exception:
@@ -3936,6 +3935,9 @@ class Task(Tasks):
         self.extra_audio:list   = self.extra_audio if self.extra_audio else []
         self.extra_files:list   = self.extra_files if self.extra_files else []
 
+    def print_name(self) -> str:
+        return f'{self.name.replace("_", " ").title()} Task'
+
     def get_channel_id(self, default=None) -> int|None:
         channel = getattr(self.ictx, 'channel', None)
         return getattr(channel, 'id', default)
@@ -3947,9 +3949,9 @@ class Task(Tasks):
         # Extract and remove overrides from the payload
         overrides = self.payload.pop("__overrides__")
         # Update the default overrides with current vars
-        updated_overrides = update_dict_matched_keys(overrides, vars(self.vars), skip_none=True)
+        updated_overrides = update_dict(overrides, vars(self.vars), in_place=False, skip_none=True)
         # Replace placeholders like {prompt} with overrides["prompt"]
-        self.payload = resolve_placeholders(self.payload, updated_overrides, log_prefix=f'[{self.name}_task]', log_suffix='into payload')
+        self.payload = resolve_placeholders(self.payload, updated_overrides, log_prefix=f'[{self.print_name()}]', log_suffix='into payload')
 
     def update_vars_from_imgcmd(self):
         imgcmd_params = self.params.imgcmd
@@ -6354,14 +6356,13 @@ class ImgModel(SettingsBase):
     def handle_payload_updates(self, updates:dict, task:"Task") -> dict:
         task.vars.update_from_dict(updates)
         if '__overrides__' in task.payload:
-            task.payload['__overrides__'] = deep_merge(task.payload['__overrides__'], updates)
-            return task.payload
+            return update_dict(task.payload['__overrides__'], updates)
         else:
-            return deep_merge(task.payload, updates)
+            return update_dict(task.payload, updates)
 
     # Update vars and __overrides__ dict in user's default payload with any imgmodel payload mods
     def override_payload(self, task:"Task") -> dict:
-        self.handle_payload_updates(self.payload_mods, task)
+        return self.handle_payload_updates(self.payload_mods, task)
     
     def apply_prompts_to_task(self, task:"Task"):
         active_ep = task.params.get_active_imggen_ep()
@@ -6791,7 +6792,7 @@ class ImgModel_Comfy(ImgModel):
         task.vars.update_from_dict(updates)
 
     def apply_payload_param_variances(self, updates:dict, task:"Task"):
-        summed_updates = sum_update_dict(vars(task.vars), updates, merge_unmatched=False)
+        summed_updates = sum_update_dict(vars(task.vars), updates, updates_only=True)
         task.vars.update_from_dict(summed_updates)
 
     def apply_imgcmd_params(self, task:"Task"):
@@ -6838,7 +6839,7 @@ class ImgModel_SDWebUI(ImgModel):
         update_dict(task.payload, updates)
 
     def apply_payload_param_variances(self, updates:dict, task:"Task"):
-        task.payload = sum_update_dict(task.payload, updates)
+        sum_update_dict(task.payload, updates)
 
     def apply_imgcmd_params(self, task:"Task"):
         try:
@@ -7135,7 +7136,7 @@ class Settings(BaseFileMemory):
                 if isinstance(main_key, (Behavior, ImgModel, LLMContext, LLMState)):
                     main_key_dict = vars(main_key)
                     if isinstance(v, dict) and isinstance(main_key_dict, dict):
-                        update_dict_matched_keys(main_key_dict, v)
+                        update_dict(main_key_dict, v, merge_unmatched=False)
             else:
                 log.warning(f'Received unexpected key when initializing Settings: "{k}"')
                 setattr(self, k, v)
