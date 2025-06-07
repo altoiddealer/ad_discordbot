@@ -6332,7 +6332,8 @@ class Behavior(SettingsBase):
         # Determine if the bot should reply based on a probability
         return random.random() < probability
 
-
+# Base class is intended to handle unknown clients. Payload management will rely on '__overrides__' injection method only.
+# Subclasses for known clients will manage payloads and settings more expectedly.
 class ImgModel(SettingsBase):
     def __init__(self):
         self._imgmodel_update_task:Optional[asyncio.Task] = None
@@ -6359,10 +6360,6 @@ class ImgModel(SettingsBase):
 
     def handle_payload_updates(self, updates:dict, task:"Task") -> dict:
         task.vars.update_from_dict(updates)
-        if '__overrides__' in task.payload:
-            return update_dict(task.payload['__overrides__'], updates)
-        else:
-            return update_dict(task.payload, updates)
 
     # Update vars and __overrides__ dict in user's default payload with any imgmodel payload mods
     def override_payload(self, task:"Task") -> dict:
@@ -6381,12 +6378,8 @@ class ImgModel(SettingsBase):
         task.update_vars_from_imgcmd()
 
     def apply_payload_param_variances(self, updates:dict, task:"Task"):
-        target = task.payload
-        if '__overrides__' in task.payload:
-            target = task.payload['__overrides__']
-        # returned dict contains summed up 'updates' (not a complete payload merge)
-        summed_updates = sum_update_dict(target, updates, merge_unmatched=False)
-        self.handle_payload_updates(summed_updates)
+        summed_updates = sum_update_dict(vars(task.vars), updates, in_place=False, updates_only=True, merge_unmatched=False)
+        task.vars.update_from_dict(summed_updates)
 
     def apply_controlnet(self, controlnet, task:"Task"):
         if not bot_database.was_warned('controlnet_unsupported'):
@@ -6791,13 +6784,6 @@ class ImgModel_Comfy(ImgModel):
         file_obj.name = filename
         # Return file dict
         return {"file": file_obj, "filename": filename, "content_type": mime_type}
-
-    def handle_payload_updates(self, updates:dict, task:"Task"):
-        task.vars.update_from_dict(updates)
-
-    def apply_payload_param_variances(self, updates:dict, task:"Task"):
-        summed_updates = sum_update_dict(vars(task.vars), updates, updates_only=True)
-        task.vars.update_from_dict(summed_updates)
 
     def apply_imgcmd_params(self, task:"Task"):
         imgcmd_vars = {}

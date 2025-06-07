@@ -1272,6 +1272,7 @@ class ImgGenClient(APIClient):
     get_controlnet_control_types: Optional["ImgGenEndpoint_GetControlNetControlTypes"] = None
     get_history: Optional["ImgGenEndpoint_GetHistory"] = None
     get_view: Optional["ImgGenEndpoint_GetView"] = None
+    post_upload: Optional["ImgGenEndpoint"] = None
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -1288,9 +1289,9 @@ class ImgGenClient(APIClient):
                 "get_controlnet_models": ImgGenEndpoint_GetControlNetModels,
                 "post_server_restart": ImgGenEndpoint_PostServerRestart,
                 "get_controlnet_control_types": ImgGenEndpoint_GetControlNetControlTypes,
+                "post_upload": ImgGenEndpoint_PostUpload,
                 "get_history": ImgGenEndpoint_GetHistory,
-                "get_view": ImgGenEndpoint_GetView,
-                "post_upload": ImgGenEndpoint_PostUpload}
+                "get_view": ImgGenEndpoint_GetView}
 
     def _default_endpoint_class(self):
         return ImgGenEndpoint
@@ -1415,7 +1416,6 @@ class ImgGenClient_SDWebUI(ImgGenClient):
 class ImgGenClient_Comfy(ImgGenClient):
     get_history: Optional["ImgGenEndpoint"] = None
     get_view: Optional["ImgGenEndpoint"] = None
-    post_upload: Optional["ImgGenEndpoint"] = None
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 

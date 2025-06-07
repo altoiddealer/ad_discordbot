@@ -160,17 +160,17 @@ def update_dict(d:dict, u:dict, in_place=True, merge_unmatched=True, skip_none=F
 
     return target
 
-def sum_update_dict(d, u, updates_only=False, merge_unmatched=False):
+def sum_update_dict(d, u, updates_only=False, merge_unmatched=False, in_place=True):
     """
     Recursively updates dictionary `d` by summing numeric values from dictionary `u`.
 
     Arguments:
-        d (dict): The target dictionary to be updated (mutated in-place).
+        d (dict): The target dictionary to be updated.
         u (dict): The update dictionary containing values to add or override.
-        updates_only (bool): If True, return only keys from `u` with updated values.
-                             If False, return the fully updated `d` dictionary.
+        updates_only (bool): If True, return only keys from `u` that were updated and matched in `d`.
         merge_unmatched (bool): If True, include keys from `u` not found in `d`.
                                 If False, ignore such keys.
+        in_place (bool): If True, modifies `d` in-place. If False, does not mutate `d` or `u`.
 
     Returns:
         dict: A dictionary containing either the full merged result or just the updated keys.
@@ -180,26 +180,43 @@ def sum_update_dict(d, u, updates_only=False, merge_unmatched=False):
             return len(str(value).split('.')[1])
         return 0
 
+    # Make deep copies if not in-place
+    d = copy.deepcopy(d) if not in_place else d
+    u = copy.deepcopy(u) if not in_place else u
+
     result = {} if updates_only else d
 
     for k, v in u.items():
-        if k not in d and not merge_unmatched:
+        key_in_d = k in d
+
+        if not key_in_d and not merge_unmatched:
             continue  # skip keys not in d if merge_unmatched is False
 
         if isinstance(v, dict):
-            d[k] = sum_update_dict(d.get(k, {}), v, updates_only=False, merge_unmatched=merge_unmatched)
-            if updates_only:
-                result[k] = d[k]
+            updated_subdict = sum_update_dict(
+                d.get(k, {}), v,
+                updates_only=updates_only,
+                merge_unmatched=merge_unmatched,
+                in_place=False  # don't mutate subdicts during recursion
+            )
+
+            if updated_subdict or not updates_only:
+                d[k] = d.get(k, {}) if isinstance(d.get(k), dict) else {}
+                d[k].update(updated_subdict)
+
+            if updates_only and (key_in_d or merge_unmatched):
+                result[k] = updated_subdict
+
         elif isinstance(v, (int, float)) and not isinstance(v, bool):
             current_value = d.get(k, 0)
             max_decimal_places = max(get_decimal_places(current_value), get_decimal_places(v))
             new_value = round(current_value + v, max_decimal_places)
             d[k] = new_value
-            if updates_only:
+            if updates_only and (key_in_d or merge_unmatched):
                 result[k] = new_value
         else:
             d[k] = v
-            if updates_only:
+            if updates_only and (key_in_d or merge_unmatched):
                 result[k] = v
 
     return result
