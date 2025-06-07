@@ -1255,7 +1255,12 @@ class TaskProcessing(TaskAttributes):
                 for audio_fp in self.extra_audio:
                     await voice_clients.process_audio_file(self.ictx, audio_fp)
             if self.extra_files:
-                await self.channel.send(file=self.extra_files) if len(self.extra_files) == 1 else await self.channel.send(files=self.extra_files)
+                # Wrap paths into discord.File
+                files_to_send = [File(f) for f in self.extra_files]
+                if len(files_to_send) == 1:
+                    await self.channel.send(file=files_to_send[0])
+                else:
+                    await self.channel.send(files=files_to_send)
         except Exception as e:
             log.error(f"An error occurred while trying to send extra results: {e}")
 
