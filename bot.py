@@ -1531,7 +1531,8 @@ class TaskProcessing(TaskAttributes):
                             queue_to = 'gen_queue' if queue_to == 'message_queue' else queue_to # Do not allow to go to Message queue
                             log.info('An API task was triggered, created and queued.')
                             await self.embeds.send('system', title='Processing an API Request', description='An API task was triggered, created and queued.', delete_after=5)
-                            api_task = self.clone('api', self.ictx, ignore_list=['payload'], api_config=api_config)
+                            api_task = self.clone('api', self.ictx, ignore_list=['payload'])
+                            setattr(api_task, 'api_config', api_config)
                             await task_manager.queue_task(api_task, queue_to)
                         else:
                             endpoint, updated_api_config = api.get_endpoint_from_config(api_config)
@@ -1549,7 +1550,8 @@ class TaskProcessing(TaskAttributes):
                             queue_to = 'gen_queue' if queue_to == 'message_queue' else queue_to # Do not allow to go to Message queue
                             log.info('A Workflow task was triggered, created and queued.')
                             await self.embeds.send('system', title='Processing a Workflow Request', description='A Workflow task was triggered, created and queued.', delete_after=5)
-                            workflow_task = self.clone('workflow', self.ictx, ignore_list=['payload'], workflow_config=workflow_config)
+                            workflow_task = self.clone('workflow', self.ictx, ignore_list=['payload'])
+                            setattr(workflow_task, 'workflow_config', workflow_config)
                             await task_manager.queue_task(workflow_task, queue_to)
                         else:
                             await self.run_workflow_task(workflow_config)
@@ -2116,12 +2118,9 @@ class TaskProcessing(TaskAttributes):
             log.error(f'An error occurred while formatting prompt with recent messages: {e}')
             return prompt
 
-    def process_prompt_formatting(self:Union["Task","Tasks"], prompt:str, **kwargs) -> str:
-        updated_prompt = prompt
+    def process_prompt_formatting(self:Union["Task","Tasks"], prompt:str|None=None, format_prompt:list|None=None, **kwargs) -> str:
+        updated_prompt = prompt if prompt else ''
         try:
-            # unpack formatting dict
-
-            format_prompt: list[str] = kwargs.get('format_prompt', [])
             time_offset = kwargs.get('time_offset', None)
             time_format = kwargs.get('time_format', None)
             date_format = kwargs.get('date_format', None)

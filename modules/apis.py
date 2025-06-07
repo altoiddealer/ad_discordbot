@@ -2214,7 +2214,7 @@ class StepExecutor:
 
     def _split_step(self, step: dict) -> tuple[str, dict, dict]:
         step = step.copy()
-        metadata_keys = {"save_as", "on_error"} #, "returns", "skip_if", "log"}  # extensible
+        metadata_keys = {"save_as", "on_error", "log"} #, "returns", "skip_if", "log"}  # extensible
         metadata = {k: step.pop(k) for k in metadata_keys if k in step}
         if len(step) != 1:
             raise ValueError(f"[StepExecutor] Invalid step format: {step}")
@@ -2224,7 +2224,7 @@ class StepExecutor:
     def _initial_data(self):
         if isinstance(self.response, APIResponse):
             return self.response.body
-        return self.original_input
+        return self.original_input_data
 
     async def run(self, input_data: Any|None = None) -> Any:
         result = input_data or self._initial_data()
@@ -2251,16 +2251,18 @@ class StepExecutor:
                     # Run the step and determine where to store the result
                     step_result = await method(result, config) if asyncio.iscoroutinefunction(method) else method(result, config)
 
-                # print("step name:", step_name, "step result:", step_result)
-
                 # Apply returns logic
                 step_result = self._apply_returns(step_result, result, config)
-                # print("step_result OUT:", step_result)
+                
                 save_as = meta.get("save_as")
                 if save_as:
                     self.context[save_as] = step_result
+                    if meta.get("log"):
+                        log.info(f'[Step Executor] Saved {step_name} result to context as: {save_as}')
                 else:
                     result = step_result
+                if meta.get("log"):
+                    log.info(f'[Step Executor] {step_name} results: {step_result}')
             except Exception as e:
                 on_error = meta.get("on_error", "raise")
                 if on_error == "skip":
