@@ -4588,7 +4588,7 @@ if imggen_enabled:
                 log_msg += f"\nNegative Prompt: {neg_prompt}"
             if img2img:
                 async def process_image_img2img(img2img, img2img_dict, mode, log_msg):
-                    i2i_image = await imgmodel_settings.handle_file_attachment(img2img)
+                    i2i_image = await imgmodel_settings.handle_file_attachment(img2img, 'image')
                     img2img_dict['image'] = i2i_image
                     # Ask user to select a Denoise Strength
                     denoise_options = []
@@ -4616,20 +4616,20 @@ if imggen_enabled:
                     log.error(f"An error occurred while configuring Img2Img for /image command: {e}")
             if img2img_mask:
                 if img2img:
-                    img2img_mask_img = await imgmodel_settings.handle_file_attachment(img2img_mask)
+                    img2img_mask_img = await imgmodel_settings.handle_file_attachment(img2img_mask, 'image')
                     img2img_dict['mask'] = img2img_mask_img
                     log_msg += "\nInpainting Mask Provided"
                 else:
                     await ctx.send("Inpainting requires im2img. Not applying img2img_mask mask...", ephemeral=True)
             if face_swap:
-                faceswapimg = await imgmodel_settings.handle_file_attachment(face_swap)
+                faceswapimg = await imgmodel_settings.handle_file_attachment(face_swap, 'image')
                 log_msg += "\nFace Swap Image Provided"
             if cnet:
                 # Get filtered ControlNet data
                 cnet_data = await get_cnet_data()
                 async def process_image_controlnet(cnet, cnet_dict, log_msg):
                     try:
-                        cnet_dict['image'] = await imgmodel_settings.handle_file_attachment(cnet)
+                        cnet_dict['image'] = await imgmodel_settings.handle_file_attachment(cnet, 'image')
                     except Exception as e:
                         log.error(f"Error decoding ControlNet input image for '/image' command: {e}")
                     try:
@@ -6398,8 +6398,32 @@ class ImgModel(SettingsBase):
             log.warning("[TAGS] ReActor was triggered, but is currently only supported for A1111-like Web UIs (A1111/Forge/ReForge)")
             bot_database.update_was_warned('reactor_unsupported')
 
-    async def handle_file_attachment(self, attachment:discord.Attachment) -> bytes:
-        return await attachment.read()
+    async def handle_file_attachment(self, attachment: discord.Attachment, file_type:Optional[str]=None) -> str:
+        """
+        If post_upload endpoint is enabled, processes/uploads the file.
+        Otherwise, converts to base64.
+
+        Returns:
+            str: Either the filename of the uploaded file, or a base64-encoded string if not uploaded.
+        """
+        file_bytes = await attachment.read()
+
+        if not api.imggen.post_upload:
+            return base64.b64encode(file_bytes).decode('utf-8')
+        else:
+            filename = attachment.filename
+            # Detect MIME type
+            kind = filetype.guess(file_bytes)
+            mime_type = kind.mime if kind else 'application/octet-stream'
+            mime_category = mime_type.split('/')[0]  # e.g., 'image', 'video', etc.
+            # Use file_category as default if file_type is not provided
+            resolved_file_type = file_type or mime_category
+            # Prepare a file-like object
+            file_obj = io.BytesIO(file_bytes)
+            file_obj.name = filename
+            file = {"file": file_obj, "filename": filename, "content_type": mime_type}
+            await api.imggen.post_upload.upload_file(file=file, file_type=resolved_file_type)
+            return filename
 
     def collect_model_names(self, imgmodels:list):
         if not imgmodels:
@@ -6773,17 +6797,17 @@ class ImgModel_Comfy(ImgModel):
         return {self._name_key: imgmodel_value,
                 self._value_key: imgmodel_value}
     
-    async def handle_file_attachment(self, attachment: discord.Attachment):
-        file_bytes = await attachment.read()
-        filename = attachment.filename
-        # Detect MIME type
-        kind = filetype.guess(file_bytes)
-        mime_type = kind.mime if kind else 'application/octet-stream'
-        # Prepare a file-like object
-        file_obj = io.BytesIO(file_bytes)
-        file_obj.name = filename
-        # Return file dict
-        return {"file": file_obj, "filename": filename, "content_type": mime_type}
+    # async def handle_file_attachment(self, attachment: discord.Attachment, file_type:Optional[str]=None) -> str:
+    #     file_bytes = await attachment.read()
+    #     filename = attachment.filename
+    #     # Detect MIME type
+    #     kind = filetype.guess(file_bytes)
+    #     mime_type = kind.mime if kind else 'application/octet-stream'
+    #     # Prepare a file-like object
+    #     file_obj = io.BytesIO(file_bytes)
+    #     file_obj.name = filename
+    #     # Return file dict
+    #     return {"file": file_obj, "filename": filename, "content_type": mime_type}
 
     def apply_imgcmd_params(self, task:"Task"):
         imgcmd_vars = {}
@@ -6821,7 +6845,7 @@ class ImgModel_SDWebUI(ImgModel):
         if hasattr(api.imggen, 'post_options') and api.imggen.post_options:
             self._imgmodel_input_key:str = api.imggen.post_options.imgmodel_input_key or 'sd_model_checkpoint'
 
-    async def handle_file_attachment(self, attachment):
+    async def handle_file_attachment(self, attachment:discord.Attachment, file_type:Optional[str]=None) -> str:
         file_bytes = await attachment.read()
         return base64.b64encode(file_bytes).decode('utf-8')
 

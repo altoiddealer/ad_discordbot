@@ -1419,23 +1419,10 @@ class ImgGenClient_Comfy(ImgGenClient):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
-    async def apply_img2img(self, task):
-        if not task.params.imgcmd['img2img'].get('image'):
-            raise RuntimeError(f'[{self.name}] Img2img missing required image input')
-
-        img2img_file = {'image':  task.params.imgcmd['img2img']['image']}
-        data = {'type': 'input', 'overwrite': 'false'}
-
-        await self.post_upload.call(payload_map={'files': img2img_file, 
-                                                 'data': data}, 
-                                    path_vars='image')
-
     async def main_imggen(self, img_payload:dict, mode:str="txt2img", task=None) -> Tuple[list[Image.Image], None]:
         ictx = None
         if task:
             ictx = task.ictx
-        if mode == 'img2img':
-            await self.apply_img2img(task)
         try:
             ep_for_mode:ImgGenEndpoint = getattr(self, f'post_{mode}')
             # Add client_id to payload
@@ -1580,6 +1567,10 @@ class Endpoint:
                 setattr(self, '_deferred_payload_source', payload_config)
 
     def get_payload(self):
+        if self.payload_type == 'multipart':
+            mapping_keys = {'json', 'data', 'params', 'files'}
+            if not mapping_keys.issubset(self.payload):
+                log.error(f"[{self.name}] has 'payload_type: multipart' but payload does not include all required keys: {mapping_keys}")
         return copy.deepcopy(self.payload)
 
     def get_preferred_content_type(self) -> Optional[str]:
@@ -1767,6 +1758,13 @@ class Endpoint:
         input_data = input_data or {}
         explicit_type = payload_type in ["json", "form", "multipart", "query"]
         preferred_content = self.get_preferred_content_type()
+        if (payload_type == "multipart" or preferred_content.startswith("multipart/form-data")) \
+            and input_data and not payload_map:
+            mapping_keys = {'json', 'data', 'params', 'files'}
+            if mapping_keys.issubset(input_data):
+                payload_map = input_data
+            else:
+                raise ValueError(f"[{self.name}] has 'payload_type: multipart' but payload does not include all required keys: {mapping_keys}")
         # Use explicit payload map if given
         if payload_map:
             # Fully structured override
@@ -1779,7 +1777,7 @@ class Endpoint:
                 files_payload = None
         else:
             if payload_type == "multipart" or preferred_content.startswith("multipart/form-data"):
-                raise ValueError(f"[{self.name}] 'payload_map=' is required for multipart/form-data payloads (cannot be accomplished with 'input_data=').")
+                raise ValueError(f"[{self.name}] 'payload_map=' is required for multipart/form-data payloads (cannot be accomplished with 'input_data=')'")
             if explicit_type:
                 if payload_type == "json":
                     json_payload = input_data
@@ -2155,6 +2153,12 @@ class ImgGenEndpoint_GetView(ImgGenEndpoint):
 class ImgGenEndpoint_PostUpload(ImgGenEndpoint):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+
+    async def upload_file(self, file, file_type:str='image'):
+        payload = self.get_payload()
+        payload['files'] = {file_type: file}
+        path_vars = file_type if '{}' in self.path else None
+        await self.call(payload_map=payload, path_vars=path_vars)
 
 class APIResponse:
     def __init__(

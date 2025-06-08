@@ -47,13 +47,13 @@ bot_api_functions:
       imgmodel_filename_key: filename
     get_controlnet_models: {endpoint_name: Get Cnet Models}
     post_server_restart: {endpoint_name: Post Server Restart}
+    post_upload: {endpoint_name: Upload} # Not used for A1111/Forge/ReForge
     # NOTE: The bot's "main controlnet" support works out-of-the-box for A1111-like webUIs (A1111 / Forge / ReForge)
     #       ComfyUI (and potentially other APIs) does not have an endpoint that returns the expected structure. See example usage in all_apis: ComfyUI.
     get_controlnet_control_types:
       endpoint_name: Get Cnet Control Types
       control_types_key: control_types # ex: response = {'control_types': <Beautifully organized controlnet model dictionary>, ...}
     # ComfyUI specific (may work for similar APIs)
-    post_upload: {endpoint_name: Upload}
     get_history: {endpoint_name: History}
     get_view: {endpoint_name: View}
 
@@ -166,7 +166,7 @@ all_apis:
         payload_type: json
       - {name: History, path: "/history/{}", method: GET} # "/history/{prompt_id}"
       - {name: View, path: /view, method: GET, payload_type: query, response_type: bytes}
-      - {name: Upload, path: "/upload/{}", method: POST, headers: {Content-Type: multipart/form-data}, payload_type: multipart} # "/upload/{image_type}"
+      - {name: Upload, path: "/upload/{}", method: POST, headers: {Content-Type: multipart/form-data}, payload_type: multipart, payload: upload_files.yaml} # "/upload/{image_type}"
       - {name: Cancel, path: /interrupt, method: POST}
       - name: Get Checkpoints
         path: "/object_info/CheckpointLoaderSimple"
