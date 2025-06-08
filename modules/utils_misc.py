@@ -187,6 +187,8 @@ def sum_update_dict(d, u, updates_only=False, merge_unmatched=False, in_place=Tr
     result = {} if updates_only else d
 
     for k, v in u.items():
+        if v is None:
+            continue  # skip keys with None values
         key_in_d = k in d
 
         if not key_in_d and not merge_unmatched:
