@@ -1,5 +1,5 @@
-# Example of 'payload_map' structure, required for multi-part payloads (files uploads, among other use cases)
-# IMPORTANT: Payload must include all top level keys to be recognized as a "mapped payload": json, data, params, files
+# Example of "payload_map" structure, required for multi-part payloads (files uploads, among other use cases)
+# IMPORTANT: All of these top level keys required for payload to be recognized as a "payload_map": json, data, params, files
 json: {}
 data: {type: input, overwrite: true}
 params: {}

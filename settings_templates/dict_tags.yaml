@@ -174,7 +174,9 @@ tag_presets:
       - trigger: '{no|without|clear|empty|transparent} {bg|background}'
         layerdiffuse: '(SDXL) Only Generate Transparent Image (Attention Injection)'  # See comments at bottom
 
-      # Some examples for triggering LORAs
+      # Some examples for triggering LoRAs
+      # Note: This is the expected syntax for applying LoRAs in A1111/Forge/Reforge AND ComfyUI.
+      #       For ComfyUI: if extension is not included, it will add '.safetensors' by default.
       - trigger: 'grimace'
         positive_prompt: '<lora:PE_Grimace_v1.0:0.75>'
 

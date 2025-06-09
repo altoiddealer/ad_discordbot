@@ -1,0 +1,37 @@
+  {
+    "__overrides__": {
+        "prompt": "beautiful scenery nature glass bottle landscape, purple galaxy bottle,",
+        "neg_prompt": "text, watermark",
+        "width": 1024,
+        "height": 1024,
+        "ckpt_name": "sdxl\\epicrealismXL_vxviLastfameRealism.safetensors",
+        "seed": "156680208700286",
+        "i2i_image": "example.png",
+        "i2i_mask": "mask.png",
+        "denoising_strength": 0.87,
+        "cnet_image": "input.png",
+        "cnet_mask": "input_mask.png",
+        "cnet_model": "diffusers_xl_depth_full",
+        "cnet_module": "depth_midas",
+        "cnet_weight": 1.0,
+        "cnet_processor_res": 64,
+        "cnet_guidance_start": 0.0,
+        "cnet_guidance_end": 1.0,
+        "cnet_threshold_a": 64,
+        "cnet_threshold_b": 64,
+        "character": "M1nty",
+        "lora_01": "None",
+        "strength_01": 1,
+        "lora_02": "None",
+        "strength_02": 1,
+        "lora_03": "None",
+        "strength_03": 1,
+        "lora_04": "None",
+        "strength_04": 1,
+
+        "steps": 20,
+        "cfg_scale": 8,
+        "sampler_name": "euler",
+        "scheduler": "scheduler"
+  }
+}

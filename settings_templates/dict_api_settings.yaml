@@ -79,7 +79,9 @@ bot_api_functions:
 
 all_apis:
   # You may define any number of APIs and Endpoints here (a list of dictionaries), making them available to use for various bot functions,
-  #   including the "main" apis above, the Tags system (dict_tags.yaml), user defined commands (dict_commands.yaml *WIP feature*), etc.
+  #   including the "main" apis above, the Tags system (dict_tags.yaml), planned "user commands" feature (not yet implemented), etc.
+
+  # 'payload_type' is recommended for all POST/PUT methods. Valid types: json (default) / form / multipart (file) / query
   - name: SD Forge
     url: http://127.0.0.1:7860
     enabled: true
@@ -90,10 +92,10 @@ all_apis:
     endpoints:
       - name: Post txt2img
         path: /sdapi/v1/txt2img
-        preset: sd-txt2img-img2img-endpoints # See 'presets' further down
+        preset: sd-txt2img-img2img-endpoints # See 'presets' further down (serves as example usage for presets)
       - name: Post img2img
         path: /sdapi/v1/img2img
-        preset: sd-txt2img-img2img-endpoints
+        preset: sd-txt2img-img2img-endpoints # See 'presets' further down
       - {name: Get Progress, path: /sdapi/v1/progress, method: GET}
       - {name: Post PNG Info, path: /sdapi/v1/png-info, method: POST}
       - {name: Get Checkpoints, path: /sdapi/v1/sd-models, method: GET}
@@ -157,23 +159,22 @@ all_apis:
       - name: Post txt2img
         path: /prompt
         method: POST
-        payload_base: comfyui_text2image.json
+        payload_base: comfyui_txt2img.json # comfyui_txt2img_loras.json - requires 'rgthree-comfy' nodes
         payload_type: json
       - name: Post img2img
         path: /prompt
         method: POST
-        payload_base: comfyui_image2image.json
+        payload_base: comfyui_img2img.json # comfyui_img2img_loras.json - requires 'rgthree-comfy' nodes
         payload_type: json
-      - {name: History, path: "/history/{}", method: GET} # "/history/{prompt_id}"
+      - {name: History, path: "/history/{}", method: GET} # ex: prompt_id is formatted into {}
       - {name: View, path: /view, method: GET, payload_type: query, response_type: bytes}
-      - {name: Upload, path: "/upload/{}", method: POST, headers: {Content-Type: multipart/form-data}, payload_type: multipart, payload: upload_files.yaml} # "/upload/{image_type}"
+      - {name: Upload, path: "/upload/{}", method: POST, headers: {Content-Type: multipart/form-data}, payload_type: multipart, payload: upload_files.yaml} # ex: "image" is formatted into {}
       - {name: Cancel, path: /interrupt, method: POST}
       - name: Get Checkpoints
         path: "/object_info/CheckpointLoaderSimple"
         method: GET
         response_handling:
           - extract_key: CheckpointLoaderSimple.input.required.ckpt_name[0] # list of models
-
       # 'method: null' will skip API call, and simply return the payload as the result. In this case, user needs to manually configure a '/user/payload/cnet_data.yaml'
       - {name: Get Cnet Control Types, path: /anything/at/all, method: null, payload_base: cnet_data.json}
 
@@ -187,11 +188,13 @@ presets:
     payload_base: sd-webui.yaml
     input_data: {prompt: "{prompt}"}
     timeout: 120
+    # response_handling is SKIPPED when 'extract_key' method is used (in first section, 'bot_api_functions')
+    # This serves as an example how to replicate internal handling via the response_handling system.
     response_handling:
       # Capture 'images' list as context variable "image_list"
       - extract_key: images
         save_as: image_list
-      # Execute a 'for loop' of steps on each value in 'image_list' (**EXPERIMENTAL - PLEASE REPORT ISSUES**)
+      # Execute a 'for loop' of steps on each value in 'image_list'
       - for_each:
           in: image_list
           as: image
@@ -202,48 +205,32 @@ presets:
                 file_path: "images"
                 file_name: "img_{image_index}"
 
-# For executing custom logic beyond default bahviors (ei: add additional post-processing from a 'post_txt2img' endpoint call).
-# For non-main functions only (N/A to main functions)
-workflows:
-  - name: img_to_img
-    steps:
-      - call_api:
-        api_name: Stable Diffusion WebUI
-        endpoint_name: Post img2img
-        payload_type: json
-        input_data:
-          init_images:
-            path: "inputs/photo.jpg"
-            as: base64
-          prompt: "make it look like a Pixar character"
-        save_as: result
 
+# For executing custom logic beyond default bahaviors (ei: add additional post-processing from a 'post_txt2img' endpoint call).
+# Currently only accessed via Tags system ('run_workflow' tag). Also planned for use in upcoming "User Commands" feature.
+workflows:
   - name: Comfy Wan t2v
     steps:
-      - group:
-        - - call_api:
-              api_name: ComfyUI
-              endpoint_name: Prompt
-              payload_type: json
-              input_data:
-                prompt: {prompt}
-        - - poll_api:
-              api_name: ComfyUI
-              endpoint_name: Progress
-              progress_key: progress
-              eta_key: eta_relative
-              message: Generating a video
-
-      - name: Transform Image
-        api_name: Stable Diffusion WebUI
-        endpoint_name: Post img2img
-        payload_type: json
-        input_data:
-          init_images:
-            path: "inputs/photo.jpg"
-            as: base64
-          prompt: "make it look like a Pixar character"
-        save_as: result
+      - call_api:
+          api_name: ComfyUI
+          endpoint_name: Prompt
+          payload_type: json
+          input_data:
+            prompt: "{prompt}"
+        save_as: prompt_id
+      - track_progress:
+          client_name: ComfyUI
+          progress_key: data.value # Required. dot notation gets the value nested in "data"
+          max_key: data.max        # Optional. If applicable, should return the maximum value of "progress".
+          eta_key: null            # Optional. If applicable, discord embed will include the ETA value.
+          message: Generating a video # message for the discord embed
+          completion_condition:       # Optional: All key/values must be matched to stop fetching progress
+            type: executed
+            data: {prompt_id: "{prompt_id}"}
+          # websocket exclusive values
+          use_ws: True
+          type_filter: [progress, executed]   # ignores other message types
+          data_filter: {prompt_id: "{prompt_id}"} # must '.get()' these key/values
 
   - name: fan_out_translate
     description: Translates a sentence into multiple languages in parallel
@@ -279,18 +266,6 @@ workflows:
             es: "{es_text}"
             fr: "{fr_text}"
       # returns result of last step (multilingual output)
-
-
-# payload_type (recommended for all POST/PUT).
-# Use one of: json (default) / form / multipart (file) / query
-
-# as value | Behavior                             | Payload area
-# text     | Load file as UTF-8 string            | json, data
-# file     | Load as binary, use multipart        | files
-# base64   | Read file, encode in base64          | json or data
-# raw      | Read file bytes, send as request body| data
-# url      | User provides a direct URL string    | json, params, etc.
-
 
 ## Schemas
 

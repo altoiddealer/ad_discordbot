@@ -1054,10 +1054,11 @@ class BotVars():
         for k, v in input.items():
             setattr(self, k, v)
     
-    def add_lora(self, name:str, weight:float):
+    def add_lora(self, name:str, strength:float):
+        index_str = f"{self._loras_index:02}"  # Format index with leading zeros (2 digits)
         # Dynamically set incrementing attributes like lora1_name, lora1_weight, etc.
-        setattr(self, f"lora{self._loras_index}_name", name)
-        setattr(self, f"lora{self._loras_index}_weight", weight)
+        setattr(self, f"lora_{index_str}", name)
+        setattr(self, f"strength_{index_str}", strength)
         self._loras_index += 1
 
 bot_vars = BotVars()
@@ -3956,7 +3957,6 @@ class Task(Tasks):
         return getattr(channel, 'id', default)
 
     def override_payload(self):
-        self.payload.pop('_comment', None)
         if "__overrides__" not in self.payload:
             return
         # Extract and remove overrides from the payload
@@ -6778,7 +6778,7 @@ class ImgModel_Comfy(ImgModel):
     def clean_payload(self, payload: dict):
         prompt_value = payload.get('prompt')
         if prompt_value is None:
-            prompt_value = payload
+            prompt_value = copy.deepcopy(payload)
         payload.clear()
         payload['prompt'] = prompt_value
 
@@ -6792,12 +6792,23 @@ class ImgModel_Comfy(ImgModel):
     def collect_loras(self, insert_text: str, task:"Task") -> str:
         lora_matches = patterns.sd_lora_split.findall(insert_text)
         if lora_matches:
-            for name, weight_str in lora_matches:
+            lora_extensions = ('.pt', '.pth', '.ckpt', '.safetensors', '.bin', '.onnx', '.h5', '.hdf5', '.pkl', '.npz')
+            for name, strength_str in lora_matches:
                 try:
-                    weight = float(weight_str)
+                    strength = float(strength_str)
                 except ValueError:
                     continue  # Skip malformed weights
-                task.vars.add_lora(name, weight)
+
+                name = name.strip()
+                ext = os.path.splitext(name)[1].lower()
+                if ext == '' or ext not in lora_extensions:
+                    if not bot_database.was_warned("comfy_lora_ext"):
+                        log.warning(f"LoRA syntax was matched, but the value does not include a valid extension (which ComfyUI expects).")
+                        log.warning(f'Updating "{name}" to "{name}.safetensors" (along with any future LoRA matches missing extension)')
+                        bot_database.update_was_warned("comfy_lora_ext")
+                    name = f"{name}.safetensors"
+
+                task.vars.add_lora(name, strength)
         # Return cleaned text (remove all <lora:...:...> tags)
         return patterns.sd_lora.sub('', insert_text)
     

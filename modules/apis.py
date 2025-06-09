@@ -1143,7 +1143,6 @@ class APIClient:
         STALL_THRESHOLD = 5.0
         last_progress = 0.0
         stall_time = 0.0
-        saw_completion_flag = False
 
         updates = []
 
@@ -1339,10 +1338,12 @@ class ImgGenClient(APIClient):
             else:
                 progress_key = self.get_progress.progress_key
                 eta_key = self.get_progress.eta_key
+                max_key = self.get_progress.max_key
                 message = "Generating image"
                 await self.track_progress(endpoint=self.get_progress,
                                           progress_key=progress_key,
                                           eta_key=eta_key,
+                                          max_key=max_key,
                                           message=message,
                                           ictx=ictx)
         except Exception as e:
@@ -1552,16 +1553,22 @@ class Endpoint:
         if payload_config:
             self.init_payload(payload_config)
 
+    def pop_payload_comment(self):
+        if isinstance(self.payload, dict):
+            self.payload.pop('_comment', None)
+
     def init_payload(self, payload_config):
         # dictionary value
         if isinstance(payload_config, dict):
             self.payload = payload_config
+            self.pop_payload_comment()
         # string value
         elif isinstance(payload_config, str):
             payload_fp = os.path.join(shared_path.dir_user_payloads, payload_config)
             # string is file path
             if os.path.exists(payload_fp):
                 self.payload = load_file(payload_fp)
+                self.pop_payload_comment()
             # any other string should be a 'get' endpoint. Need to get payload after client init.
             else:
                 setattr(self, '_deferred_payload_source', payload_config)
