@@ -32,6 +32,6 @@
         "steps": 20,
         "cfg_scale": 8,
         "sampler_name": "euler",
-        "scheduler": "scheduler"
+        "scheduler": "simple"
   }
 }

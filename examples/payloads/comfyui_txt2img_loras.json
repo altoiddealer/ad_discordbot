@@ -46,7 +46,7 @@
     "steps": 20,
     "cfg_scale": 8,
     "sampler_name": "euler",
-    "scheduler": "scheduler"
+    "scheduler": "simple"
   },
 
   "3": {
@@ -160,9 +160,9 @@
       "strength_01": "{strength_01}",
       "lora_02": "{lora_02}",
       "strength_02": "{strength_02}",
-      "lora_03": "lora_03",
+      "lora_03": "{lora_03}",
       "strength_03": "{strength_03}",
-      "lora_04": "lora_04",
+      "lora_04": "{lora_04}",
       "strength_04": "{strength_04}",
       "model": [
         "4",
