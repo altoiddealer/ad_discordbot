@@ -1530,7 +1530,7 @@ class TaskProcessing(TaskAttributes):
                         await voice_clients.toggle_playback_in_voice_channel(self.ictx.guild.id, str(tag_dict.pop('toggle_vc_playback')))
                 if 'send_user_image' in tag_dict:
                     user_image_file = str(tag_dict.pop('send_user_image'))
-                    user_image_args = self.get_image_tag_args('User image', user_image_file, key=None, set_dir=None)
+                    user_image_args = await self.get_image_tag_args('User image', user_image_file, key=None, set_dir=None)
                     user_image = discord.File(user_image_args)
                     self.extra_files.append(user_image)
                     log.info(f'[TAGS] Sending user image for matched {tag_print}')
@@ -2456,7 +2456,7 @@ class TaskProcessing(TaskAttributes):
         # If neither image files nor subdirectories found, return None
         return None, None
 
-    def get_image_tag_args(self:Union["Task","Tasks"], extension, value, key=None, set_dir=None):
+    async def get_image_tag_args(self:Union["Task","Tasks"], extension, value, key=None, set_dir=None):
         args = {}
         image_file_path = ''
         method = ''
@@ -2502,16 +2502,17 @@ class TaskProcessing(TaskAttributes):
                     raise FileNotFoundError(f"File '{value}' not found with supported extensions (.txt, .png, .jpg)")
             if image_file_path and os.path.isfile(image_file_path):
                 if extension == "User image":
-                    return image_file_path # user image does not need to be converted to base64
+                    return image_file_path # user image does not need to be handled uniquely
+
+                filename = os.path.basename(image_file_path)
                 if image_file_path.endswith(".txt"):
                     with open(image_file_path, "r") as txt_file:
-                        base64_img = txt_file.read()
+                        args['image'] = txt_file.read()
                         method = 'base64 from .txt'
                 else:
                     with open(image_file_path, "rb") as image_file:
-                        image_data = image_file.read()
-                        base64_img = base64.b64encode(image_data).decode('utf-8')
-                        args['image'] = base64_img
+                        file_bytes = image_file.read()
+                        args['image'] = await self.imgmodel_settings.handle_image_input(file_bytes, filename=filename, file_type='image')
                         if not method: # will already have value if random img picked from dir
                             method = 'Image file'
             if method:
@@ -2613,7 +2614,7 @@ class TaskProcessing(TaskAttributes):
 
     # The methods of this function allow multiple extensions with an identical "select image from random folder" value to share the first selected folder.
     # The function will first try to find a specific image file based on the extension's key name (ex: 'canny.png' or 'img2img_mask.jpg')
-    def collect_img_extension_mods(self, mods):
+    async def collect_img_extension_mods(self, mods):
         controlnet = mods.get('controlnet', [])
         reactor = mods.get('reactor', None)
         img2img = mods.get('img2img', None)
@@ -2621,13 +2622,13 @@ class TaskProcessing(TaskAttributes):
         set_dir = None
         if img2img:
             try:
-                img2img_args = self.get_image_tag_args('Img2Img', img2img, key='img2img', set_dir=set_dir)
+                img2img_args = await self.get_image_tag_args('Img2Img', img2img, key='img2img', set_dir=set_dir)
                 mods['img2img'] = img2img_args.get('image', '')
                 if img2img_args:
                     if set_dir is None:
                         set_dir = img2img_args.get('selected_folder', None)
                     if img2img_mask:
-                        img2img_mask_args = self.get_image_tag_args('Img2Img Mask', img2img_mask, key='img2img_mask', set_dir=set_dir)
+                        img2img_mask_args = await self.get_image_tag_args('Img2Img Mask', img2img_mask, key='img2img_mask', set_dir=set_dir)
                         mods['img2img_mask'] = img2img_mask_args.get('image', '')
                         if img2img_mask_args:
                             if set_dir is None:
@@ -2644,7 +2645,7 @@ class TaskProcessing(TaskAttributes):
                     mask_image = controlnet_item.get('mask', None) or controlnet_item.get('mask_image', None)
                     # Update controlnet item with image information
                     if image:
-                        cnet_args = self.get_image_tag_args('ControlNet Image', image, key=prefix, set_dir=set_dir)
+                        cnet_args = await self.get_image_tag_args('ControlNet Image', image, key=prefix, set_dir=set_dir)
                         if not cnet_args:
                             controlnet[idx] = {}
                         else:
@@ -2657,7 +2658,7 @@ class TaskProcessing(TaskAttributes):
                             # Update controlnet item with mask_image information
                             if mask_image:
                                 key = f'{prefix}_mask' if prefix else None
-                                cnet_mask_args = self.get_image_tag_args('ControlNet Mask', mask_image, key=key, set_dir=set_dir)
+                                cnet_mask_args = await self.get_image_tag_args('ControlNet Mask', mask_image, key=key, set_dir=set_dir)
                                 controlnet[idx]['mask_image'] = cnet_mask_args.get('image', None)
                                 if cnet_mask_args:
                                     if set_dir is None:
@@ -2670,13 +2671,13 @@ class TaskProcessing(TaskAttributes):
                 image = reactor.get('image', None)
                 mask_image = reactor.get('mask', None)
                 if image:
-                    reactor_args = self.get_image_tag_args('ReActor Enabled', image, key='reactor', set_dir=None)
+                    reactor_args = await self.get_image_tag_args('ReActor Enabled', image, key='reactor', set_dir=None)
                     if reactor_args:
                         reactor_args.pop('selected_folder', None)
                         mods['reactor'].update(reactor_args)
                         mods['reactor']['enabled'] = True
                         if mask_image:
-                            reactor_mask_args = self.get_image_tag_args('ReActor Mask', mask_image, key='reactor_mask', set_dir=set_dir)
+                            reactor_mask_args = await self.get_image_tag_args('ReActor Mask', mask_image, key='reactor_mask', set_dir=set_dir)
                             mods['reactor']['mask'] = reactor_mask_args.get('image', '')
                             if reactor_mask_args and set_dir is None:
                                 set_dir = reactor_mask_args.get('selected_folder', None)
@@ -2786,7 +2787,7 @@ class TaskProcessing(TaskAttributes):
                 img_payload_mods.setdefault('reactor', {})
                 img_payload_mods['reactor'].update(reactor_args)
 
-            img_payload_mods = self.collect_img_extension_mods(img_payload_mods)
+            img_payload_mods = await self.collect_img_extension_mods(img_payload_mods)
         except TaskCensored:
             raise
         except Exception as e:
@@ -4597,7 +4598,7 @@ if imggen_enabled:
                 log_msg += f"\nNegative Prompt: {neg_prompt}"
             if img2img:
                 async def process_image_img2img(img2img, img2img_dict, mode, log_msg):
-                    i2i_image = await imgmodel_settings.handle_file_attachment(img2img, 'image')
+                    i2i_image = await imgmodel_settings.handle_image_input(img2img, file_type='image')
                     img2img_dict['image'] = i2i_image
                     # Ask user to select a Denoise Strength
                     denoise_options = []
@@ -4625,20 +4626,20 @@ if imggen_enabled:
                     log.error(f"An error occurred while configuring Img2Img for /image command: {e}")
             if img2img_mask:
                 if img2img:
-                    img2img_mask_img = await imgmodel_settings.handle_file_attachment(img2img_mask, 'image')
+                    img2img_mask_img = await imgmodel_settings.handle_image_input(img2img_mask, file_type='image')
                     img2img_dict['mask'] = img2img_mask_img
                     log_msg += "\nInpainting Mask Provided"
                 else:
                     await ctx.send("Inpainting requires im2img. Not applying img2img_mask mask...", ephemeral=True)
             if face_swap:
-                faceswapimg = await imgmodel_settings.handle_file_attachment(face_swap, 'image')
+                faceswapimg = await imgmodel_settings.handle_image_input(face_swap, file_type='image')
                 log_msg += "\nFace Swap Image Provided"
             if cnet:
                 # Get filtered ControlNet data
                 cnet_data = await get_cnet_data()
                 async def process_image_controlnet(cnet, cnet_dict, log_msg):
                     try:
-                        cnet_dict['image'] = await imgmodel_settings.handle_file_attachment(cnet, 'image')
+                        cnet_dict['image'] = await imgmodel_settings.handle_image_input(cnet, file_type='image')
                     except Exception as e:
                         log.error(f"Error decoding ControlNet input image for '/image' command: {e}")
                     try:
@@ -6407,7 +6408,7 @@ class ImgModel(SettingsBase):
             log.warning("[TAGS] ReActor was triggered, but is currently only supported for A1111-like Web UIs (A1111/Forge/ReForge)")
             bot_database.update_was_warned('reactor_unsupported')
 
-    async def handle_file_attachment(self, attachment: discord.Attachment, file_type:Optional[str]=None) -> str:
+    async def handle_image_input(self, source: Union[discord.Attachment, bytes], file_type: Optional[str] = None, filename: Optional[str] = None) -> str:
         """
         If post_upload endpoint is enabled, processes/uploads the file.
         Otherwise, converts to base64.
@@ -6415,22 +6416,30 @@ class ImgModel(SettingsBase):
         Returns:
             str: Either the filename of the uploaded file, or a base64-encoded string if not uploaded.
         """
-        file_bytes = await attachment.read()
+        if isinstance(source, discord.Attachment):
+            file_bytes = await source.read()
+            filename = source.filename
+        elif isinstance(source, bytes):
+            file_bytes = source
+            if not filename:
+                raise ValueError("Filename must be provided when passing bytes.")
+        else:
+            raise TypeError("Unsupported image input type. Expected discord.Attachment or bytes.")
 
         if not api.imggen.post_upload:
             return base64.b64encode(file_bytes).decode('utf-8')
         else:
-            filename = attachment.filename
             # Detect MIME type
             kind = filetype.guess(file_bytes)
             mime_type = kind.mime if kind else 'application/octet-stream'
-            mime_category = mime_type.split('/')[0]  # e.g., 'image', 'video', etc.
+            mime_category = mime_type.split('/')[0]
             # Use file_category as default if file_type is not provided
             resolved_file_type = file_type or mime_category
             # Prepare a file-like object
             file_obj = io.BytesIO(file_bytes)
             file_obj.name = filename
             file = {"file": file_obj, "filename": filename, "content_type": mime_type}
+
             await api.imggen.post_upload.upload_file(file=file, file_type=resolved_file_type)
             return filename
     
@@ -6812,7 +6821,7 @@ class ImgModel_Comfy(ImgModel):
         # Return cleaned text (remove all <lora:...:...> tags)
         return patterns.sd_lora.sub('', insert_text)
     
-    # async def handle_file_attachment(self, attachment: discord.Attachment, file_type:Optional[str]=None) -> str:
+    # async def handle_image_input(self, source: Union[discord.Attachment, bytes], file_type: Optional[str] = None, filename: Optional[str] = None) -> str:
     #     file_bytes = await attachment.read()
     #     filename = attachment.filename
     #     # Detect MIME type
@@ -6860,8 +6869,13 @@ class ImgModel_SDWebUI(ImgModel):
         if hasattr(api.imggen, 'post_options') and api.imggen.post_options:
             self._imgmodel_input_key:str = api.imggen.post_options.imgmodel_input_key or 'sd_model_checkpoint'
 
-    async def handle_file_attachment(self, attachment:discord.Attachment, file_type:Optional[str]=None) -> str:
-        file_bytes = await attachment.read()
+    async def handle_image_input(self, source: Union[discord.Attachment, bytes], file_type: Optional[str] = None, filename: Optional[str] = None) -> str:
+        if isinstance(source, discord.Attachment):
+            file_bytes = await source.read()
+        elif isinstance(source, bytes):
+            file_bytes = source
+        else:
+            raise TypeError("Unsupported image input type.")
         return base64.b64encode(file_bytes).decode('utf-8')
 
     def handle_payload_updates(self, updates:dict, task:"Task"):
