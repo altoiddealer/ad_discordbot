@@ -1019,6 +1019,7 @@ async def announce_changes(change_label:str, change_name:str, ictx: CtxInteracti
 #################################################################
 class BotVars():
     def __init__(self):
+        self._loras_index = 1
         # General
         self.prompt:Optional[str] = None
         self.character:Optional[str] = None
@@ -1052,6 +1053,12 @@ class BotVars():
     def update_from_dict(self, input:dict):
         for k, v in input.items():
             setattr(self, k, v)
+    
+    def add_lora(self, name:str, weight:float):
+        # Dynamically set incrementing attributes like lora1_name, lora1_weight, etc.
+        setattr(self, f"lora{self._loras_index}_name", name)
+        setattr(self, f"lora{self._loras_index}_weight", weight)
+        self._loras_index += 1
 
 bot_vars = BotVars()
 
@@ -1675,7 +1682,7 @@ class TaskProcessing(TaskAttributes):
                 await self.init_llm_payload()
         # apply previously matched tags
         await self.apply_generic_tag_matches(phase='llm')
-        self.tags.process_tag_insertions(self.prompt)
+        self.prompt = self.tags.process_tag_insertions(self.prompt)
         # collect matched tag values
         llm_payload_mods, formatting = await self.collect_llm_tag_values()
         # apply tags relevant to LLM payload
@@ -2356,9 +2363,11 @@ class TaskProcessing(TaskAttributes):
 
     def process_img_prompt_tags(self:Union["Task","Tasks"]):
         try:
-            self.prompt = self.tags.process_tag_insertions(self.prompt)
+            collect_loras = lambda text: self.imgmodel_settings.collect_loras(text, task=self)
+            self.prompt = self.tags.process_tag_insertions(self.prompt, pre_insert_callback=collect_loras)
             updated_positive_prompt = self.prompt
             updated_negative_prompt = self.neg_prompt
+
             for tag in self.tags.matches:
                 join = tag.get('img_text_joining', ' ')
                 if 'imgtag_uninserted' in tag: # was flagged as a trigger match but not inserted
@@ -6424,6 +6433,9 @@ class ImgModel(SettingsBase):
             file = {"file": file_obj, "filename": filename, "content_type": mime_type}
             await api.imggen.post_upload.upload_file(file=file, file_type=resolved_file_type)
             return filename
+    
+    def collect_loras(self, text:str, task:"Task") -> str:
+        return text
 
     def collect_model_names(self, imgmodels:list):
         if not imgmodels:
@@ -6505,22 +6517,6 @@ class ImgModel(SettingsBase):
     async def guess_model_data(self, imgmodel_data:dict, presets:list[dict]) -> dict|None:
         try:
             imgmodel = imgmodel_data.get(self._any_key)
-            filename: Optional[str] = imgmodel_data.get(self._filename_key, '')
-            file_size_gb = 0
-            filename_available = bool(filename)
-
-            if filename_available:
-                try:
-                    file_size_bytes = os.path.getsize(filename)
-                    file_size_gb = file_size_bytes / (1024 ** 3)  # 1 GB = 1024^3 bytes
-                except Exception as e:
-                    if not bot_database.was_warned('imgmodel_filename'):
-                        bot_database.update_was_warned('imgmodel_filename')
-                        log.warning("[Change Imgmodels] Failed to read the filesize of the selected image model (may be on remote system?).")
-                        log.warning("[Change Imgmodels] Filesize will not be factored when evaluating presets in 'dict_imgmodels.yaml'.")
-                        log.warning(f"[Change Imgmodels] File not found: {e}")
-                    filename_available = False  # Disable filename-based filters if file is inaccessible
-
             match_counts = []
             for preset in presets:
                 preset_copy = preset.copy()
@@ -6529,12 +6525,12 @@ class ImgModel(SettingsBase):
                     log.info(f'Applying exact match imgmodel preset for "{exact_match}".')
                     return preset_copy
 
-                filter_list = preset_copy.pop('filter', [])
-                exclude_list = preset_copy.pop('exclude', [])
+                filter_list = [f for f in preset_copy.pop('filter', []) if f.strip()]
+                exclude_list = [e for e in preset_copy.pop('exclude', []) if e.strip()]
                 match_count = 0
 
                 if filter_list:
-                    if all(re.search(re.escape(filter_text), imgmodel, re.IGNORECASE) for filter_text in filter_list):
+                    if any(re.search(re.escape(filter_text), imgmodel, re.IGNORECASE) for filter_text in filter_list):
                         match_count += 1
                     else:
                         match_count -= 1
@@ -6543,12 +6539,6 @@ class ImgModel(SettingsBase):
                         match_count += 1
                     else:
                         match_count -= 1
-                if filename_available:
-                    if 'max_filesize' in preset_copy and preset_copy['max_filesize'] > file_size_gb:
-                        match_count += 1
-                        del preset_copy['max_filesize']
-
-                preset_copy.pop('max_filesize', None)
 
                 match_counts.append((preset_copy, match_count))
 
@@ -6787,6 +6777,8 @@ class ImgModel_Comfy(ImgModel):
 
     def clean_payload(self, payload: dict):
         prompt_value = payload.get('prompt')
+        if prompt_value is None:
+            prompt_value = payload
         payload.clear()
         payload['prompt'] = prompt_value
 
@@ -6796,6 +6788,18 @@ class ImgModel_Comfy(ImgModel):
     async def get_imgmodel_data(self, imgmodel_value:str, ictx:CtxInteraction=None) -> dict:
         return {self._name_key: imgmodel_value,
                 self._value_key: imgmodel_value}
+    
+    def collect_loras(self, insert_text: str, task:"Task") -> str:
+        lora_matches = patterns.sd_lora_split.findall(insert_text)
+        if lora_matches:
+            for name, weight_str in lora_matches:
+                try:
+                    weight = float(weight_str)
+                except ValueError:
+                    continue  # Skip malformed weights
+                task.vars.add_lora(name, weight)
+        # Return cleaned text (remove all <lora:...:...> tags)
+        return patterns.sd_lora.sub('', insert_text)
     
     # async def handle_file_attachment(self, attachment: discord.Attachment, file_type:Optional[str]=None) -> str:
     #     file_bytes = await attachment.read()

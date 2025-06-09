@@ -287,6 +287,7 @@ class SharedRegex: # Search for [ (]r['"] in vscode
 
     sd_lora = re.compile(r'<lora:[^:]+:[^>]+>')
     sd_lora_weight = re.compile(r'(?<=:)\d+(\.\d+)?')
+    sd_lora_split = re.compile(r'<lora:([^:]+):([^>]+)>')
 
     recent_msg_roles = re.compile(r'\{(user|llm|history)_([0-9]+)\}', flags=re.IGNORECASE)
 

@@ -9,7 +9,7 @@ from modules.database import BaseFileMemory
 from modules.utils_discord import get_user_ctx_inter, is_direct_message
 from modules.typing import TAG, TAG_LIST, TAG_LIST_DICT, CtxInteraction, Union
 from modules.utils_shared import shared_path, flows_queue, patterns
-from typing import Any, Optional, Tuple
+from typing import Any, Optional, Tuple, Callable
 from modules.utils_misc import valueparser
 
 from modules.logs import import_track, get_logger; import_track(__file__, fp=True); log = get_logger(__name__)  # noqa: E702
@@ -304,7 +304,7 @@ class Tags():
         except Exception as e:
             log.error(f"Error matching tags for img phase: {e}")
 
-    def process_tag_insertions(self, prompt:str) -> str:
+    def process_tag_insertions(self, prompt:str, pre_insert_callback: Optional[Callable[[dict, str], str]] = None) -> str:
         try:
             # iterate over a copy of the matches, preserving the structure of the original matches list
             tuple_matches = copy.deepcopy(self.matches) # type: ignore
@@ -324,6 +324,9 @@ class Tags():
                 if insert_text is None:
                     log.error(f"Error processing matched tag {item}. Skipping this tag.")
                 else:
+                    # Callback to handle LORAs if applicable (ComfyUI)
+                    if pre_insert_callback:
+                        insert_text = pre_insert_callback(insert_text)
                     if insert_method == 'replace':
                         if insert_text == '':
                             prompt = prompt[:start] + prompt[end:].lstrip()
