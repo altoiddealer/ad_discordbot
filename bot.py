@@ -1983,7 +1983,7 @@ class TaskProcessing(TaskAttributes):
                     ep = api.ttsgen.post_generate
                     tts_payload:dict = ep.get_payload()
                     tts_payload[ep.text_input_key] = resp_chunk
-                    audio_fp = await api.ttsgen.post_generate.call(input_data=tts_payload, extract_keys='output_file_path_key')
+                    audio_fp = await api.ttsgen.post_generate.call(input_data=tts_payload, main=True)
                     if audio_fp:
                         stream_replies.streamed_tts = was_streamed
                         setattr(self.params, 'streamed_tts', was_streamed)
@@ -3470,7 +3470,7 @@ class Tasks(TaskProcessing):
                 tts_payload.update(tts_args) # update with selected voice and lang
                 if ep.text_input_key:
                     tts_payload[ep.text_input_key] = self.text # update with input text
-                audio_file = await api.ttsgen.post_generate.call(input_data=tts_payload, extract_keys='output_file_path_key')
+                audio_file = await api.ttsgen.post_generate.call(input_data=tts_payload, main=True)
                 if audio_file:
                     self.tts_resps.append(audio_file)
             elif tgwui_tts_on:
@@ -4501,7 +4501,7 @@ if imggen_enabled:
 
         if config.controlnet_enabled():
             try:
-                all_control_types:dict = await api.imggen.get_controlnet_control_types.call(retry=0, extract_keys='control_types_key')
+                all_control_types:dict = await api.imggen.get_controlnet_control_types.call(retry=0, main=True)
                 for key, value in all_control_types.items():
                     if key == "All":
                         continue

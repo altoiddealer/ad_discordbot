@@ -1,5 +1,5 @@
 import aiohttp
-import json
+from json import loads as json_loads
 import asyncio
 import os
 import jsonschema
@@ -723,7 +723,7 @@ class APIClient:
                     try:
                         decoded = line.decode("utf-8").strip()
                         if response_type == "json":
-                            yield json.loads(decoded)
+                            yield json_loads(decoded)
                         else:
                             yield decoded
                     except Exception as e:
@@ -966,7 +966,7 @@ class APIClient:
                     if response_type == "text":
                         return msg.data
                     try:
-                        return jsonlib.loads(msg.data)
+                        return json.loads(msg.data)
                     except Exception:
                         log.warning("Failed to parse WebSocket text as JSON.")
                         return msg.data
@@ -999,7 +999,6 @@ class APIClient:
         - timeout: Timeout per WS receive
         - interval: Minimum time in seconds between yields
         """
-        from json import loads as json_loads
         start_time = time.monotonic()
         last_successful_yield = time.monotonic()
         yield_count = 0
@@ -1321,7 +1320,7 @@ class ImgGenClient(APIClient):
         if self.post_pnginfo.pnginfo_image_key:
             pnginfo_payload[self.post_pnginfo.pnginfo_image_key] = image_data
         # post for image gen data
-        return await self.post_pnginfo.call(input_data=pnginfo_payload, extract_keys="pnginfo_result_key")
+        return await self.post_pnginfo.call(input_data=pnginfo_payload, main=True)
 
     async def track_t2i_i2i_progress(self, ictx=None):
         from modules.utils_discord import Embeds
@@ -1336,15 +1335,11 @@ class ImgGenClient(APIClient):
                                     "Refer to the wiki for more info (https://github.com/altoiddealer/ad_discordbot/wiki).")
                         bot_database.update_was_warned("imggen_websocket_progress")
             else:
-                progress_key = self.get_progress.progress_key
-                eta_key = self.get_progress.eta_key
-                max_key = self.get_progress.max_key
-                message = "Generating image"
                 await self.track_progress(endpoint=self.get_progress,
-                                          progress_key=progress_key,
-                                          eta_key=eta_key,
-                                          max_key=max_key,
-                                          message=message,
+                                          progress_key=self.get_progress.progress_key,
+                                          eta_key=self.get_progress.eta_key,
+                                          max_key=self.get_progress.max_key,
+                                          message="Generating image",
                                           ictx=ictx)
         except Exception as e:
             log.error(f'Error tracking {self.name} image generation progress: {e}')
@@ -1352,7 +1347,7 @@ class ImgGenClient(APIClient):
             await embeds.delete('img_gen')
 
     async def post_for_images(self, endpoint:"ImgGenEndpoint", img_payload:dict) -> list[str]:
-        return await endpoint.call(input_data=img_payload, extract_keys='images_result_key')
+        return await endpoint.call(input_data=img_payload, main=True)
 
     async def main_imggen(self, img_payload:dict, mode:str="txt2img", ictx=None) -> Tuple[list[Image.Image], Optional[PngImagePlugin.PngInfo]]:
         try:
@@ -1507,9 +1502,9 @@ class TTSGenClient(APIClient):
         lang_list, all_voices = [], []
         try:
             if self.get_languages:
-                lang_list = await self.get_languages.call(retry=0, extract_keys="get_languages_key")
+                lang_list = await self.get_languages.call(retry=0, main=True)
             if self.get_voices:
-                all_voices = await self.get_voices.call(retry=0, extract_keys="get_voices_key")
+                all_voices = await self.get_voices.call(retry=0, main=True)
             return lang_list, all_voices
         except Exception as e:
             log.error(f'Error fetching options for "/speak" command via API: {e}')
@@ -1579,6 +1574,9 @@ class Endpoint:
             if not mapping_keys.issubset(self.payload):
                 log.error(f"[{self.name}] has 'payload_type: multipart' but payload does not include all required keys: {mapping_keys}")
         return copy.deepcopy(self.payload)
+    
+    def get_extract_keys(self):
+        return None
 
     def get_preferred_content_type(self) -> Optional[str]:
         content_type = None
@@ -1810,7 +1808,7 @@ class Endpoint:
                    input_data: dict = None,
                    payload_map: dict = None,
                    sanitize:bool=False,
-                   extract_keys:str|list[str]|None=None,
+                   main:bool=False,
                    task=None,
                    ictx=None,
                    **kwargs
@@ -1870,8 +1868,8 @@ class Endpoint:
             results = response.body
 
         # Optional key extraction (bypasses StepExecutor)
-        if extract_keys and self.can_extract(extract_keys):
-            return self.extract_main_keys(results, extract_keys)
+        if main and self.can_extract():
+            return self.extract_main_keys(results)
 
         # ws_response = await self.process_ws_request(json_payload, data_payload, input_data, **kwargs)
         # Hand off full response to StepExecutor
@@ -1976,7 +1974,10 @@ class Endpoint:
     async def get_expected_response_data(self, response):
         return None
 
-    def can_extract(self, extract_keys: str | list[str]) -> bool:
+    def can_extract(self) -> bool:
+        extract_keys:Optional[str|list[str]] = self.get_extract_keys()
+        if not extract_keys:
+            return False
         """Check if all keys in 'extract_keys' are present as self attributes"""
         if isinstance(extract_keys, str):
             return getattr(self, extract_keys, None) is not None
@@ -1985,10 +1986,10 @@ class Endpoint:
         return False
 
     # Extracts the key values from the API response, for the Endpoint's key names defined in user API settings
-    def extract_main_keys(self, response, ep_keys: str|list[str] = None):
-        if not ep_keys or not isinstance(response, dict):
-            if not isinstance(response, dict):
-                log.warning(f'[{self.client.name}] tried to extract value(s) for "{ep_keys}" from the response, but response was non-dict format.')
+    def extract_main_keys(self, response):
+        ep_keys:str | list[str] = self.get_extract_keys()
+        if not isinstance(response, dict):
+            log.warning(f'[{self.client.name}] tried to extract value(s) for "{ep_keys}" from the response, but response was non-dict format.')
             return response
         # Try to extract and return one key value        
         if isinstance(ep_keys, str):
@@ -2048,17 +2049,27 @@ class TTSGenEndpoint_GetVoices(TTSGenEndpoint):
         super().__init__(*args, **kwargs)
         self.get_voices_key: Optional[str] = None
 
+    def get_extract_keys(self) -> str|None:
+        return self.get_voices_key
+
 class TTSGenEndpoint_GetLanguages(TTSGenEndpoint):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.get_languages_key: Optional[str] = None
 
+    def get_extract_keys(self) -> str|None:
+        return self.get_languages_key
+
 class TTSGenEndpoint_PostGenerate(TTSGenEndpoint):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        self.output_file_path_key: Optional[str] = None
         self.text_input_key: Optional[str] = None
         self.language_input_key: Optional[str] = None
         self.voice_input_key: Optional[str] = None
+
+    def get_extract_keys(self) -> str|None:
+        return self.output_file_path_key
 
     async def get_expected_response_data(self, response:"APIResponse"):
         return None
@@ -2093,6 +2104,9 @@ class ImgGenEndpoint_PostTxt2Img(ImgGenEndpoint):
         self.seed_key: Optional[str] = None
         self.images_result_key: Optional[str] = None
 
+    def get_extract_keys(self) -> str|None:
+        return self.images_result_key
+
     def get_prompt_keys(self):
         if isinstance(self.client, ImgGenClient_Comfy):
             return None, None
@@ -2105,6 +2119,9 @@ class ImgGenEndpoint_PostImg2Img(ImgGenEndpoint):
         self.neg_prompt_key: Optional[str] = None
         self.seed_key: Optional[str] = None
         self.images_result_key: Optional[str] = None
+
+    def get_extract_keys(self) -> str|None:
+        return self.images_result_key
 
     def get_prompt_keys(self):
         if isinstance(self.client, ImgGenClient_Comfy):
@@ -2123,6 +2140,9 @@ class ImgGenEndpoint_PostPNGInfo(ImgGenEndpoint):
         super().__init__(*args, **kwargs)
         self.pnginfo_image_key: Optional[str] = None
         self.pnginfo_result_key: Optional[str] = None
+
+    def get_extract_keys(self) -> str|None:
+        return self.pnginfo_result_key
 
 class ImgGenEndpoint_PostOptions(ImgGenEndpoint):
     def __init__(self, *args, **kwargs):
@@ -2148,6 +2168,9 @@ class ImgGenEndpoint_GetControlNetControlTypes(ImgGenEndpoint):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.control_types_key: Optional[str] = None
+
+    def get_extract_keys(self) -> str|None:
+        return self.control_types_key
 
 class ImgGenEndpoint_GetHistory(ImgGenEndpoint):
     def __init__(self, *args, **kwargs):
