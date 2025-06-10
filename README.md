@@ -19,10 +19,30 @@
 
 ---
 
+## Accouncements:
+
+**06/10/2025:** - New Main Features: **Universal API System! ComfyUI Support!** ([more details](https://github.com/altoiddealer/ad_discordbot/wiki/APIs))
+
 ## What's new:
 
 <details>
   <summary>click to expand</summary>
+
+   **06/10/2025:** Major Feature: **Universal API System!**. **ComfyUI Support!**
+
+   **Note:** This update includes a major restructuring of **`config.yaml`** (sorry!) - this structure should remain in place for the forseeable future.
+
+   After 3 months, I'm finally unvieling a new API system that is intended to obsolete hardcoded limitations for APIs (*only* Automatic1111 / Forge / etc.)
+
+   Theoretically, **any** API can now be used for the main bot functions for image generation and TTS.
+   
+   **For the time being**, an integrated Text Generation WebUI install is still the only support TextGen for "main functions".  Other TTS APIs (including TGWUI) CAN be defined and used via the Tags system.
+
+   This is a very well thought out, flexible, deeply integrated, internally-highly-complex system that is absolutely overkill for a project named "altoiddealer's discordbot".
+
+   Please review the Wiki, comments in the config files, examples folder - or [ask me questions directly in discord](https://discord.com/channels/1089972953506123937/1154970156108365944).
+   
+  ---
 
    **04/04/2025:** Major rewrite of core install logic (can now be installed as a Standalone!) **Update Wizards!**
 
@@ -180,140 +200,6 @@
 
   <img width="690" alt="Screenshot 2024-04-29 145440" src="https://github.com/altoiddealer/ad_discordbot/assets/1613484/bd399667-8d1e-4dd8-9b36-074b9c4a3e54">
 
-  ---
-
-   **04/21/2024:** Revamped Main Config. Made textgenwebui and SD WebUI Optional!
-
-    - replaced config.py with config.yaml
-    - Config.py will still work, but is now unsupported and will receive no updates.
-    - Textgenwebui and SD WebUI are now optional elements of the bot that can be disabled in config.yaml
-
-  ---
-
-   **04/19/2024:** Overhauled Img Model handling. Now "API" Method only.
-
-  At first, there was only the '.YAML method' - each model required its own definition.
-
-  Later, fetching models via API became a secondary option.
-
-  Now, I noticed that all the improvements to API method have made the 'YAML method' obsolete:
-
-    - Filter / Exclusion settings to control models that get loaded
-    - Sophisticated calculations for 'Sizes' menu in '/image' command
-    - Apply model settings and 'Tags' based on intelligent filter matching
-    - Now, additional check for 'exact_match' if necessary.
-
-  **Please take care migrating to this change**:
-
-    - Fetch the new version of 'dict_imgmodels.yaml' which is now the settings panel for the API method.
-    - Migrate your 'imgmodel' settings from config.yaml
-    - Delete the whole 'imgmodels' block in config.yaml!
-
-  ---
-
-
-   **04/18/2024:** New Feature: Dynamic Prompting.
-
-   Works ~~exactly~~ _**very similarly**_ to the SD WebUI extension [sd-dynamic-prompts](https://github.com/adieyal/sd-dynamic-prompts)
-
-   **[Read up on it here!](https://github.com/altoiddealer/ad_discordbot/wiki/dynamic-prompting)**
-
-  <img width="959" alt="Screenshot 2024-04-20 202457" src="https://github.com/altoiddealer/ad_discordbot/assets/1613484/6d1c0498-fc4d-4869-807e-904392ab44d2">
-
-  ---
-
-
-   **04/16/2024:** Enhanced Flows and "Instant Tags". Many other improvements.
-
-    - Changed the 'Logging Level' from DEBUG to INFO - LESS SPAM!
-    - Performance may be more optimized... all settings were being stored in the discord client object.
-      Now, they are stored in a dedicated class object.
-    - Characters can now be omitted from /character command with new parameter (see M1nty example char)
-    - The feature to create tags instantly from your text has been upgraded.
-      ANY tag values can be created including dictionaries, lists, sublists... anything.
-    - The SD API "Guess imgmodel params" feature has much better success rate now.
-    - "Flows" feature can now use variables for tag values.
-    - Added a new "Flows" example in 'dict_tags.yaml'
-    - Added new forge-couple param.
-    - Better error handling when failure to change Img model
-    - Fixed img prompt insertions from Tags sometimes creating a line break.
-
-  <img width="1616" alt="Screenshot_2024-04-16_144136" src="https://github.com/altoiddealer/ad_discordbot/assets/1613484/141a03ae-0412-4cb0-a462-816c29eea857">
-
-  ---
-
-   **04/12/2024:** Changed user images dir. New Tags. Enhanced Image Selection.
-
-     - All images now go into a root 'user_images' folder.
-       There are no longer separate root folders for ReActor, ControlNet, Img2Img, Inpainting masks, etc.
-       Users can organize their images in 'user_images' however they wish - just include path in Tags values.
-
-     - New tags:
-       - 'img2img'. Previous commit added img2img to /images cmd - now, it's also a Tag.
-       - 'img2img_mask' (inpainting)...  and now also added to /image command!
-       - 'send_user_image' - can send a local, non-AI generated image! Can be triggered to send an image after LLM Gen and/or after Img Gen.
-
-    - Enhanced image selection:
-      When processing images from tags (ReActor, ControlNet, etc etc), if the value is a directory (does not include .jpg/.png/.txt),
-      the function will recursively attempt to select a random image - if no images are in the directory, it will try picking a random directory, and so on,
-      until an image is found or reaches an empty directory (error).  So rather than just picking a random image from a folder, it can now pick from a random folder.
-
-  <img width="1166" alt="example" src="https://github.com/altoiddealer/ad_discordbot/assets/1613484/1f4e1297-b69e-4c85-b525-d34c568d5477">
-
-  ---
-
-   **04/10/2024:** Upgraded '/image' cmd. Added Tags. Added [sd-forge-couple](https://github.com/Haoming02/sd-forge-couple) extension support.
-
-    - Upgraded the /image command:
-
-      - ControlNet and ReActor now only appear in the select options if enabled in config.yaml
-      - 'img2img' has been added. If an image is attached, it will prompt for the Denoise Strength.
-      - ControlNet now follows up asking for model/map if an image is attached, to simplify the main menu.
-
-    - Added 'sd_output_dir' tag, so now you can control the image save location in your tag definitions.
-
-    - Added extension support for SD Forge Couple.  Currently only useful for '/image' command unless you can get the LLM to reply with the correct format (I'm working on that!)
-
-  <img width="658" alt="Screenshot_2024-04-10_140521" src="https://github.com/altoiddealer/ad_discordbot/assets/1613484/c5aa7146-92b5-43d2-87d7-8887320a45d8">
-
-   ---
-
-   **04/01/2024:** Pretty massive update. Be sure to update textgen-webui, and take care updating settings files.
-
-    - Overhauled SD WebUI extension support (ControlNet, layerdiffuse, ReActor) to be much more powerful and manageable.
-
-      - ControlNet support received a massive update in particular... multi-ControlNet is even supported!
-      - These extensions each have a simple primary Tag to activate and apply.
-      - **ALL** of their parameters are now easily controlled by the Tags system.
-
-    - Added a new method to create Tags on-the-fly using this syntax: [[key:value]] or [[key1:value1 | key2:value2]]. These go into immediate effect, particularly useful for controlling the extension settings.
-
-    - 4 older parameters were recently removed from textgen-webui - mirrored in this bot update.
-
-   ---
-
-   **03/07/2024:** [layerdiffuse](https://github.com/layerdiffusion/sd-forge-layerdiffuse) support added to Tags feature!
-
-   <img width="603" alt="Screenshot 2024-03-07 104132" src="https://github.com/altoiddealer/ad_discordbot/assets/1613484/30975294-d8b4-4ae1-a53d-7f3616d8a22c">
-
-   ---
-
-   **02/13/2024:** Major update introducing the Tags feature. Take care migrating your existing settings
-
-   <img width="1403" alt="Screenshot 2024-03-07 104231" src="https://github.com/altoiddealer/ad_discordbot/assets/1613484/89aae51f-2abe-43c2-bade-a2ea395be2da">
-
-   ---
-
-   **12/11/2023:** New "/speak" command! Silero and ElevenLabs TTS extensions now supported!
-
-   <img width="595" alt="Screenshot 2024-03-07 104326" src="https://github.com/altoiddealer/ad_discordbot/assets/1613484/c7b42c39-c29f-4d69-af25-fff5a4d9dbcf">
-
-   ---
-
-   **12/8/2023:** TTS Support, and Character Specific Extension Settings now added!
-
-   <img width="1152" alt="Screenshot 2024-03-07 104503" src="https://github.com/altoiddealer/ad_discordbot/assets/1613484/5bbd15bc-f181-4f49-bece-b633bdc7412d">
-
 </details>
 
 ## Features:
@@ -424,7 +310,7 @@
 
    A number of user settings files will appear (copied in from **`/user_settings/`**) where you can customize the bot.
 
-   `config.yaml` , `dict_base_settings.yaml` , `dict_cmdoptions.yaml` , `dict_imgmodels.yaml` , `dict_tags.yaml`
+   `config.yaml` , `dict_api_settings.yaml`, `dict_base_settings.yaml` , `dict_cmdoptions.yaml` , `dict_imgmodels.yaml` , `dict_tags.yaml`
 
 ---
 
@@ -455,39 +341,48 @@
 
 ### Getting image responses from the bot
 
-(**A1111 or sd-webui-forge must be running!**)
+**An "ImgGen" API must be configured and enabled - See [APIs Configuration](https://github.com/altoiddealer/ad_discordbot/wiki/apis#configuration)**
 
 * By default, starting your request with "draw " or "generate " will trigger an image response via the Tags system (see **`dict_tags.yaml`**)
 
 * Use **/image** command to use your own prompt with advanced options
 
-### Getting TTS responses from the bot (Tested: alltalk_tts, coqui_tts, silero_tts, elevenlabs_tts)
+### Getting TTS responses from the bot
 
-1. **Install your TTS extension**.
+1. a. **A "TTSGen" API can be used if configured and enabled - See [APIs Configuration](https://github.com/altoiddealer/ad_discordbot/wiki/apis#configuration)**
 
-   **Follow the specific instructions for your TTS extension!!**
+   b. **Alternatively**: If bot is TGWUI enabled, TGWUI TTS extensions can also be used (Tested: alltalk_tts, coqui_tts, silero_tts, elevenlabs_tts)
 
-   Example instructions for **coqui_tts**:
+      <details>
+      <summary>TGWUI TTS Extension Usage Instructions</summary>
 
-   **Run the .cmd file** in text-generation-webui directory (**ex: cmd_windows.bat**), and performing the following commands:
+      **Install your TTS extension**.
 
-   Linux / Mac:
-   ```
-   pip install -r extensions/coqui_tts/requirements.txt
-   ```
+      **Follow the specific instructions for your TTS extension!!**
 
-   Windows:
-   ```
-   pip install -r extensions\coqui_tts\requirements.txt
-   ```
+      Example instructions for **coqui_tts**:
+
+      **Run the .cmd file** in text-generation-webui directory (**ex: cmd_windows.bat**), and performing the following commands:
+
+      Linux / Mac:
+      ```
+      pip install -r extensions/coqui_tts/requirements.txt
+      ```
+
+      Windows:
+      ```
+      pip install -r extensions\coqui_tts\requirements.txt
+      ```
+
+      If necessary, model file(s) should download on first launch of the bot.  If not, then first launch textgen-webui normally and enable the extension.
+
+      </details>
 
 2. Ensure that your bot has sufficient permissions to access the Voice channel and/or upload files (From your bot invite/Discord Developer portal, and your Discord server/channel settings)
 
-3. Configure **config.yaml** in the section **discord** > **tts_settings**
+3. Configure the **ttsgen** section in **config.yaml**
 
-4. If necessary, model file(s) should download on first launch of the bot.  If not, then first launch textgen-webui normally and enable the extension.
-
-5. **Your characters can have their own settings including voices!  See example character M1nty for usage**
+4. **Your characters can have their own settings including voices!  See example character M1nty for usage**
 
 ---
 
@@ -496,4 +391,3 @@
 1. **Run the update-wizard** for your OS (**ex: update_wizard_windows.bat**)
 
 <img width="609" alt="Screenshot 2025-04-04 215515" src="https://github.com/user-attachments/assets/f33ff332-babd-4508-8b73-58aca743b5c3" />
-
