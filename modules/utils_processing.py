@@ -62,7 +62,9 @@ async def save_any_file(data: Any,
             log.info(f'{msg_prefix}Guessed output file format for "save" step by analyzing headers/data: "{file_format}"')
 
     full_path = output_path / f"{file_name}.{file_format}"
-    binary_formats = {"jpg", "jpeg", "png", "webp", "gif", "mp3", "wav", "mp4", "webm", "bin"}
+    binary_formats = {"jpg", "jpeg", "png", "webp", "gif", "bmp", "tiff", "mp3", "wav", "ogg", "flac",
+                      "mp4", "webm", "avi", "mov", "mkv", "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx",
+                      "zip", "rar", "7z", "tar", "gz", "bz2", "exe", "dll", "iso","bin", "dat"}
 
     # 3. Base64 decoding if applicable
     if isinstance(data, str) and is_base64(data):
@@ -78,19 +80,19 @@ async def save_any_file(data: Any,
 
     # 5. Save logic
     try:
-        async with aiofiles.open(full_path, mode) as f:
-    # 5a. Special case: Handle PIL images with optional PngInfo
-            if isinstance(data, Image.Image) and file_format.lower() in {"png", "jpeg", "jpg", "webp"}:
-                pnginfo = data.info.get("pnginfo") if file_format.lower() == "png" else None
-                data.save(full_path, format=file_format.upper(), pnginfo=pnginfo)
-                log.info(f"{msg_prefix}Saved image using PIL to {full_path}")
-                return {
-                    "path": str(full_path),
+        # 5a. Special case: Handle PIL images with optional PngInfo
+        if isinstance(data, Image.Image) and file_format.lower() in {"png", "jpeg", "jpg", "webp"}:
+            pnginfo = data.info.get("pnginfo") if file_format.lower() == "png" else None
+            format_map = {"jpg": "JPEG", "jpeg": "JPEG", "png": "PNG", "webp": "WEBP"}
+            data.save(full_path, format=format_map.get(file_format.lower(), file_format.upper()), pnginfo=pnginfo)
+            log.info(f"{msg_prefix}Saved image using PIL to {full_path}")
+            return {"path": str(full_path),
                     "format": file_format,
                     "name": file_name,
-                    "data": data
-                }
+                    "data": data}
 
+        # 5b. Proceed with async file saving for everything else
+        async with aiofiles.open(full_path, mode) as f:
             if file_format == "json":
                 if isinstance(data, (dict, list)):
                     await f.write(json.dumps(data, indent=2))
