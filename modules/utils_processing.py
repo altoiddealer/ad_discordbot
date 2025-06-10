@@ -136,8 +136,13 @@ def resolve_placeholders(config: Any, context: dict, log_prefix: str='', log_suf
     formatted_keys = []
 
     def _stringify(value):
+        if isinstance(value, bytes):
+            return "placeholder"
         if isinstance(value, (dict, list)):
-            return json.dumps(value)
+            try:
+                return json.dumps(value)
+            except TypeError:
+                return str(value)
         if value is None:
             return ""
         return str(value)

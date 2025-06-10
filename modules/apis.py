@@ -10,6 +10,7 @@ from PIL import Image, PngImagePlugin
 import io
 import base64
 import copy
+import filetype
 from modules.typing import CtxInteraction
 from typing import get_type_hints, get_type_hints, get_origin, get_args, Any, Tuple, Optional, Union, Callable, AsyncGenerator
 from modules.utils_shared import client, shared_path, bot_database, load_file, get_api
@@ -2545,7 +2546,7 @@ class StepExecutor:
 
         return results
 
-    @step_returns("input", "type", default="input")
+    @step_returns("data", "input", default="data")
     async def _step_prompt_user(self, data, config):
         """
         Prompts the user for input via Discord interaction.
@@ -2559,28 +2560,24 @@ class StepExecutor:
             raise RuntimeError("[StepExecutor] Cannot prompt user: 'ictx' (interaction context) is not set")
         
         from discord import Message, Attachment
+        ictx:Message
 
         prompt_text = config.get("prompt", "Please respond.")
         expected_type = config.get("type", "text")
         timeout = config.get("timeout", 60)
 
-        # Send the prompt
-        if hasattr(ictx, 'reply') and callable(getattr(ictx, 'reply')):
-            await ictx.reply(prompt_text)
-        elif hasattr(ictx, 'send') and callable(getattr(ictx, 'send')):
-            await ictx.send(prompt_text)
-        elif hasattr(ictx, 'response') and callable(getattr(ictx.response, 'send_message')):
-            await ictx.response.send_message(prompt_text)
-        else:
-            raise AttributeError("ictx object does not have any methods: 'reply', 'send', or 'response.send'")
+        # Open DM channel
+        dm_channel = await ictx.author.create_dm()
+
+        # Send the prompt via DM
+        await dm_channel.send(prompt_text)
 
         def check(msg: Message):
-            return (hasattr(msg, 'author') and \
-                msg.author.id == ictx.author.id and
-                msg.channel.id == ictx.channel.id
-            )
+            return msg.author.id == ictx.author.id and msg.channel.id == dm_channel.id
 
+        # Wait for the response
         try:
+            client.waiting_for[ictx.author.id] = True
             msg: Message = await client.wait_for("message", check=check, timeout=timeout)
 
             if expected_type == "text":
@@ -2591,12 +2588,14 @@ class StepExecutor:
                     file_bytes = await attachment.read()
                     filename = attachment.filename
 
-                    # Option A: Use in-memory BytesIO
+                    kind = filetype.guess(file_bytes)
+                    mime_type = kind.mime if kind else 'application/octet-stream'
+                    mime_category = mime_type.split('/')[0]
+                    # Prepare a file-like object
                     file_obj = io.BytesIO(file_bytes)
-                    file_obj.name = filename  # Required by aiohttp
+                    file_obj.name = filename
 
-                    # Optionally store metadata too
-                    return {"file": file_obj, "filename": filename}
+                    return {"file": file_obj, "filename": filename, "content_type": mime_type}
                 else:
                     raise ValueError("[StepExecutor] Expected file attachment but none provided.")
             else:
@@ -2604,6 +2603,8 @@ class StepExecutor:
 
         except asyncio.TimeoutError:
             raise TimeoutError("[StepExecutor] User did not respond in time.")
+        finally:
+            client.waiting_for.pop(ictx.author.id, None)
 
     @step_returns("data", "input", default="data")
     def _step_extract_key(self, data: Any, config: Union[str, dict]) -> Any:

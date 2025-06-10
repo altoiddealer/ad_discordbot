@@ -6298,6 +6298,8 @@ class Behavior(SettingsBase):
     def bot_should_reply(self, message:discord.Message, text:str, last_character:str) -> bool:
         main_condition = is_direct_message(message) or (message.channel.id in bot_database.main_channels)
 
+        if client.waiting_for.get(message.author.id):
+            return False
         if is_direct_message(message) and not config.discord['direct_messages'].get('allow_chatting', True):
             return False
         # Don't reply to @everyone
