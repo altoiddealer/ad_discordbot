@@ -3,7 +3,7 @@
     "ad_discordbot has a flexible and sensible system to inject dynamic values from the bot script into payloads.",
     "Simply copy/paste '__overrides__' section to any payload, then reference {prompt}, {width}, etc.",
     "The values in '__overrides__' are defaults which the bot can update before injecting -> sending to the API.",
-    "You are not resticted to these variables. You can define your own via the Tags system (the 'payload' tag), and in 'dict_imgmodels.yaml' (model presets).",
+    "You are not restricted to these variables. You can define your own via the Tags system (the 'payload' tag), and in 'dict_imgmodels.yaml' (model presets).",
     "Any key values you set, will be injected into '__overrides__' and resolved into the payload.",
     "NOTE: when using {seed} it will inject a randomized seed integer.",
     "NOTE: The last items (from 'steps' down) are examples you could define and use - these are not currently set by the bot script directly."
