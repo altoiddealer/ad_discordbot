@@ -37,7 +37,7 @@ from functools import partial
 import filetype
 
 from modules.utils_files import load_file, merge_base, save_yaml_file  # noqa: F401
-from modules.utils_shared import bot_args, bot_token, is_tgwui_integrated, shared_path, bg_task_queue, task_event, flows_queue, flows_event, patterns, bot_emojis, config, bot_database, get_api
+from modules.utils_shared import client, TOKEN, is_tgwui_integrated, shared_path, bg_task_queue, task_event, flows_queue, flows_event, patterns, bot_emojis, config, bot_database, get_api
 from modules.database import StarBoard, Statistics, BaseFileMemory
 from modules.utils_misc import check_probability, fix_dict, set_key, deep_merge, update_dict, sum_update_dict, random_value_from_range, convert_lists_to_tuples, \
     get_time, format_time, format_time_difference, get_normalized_weights, valueparser  # noqa: F401
@@ -71,19 +71,10 @@ bot_statistics = Statistics()
 #################################################################
 bot_embeds = Embeds()
 
-# Set Discord bot token from config, or args, or prompt for it, or exit
-TOKEN = bot_token.TOKEN
-
 os.environ['GRADIO_ANALYTICS_ENABLED'] = 'False'
 os.environ["BITSANDBYTES_NOWELCOME"] = "1"
 warnings.filterwarnings("ignore", category=UserWarning, message="TypedStorage is deprecated")
 warnings.filterwarnings("ignore", category=UserWarning, message="You have modified the pretrained model configuration to control generation")
-
-# Set discord intents
-intents = discord.Intents.default()
-intents.message_content = True
-client = commands.Bot(command_prefix=".", intents=intents)
-client.is_first_on_ready = True # type: ignore
 
 # Method to check if an API is enabled and available
 async def api_online(client_type:str|None=None, client_name:str='', strict=False, ictx:CtxInteraction|None=None) -> bool:
@@ -1247,7 +1238,7 @@ class TaskProcessing(TaskAttributes):
                 self.bot_hmessage.related_ids.extend(self.params.chunk_msg_ids)
             # Apply any reactions applicable to message
             if config.discord['history_reactions'].get('enabled', True):
-                await bg_task_queue.put(apply_reactions_to_messages(client.user, self.ictx, self.bot_hmessage, msg_ids_to_react))
+                await bg_task_queue.put(apply_reactions_to_messages(self.ictx, self.bot_hmessage, msg_ids_to_react))
         # send any extra content
         await bg_task_queue.put(self.send_extra_results())
 
@@ -1800,7 +1791,7 @@ class TaskProcessing(TaskAttributes):
             # Replacing original Bot HMessage via "regenerate replace"
             if self.params.bot_hmessage_to_update:
                 apply_reactions = config.discord['history_reactions'].get('enabled', True)
-                self.bot_hmessage = await replace_msg_in_history_and_discord(client.user, self.ictx, self.params, self.llm_resp, self.tts_resps, apply_reactions)
+                self.bot_hmessage = await replace_msg_in_history_and_discord(self.ictx, self.params, self.llm_resp, self.tts_resps, apply_reactions)
                 self.params.should_send_text = False
             else:
                 await self.create_bot_hmessage()
@@ -2895,7 +2886,7 @@ class Tasks(TaskProcessing):
 
                 # add history reactions to user message
                 if config.discord['history_reactions'].get('enabled', True):
-                    await bg_task_queue.put(apply_reactions_to_messages(client.user, self.ictx, self.user_hmessage))
+                    await bg_task_queue.put(apply_reactions_to_messages(self.ictx, self.user_hmessage))
 
                 # Swap LLM Model back if triggered
                 if self.params.llmmodel and self.params.llmmodel.get('mode', 'change') == 'swap':
@@ -3142,7 +3133,7 @@ class Tasks(TaskProcessing):
             # Apply any reactions applicable to HMessage
             msg_ids_to_edit = [updated_bot_hmessage.id] + updated_bot_hmessage.related_ids
             if config.discord['history_reactions'].get('enabled', True):
-                await bg_task_queue.put(apply_reactions_to_messages(client.user, self.ictx, updated_bot_hmessage, msg_ids_to_edit, new_discord_msg))
+                await bg_task_queue.put(apply_reactions_to_messages(self.ictx, updated_bot_hmessage, msg_ids_to_edit, new_discord_msg))
 
             # process any tts resp
             # if self.tts_resps:
@@ -3264,11 +3255,11 @@ class Tasks(TaskProcessing):
 
                 target_bot_hmessage_ids = [target_bot_hmessage.id] + target_bot_hmessage.related_ids
                 if config.discord['history_reactions'].get('enabled', True):
-                    await bg_task_queue.put(apply_reactions_to_messages(client.user, self.ictx, target_bot_hmessage, target_bot_hmessage_ids, self.target_discord_msg))
+                    await bg_task_queue.put(apply_reactions_to_messages(self.ictx, target_bot_hmessage, target_bot_hmessage_ids, self.target_discord_msg))
 
             # Update reactions for user message
             if config.discord['history_reactions'].get('enabled', True):
-                await bg_task_queue.put(apply_reactions_to_messages(client.user, self.ictx, self.user_hmessage))
+                await bg_task_queue.put(apply_reactions_to_messages(self.ictx, self.user_hmessage))
 
             await self.embeds.delete('regenerate')
 
@@ -3383,7 +3374,7 @@ class Tasks(TaskProcessing):
 
             # Apply reaction to user message
             if config.discord['history_reactions'].get('enabled', True):
-                await bg_task_queue.put(apply_reactions_to_messages(client.user, self.ictx, user_hmessage))
+                await bg_task_queue.put(apply_reactions_to_messages(self.ictx, user_hmessage))
 
             # Process all messages that need label updates
             for target_hmsg in bot_hmsgs_to_react:
@@ -3393,7 +3384,7 @@ class Tasks(TaskProcessing):
                     msg_ids_to_edit.extend(target_hmsg.related_ids)
                 # Process reactions for all affected messages
                 if config.discord['history_reactions'].get('enabled', True):
-                    await bg_task_queue.put(apply_reactions_to_messages(client.user, self.ictx, target_hmsg, msg_ids_to_edit, self.target_discord_msg))
+                    await bg_task_queue.put(apply_reactions_to_messages(self.ictx, target_hmsg, msg_ids_to_edit, self.target_discord_msg))
             
             result = f"**Modified message exchange pair in history for {self.user_name}** (messages {verb})."
             log.info(result)
@@ -3411,7 +3402,7 @@ class Tasks(TaskProcessing):
         self.target_discord_msg:discord.Message
         self.matched_hmessage:HMessage
         # Send modal which handles all further processing
-        modal = EditMessageModal(client.user, self.ictx, matched_hmessage = self.matched_hmessage, target_discord_msg = self.target_discord_msg, params=self.params)
+        modal = EditMessageModal(self.ictx, matched_hmessage = self.matched_hmessage, target_discord_msg = self.target_discord_msg, params=self.params)
         await self.ictx.response.send_modal(modal)
 
     #################################################################

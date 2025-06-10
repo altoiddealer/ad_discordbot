@@ -1,4 +1,4 @@
-from modules.utils_shared import bg_task_queue, task_event, bot_emojis, config
+from modules.utils_shared import client, bg_task_queue, task_event, bot_emojis, config
 import discord
 from discord.ext import commands
 from typing import Optional, Union
@@ -74,7 +74,7 @@ def get_hmessage_emojis(hmessage:'HMessage') -> list[str]:
     
     return emojis_for_hmessage
 
-async def update_message_reactions(client_user:discord.ClientUser, emojis_list:list[str], discord_msg:discord.Message):
+async def update_message_reactions(emojis_list:list[str], discord_msg:discord.Message):
     try:
         reactions_to_add = emojis_list
         already_reacted = []
@@ -86,14 +86,14 @@ async def update_message_reactions(client_user:discord.ClientUser, emojis_list:l
         for reaction in discord_msg.reactions:
             if reaction.emoji in bot_emojis_list:
                 async for user in reaction.users():
-                    if user == client_user:
+                    if user == client.user:
                         if reaction.emoji not in emojis_list:
                             reactions_to_remove.append(reaction.emoji)
                         else:
                             already_reacted.append(reaction.emoji)
 
         for reaction in reactions_to_remove:
-            await discord_msg.remove_reaction(reaction, client_user)
+            await discord_msg.remove_reaction(reaction, client.user)
 
         for reaction in reactions_to_add:
             if reaction not in already_reacted:
@@ -104,8 +104,7 @@ async def update_message_reactions(client_user:discord.ClientUser, emojis_list:l
 
 
 # Applies history reactions to a list of discord messages, such as all related messages from 'Continue' function
-async def apply_reactions_to_messages(client_user:discord.ClientUser,
-                                      ictx:CtxInteraction,
+async def apply_reactions_to_messages(ictx:CtxInteraction,
                                       hmsg:Optional['HMessage']=None,
                                       msg_id_list:Optional[list[int]]=None,
                                       ictx_msg:Optional[discord.Message]=None):
@@ -131,7 +130,7 @@ async def apply_reactions_to_messages(client_user:discord.ClientUser,
                 log.debug('Bot tried reacting to a discord message object which was not found (message may be from an internal prompt).')
             # Update reactions for the message
             if discord_msg:
-                await update_message_reactions(client_user, emojis_for_msg, discord_msg)                
+                await update_message_reactions(emojis_for_msg, discord_msg)                
     except Exception as e:
         log.error(f'Error while processing reactions for messages: {e}')
 
@@ -230,7 +229,7 @@ async def send_long_message(channel, message_text, ref_message:Optional[discord.
 
     return sent_msg_ids, sent_message
 
-async def replace_msg_in_history_and_discord(client_user:discord.Client, ictx:CtxInteraction, params, text:str, text_visible:str, apply_reactions:bool=True) -> Optional['HMessage']:
+async def replace_msg_in_history_and_discord(ictx:CtxInteraction, params, text:str, text_visible:str, apply_reactions:bool=True) -> Optional['HMessage']:
     channel = ictx.channel
     updated_hmessage: Optional[HMessage] = getattr(params, 'user_hmessage_to_update', None) or getattr(params, 'bot_hmessage_to_update', None)
     hmsg_hidden = getattr(params, 'user_hmsg_hidden', None) or getattr(params, 'bot_hmsg_hidden', None) or updated_hmessage.hidden 
@@ -242,7 +241,7 @@ async def replace_msg_in_history_and_discord(client_user:discord.Client, ictx:Ct
         target_discord_msg = await channel.fetch_message(target_discord_msg_id)
 
         # Only modify discord message(s) if they are responses from the bot
-        if target_discord_msg.author == client_user:
+        if target_discord_msg.author == client.user:
             # Collect all messages that are part of the original message
             messages_to_remove = [updated_hmessage.id] + updated_hmessage.related_ids
             # Remove target message from the list
@@ -284,7 +283,7 @@ async def replace_msg_in_history_and_discord(client_user:discord.Client, ictx:Ct
             
         # Apply any reactions applicable to message
         if apply_reactions:
-            await bg_task_queue.put(apply_reactions_to_messages(client_user, ictx, updated_hmessage))
+            await bg_task_queue.put(apply_reactions_to_messages(ictx, updated_hmessage))
 
         return updated_hmessage
     except Exception as e:
@@ -310,11 +309,10 @@ async def rebuild_chunked_message(ictx:CtxInteraction, msg_id_list:list=None, ic
 
 # Modal for editing history
 class EditMessageModal(discord.ui.Modal, title="Edit Message in History"):
-    def __init__(self, client_user: Optional[discord.ClientUser], ictx:CtxInteraction, matched_hmessage: 'HMessage', target_discord_msg: discord.Message, apply_reactions:bool=True, params=None):
+    def __init__(self, ictx:CtxInteraction, matched_hmessage: 'HMessage', target_discord_msg: discord.Message, apply_reactions:bool=True, params=None):
         super().__init__()
         self.target_discord_msg = target_discord_msg
         self.matched_hmessage = matched_hmessage
-        self.client_user = client_user
         self.ictx = ictx
         self.apply_reactions = apply_reactions
         self.params = params
@@ -332,8 +330,8 @@ class EditMessageModal(discord.ui.Modal, title="Edit Message in History"):
         # Update text in history
         new_text = self.new_content.value
         setattr(self.params, 'user_hmessage_to_update', self.matched_hmessage)
-        await replace_msg_in_history_and_discord(self.client_user, self.ictx, params=self.params, text=new_text, text_visible=new_text, apply_reactions=self.apply_reactions)
-        if self.target_discord_msg.author != self.client_user:
+        await replace_msg_in_history_and_discord(self.ictx, params=self.params, text=new_text, text_visible=new_text, apply_reactions=self.apply_reactions)
+        if self.target_discord_msg.author != client.user:
             await inter.response.send_message("Message history has been edited successfully (Note: the bot cannot update your discord message).", ephemeral=True, delete_after=7)
         else:
             await inter.response.send_message("Message history has been edited successfully.", ephemeral=True, delete_after=5)

@@ -64,7 +64,7 @@ async def save_any_file(data: Any,
     full_path = output_path / f"{file_name}.{file_format}"
     binary_formats = {"jpg", "jpeg", "png", "webp", "gif", "bmp", "tiff", "mp3", "wav", "ogg", "flac",
                       "mp4", "webm", "avi", "mov", "mkv", "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx",
-                      "zip", "rar", "7z", "tar", "gz", "bz2", "exe", "dll", "iso","bin", "dat"}
+                      "zip", "rar", "7z", "tar", "gz", "bz2", "exe", "dll", "iso", "bin", "dat"}
 
     # 3. Base64 decoding if applicable
     if isinstance(data, str) and is_base64(data):

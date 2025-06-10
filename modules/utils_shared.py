@@ -7,6 +7,8 @@ from pathlib import Path
 from shutil import copyfile, move
 from modules.utils_files import load_file
 from modules.utils_misc import fix_dict
+import discord
+from discord.ext import commands
 
 from modules.logs import import_track, get_logger; import_track(__file__, fp=True); log = get_logger(__name__)  # noqa: E702
 logging = log
@@ -47,6 +49,12 @@ def parse_bot_args():
 bot_args = parse_bot_args()
 
 is_tgwui_integrated = bot_args.is_tgwui_integrated
+
+# Set discord intents
+intents = discord.Intents.default()
+intents.message_content = True
+client = commands.Bot(command_prefix=".", intents=intents)
+client.is_first_on_ready = True # type: ignore
 
 class SharedPath:
 
@@ -279,6 +287,8 @@ class BotToken(BaseFileMemory):
             sys.exit(2)
 
 bot_token = BotToken()
+
+TOKEN = bot_token.TOKEN
 
 class SharedRegex: # Search for [ (]r['"] in vscode
     braces = re.compile(r'{{([^{}]+?)}}(?=[^\w$:]|$$|$)') # {{this syntax|separate items can be divided|another item}}
