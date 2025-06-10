@@ -1,5 +1,8 @@
-# All Img models are fetched via API (A1111 / Forge).
-# To control VAE for your models, set a "preferred VAE" for each model in SD WebUI (A111 / Forge), by clicking "Checkpoints" tab, then the Tool icon for each model ("Edit Metadata")
+# All Img models are fetched via API (see dict_api_settings.yaml).
+# To control VAE / additional modules for your models:
+#       - A1111/ReForge: set a "preferred VAE" for each model by clicking "Checkpoints" tab, then the Tool icon for each model ("Edit Metadata")
+#       - Forge: Use 'forge_additional_modules' (examples below)
+#       - ComfyUI / other clients: Add key values under `payload` like "vae: <valid value for the vae>" then use payload injection (include {vae} in your payload file where it should be injected)
 
 settings:
   # Filter - Only collect models which include matching text. [''] = No filtering (loads all models)
@@ -7,7 +10,6 @@ settings:
   # Exclude - Omit models which include matching text.
   exclude: ['inpaint', 'refiner', 'base']
   # You may define another layer of filters for specific server (guild) IDs. Intended for use in tandem with 'per_server_imgmodels' (setting in config.yaml)
-  # **Per-Server Filters DO NOT apply to Auto-Change Imgmodels feature**
   per_server_filters:
     - guild_id: 1111111111111111111111
       filter: []
@@ -18,18 +20,17 @@ settings:
   # Feature to periodically switch Img models. Can be toggled in discord via '/toggle_auto_change_imgmodels' command.
   auto_change_imgmodels:
     enabled: false
-    mode: random          # 'random' = picks model at random / 'cycle' = sequential order
-    frequency: 2.0        # How often to change models (hours). 0.5 = 30 minutes
+    mode: random      # 'random' = picks model at random / 'cycle' = sequential order
+    frequency: 2.0    # How often to change models (hours). 0.5 = 30 minutes
   # Controls whether to check the presets below when updating models. Otherwise, only settings will apply from dict_base_settings.yaml (not specific to models / resolutions)
   guess_model_params: true
 
-
 # When changing imgmodels, Presets are scored by matching/failing 'filter', 'exclude', and 'max_filesize' criteria.
-# For single model presets (exact_matches), use the 'title' from the values listed here: (http://127.0.0.1:7860/docs#/default/get_sd_models_sdapi_v1_sd_models_get)
+# Including "exact_match" for a specific model will bypass scoring / etc.
 
 # Duplicate and update to add more presets to the list.
-# Valid payload options listed here: (http://127.0.0.1:7860/docs#/default/text2imgapi_sdapi_v1_txt2img_post)
-# It is recommended to use tag presets for your payload settings *** BUT "width" and "height" are very important here as they affect the '/image' Size options!! ***
+# Payload values from matched preset will override matching keys in txt2img/img2img endpoint payloads
+# "width" and "height" are used to directly affect the '/image' Size options!! ***
 presets:
   - max_filesize: 6.0
     filter: ['']
@@ -77,6 +78,12 @@ presets:
     payload:
       width: 1024
       height: 1024
+      # EXAMPLE USAGE FOR SETTING MODULES IF USING COMFYUI (or any other "non-A1111-like" API).
+      #       NOTE: Add each item to the '__overrides__' dict in your payload, then reference with {placeholder_syntax}
+      # vae: ae.safetensors                         # maps to "{vae}"
+      # clip: clip_l.safetensors                    # maps to "{clip}"
+      # text_encoder: t5xxl_fp8_e4m3fn.safetensors  # maps to "{text_encoder}"
+      
       # EXAMPLE USAGE FOR SETTING MODULES IF USING FORGE
       # override_settings:
       #   forge_additional_modules:

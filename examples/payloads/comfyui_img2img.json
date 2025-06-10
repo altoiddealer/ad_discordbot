@@ -1,0 +1,179 @@
+{
+  "_comment": [
+    "ad_discordbot has a flexible and sensible system to inject dynamic values from the bot script into payloads.",
+    "Simply copy/paste '__overrides__' section to any payload, then reference {prompt}, {width}, etc.",
+    "The values in '__overrides__' are defaults which the bot can update before injecting -> sending to the API.",
+    "You are not restricted to these variables. You can define your own via the Tags system (the 'payload' tag), and in 'dict_imgmodels.yaml' (model presets).",
+    "Any key values you set, will be injected into '__overrides__' and resolved into the payload.",
+    "NOTE: when using {seed} it will inject a randomized seed integer.",
+    "NOTE: The last items (from 'steps' down) are examples you could define and use - these are not currently set by the bot script directly."
+  ],
+
+  "__overrides__": {
+    "prompt": "beautiful scenery nature glass bottle landscape, purple galaxy bottle,",
+    "neg_prompt": "text, watermark",
+    "width": 1024,
+    "height": 1024,
+    "ckpt_name": "sdxl\\epicrealismXL_vxviLastfameRealism.safetensors",
+    "seed": "156680208700286",
+    "i2i_image": "example.png",
+    "i2i_mask": "mask.png",
+    "denoising_strength": 0.87,
+    "cnet_image": "input.png",
+    "cnet_mask": "input_mask.png",
+    "cnet_model": "diffusers_xl_depth_full",
+    "cnet_module": "depth_midas",
+    "cnet_weight": 1.0,
+    "cnet_processor_res": 64,
+    "cnet_guidance_start": 0.0,
+    "cnet_guidance_end": 1.0,
+    "cnet_threshold_a": 64,
+    "cnet_threshold_b": 64,
+    "character": "M1nty",
+
+    "steps": 20,
+    "cfg_scale": 8,
+    "sampler_name": "euler",
+    "scheduler": "scheduler"
+  },
+
+  "prompt": {
+  "3": {
+    "inputs": {
+      "seed": "{seed}",
+      "steps": "{steps}",
+      "cfg": "{cfg_scale}",
+      "sampler_name": "dpmpp_2m",
+      "scheduler": "normal",
+      "denoise": "{denoising_strength}",
+      "model": [
+        "14",
+        0
+      ],
+      "positive": [
+        "6",
+        0
+      ],
+      "negative": [
+        "7",
+        0
+      ],
+      "latent_image": [
+        "12",
+        0
+      ]
+    },
+    "class_type": "KSampler",
+    "_meta": {
+      "title": "KSampler"
+    }
+  },
+  "6": {
+    "inputs": {
+      "text": "{prompt}",
+      "clip": [
+        "14",
+        1
+      ]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {
+      "title": "CLIP Text Encode (Prompt)"
+    }
+  },
+  "7": {
+    "inputs": {
+      "text": "{neg_prompt}",
+      "clip": [
+        "14",
+        1
+      ]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {
+      "title": "CLIP Text Encode (Prompt)"
+    }
+  },
+  "8": {
+    "inputs": {
+      "samples": [
+        "3",
+        0
+      ],
+      "vae": [
+        "14",
+        2
+      ]
+    },
+    "class_type": "VAEDecode",
+    "_meta": {
+      "title": "VAE Decode"
+    }
+  },
+  "9": {
+    "inputs": {
+      "filename_prefix": "ComfyUI",
+      "images": [
+        "8",
+        0
+      ]
+    },
+    "class_type": "SaveImage",
+    "_meta": {
+      "title": "Save Image"
+    }
+  },
+  "10": {
+    "inputs": {
+      "image": "{i2i_image}"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "Load Image"
+    }
+  },
+  "12": {
+    "inputs": {
+      "pixels": [
+        "17",
+        0
+      ],
+      "vae": [
+        "14",
+        2
+      ]
+    },
+    "class_type": "VAEEncode",
+    "_meta": {
+      "title": "VAE Encode"
+    }
+  },
+  "14": {
+    "inputs": {
+      "ckpt_name": "{ckpt_name}"
+    },
+    "class_type": "CheckpointLoaderSimple",
+    "_meta": {
+      "title": "Load Checkpoint"
+    }
+  },
+  "17": {
+    "inputs": {
+      "width": "{width}",
+      "height": "{height}",
+      "interpolation": "lanczos",
+      "method": "fill / crop",
+      "condition": "always",
+      "multiple_of": 0,
+      "image": [
+        "10",
+        0
+      ]
+    },
+    "class_type": "ImageResize+",
+    "_meta": {
+      "title": "🔧 Image Resize"
+    }
+  }
+}
+}

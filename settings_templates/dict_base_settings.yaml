@@ -1,10 +1,8 @@
-# These are the baseline settings you may adjust to your liking.
-# When you use bot commands like /character, /imgmodel, etc - those settings will have higher priority.
-# Note that Img model settings defined here DO NOT get merged until the bot changes Img models (via '/imgmodel' cmd, or the 'auto change Img models' feature).
+# These are the baseline settings you may adjust to your liking (or at least as reference to internal default values)
+# These settings will override internal defaults.
+# You may include any of these directly in character files (see '/examples/characters' for usage) which will override these values.
 
 # To see the currently active settings, look in internal/activesettings.yaml (which is not intended to be edited).
-
-# There are many settings here you probably don't need to tinker with.
 
 behavior:
   reply_to_itself: 0.0                # 0.0 = never happens / 1.0 = always happens
@@ -35,115 +33,11 @@ behavior:
   spontaneous_msg_max_wait: 60.0      # Maximum wait before bot may spontaneously message (-minutes-)
   spontaneous_msg_prompts:            # Random prompt will be picked from this list if triggered
     - '''[SYSTEM] The conversation has been inactive for {time_since_last_msg}, so you should say something.'''
-  # - 'another prompt' 
+  # - 'another prompt'
 
 imgmodel:
-  payload:
-    override_settings:
-      CLIP_stop_at_last_layers: 1
-      sd_vae: Automatic
-      #forge_inference_memory: 4096 # Relavent to UI value "GPU Weights". Adjust this in the UI, and use the value printed in the cmd window for "(**value** MB) to do matrix computation"
-    restore_faces: False
-    sampler_name: "DPM++ 2M"
-    scheduler: karras
-    steps: 30
-    distilled_cfg_scale: 3.5
-    cfg_scale: 7
-    height: 896
-    width: 1152
-    enable_hr: False
-    hr_upscaler: "Latent"
-    denoising_strength: 0.5
-    hr_scale: 2
-    hr_second_pass_steps: 0
-    # Note: Refiner is disabled if 'refiner_switch_at: 0.0' *OR* refiner_checkpoint: ''
-    refiner_checkpoint: '' # 'sd_xl_refiner_1.0_0.9vae.safetensors [8d0ce6c016]'
-    refiner_switch_at: 0.8
-    # inpainting params
-    mask_blur: 4                  # blur strength
-    inpainting_fill: 1            # 0 - 'fill' / 1 - 'original' / 2 - 'latent noise' / 3 - 'latent nothing'
-    inpaint_full_res: true        # true - 'Whole picture' / false - 'Only masked'
-    inpaint_full_res_padding: 32  # 'Only masked padding, pixels' (default: 32)
-    inpainting_mask_invert: 0     # 0 - 'Inpaint masked', 1 - 'Inpaint not masked'
-    # Stable Diffusion (A1111 / Forge) extension settings. Modifying these may have unintended results...
-    alwayson_scripts:
-      controlnet:           # ControlNet extension arguments. The 'tags' feature supports multi-controlnet. To enable multi-controlnet, first increase # of CNets in A1111/Forge CNet settings.
-        args:               # Then, use 'cnet0_{key}: value' tags for first unit, and 'cnet1_{key}' etc, for additional ControlNets.
-          - enabled: false        # Enable ControlNet
-            image: null           # base64 string for an input image
-            mask_image: null      # base64 string for a greyscale mask image
-            model: "None"         # Exact name of the model including hash (ex: "diffusers_xl_canny_full [2b69fca4]")
-            module: "None"        # The preprocessor, such as "canny". "None" = No preprocessor (treat input image as a ControlNet mask)
-            weight: 1.0           # strength of the ControlNet
-            processor_res: 64     # resolution of the ControlNet guidance
-            pixel_perfect: true   # ** overrides 'preprocessor_res' by dynamically using the resolution of the input image **
-            guidance_start: 0.0   # 0.0 = begin guidance on step 1, 1.0 = never start guidance
-            guidance_end: 1.0     # 0.0 = end on step 1, 1.0 = does not end guidance
-            threshold_a: 64       # Only relavent for certain model types. Refer to ControlNet in your SD WebUI.
-            threshold_b: 64       # Only relavent for certain model types. Refer to ControlNet in your SD WebUI.
-            control_mode: 0       # 0 - Balanced, 1 - Prompt is More Important, 2 - ControlNet is More Important
-            resize_mode: 1        # 0 - Just Resize, 1 - Crop and Resize, 2 - Resize and Fill
-            lowvram: false        # Reduces vram usage by increasing generation time
-            save_detected_map: false  # Whether control maps should be returned
-      forge_couple:          # Forge Couple extension arguments. More info here: (https://github.com/Haoming02/sd-forge-couple/wiki/API)
-        args:
-          enable: false                 # Enable Forge Couple
-          mode: 'Basic'                 # 'Basic' (uses 'direction') / 'Advanced' (uses 'maps') / 'Mask' (uses 'maps')
-          sep: 'SEP'                    # Separator such as 'SEP'. If empty, '\n' (line breaks) will separate regions.
-          direction: 'Horizontal'       # 'Horizontal' / 'Vertical'
-          global_effect: 'First Line'   # 'None' / 'First Line' / 'Last Line' (defines if and where a global prompt will be in your prompt structure (affecting all regions))
-          global_weight: 0.5            # The Weight of the Global Effect.
-          maps: [                         # for advanced regional mapping. Format for each region map: [ x / y / weight ]. Valid range for each value is 0.0 - 1.0
-            ["0:0.5", "0.0:1.0", "1.0"],  # if 'mode: Advanced', then 'maps' should be a list of lists as shown in default value [[ x, y, weight ], [x,... ]]
-            ["0.5:1.0","0.0:1.0","1.0"]   # if 'mode: Mask', then 'maps' should be a list of dictionaries [{'mask': <base64>, 'weight:' 1.0}, {'mask'...}] )
-            ]
-      layerdiffuse:         # layerdiffuse extension arguments
-        args:
-          enabled: false                  # Enable layerdiffuse
-          method: '(SDXL) Only Generate Transparent Image (Attention Injection)' # Method
-          weight: 1.0                     # Weight of alpha channel (0.0 - 1.0)
-          stop_at: 1.0                    # Stop at (0.0 - 1.0)
-          foreground: null                # Foreground setting (if foreground method)
-          background: null                # Background setting (if background method)
-          blending: null                  # Blending (for foreground/background methods)
-          resize_mode: 'Crop and Resize'  # Resize mode
-          output_mat_for_i2i: false       # Output original mat for img2img
-          fg_prompt: ''                   # Foreground Additional Prompt
-          bg_prompt: ''                   # Background Additional Prompt
-          blended_prompt: ''              # Blended Additional Prompt
-      reactor:              # Reactor extension arguments
-        args:                   # ** These defaults can be customized. It's OK if missing from here - the bot will fall back to default values in bot.py **
-          image: ''                     #0 source face image in base64
-          enabled: false                #1 Enable ReActor
-          source_faces: '0'             #2 Comma separated face number(s) from swap-source image
-          target_faces: '0'             #3 Comma separated face number(s) for target image (result)
-          model: inswapper_128.onnx     #4 model path
-          restore_face: CodeFormer      #5 Restore Face: None; CodeFormer; GFPGAN
-          restore_visibility: 1         #6 Restore visibility value
-          restore_upscale: true         #7 Restore face -> Upscale
-          upscaler: 4x_NMKD-Superscale-SP_178000_G  #8 Upscaler (type 'None' if doesn't need), see full list here: http://127.0.0.1:7860/sdapi/v1/script-info -> reactor -> sec.8
-          scale: 1.5                    #9 Upscaler scale value
-          upscaler_visibility: 1        #10 Upscaler visibility (if scale = 1)
-          swap_in_source_img: false     #11 Swap in source image
-          swap_in_gen_img: true         #12 Swap in generated image
-          log_level: 1                  #13 Console Log Level (0 - min, 1 - med or 2 - max)
-          gender_detect_source: 0       #14 Gender Detection (Source) (0 - No, 1 - Female Only, 2 - Male Only)
-          gender_detect_target: 0       #15 Gender Detection (Target) (0 - No, 1 - Female Only, 2 - Male Only)
-          save_original: false          #16 Save the original image(s) made before swapping
-          codeformer_weight: 0.8        #17 CodeFormer Weight (0 = maximum effect, 1 = minimum effect), 0.5 - by default
-          source_img_hash_check: false  #18 Source Image Hash Check, False - by default
-          target_img_hash_check: false  #19 Target Image Hash Check, False - by default
-          system: CUDA                  #20 CPU or CUDA (if you have it), CPU - by default
-          face_mask_correction: true    #21 Face Mask Correction
-          source_type: 0                #22 Select Source, 0 - Image, 1 - Face Model, 2 - Source Folder
-          face_model: ''                #23 Filename of the face model (from "models/reactor/faces"), e.g. elena.safetensors, don't forger to set #22 to 1
-          source_folder: ''             #24 The path to the folder containing source faces images, don't forger to set #22 to 2
-          multiple_source_images: null  #25 **irrelevant for API**
-          random_img: true              #26 Randomly select an image from the path
-          force_upscale: true           #27 Force Upscale even if no face found
-          threshold: 0.6                #28 Face Detection Threshold
-          max_faces: 2                  #29 Maximum number of faces to detect (0 is unlimited)
-          tab_single: null              #30 Not sure what this does. Ignore
+  payload_mods: {}
+  tags: {}
 
 llmcontext:
   context: 'The following is a conversation with an AI Large Language Model. The AI has been trained to answer questions, provide recommendations, and help with decision making. The AI follows user requests. The AI thinks outside the box.'
@@ -162,7 +56,7 @@ llmstate:
     character_menu: ''
     chat_generation_attempts: 1
     chat_prompt_size: 2048
-    custom_stopping_strings: ''
+    custom_stopping_strings: []
     custom_system_message: ''
     custom_token_bans: ''
     do_sample: true
@@ -211,7 +105,7 @@ llmstate:
     smoothing_factor: 0
     static_cache: false
     stop_at_newline: false
-    stopping_strings: ''
+    stopping_strings: []
     stream: true
     temperature: 0.98
     temperature_last: false

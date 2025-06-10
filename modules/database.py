@@ -153,7 +153,7 @@ class Database(BaseFileMemory):
         self.last_character:str
         self.last_change:float
         self.last_imgmodel_name:str
-        self.last_imgmodel_checkpoint:str
+        self.last_imgmodel_value:str
         self.last_imgmodel_res: int
         self.last_guild_settings:dict[dict[str, int]]
         self.last_user_msg:dict[str, float]
@@ -193,7 +193,7 @@ class Database(BaseFileMemory):
         self.last_character = data.pop('last_character', None)
         self.last_change = data.pop('last_change', (time.time() - timedelta(minutes=10).seconds))
         self.last_imgmodel_name = data.pop('last_imgmodel_name', '')
-        self.last_imgmodel_checkpoint = data.pop('last_imgmodel_checkpoint', '')
+        self.last_imgmodel_value = data.pop('last_imgmodel_value', '')
         self.last_imgmodel_res = data.pop('last_imgmodel_res', None)
         if not self.last_imgmodel_res:
             self.last_imgmodel_res = init_avg_from_dims()

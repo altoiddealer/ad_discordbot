@@ -871,7 +871,6 @@ class HistoryManager:
     export_for_tgwui: bool                  = field(default=True)
     autoload_history: bool                  = field(default=False)
     change_char_history_method: str         = field(default='new')
-    greeting_or_history: str                = field(default='history')
     per_channel_history: bool               = field(default=True)
 
     _histories: dict[ChannelID, History]    = field(default_factory=dict)

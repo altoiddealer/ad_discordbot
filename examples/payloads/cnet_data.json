@@ -1,0 +1,366 @@
+{
+  "_comment": [
+    "Example manually configured payload for 'get_controlnet_control_types' endpoint.",
+    "This is the structure which would be returned from A1111-like APIs, which is ideal for managing ControlNet options in an API driven setting.",
+    "This structure is required for the 'controlnet' option to work in the main 'image' command."
+  ],
+
+  "control_types": {
+    "Blur": {
+      "module_list": [
+        "None",
+        "blur_gaussian"
+      ],
+      "model_list": [
+        "None",
+        "bdsqlsz_controlllite_xl_tile_realistic [12b261fe]",
+        "control_v11f1e_sd15_tile [a371b31b]",
+        "tplanetSDXLControlnet_Tile_v10F16 [6c558c4d]",
+        "xinsir_controlnet-tile-sdxl-1.0 [4d6257d3]"
+      ],
+      "default_option": "blur_gaussian",
+      "default_model": "control_v11f1e_sd15_tile [a371b31b]"
+    },
+
+    "Canny": {
+      "module_list": [
+        "None",
+        "canny",
+        "invert (from white bg & black line)"
+      ],
+      "model_list": [
+        "None",
+        "bdsqlsz_controlllite_xl_canny [a74daa41]",
+        "control_v11p_sd15_canny [d14c016b]",
+        "controlnetxlCNXL_xinsirCannyv2 [ab7dc06d]",
+        "diffusers_xl_canny_full [2b69fca4]",
+        "t2i-adapter_diffusers_xl_canny [6b0c1490]"
+      ],
+      "default_option": "canny",
+      "default_model": "control_v11p_sd15_canny [d14c016b]"
+    },
+
+    "Depth": {
+      "module_list": [
+        "None",
+        "depth_midas",
+        "depth_marigold",
+        "depth_zoe",
+        "depth_leres++",
+        "depth_leres",
+        "depth_hand_refiner",
+        "depth_anything_v2",
+        "depth_anything"
+      ],
+      "model_list": [
+        "None",
+        "bdsqlsz_controlllite_xl_depth [c4d5ca3b]",
+        "control_v11f1p_sd15_depth [cfd03158]",
+        "diffusers_xl_depth_full [2f51180b]",
+        "flux-depth-controlnet-v3 [add17cb7]",
+        "t2i-adapter_diffusers_xl_depth_midas [9c183166]",
+        "t2i-adapter_diffusers_xl_depth_zoe [cc102381]",
+        "t2iadapter_depth_sd14v1 [fa476002]",
+        "xinsir_controlnet-depth-sdxl-1.0 [e590f04c]"
+      ],
+      "default_option": "depth_midas",
+      "default_model": "control_v11f1p_sd15_depth [cfd03158]"
+    },
+
+    "IP-Adapter": {
+      "module_list": [
+        "None",
+        "InsightFace+CLIP-H (IPAdapter)",
+        "CLIP-ViT-bigG (IPAdapter)",
+        "CLIP-ViT-H (IPAdapter)"
+      ],
+      "model_list": [
+        "None",
+        "ip-adapter_instant_id_sdxl [eb2d3ec0]"
+      ],
+      "default_option": "InsightFace+CLIP-H (IPAdapter)",
+      "default_model": "ip-adapter_instant_id_sdxl [eb2d3ec0]"
+    },
+
+    "Inpaint": {
+      "module_list": [
+        "None",
+        "inpaint_only+lama",
+        "inpaint_only",
+        "inpaint_global_harmonious"
+      ],
+      "model_list": [
+        "None",
+        "Kataragi_inpaintXL-fp16 [ad3c2578]",
+        "control_v11p_sd15_inpaint [ebff9138]",
+        "controlnetxlCNXL_destitechInpaintv2 [e799aa20]",
+        "controlnetxlCNXL_ecomxlInpaint [ad895a99]"
+      ],
+      "default_option": "inpaint_only+lama",
+      "default_model": "control_v11p_sd15_inpaint [ebff9138]"
+    },
+
+    "Instant-ID": {
+      "module_list": [
+        "None",
+        "InsightFace (InstantID)",
+        "instant_id_face_keypoints"
+      ],
+      "model_list": [
+        "None",
+        "control_instant_id_sdxl [c5c25a50]",
+        "ip-adapter_instant_id_sdxl [eb2d3ec0]"
+      ],
+      "default_option": "InsightFace (InstantID)",
+      "default_model": "control_instant_id_sdxl [c5c25a50]"
+    },
+
+    "Lineart": {
+      "module_list": [
+        "None",
+        "lineart_standard (from white bg & black line)",
+        "invert (from white bg & black line)",
+        "lineart_realistic",
+        "lineart_coarse",
+        "lineart_anime_denoise",
+        "lineart_anime"
+      ],
+      "model_list": [
+        "None",
+        "bdsqlsz_controlllite_xl_lineart_anime_denoise [74db2627]",
+        "control_v11p_sd15_lineart [43d4be0d]",
+        "control_v11p_sd15s2_lineart_anime [3825e83e]",
+        "t2i-adapter_diffusers_xl_lineart [bae0efef]"
+      ],
+      "default_option": "lineart_standard (from white bg & black line)",
+      "default_model": "control_v11p_sd15_lineart [43d4be0d]"
+    },
+
+    "MLSD": {
+      "module_list": [
+        "None",
+        "mlsd",
+        "invert (from white bg & black line)"
+      ],
+      "model_list": [
+        "None",
+        "control_v11p_sd15_mlsd [aca30ff0]"
+      ],
+      "default_option": "mlsd",
+      "default_model": "control_v11p_sd15_mlsd [aca30ff0]"
+    },
+
+    "NormalMap": {
+      "module_list": [
+        "None",
+        "normalbae",
+        "normal_midas"
+      ],
+      "model_list": [
+        "None",
+        "bdsqlsz_controlllite_xl_normal_dsine [87b87650]",
+        "control_v11p_sd15_normalbae [316696f1]"
+      ],
+      "default_option": "normalbae",
+      "default_model": "control_v11p_sd15_normalbae [316696f1]"
+    },
+
+    "OpenPose": {
+      "module_list": [
+        "None",
+        "openpose_full",
+        "openpose_hand",
+        "openpose_faceonly",
+        "openpose_face",
+        "openpose",
+        "dw_openpose_full",
+        "densepose_parula (black bg & blue torso)",
+        "densepose (pruple bg & purple torso)",
+        "animal_openpose"
+      ],
+      "model_list": [
+        "None",
+        "bdsqlsz_controlllite_xl_dw_openpose [23893c0e]",
+        "control_v11p_sd15_openpose [cab727d4]",
+        "t2i-adapter_diffusers_xl_openpose [adfb64aa]",
+        "t2iadapter_openpose_sd14v1 [7e267e5e]",
+        "thibaud_xl_openpose [c7b9cadd]",
+        "xinsir-controlnet-openpose-sdxl-1.0 [d0333a45]"
+      ],
+      "default_option": "openpose_full",
+      "default_model": "control_v11p_sd15_openpose [cab727d4]"
+    },
+
+    "Recolor": {
+      "module_list": [
+        "None",
+        "recolor_luminance",
+        "recolor_intensity"
+      ],
+      "model_list": [
+        "None",
+        "bdsqlsz_controlllite_xl_t2i-adapter_color_shuffle [8ff329d6]",
+        "controlnetxlCNXL_kataragiLine2color [cabeb539]",
+        "t2iadapter_color_sd14v1 [8522029d]"
+      ],
+      "default_option": "recolor_luminance",
+      "default_model": "bdsqlsz_controlllite_xl_t2i-adapter_color_shuffle [8ff329d6]"
+    },
+
+    "Reference": {
+      "module_list": [
+        "None",
+        "reference_only",
+        "reference_adain+attn",
+        "reference_adain"
+      ],
+      "model_list": [
+        "None"
+      ],
+      "default_option": "reference_only",
+      "default_model": "None"
+    },
+
+    "Revision": {
+      "module_list": [
+        "None",
+        "CLIP-G (Revision)",
+        "CLIP-G (Revision ignore prompt)"
+      ],
+      "model_list": [
+        "None"
+      ],
+      "default_option": "CLIP-G (Revision)",
+      "default_model": "None"
+    },
+
+    "Scribble": {
+      "module_list": [
+        "None",
+        "scribble_pidinet",
+        "invert (from white bg & black line)",
+        "scribble_xdog",
+        "scribble_hed"
+      ],
+      "model_list": [
+        "None",
+        "bdsqlsz_controlllite_xl_sketch [8e99f467]",
+        "control_v11p_sd15_scribble [d4ba51ff]",
+        "t2i-adapter_diffusers_xl_sketch [72b96ab1]"
+      ],
+      "default_option": "scribble_pidinet",
+      "default_model": "control_v11p_sd15_scribble [d4ba51ff]"
+    },
+
+    "Segmentation": {
+      "module_list": [
+        "None",
+        "seg_ofade20k",
+        "seg_ufade20k",
+        "seg_ofcoco",
+        "seg_anime_face"
+      ],
+      "model_list": [
+        "None",
+        "control_v11p_sd15_seg [e1f51eb9]"
+      ],
+      "default_option": "seg_ofade20k",
+      "default_model": "control_v11p_sd15_seg [e1f51eb9]"
+    },
+
+    "Shuffle": {
+      "module_list": [
+        "None",
+        "shuffle"
+      ],
+      "model_list": [
+        "None",
+        "bdsqlsz_controlllite_xl_t2i-adapter_color_shuffle [8ff329d6]",
+        "control_v11e_sd15_shuffle [526bfdae]"
+      ],
+      "default_option": "shuffle",
+      "default_model": "control_v11e_sd15_shuffle [526bfdae]"
+    },
+
+    "Sketch": {
+      "module_list": [
+        "None",
+        "scribble_pidinet",
+        "invert (from white bg & black line)",
+        "scribble_xdog",
+        "scribble_hed"
+      ],
+      "model_list": [
+        "None",
+        "bdsqlsz_controlllite_xl_sketch [8e99f467]",
+        "control_v11p_sd15_scribble [d4ba51ff]",
+        "t2i-adapter_diffusers_xl_sketch [72b96ab1]"
+      ],
+      "default_option": "scribble_pidinet",
+      "default_model": "control_v11p_sd15_scribble [d4ba51ff]"
+    },
+
+    "SoftEdge": {
+      "module_list": [
+        "None",
+        "softedge_pidinet",
+        "softedge_teed",
+        "softedge_pidisafe",
+        "softedge_hedsafe",
+        "softedge_hed"
+      ],
+      "model_list": [
+        "None",
+        "bdsqlsz_controlllite_xl_softedge [c28ff1c4]",
+        "control_v11p_sd15_softedge [a8575a2a]",
+        "controlnetxlCNXL_ecomxlSoftedge [2e13fcc3]",
+        "sargezt_xl_softedge [b6f7415b]"
+      ],
+      "default_option": "softedge_pidinet",
+      "default_model": "control_v11p_sd15_softedge [a8575a2a]"
+    },
+
+    "T2I-Adapter": {
+      "module_list": [
+        "None",
+        "t2ia_sketch_pidi",
+        "t2ia_color_grid"
+      ],
+      "model_list": [
+        "None",
+        "bdsqlsz_controlllite_xl_t2i-adapter_color_shuffle [8ff329d6]",
+        "t2i-adapter_diffusers_xl_canny [6b0c1490]",
+        "t2i-adapter_diffusers_xl_depth_midas [9c183166]",
+        "t2i-adapter_diffusers_xl_depth_zoe [cc102381]",
+        "t2i-adapter_diffusers_xl_lineart [bae0efef]",
+        "t2i-adapter_diffusers_xl_openpose [adfb64aa]",
+        "t2i-adapter_diffusers_xl_sketch [72b96ab1]",
+        "t2iadapter_color_sd14v1 [8522029d]",
+        "t2iadapter_depth_sd14v1 [fa476002]",
+        "t2iadapter_openpose_sd14v1 [7e267e5e]",
+        "t2iadapter_style_sd14v1 [202e85cc]"
+      ],
+      "default_option": "t2ia_sketch_pidi",
+      "default_model": "bdsqlsz_controlllite_xl_t2i-adapter_color_shuffle [8ff329d6]"
+    },
+
+    "Tile": {
+      "module_list": [
+        "None",
+        "tile_resample",
+        "tile_colorfix+sharp",
+        "tile_colorfix",
+        "blur_gaussian"
+      ],
+      "model_list": [
+        "None",
+        "bdsqlsz_controlllite_xl_tile_realistic [12b261fe]",
+        "control_v11f1e_sd15_tile [a371b31b]",
+        "tplanetSDXLControlnet_Tile_v10F16 [6c558c4d]",
+        "xinsir_controlnet-tile-sdxl-1.0 [4d6257d3]"
+      ],
+      "default_option": "tile_resample",
+      "default_model": "control_v11f1e_sd15_tile [a371b31b]"
+    }
+  }
+}

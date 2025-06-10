@@ -2,6 +2,7 @@ __pycache__/
 *.pyc
 
 config.yaml
+dict_api_settings.yaml
 dict_base_settings.yaml
 dict_cmdoptions.yaml
 dict_imgmodels.yaml
