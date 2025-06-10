@@ -1318,8 +1318,9 @@ class ImgGenClient(APIClient):
     async def post_image_for_pnginfo_data(self, image_data:str):
         # Build payload
         pnginfo_payload = self.post_pnginfo.get_payload()
-        if self.post_pnginfo.pnginfo_image_key:
-            pnginfo_payload[self.post_pnginfo.pnginfo_image_key] = image_data
+        info_key = self.post_pnginfo.pnginfo_image_key
+        if info_key:
+            pnginfo_payload[info_key] = image_data
         # post for image gen data
         return await self.post_pnginfo.call(input_data=pnginfo_payload, main=True)
 
@@ -1929,12 +1930,14 @@ class Endpoint:
                 result = response_data
             else:
                 result = {}
-                try:
-                    for key, config in return_values.items():
+                for key, config in return_values.items():
+                    try: 
                         result[key] = extract_key(response_data, config)
-                except ValueError as e:
-                    log.warning(f"[{self.name}] Failed to extract key '{key}': {e}")
-                    raise
+                    except ValueError as e:
+                        if not bot_database.was_warned(f'poll_api_fail_{key}'):
+                            log.warning(f"[{self.name}] Failed to extract key '{key}': {e}")
+                            bot_database.update_was_warned(f'poll_api_fail_{key}')
+
             yield result
 
             yield_count += 1
@@ -1981,9 +1984,9 @@ class Endpoint:
             return False
         """Check if all keys in 'extract_keys' are present as self attributes"""
         if isinstance(extract_keys, str):
-            return getattr(self, extract_keys, None) is not None
+            return extract_keys is not None
         elif isinstance(extract_keys, list):
-            return all(getattr(self, key_attr, None) is not None for key_attr in extract_keys)
+            return all(key is not None for key in extract_keys)
         return False
 
     # Extracts the key values from the API response, for the Endpoint's key names defined in user API settings
@@ -1994,17 +1997,13 @@ class Endpoint:
             return response
         # Try to extract and return one key value        
         if isinstance(ep_keys, str):
-            key_paths = getattr(self, ep_keys, None)
-            if key_paths:
-                return try_paths(response, key_paths)
+            return try_paths(response, ep_keys)
         # Try to extract and return multiple key values as a tuple
         elif isinstance(ep_keys, list):
             results = []
-            for key_attr in ep_keys:
-                key_paths = getattr(self, key_attr, None)
-                if key_paths:
-                    value = try_paths(response, key_paths)
-                    results.append(value)
+            for key_path in ep_keys:
+                value = try_paths(response, key_path)
+                results.append(value)
             if results:
                 return tuple(results)
         # Key not matched, return original dict
