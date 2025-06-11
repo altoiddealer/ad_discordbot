@@ -1577,6 +1577,15 @@ class Endpoint:
                 log.error(f"[{self.name}] has 'payload_type: multipart' but payload does not include all required keys: {mapping_keys}")
         return copy.deepcopy(self.payload)
     
+    def get_payload_with_updates(self, updates, default):
+        base_payload = self.get_payload()
+        if isinstance(base_payload, dict) and isinstance(updates, dict):
+            return deep_merge(base_payload, updates)
+        elif default:
+            return default
+        else:
+            return updates
+
     def get_extract_keys(self):
         return None
 
@@ -1870,8 +1879,12 @@ class Endpoint:
             results = response.body
 
         # Optional key extraction (bypasses StepExecutor)
-        if main and self.can_extract():
-            return self.extract_main_keys(results)
+        if main:
+            extract_keys:Optional[str|list[str]] = self.get_extract_keys()
+            if extract_keys is not None:
+                if isinstance(extract_keys, str) or \
+                    (isinstance(extract_keys, list) and all(key is not None for key in extract_keys)):
+                    return self.extract_main_keys(results, extract_keys)
 
         # ws_response = await self.process_ws_request(json_payload, data_payload, input_data, **kwargs)
         # Hand off full response to StepExecutor
@@ -1935,7 +1948,7 @@ class Endpoint:
                         result[key] = extract_key(response_data, config)
                     except ValueError as e:
                         if not bot_database.was_warned(f'poll_api_fail_{key}'):
-                            log.warning(f"[{self.name}] Failed to extract key '{key}': {e}")
+                            log.warning(f"[{self.name}] Failed to extract key '{key}' (only warning once for this)")
                             bot_database.update_was_warned(f'poll_api_fail_{key}')
 
             yield result
@@ -1978,17 +1991,6 @@ class Endpoint:
     async def get_expected_response_data(self, response):
         return None
 
-    def can_extract(self) -> bool:
-        extract_keys:Optional[str|list[str]] = self.get_extract_keys()
-        if not extract_keys:
-            return False
-        """Check if all keys in 'extract_keys' are present as self attributes"""
-        if isinstance(extract_keys, str):
-            return extract_keys is not None
-        elif isinstance(extract_keys, list):
-            return all(key is not None for key in extract_keys)
-        return False
-
     # Extracts the key values from the API response, for the Endpoint's key names defined in user API settings
     def extract_main_keys(self, response):
         ep_keys:str | list[str] = self.get_extract_keys()
@@ -1997,40 +1999,17 @@ class Endpoint:
             return response
         # Try to extract and return one key value        
         if isinstance(ep_keys, str):
-            return try_paths(response, ep_keys)
+            return extract_key(response, ep_keys)
         # Try to extract and return multiple key values as a tuple
         elif isinstance(ep_keys, list):
             results = []
             for key_path in ep_keys:
-                value = try_paths(response, key_path)
+                value = extract_key(response, key_path)
                 results.append(value)
             if results:
                 return tuple(results)
         # Key not matched, return original dict
         return response
-
-# Utility function to get a key value like 'data.voices'
-def deep_get(d: dict, path: str) -> Any:
-    """Safely navigate dot-separated path in a dict."""
-    keys = path.split(".")
-    for key in keys:
-        if isinstance(d, dict):
-            d = d.get(key)
-        else:
-            return None
-    return d
-
-def try_paths(response: dict, paths: Union[str, list[str]]) -> Any:
-    """Try one or more deep key paths and return the first match."""
-    if isinstance(paths, str):
-        return deep_get(response, paths)
-
-    if isinstance(paths, list):
-        for path in paths:
-            val = deep_get(response, path)
-            if val is not None:
-                return val
-    return None
 
 
 class TextGenEndpoint(Endpoint):
@@ -2248,7 +2227,7 @@ class StepExecutor:
 
     def _split_step(self, step: dict) -> tuple[str, dict, dict]:
         step = step.copy()
-        metadata_keys = {"save_as", "on_error", "log"} #, "returns", "skip_if", "log"}  # extensible
+        metadata_keys = {"save_as", "on_error", "log", "returns"} #, "skip_if"}  # extensible
         metadata = {k: step.pop(k) for k in metadata_keys if k in step}
         if len(step) != 1:
             raise ValueError(f"[StepExecutor] Invalid step format: {step}")
@@ -2285,18 +2264,8 @@ class StepExecutor:
                     # Run the step and determine where to store the result
                     step_result = await method(result, config) if asyncio.iscoroutinefunction(method) else method(result, config)
 
-                # Apply returns logic
-                step_result = self._apply_returns(step_result, result, config)
-                
-                save_as = meta.get("save_as")
-                if save_as:
-                    self.context[save_as] = step_result
-                    if meta.get("log"):
-                        log.info(f'[Step Executor] Saved {step_name} result to context as: {save_as}')
-                else:
-                    result = step_result
-                if meta.get("log"):
-                    log.info(f'[Step Executor] {step_name} results: {step_result}')
+                result = self._process_step_result(step_name, step_result, result, meta)
+
             except Exception as e:
                 on_error = meta.get("on_error", "raise")
                 if on_error == "skip":
@@ -2312,58 +2281,50 @@ class StepExecutor:
                     else:
                         result = step_result
                 else:  # Default behavior: raise
-                    log.error(f"[StepExecutor] An error occured while processing step '{step_name}': {e}")
+                    log.error(f"[StepExecutor] An error occurred while processing step '{step_name}': {e}")
                     raise
 
         # print("final result:", result)
         return result
     
-    def _apply_returns(self, result, original_input, config:dict|str, allowed: list[str]|None=None, default="data"):
-        returns = default
-        if isinstance(config, dict):
-            returns = config.get("returns", default)
+    def _process_step_result(self, step_name:str, step_result, result, meta:dict):
+        # apply "returns"
+        returns = meta.get("returns", "data")
+        if returns and not isinstance(returns, str):
+            log.warning(f"[StepExecutor] 'returns' value must be a string, not {type(returns).__name__}. Falling back to 'data'.")
+            returns = "data"
+        step_result = self._apply_returns(step_result, result, returns)
 
-        if allowed and returns not in allowed:
-            log.warning(
-                f"[StepExecutor] Ignoring invalid 'returns' value '{returns}'. "
-                f"[StepExecutor] Allowed: {allowed}. Falling back to default: '{default}'."
-            )
-            returns = default
+        # apply "save_as"
+        save_as = meta.get("save_as")
+        if save_as:
+            self.context[save_as] = step_result
+            if returns != "data":
+                result = step_result
+            if meta.get("log"):
+                log.info(f'[Step Executor] Saved {step_name} result to context as: {save_as}')
+        else:
+            result = step_result
 
+        # apply "log"
+        if meta.get("log"):
+            log.info(f'[Step Executor] {step_name} results: {step_result}')
+
+        return result
+
+    def _apply_returns(self, result, original_input, returns:str):
         if returns == "data":
             return result
         if returns == "input":
             return original_input
         if returns == "context":
             return self.context
-        if returns == "dict":
-            if isinstance(result, dict):
-                return result
-            log.warning(f"[StepExecutor] 'returns': 'dict' requested but result is of type {type(result).__name__}. Falling back to 'data'.")
-            return result
-        if returns == "path":
-            if isinstance(result, dict):
-                return result.get('path', result)
-            if isinstance(result, str):
-                return result
-            log.warning(f"[StepExecutor] 'returns': 'path' requested but result is of type {type(result).__name__}. Falling back to 'data'.")
-            return result
+        if isinstance(result, dict):
+            if returns in result:
+                return result[returns]
+        log.warning(f"[StepExecutor] 'returns': '{returns}' not found in step result. Falling back to 'data'.")
 
-        log.warning(f"[StepExecutor] Unhandled 'returns' value: {returns}. Falling back to 'data'.")
         return result
-
-    def step_returns(*allowed: str, default: str = "data"):
-        def decorator(func):
-            async def async_wrapper(self:"StepExecutor", data, config):
-                raw_result = await func(self, data, config)
-                return self._apply_returns(raw_result, data, config, allowed, default)
-
-            def sync_wrapper(self:"StepExecutor", data, config):
-                raw_result = func(self, data, config)
-                return self._apply_returns(raw_result, data, config, allowed, default)
-
-            return async_wrapper if asyncio.iscoroutinefunction(func) else sync_wrapper
-        return decorator
 
     def _resolve_context_placeholders(self, data: Any, config: Any) -> Any:
         # Merge context with 'result'
@@ -2376,7 +2337,7 @@ class StepExecutor:
             config = processing.resolve_placeholders(config, ws_context, log_prefix='[StepExecutor]', log_suffix=f'from "{self.endpoint.client.name}" Websocket context')
         return config
     
-    @step_returns("data", "input", default="data")
+
     async def _step_for_each(self, data: Any, config: dict) -> list:
         """
         Runs a sub-StepExecutor for each item in a list or each key-value pair in a dict.
@@ -2427,7 +2388,6 @@ class StepExecutor:
 
         return results
 
-    @step_returns("data", "input", default="data")
     async def _step_group(self, data: Any, config: list[list[dict]]) -> list:
         """
         Executes multiple step sequences in parallel, each defined as a list of steps.
@@ -2451,11 +2411,9 @@ class StepExecutor:
         results = await asyncio.gather(*tasks)
         return results
 
-    @step_returns("data", "input", default="data")
     async def _step_pass(self, data: Any, config: Any):
         return data
 
-    @step_returns("data", "input", default="data")
     def _step_return(self, data: Any, config: str) -> Any:
         """
         Returns a value from the context using the given key (config).
@@ -2477,7 +2435,6 @@ class StepExecutor:
             raise ValueError(f'[StepExecutor] API "endpoint_name" was not included in "{step_name}" response handling step')
         return client_name, endpoint_name, use_ws
 
-    @step_returns("data", "input", default="data")
     async def _step_call_api(self, data: Any, config: Union[str, dict]) -> Any:
         api:API = await get_api()
         client_name, endpoint_name, use_ws = self.resolve_api_names(config, 'call_api')
@@ -2485,13 +2442,15 @@ class StepExecutor:
         endpoint:Endpoint = api_client.get_endpoint(endpoint_name=endpoint_name, strict=True)
 
         input_data = config.pop('input_data', data)
+        updated_payload = endpoint.get_payload_with_updates(input_data)
+        if input_data != updated_payload:
+            updated_payload = self._resolve_context_placeholders(data=input_data, config=updated_payload)
 
-        response = await endpoint.call(input_data=input_data, **config)
+        response = await endpoint.call(input_data=updated_payload, **config)
         if not isinstance(response, APIResponse):
             return response
         return response.body
 
-    @step_returns("data", "input", default="data")
     async def _step_track_progress(self, data: Any, config: dict) -> list[dict]:
         """
         Polls an endpoint while sending a progress Embed to discord.
@@ -2517,7 +2476,6 @@ class StepExecutor:
                                                completion_condition=completion_condition,
                                                **config)
 
-    @step_returns("data", "input", default="data")
     async def _step_poll_api(self, data: Any, config: dict) -> list[dict]:
         """
         Polls an endpoint.
@@ -2545,7 +2503,6 @@ class StepExecutor:
 
         return results
 
-    @step_returns("data", "input", default="data")
     async def _step_prompt_user(self, data, config):
         """
         Prompts the user for input via Discord interaction.
@@ -2605,18 +2562,15 @@ class StepExecutor:
         finally:
             client.waiting_for.pop(ictx.author.id, None)
 
-    @step_returns("data", "input", default="data")
     def _step_extract_key(self, data: Any, config: Union[str, dict]) -> Any:
         return extract_key(data, config)
 
-    @step_returns("data", "input", default="data")
     def _step_extract_values(self, data: Any, config: dict[str, Union[str, dict]]) -> dict[str, Any]:
         result = {}
         for key, path_config in config.items():
             result[key] = extract_key(data, path_config)
         return result
 
-    @step_returns("data", "input", default="data")
     def _step_decode_base64(self, data, config):
         if isinstance(data, str):
             if "," in data:
@@ -2624,12 +2578,10 @@ class StepExecutor:
             return base64.b64decode(data)
         raise TypeError("[StepExecutor] Expected base64 string for 'decode_base64' step")
 
-    @step_returns("data", "input", default="data")
     def _step_type(self, data, to_type):
         type_map = {"int": int, "float": float, "str": str, "bool": bool}
         return type_map[to_type](data)
     
-    @step_returns("data", "input", default="data")
     def _step_cast(self, data, config: dict):
         type_map = {
             "int": int,
@@ -2655,7 +2607,6 @@ class StepExecutor:
 
         return result
 
-    @step_returns("data", "input", default="data")
     def _step_map(self, data, config: dict):
         """
         Transforms each item in a list using a mapping config.
@@ -2693,7 +2644,6 @@ class StepExecutor:
         else:
             raise ValueError(f"[StepExecutor] Unknown transform type: {transform_type}")
 
-    @step_returns("data", "input", default="data")
     def _step_regex(self, data, pattern):
         match = re.search(pattern, data)
         if not match:
@@ -2701,12 +2651,10 @@ class StepExecutor:
             return data
         return match.group(1) if match.lastindex else match.group(0)
 
-    @step_returns("data", "input", default="data")
     def _step_eval(self, data, expression):
         # TODO: Expand eval step
         return eval(expression, {"data": data})
 
-    @step_returns("data", "input", default="data")
     def _step_add_pnginfo(self, data: Any, config: dict) -> Image.Image:
         """
         Adds PngInfo metadata to an image using values from context or data.
@@ -2748,7 +2696,6 @@ class StepExecutor:
 
         return image
 
-    @step_returns("path", "dict", "data", default="path")
     async def _step_save(self, data: Any, config: dict):
         """
         Save input data to a file and return either path, original data, or metadata.
@@ -2757,7 +2704,11 @@ class StepExecutor:
         - file_format: Explicit format (e.g. 'json', 'jpg').
         - file_name: Optional file name (without extension).
         - file_path: Relative directory inside output_dir.
-        - returns: 'path' (default), 'data', or 'dict'.
+        - returns: dict containing:
+                "path" (str) - full path to file
+                "format" (str) - file format
+                "name" (str) -  filename
+                "data" - file data
         """
         return await processing.save_any_file(data=data,
                                               file_format=config.get('file_format'),
