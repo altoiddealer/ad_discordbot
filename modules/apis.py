@@ -2443,6 +2443,13 @@ class StepExecutor:
             raise ValueError(f'[StepExecutor] API "endpoint_name" was not included in "{step_name}" response handling step')
         return client_name, endpoint_name, use_ws
 
+    async def _step_get_api_payload(self, data: Any, config: Union[str, dict]) -> Any:
+        api:API = await get_api()
+        client_name, endpoint_name, use_ws = self.resolve_api_names(config, 'get_api_payload')
+        api_client:APIClient = api.get_client(client_name=client_name, strict=True)
+        endpoint:Endpoint = api_client.get_endpoint(endpoint_name=endpoint_name, strict=True)
+        return endpoint.get_payload()
+
     async def _step_call_api(self, data: Any, config: Union[str, dict]) -> Any:
         api:API = await get_api()
         client_name, endpoint_name, use_ws = self.resolve_api_names(config, 'call_api')
