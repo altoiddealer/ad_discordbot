@@ -314,7 +314,17 @@ def is_base64(s: str) -> bool:
         return base64.b64encode(base64.b64decode(s)) == s.encode()
     except Exception:
         return False
-    
+
+def normalize_mime_type(fmt: str) -> str:
+    """
+    Normalize format strings, including converting MIME types like 'image/png' to 'png'.
+    """
+    if '/' in fmt:
+        ext = mimetypes.guess_extension(fmt)
+        if ext:
+            return ext.lstrip('.') # remove dot from .jpg, .json, etc.
+    return fmt.lower()
+
 def guess_format_from_headers(headers: dict) -> str|None:
     """
     Attempts to infer the file format using HTTP headers.
@@ -325,9 +335,9 @@ def guess_format_from_headers(headers: dict) -> str|None:
     # Try inferring from content-type
     if content_type:
         mime_type = content_type.split(";")[0].strip()
-        ext = mimetypes.guess_extension(mime_type)
+        ext = normalize_mime_type(mime_type)
         if ext:
-            return ext.lstrip(".")  # remove dot from .jpg, .json, etc.
+            return ext
 
     # Try extracting from content-disposition filename
     if content_disposition:

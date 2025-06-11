@@ -2578,7 +2578,8 @@ class StepExecutor:
             client.waiting_for.pop(ictx.author.id, None)
 
     def _step_extract_key(self, data: Any, config: Union[str, dict]) -> Any:
-        return extract_key(data, config)
+        extracted = extract_key(data, config)
+        return extracted
 
     def _step_extract_values(self, data: Any, config: dict[str, Union[str, dict]]) -> dict[str, Any]:
         result = {}

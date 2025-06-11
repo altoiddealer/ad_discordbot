@@ -13,7 +13,7 @@ from pathlib import Path
 from pydub import AudioSegment
 import io
 from typing import Any, Optional, Callable
-from modules.utils_misc import guess_format_from_headers, guess_format_from_data, is_base64, valueparser
+from modules.utils_misc import extract_key, normalize_mime_type, guess_format_from_headers, guess_format_from_data, is_base64, valueparser
 from modules.utils_shared import config
 
 from modules.logs import import_track, get_logger; import_track(__file__, fp=True); log = get_logger(__name__)  # noqa: E702
@@ -51,17 +51,21 @@ async def save_any_file(data: Any,
         raise RuntimeError(f"Tried saving to a path which is not in config.yaml 'allowed_paths': {output_path}")
     output_path.mkdir(parents=True, exist_ok=True)
 
-    # 2. Guess format: config > headers > data
-    file_format = file_format
-    if not file_format:
+    # 2. Resolve file_format
+    if file_format:
+        file_format = normalize_mime_type(file_format) # Normalize if MIME type like 'image/png'
+    else:
         if isinstance(response, APIResponse):
             file_format = guess_format_from_headers(response.headers)
         if not file_format:
             file_format = guess_format_from_data(data)
         if file_format:
-            log.info(f'{msg_prefix}Guessed output file format for "save" step by analyzing headers/data: "{file_format}"')
+            file_format = normalize_mime_type(file_format)
+            log.info(f'{msg_prefix}Guessed output file format: "{file_format}"')
 
     full_path = output_path / f"{file_name}.{file_format}"
+    file_name = f"{file_name}.{file_format}"
+
     binary_formats = {"jpg", "jpeg", "png", "webp", "gif", "bmp", "tiff", "mp3", "wav", "ogg", "flac",
                       "mp4", "webm", "avi", "mov", "mkv", "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx",
                       "zip", "rar", "7z", "tar", "gz", "bz2", "exe", "dll", "iso", "bin", "dat"}
@@ -118,6 +122,8 @@ async def save_any_file(data: Any,
                     await f.write(data)
                 elif isinstance(data, str):
                     await f.write(data.encode())
+                elif hasattr(data, "read"):  # e.g., BytesIO or file-like
+                    await f.write(data.read())
                 else:
                     raise TypeError(f"{msg_prefix}Binary format requires bytes or str, got {type(data).__name__}")
 
@@ -132,7 +138,7 @@ async def save_any_file(data: Any,
             "name": file_name,
             "data": data}
 
-def resolve_placeholders(config: Any, context: dict, log_prefix: str='', log_suffix: str='') -> Any:
+def resolve_placeholders(config: Any, context: dict, log_prefix: str = '', log_suffix: str = '') -> Any:
     formatted_keys = []
 
     def _stringify(value):
@@ -147,33 +153,40 @@ def resolve_placeholders(config: Any, context: dict, log_prefix: str='', log_suf
             return ""
         return str(value)
 
+    def _extract_from_context(path: str):
+        try:
+            value = extract_key(context, path)
+            formatted_keys.append(path.split('.')[0])  # only log the root key
+            return value
+        except ValueError:
+            return None
+
     def _resolve(config: Any) -> Any:
         if isinstance(config, str):
             stripped = config.strip()
-            # Exact placeholder, e.g. "{key}"
-            if (stripped.startswith("{") and stripped.endswith("}") and stripped.count("{") == 1 and stripped.count("}") == 1):
-                key = stripped[1:-1]
-                if key in context:
-                    formatted_keys.append(key)
-                    return context.get(key, config)
+            # Exact placeholder
+            if (stripped.startswith("{") and stripped.endswith("}") and
+                    stripped.count("{") == 1 and stripped.count("}") == 1):
+                key_path = stripped[1:-1]
+                value = _extract_from_context(key_path)
+                return value if value is not None else config
+
+            # Partial format with possible multiple keys
+            matches = re.findall(r'\{([^\}]+)\}', config)
+            formatted_context = {k: _stringify(_extract_from_context(k)) for k in matches}
+            try:
+                formatted = config.format(**formatted_context)
+                if formatted != config:
+                    for k in matches:
+                        formatted_keys.append(k.split('.')[0])
+                    try:
+                        parsed = valueparser.parse_value(formatted)
+                        return parsed
+                    except Exception:
+                        return formatted
+            except KeyError:
                 return config
-            else:
-                formatted_context = {k: _stringify(v) for k, v in context.items()}
-                try:
-                    formatted = config.format(**formatted_context)
-                    if formatted != config:
-                        for k in context:
-                            if f"{{{k}}}" in config:
-                                formatted_keys.append(k)
-                        try:
-                            # Parse formatted value if it's not exactly the same as the original input
-                            parsed = valueparser.parse_value(formatted)
-                            return parsed
-                        except Exception:
-                            # Fall back to raw formatted string if parsing fails
-                            return formatted
-                except KeyError:
-                    return config
+
         elif isinstance(config, dict):
             return {k: _resolve(v) for k, v in config.items()}
         elif isinstance(config, list):
