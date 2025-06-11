@@ -2254,68 +2254,66 @@ class StepExecutor:
                     # Run the step and determine where to store the result
                     step_result = await method(result, config) if asyncio.iscoroutinefunction(method) else method(result, config)
 
-                result = self._process_step_result(step_name, step_result, result, meta)
+                result = self._process_step_result(meta, result, step_result, step_name)
 
             except Exception as e:
                 on_error = meta.get("on_error", "raise")
                 if on_error == "skip":
                     log.error(f"[StepExecutor] Step '{step_name}' failed and was skipped: {e}")
-                    continue
+                    return result
                 elif on_error == "default":
                     # Use default value from config or None
                     default_value = config.get("default", None)
                     log.error(f"[StepExecutor] Step '{step_name}' failed, using default: {default_value} ({e})")
-                    step_result = default_value
-                    if meta.get("save_as"):
-                        self.context[meta["save_as"]] = step_result
-                    else:
-                        result = step_result
+                    result = default_value
+                    self._apply_meta_save_as(meta, result, step_name)
                 else:  # Default behavior: raise
                     log.error(f"[StepExecutor] An error occurred while processing step '{step_name}': {e}")
                     raise
 
         # print("final result:", result)
         return result
-    
-    def _process_step_result(self, step_name:str, step_result, result, meta:dict):
-        # apply "returns"
+
+    ### Meta Handling
+    def _apply_meta_returns(self, meta:dict, original_input:Any, step_result:Any, step_name:str) -> Any:
         returns = meta.get("returns", "data")
         if returns and not isinstance(returns, str):
             log.warning(f"[StepExecutor] 'returns' value must be a string, not {type(returns).__name__}. Falling back to 'data'.")
             returns = "data"
-        step_result = self._apply_returns(step_result, result, returns)
 
-        # apply "save_as"
-        save_as = meta.get("save_as")
-        if save_as:
-            self.context[save_as] = step_result
-            if returns != "data":
-                result = step_result
-            if meta.get("log"):
-                log.info(f'[Step Executor] Saved {step_name} result to context as: {save_as}')
-        else:
-            result = step_result
-
-        # apply "log"
-        if meta.get("log"):
-            log.info(f'[Step Executor] {step_name} results: {step_result}')
-
-        return result
-
-    def _apply_returns(self, result, original_input, returns:str):
         if returns == "data":
-            return result
+            return step_result
         if returns == "input":
             return original_input
         if returns == "context":
             return self.context
-        if isinstance(result, dict):
-            if returns in result:
-                return result[returns]
-        log.warning(f"[StepExecutor] 'returns': '{returns}' not found in step result. Falling back to 'data'.")
+        if isinstance(step_result, dict):
+            if returns in step_result:
+                return step_result[returns]
 
-        return result
+        log.warning(f"[StepExecutor] 'returns': '{returns}' not found in {step_name} step result. Falling back to 'data'.")
+        return step_result
 
+    def _apply_meta_save_as(self, meta:dict, result:Any, step_name:str):
+        save_as = meta.get("save_as")
+        if save_as:
+            self.context[save_as] = result
+            if meta.get("log"):
+                log.info(f'[Step Executor] Saved {step_name} result to context as: {save_as}')
+
+    def _process_step_result(self, meta:dict, original_input:Any, step_result:Any, step_name:str) -> Any:
+        # apply "returns"
+        processed_result = self._apply_meta_returns(meta, original_input, step_result, step_name)
+        # apply "save_as"
+        self._apply_meta_save_as(meta, processed_result, step_name)
+        # apply "log"
+        if meta.get("log"):
+            log.info(f'[Step Executor] {step_name} results: {step_result}')
+
+        return processed_result
+
+
+    ### Context Resolution
     def _resolve_context_placeholders(self, data: Any, config: Any) -> Any:
         # Merge context with 'result'
         config = processing.resolve_placeholders(config, {"result": data}, log_prefix='[StepExecutor]', log_suffix='from prior step "result"')
@@ -2328,6 +2326,7 @@ class StepExecutor:
         return config
     
 
+    ### Steps execution
     async def _step_for_each(self, data: Any, config: dict) -> list:
         """
         Runs a sub-StepExecutor for each item in a list or each key-value pair in a dict.
