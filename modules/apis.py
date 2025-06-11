@@ -2302,10 +2302,10 @@ class StepExecutor:
                 log.info(f'[Step Executor] Saved {step_name} result to context as: {save_as}')
 
     def _process_step_result(self, meta:dict, original_input:Any, step_result:Any, step_name:str) -> Any:
+        # apply "save_as"
+        self._apply_meta_save_as(meta, step_result, step_name)
         # apply "returns"
         processed_result = self._apply_meta_returns(meta, original_input, step_result, step_name)
-        # apply "save_as"
-        self._apply_meta_save_as(meta, processed_result, step_name)
         # apply "log"
         if meta.get("log"):
             log.info(f'[Step Executor] {step_name} results: {step_result}')
