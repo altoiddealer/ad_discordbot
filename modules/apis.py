@@ -1576,15 +1576,6 @@ class Endpoint:
             if not mapping_keys.issubset(self.payload):
                 log.error(f"[{self.name}] has 'payload_type: multipart' but payload does not include all required keys: {mapping_keys}")
         return copy.deepcopy(self.payload)
-    
-    def get_payload_with_updates(self, updates, default):
-        base_payload = self.get_payload()
-        if isinstance(base_payload, dict) and isinstance(updates, dict):
-            return deep_merge(base_payload, updates)
-        elif default:
-            return default
-        else:
-            return updates
 
     def get_extract_keys(self):
         return None
@@ -2424,6 +2415,24 @@ class StepExecutor:
             raise KeyError(f"[StepExecutor] Context does not contain key '{config}'")
         return self.context[config]
     
+    ### API RELATED STEPS    
+    def resolve_api_input(self, data:Any, config:dict, step_name:str, default:Any|None=None, endpoint:Endpoint|None=None):
+        input_data = config.pop('input_data', default)
+        init_payload = config.pop('init_payload', False)
+        if not endpoint: # Websocket
+            return None
+        # Overrides input_data
+        if init_payload:
+            log.info(f'[StepExecutor] Step "{step_name}": Fetching payload for "{endpoint.name}" and trying to update placeholders with internal variables.')
+            input_data = endpoint.get_payload()
+            input_data = self._resolve_context_placeholders(data, input_data)
+        elif input_data is not None:
+            log.info(f'[StepExecutor] Step "{step_name}": Sending "input_data" to "{endpoint.name}". If unwanted, update your step definition with "input_data: null".')
+        else:
+            pass
+
+        return input_data
+    
     def resolve_api_names(self, config:dict, step_name:str):
         client_name = config.pop("client_name", None) or config.pop("client", None)
         if not client_name:
@@ -2440,12 +2449,9 @@ class StepExecutor:
         api_client:APIClient = api.get_client(client_name=client_name, strict=True)
         endpoint:Endpoint = api_client.get_endpoint(endpoint_name=endpoint_name, strict=True)
 
-        input_data = config.pop('input_data', data)
-        updated_payload = endpoint.get_payload_with_updates(input_data)
-        if input_data != updated_payload:
-            updated_payload = self._resolve_context_placeholders(data=input_data, config=updated_payload)
+        input_data = self.resolve_api_input(data, config, step_name='call_api', default=data, endpoint=endpoint)
 
-        response = await endpoint.call(input_data=updated_payload, **config)
+        response = await endpoint.call(input_data=input_data, **config)
         if not isinstance(response, APIResponse):
             return response
         return response.body
@@ -2469,6 +2475,8 @@ class StepExecutor:
         if not use_ws:
             endpoint = api_client.get_endpoint(endpoint_name=endpoint_name, strict=True)
 
+        config['input_data'] = self.resolve_api_input(data, config, step_name='track_progress', default=None, endpoint=endpoint)
+
         return await api_client.track_progress(endpoint=endpoint,
                                                use_ws=use_ws,
                                                ictx=ictx,
@@ -2488,6 +2496,8 @@ class StepExecutor:
         interval = config.pop("interval", 1.0)
         duration = config.pop("duration", -1)
         num_yields = config.pop("num_yields", -1)
+
+        config['input_data'] = self.resolve_api_input(data, config, step_name='poll_api', default=data, endpoint=endpoint)
 
         results = []
         try:
