@@ -3948,15 +3948,25 @@ class Task(Tasks):
         channel = getattr(self.ictx, 'channel', None)
         return getattr(channel, 'id', default)
 
-    def override_payload(self):
-        if "__overrides__" not in self.payload:
-            return
+    def override_payload(self, payload:dict|None = None):
+        # Use self.payload if none is passed
+        is_self = payload is None
+        if is_self:
+            payload = self.payload
+
+        if "__overrides__" not in payload:
+            return payload if not is_self else None
+
         # Extract and remove overrides from the payload
-        overrides = self.payload.pop("__overrides__")
+        overrides = payload.pop("__overrides__")
         # Update the default overrides with current vars
         updated_overrides = update_dict(overrides, vars(self.vars), in_place=False, skip_none=True)
         # Replace placeholders like {prompt} with overrides["prompt"]
-        self.payload = resolve_placeholders(self.payload, updated_overrides, log_prefix=f'[{self.print_name()}]', log_suffix='into payload')
+        resolved = resolve_placeholders(payload, updated_overrides, log_prefix=f'[{self.print_name()}]', log_suffix='into payload')
+        if is_self:
+            self.payload = resolved
+            return None
+        return resolved
 
     def update_vars_from_imgcmd(self):
         imgcmd_params = self.params.imgcmd

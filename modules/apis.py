@@ -1781,6 +1781,7 @@ class Endpoint:
             files_payload = payload_map.get("files")
             if files_payload and data_payload:
                 data_payload = self.prepare_aiohttp_formdata(data_payload, files_payload)
+                json_payload = None
                 files_payload = None
         else:
             if payload_type == "multipart" or preferred_content.startswith("multipart/form-data"):
@@ -1819,6 +1820,10 @@ class Endpoint:
             raise ValueError(f"[{self.name}] Endpoint not bound to an APIClient")
         if not self.client.enabled:
             raise RuntimeError(f"[{self.name}] API Client '{self.client.name}' is currently disabled. Use '/toggle_api' to enable the client when available.")
+
+        if isinstance(input_data, dict):
+            input_data.pop('_comment', None)
+            input_data.pop('__overrides__', None)
 
         headers = kwargs.pop('headers', self.headers)
         timeout = kwargs.pop('timeout', self.timeout)
@@ -2314,13 +2319,15 @@ class StepExecutor:
 
 
     ### Context Resolution
-    def _resolve_context_placeholders(self, data: Any, config: Any) -> Any:
+    def _resolve_context_placeholders(self, data: Any, config: Any, sources=["result", "context", "task", "websocket"]) -> Any:
         # Merge context with 'result'
-        config = processing.resolve_placeholders(config, {"result": data}, log_prefix='[StepExecutor]', log_suffix='from prior step "result"')
-        config = processing.resolve_placeholders(config, self.context, log_prefix='[StepExecutor]', log_suffix='from saved context')
-        if self.task:
+        if "result" in sources:
+            config = processing.resolve_placeholders(config, {"result": data}, log_prefix='[StepExecutor]', log_suffix='from prior step "result"')
+        if "context" in sources:
+            config = processing.resolve_placeholders(config, self.context, log_prefix='[StepExecutor]', log_suffix='from saved context')
+        if "task" in sources and self.task:
             config = processing.resolve_placeholders(config, vars(self.task.vars), log_prefix='[StepExecutor]', log_suffix=f'from Task "{self.task.name}" context')
-        if self.endpoint and self.endpoint.client.ws_config:
+        if "websocket" in sources and self.endpoint and self.endpoint.client.ws_config:
             ws_context = self.endpoint.client.ws_config.get_context()
             config = processing.resolve_placeholders(config, ws_context, log_prefix='[StepExecutor]', log_suffix=f'from "{self.endpoint.client.name}" Websocket context')
         return config
@@ -2420,11 +2427,16 @@ class StepExecutor:
         init_payload = config.pop('init_payload', False)
         if not endpoint: # Websocket
             return None
-        # Overrides input_data
+        # init_payload overrides input_data
         if init_payload:
             log.info(f'[StepExecutor] Step "{step_name}": Fetching payload for "{endpoint.name}" and trying to update placeholders with internal variables.')
             input_data = endpoint.get_payload()
-            input_data = self._resolve_context_placeholders(data, input_data)
+            # Resolve from all sources except Task
+            input_data = self._resolve_context_placeholders(data, input_data, sources=["result", "context", "websocket"])
+            # Resolve Task placeholders
+            if self.task:
+                input_data = self.task.override_payload(input_data)
+
         elif input_data is not None:
             log.info(f'[StepExecutor] Step "{step_name}": Sending "input_data" to "{endpoint.name}". If unwanted, update your step definition with "input_data: null".')
         else:

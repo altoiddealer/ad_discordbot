@@ -155,37 +155,33 @@ def resolve_placeholders(config: Any, context: dict, log_prefix: str = '', log_s
 
     def _extract_from_context(path: str):
         try:
-            value = extract_key(context, path)
-            formatted_keys.append(path.split('.')[0])  # only log the root key
+            if re.match(r'^[a-zA-Z_]\w*$', path):  # simple key
+                value = context.get(path)
+            else:
+                value = extract_key(context, path)
+            if value is not None:
+                formatted_keys.append(path.split('.')[0])
             return value
         except ValueError:
             return None
 
     def _resolve(config: Any) -> Any:
         if isinstance(config, str):
+            # If it is an exact placeholder
             stripped = config.strip()
-            # Exact placeholder
-            if (stripped.startswith("{") and stripped.endswith("}") and
-                    stripped.count("{") == 1 and stripped.count("}") == 1):
+            if re.fullmatch(r"\{[^\{\}]+\}", stripped):
                 key_path = stripped[1:-1]
                 value = _extract_from_context(key_path)
                 return value if value is not None else config
 
-            # Partial format with possible multiple keys
-            matches = re.findall(r'\{([^\}]+)\}', config)
-            formatted_context = {k: _stringify(_extract_from_context(k)) for k in matches}
-            try:
-                formatted = config.format(**formatted_context)
-                if formatted != config:
-                    for k in matches:
-                        formatted_keys.append(k.split('.')[0])
-                    try:
-                        parsed = valueparser.parse_value(formatted)
-                        return parsed
-                    except Exception:
-                        return formatted
-            except KeyError:
-                return config
+            # Otherwise, do a regex-based substitution manually
+            def replacer(match):
+                key_path = match.group(1)
+                val = _extract_from_context(key_path)
+                return _stringify(val) if val is not None else match.group(0)
+
+            formatted = re.sub(r'\{([^\{\}]+)\}', replacer, config)
+            return formatted
 
         elif isinstance(config, dict):
             return {k: _resolve(v) for k, v in config.items()}
