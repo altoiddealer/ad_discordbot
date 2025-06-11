@@ -1992,8 +1992,7 @@ class Endpoint:
         return None
 
     # Extracts the key values from the API response, for the Endpoint's key names defined in user API settings
-    def extract_main_keys(self, response):
-        ep_keys:str | list[str] = self.get_extract_keys()
+    def extract_main_keys(self, response, ep_keys:str | list[str]):
         if not isinstance(response, dict):
             log.warning(f'[{self.client.name}] tried to extract value(s) for "{ep_keys}" from the response, but response was non-dict format.')
             return response
