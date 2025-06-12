@@ -38,7 +38,7 @@ def fix_dict(set, req, src: str | None = None, warned: bool = False, path=""):
             was_warned = was_warned or child_warned  # Update was_warned if any child call was warned
     return set, was_warned
 
-def extract_key(data: Any, config: Union[str, dict]) -> Any:
+def extract_key(data: dict|list, config: Union[str, dict]) -> Any:
     if isinstance(config, dict):
         path = config.get("path")
         default = config.get("default", None)
@@ -69,7 +69,7 @@ def extract_key(data: Any, config: Union[str, dict]) -> Any:
             return default
         raise ValueError(f"Failed to extract path '{path}': {e}")
 
-def set_key(data: Any, path: str, value: Any) -> None:
+def set_key(data: dict|list, path: str, value: Any) -> Any:
     if not isinstance(path, str):
         raise ValueError("Path must be a string.")
 
@@ -84,14 +84,11 @@ def set_key(data: Any, path: str, value: Any) -> None:
             if not isinstance(current, list):
                 raise TypeError(f"Expected list at {'.'.join(parts[:i])}, got {type(current).__name__}")
 
-            # If it's the last part, set the value
             if is_last:
-                # Extend list if necessary
                 while len(current) <= idx:
                     current.append(None)
                 current[idx] = value
             else:
-                # Ensure index exists and is a container
                 while len(current) <= idx:
                     current.append({})
                 if not isinstance(current[idx], (dict, list)):
@@ -107,6 +104,8 @@ def set_key(data: Any, path: str, value: Any) -> None:
                 if part not in current or not isinstance(current[part], (dict, list)):
                     current[part] = {}
                 current = current[part]
+
+    return data
 
 # Safer version of update_dict
 def deep_merge(base: dict, override: dict) -> dict:

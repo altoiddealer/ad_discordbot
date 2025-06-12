@@ -14,7 +14,7 @@ import filetype
 from modules.typing import CtxInteraction
 from typing import get_type_hints, get_type_hints, get_origin, get_args, Any, Tuple, Optional, Union, Callable, AsyncGenerator
 from modules.utils_shared import client, shared_path, bot_database, load_file, get_api
-from modules.utils_misc import valueparser, progress_bar, extract_key, deep_merge, split_at_first_comma
+from modules.utils_misc import valueparser, progress_bar, set_key, extract_key, deep_merge, split_at_first_comma
 import modules.utils_processing as processing
 
 from modules.logs import import_track, get_logger; import_track(__file__, fp=True); log = get_logger(__name__)  # noqa: E702
@@ -2607,7 +2607,12 @@ class StepExecutor:
         finally:
             client.waiting_for.pop(ictx.author.id, None)
 
-    def _step_extract_key(self, data: Any, config: Union[str, dict]) -> Any:
+    def _step_set_key(self, data: dict|list, config: Union[str, dict]) -> Any:
+        path = config.get('path')
+        value = config.get('value')
+        return set_key(data, path, value)
+
+    def _step_extract_key(self, data: dict|list, config: Union[str, dict]) -> Any:
         extracted = extract_key(data, config)
         return extracted
 
