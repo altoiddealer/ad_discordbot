@@ -2432,7 +2432,7 @@ class StepExecutor:
         if not isinstance(config, str):
             log.warning(f"[StepExecutor] 'step' step expects a string key, got: {type(config).__name__}")
             return data
-        return valueparser.parse_value(config)
+        return self._resolve_context_placeholders(data, config)
 
     def _step_return(self, data: Any, config: str) -> Any:
         """
