@@ -54,6 +54,12 @@ class APISettings():
             if name:
                 self.presets[name] = preset
 
+    def is_simple_step_preset(self, preset: dict) -> bool:
+        """True if preset only contains 'name' and 'steps'."""
+        return (isinstance(preset, dict) and
+                set(preset.keys()) <= {"name", "steps"} and
+                isinstance(preset.get("steps"), list))
+
     def get_preset(self, preset_name: str, default=None) -> dict:
         return self.presets.get(preset_name, default or {})
 
@@ -83,8 +89,20 @@ class APISettings():
                 config[key] = self.apply_presets(value)
             return config
         elif isinstance(config, list):
-            # Recurse into each item in the list
-            return [self.apply_presets(item) for item in config]
+            new_list = []
+            for item in config:
+                # list item is a dict containing only 'preset'
+                if (isinstance(item, dict) and set(item.keys()) == {"preset"}):
+                    preset_name = item["preset"]
+                    preset = self.get_preset(preset_name)
+                    # insert the preset list items
+                    if self.is_simple_step_preset(preset):
+                        preset_steps = preset.get("steps", [])
+                        new_list.extend(self.apply_presets(pstep) for pstep in preset_steps)
+                        continue  # Skip adding the original item
+                # Normal recursive case
+                new_list.append(self.apply_presets(item))
+            return new_list
         else:
             # Base case: return scalar values as-is
             return config
