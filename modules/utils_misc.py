@@ -107,6 +107,16 @@ def set_key(data: dict|list, path: str, value: Any) -> Any:
 
     return data
 
+def remove_keys(obj, keys_to_remove:list|set):
+    if isinstance(obj, dict):
+        return {key: remove_keys(value, keys_to_remove)
+                for key, value in obj.items()
+                if key not in keys_to_remove}
+    elif isinstance(obj, list):
+        return [remove_keys(item, keys_to_remove) for item in obj]
+    else:
+        return obj
+
 # Safer version of update_dict
 def deep_merge(base: dict, override: dict) -> dict:
     '''merge 2 dicts. "override" dict has priority'''

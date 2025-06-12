@@ -143,7 +143,7 @@ def resolve_placeholders(config: Any, context: dict, log_prefix: str = '', log_s
 
     def _stringify(value):
         if isinstance(value, bytes):
-            return "placeholder"
+            return "cannot_be_stringified"
         if isinstance(value, (dict, list)):
             try:
                 return json.dumps(value)
@@ -178,7 +178,14 @@ def resolve_placeholders(config: Any, context: dict, log_prefix: str = '', log_s
             def replacer(match):
                 key_path = match.group(1)
                 val = _extract_from_context(key_path)
-                return _stringify(val) if val is not None else match.group(0)
+                stringified = _stringify(val) if val is not None else match.group(0)
+                
+                if stringified == "cannot_be_stringified":
+                    raise ValueError(f"[ValueParser] Cannot stringify value for key '{key_path}'. "
+                                     f"Detected unserializable object (e.g., bytes or custom type) during string interpolation."
+                                     "(Don't try to format bytes / other unserializable types via string formatting strategy)")
+                
+                return stringified
 
             formatted = re.sub(r'\{([^\{\}]+)\}', replacer, config)
             return formatted

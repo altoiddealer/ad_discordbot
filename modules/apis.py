@@ -14,7 +14,7 @@ import filetype
 from modules.typing import CtxInteraction
 from typing import get_type_hints, get_type_hints, get_origin, get_args, Any, Tuple, Optional, Union, Callable, AsyncGenerator
 from modules.utils_shared import client, shared_path, bot_database, load_file, get_api
-from modules.utils_misc import valueparser, progress_bar, set_key, extract_key, deep_merge, split_at_first_comma
+from modules.utils_misc import valueparser, progress_bar, set_key, extract_key, remove_keys, deep_merge, split_at_first_comma
 import modules.utils_processing as processing
 
 from modules.logs import import_track, get_logger; import_track(__file__, fp=True); log = get_logger(__name__)  # noqa: E702
@@ -1744,6 +1744,11 @@ class Endpoint:
 
         return final_cleaned
 
+    def clean_payload(self, payload):
+        if isinstance(payload, dict):
+            payload = remove_keys(payload, keys_to_remove={"__overrides__", "_comment"})
+        return payload
+
     def prepare_aiohttp_formdata(self, data_payload: dict = None, files_payload: dict = None) -> aiohttp.FormData:
         form = aiohttp.FormData()
 
@@ -1839,9 +1844,7 @@ class Endpoint:
         if not self.client.enabled:
             raise RuntimeError(f"[{self.name}] API Client '{self.client.name}' is currently disabled. Use '/toggle_api' to enable the client when available.")
 
-        if isinstance(input_data, dict):
-            input_data.pop('_comment', None)
-            input_data.pop('__overrides__', None)
+        input_data = self.clean_payload(input_data)
 
         headers = kwargs.pop('headers', self.headers)
         timeout = kwargs.pop('timeout', self.timeout)
@@ -2430,9 +2433,12 @@ class StepExecutor:
     
     def _step_format(self, data: Any, config: str):
         if not isinstance(config, str):
-            log.warning(f"[StepExecutor] 'step' step expects a string key, got: {type(config).__name__}")
+            log.warning(f"[StepExecutor] 'format' step expects a string key, got: {type(config).__name__}")
             return data
-        return self._resolve_context_placeholders(data, config)
+        resolved = self._resolve_context_placeholders(data, config)
+        if isinstance(resolved, str):
+            return valueparser.parse_value(resolved)
+        return resolved
 
     def _step_return(self, data: Any, config: str) -> Any:
         """
@@ -2445,7 +2451,15 @@ class StepExecutor:
             raise KeyError(f"[StepExecutor] Context does not contain key '{config}'")
         return self.context[config]
     
-    ### API RELATED STEPS    
+    ### API RELATED STEPS
+    def resolve_api_payload(self, data: Any, payload: Any):
+        # Resolve from all sources except Task
+        payload = self._resolve_context_placeholders(data, payload, sources=["result", "context", "websocket"])
+        # Resolve Task placeholders
+        if self.task:
+            payload = self.task.override_payload(payload)
+        return payload
+
     def resolve_api_input(self, data:Any, config:dict, step_name:str, default:Any|None=None, endpoint:Endpoint|None=None):
         input_data = config.pop('input_data', default)
         init_payload = config.pop('init_payload', False)
@@ -2455,11 +2469,8 @@ class StepExecutor:
         if init_payload:
             log.info(f'[StepExecutor] Step "{step_name}": Fetching payload for "{endpoint.name}" and trying to update placeholders with internal variables.')
             input_data = endpoint.get_payload()
-            # Resolve from all sources except Task
-            input_data = self._resolve_context_placeholders(data, input_data, sources=["result", "context", "websocket"])
-            # Resolve Task placeholders
-            if self.task:
-                input_data = self.task.override_payload(input_data)
+            # Resolves context data more cleanly for Task variables
+            input_data = self.resolve_api_payload(data, input_data)
 
         elif input_data is not None:
             log.info(f'[StepExecutor] Step "{step_name}": Sending "input_data" to "{endpoint.name}". If unwanted, update your step definition with "input_data: null".')
@@ -2478,18 +2489,30 @@ class StepExecutor:
             raise ValueError(f'[StepExecutor] API "endpoint_name" was not included in "{step_name}" response handling step')
         return client_name, endpoint_name, use_ws
 
+    async def _step_get_api_ws_config(self, data: Any, config: Union[str, dict]) -> Any:
+        config['use_ws'] = True
+        api:API = await get_api()
+        client_name, _, _ = self.resolve_api_names(config, 'get_api_ws_config')
+        api_client:APIClient = api.get_client(client_name=client_name, strict=True)
+        if api_client.ws_config is None:
+            raise RuntimeError(f'[StepExecutor] API client "{client_name}" does not have a websocket config to get.')
+        return api_client.ws_config.get_context()
+
     async def _step_get_api_payload(self, data: Any, config: Union[str, dict]) -> Any:
         api:API = await get_api()
         client_name, endpoint_name, use_ws = self.resolve_api_names(config, 'get_api_payload')
         api_client:APIClient = api.get_client(client_name=client_name, strict=True)
         endpoint:Endpoint = api_client.get_endpoint(endpoint_name=endpoint_name, strict=True)
-        return endpoint.get_payload()
+        payload = endpoint.get_payload()
+        # Resolves context data more cleanly for Task variables
+        return self.resolve_api_payload(data, payload)
 
     async def _step_call_api(self, data: Any, config: Union[str, dict]) -> Any:
         api:API = await get_api()
         client_name, endpoint_name, use_ws = self.resolve_api_names(config, 'call_api')
         api_client:APIClient = api.get_client(client_name=client_name, strict=True)
         endpoint:Endpoint = api_client.get_endpoint(endpoint_name=endpoint_name, strict=True)
+        self.endpoint = endpoint # Helps to resolve API related context
 
         input_data = self.resolve_api_input(data, config, step_name='call_api', default=data, endpoint=endpoint)
 
