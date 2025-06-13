@@ -31,10 +31,10 @@
     "cnet_threshold_b": 64,
     "character": "M1nty",
 
-    "steps": 20,
+    "steps": 25,
     "cfg_scale": 8,
-    "sampler_name": "euler",
-    "scheduler": "scheduler"
+    "sampler_name": "dpmpp_2m",
+    "scheduler": "normal"
   },
 
   "3": {
@@ -129,17 +129,16 @@
       "title": "VAE Decode"
     }
   },
-  "9": {
+  "10": {
     "inputs": {
-      "filename_prefix": "ComfyUI",
       "images": [
         "8",
         0
       ]
     },
-    "class_type": "SaveImage",
+    "class_type": "PreviewImage",
     "_meta": {
-      "title": "Save Image"
+      "title": "Preview Image"
     }
   }
 }

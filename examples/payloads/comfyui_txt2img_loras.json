@@ -43,10 +43,10 @@
     "lora_04": "None",
     "strength_04": 1,
 
-    "steps": 20,
+    "steps": 25,
     "cfg_scale": 8,
-    "sampler_name": "euler",
-    "scheduler": "simple"
+    "sampler_name": "dpmpp_2m",
+    "scheduler": "normal"
   },
 
   "3": {
@@ -141,19 +141,6 @@
       "title": "VAE Decode"
     }
   },
-  "9": {
-    "inputs": {
-      "filename_prefix": "ComfyUI",
-      "images": [
-        "8",
-        0
-      ]
-    },
-    "class_type": "SaveImage",
-    "_meta": {
-      "title": "Save Image"
-    }
-  },
   "10": {
     "inputs": {
       "lora_01": "{lora_01}",
@@ -176,6 +163,18 @@
     "class_type": "Lora Loader Stack (rgthree)",
     "_meta": {
       "title": "Lora Loader Stack (rgthree)"
+    }
+  },
+  "11": {
+    "inputs": {
+      "images": [
+        "8",
+        0
+      ]
+    },
+    "class_type": "PreviewImage",
+    "_meta": {
+      "title": "Preview Image"
     }
   }
 }

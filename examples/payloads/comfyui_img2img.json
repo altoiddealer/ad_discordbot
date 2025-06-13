@@ -31,20 +31,19 @@
     "cnet_threshold_b": 64,
     "character": "M1nty",
 
-    "steps": 20,
+    "steps": 25,
     "cfg_scale": 8,
-    "sampler_name": "euler",
-    "scheduler": "scheduler"
+    "sampler_name": "dpmpp_2m",
+    "scheduler": "normal"
   },
 
-  "prompt": {
   "3": {
     "inputs": {
       "seed": "{seed}",
       "steps": "{steps}",
       "cfg": "{cfg_scale}",
-      "sampler_name": "dpmpp_2m",
-      "scheduler": "normal",
+      "sampler_name": "{sampler_name}",
+      "scheduler": "{scheduler}",
       "denoise": "{denoising_strength}",
       "model": [
         "14",
@@ -110,19 +109,6 @@
       "title": "VAE Decode"
     }
   },
-  "9": {
-    "inputs": {
-      "filename_prefix": "ComfyUI",
-      "images": [
-        "8",
-        0
-      ]
-    },
-    "class_type": "SaveImage",
-    "_meta": {
-      "title": "Save Image"
-    }
-  },
   "10": {
     "inputs": {
       "image": "{i2i_image}"
@@ -165,15 +151,23 @@
       "method": "fill / crop",
       "condition": "always",
       "multiple_of": 0,
-      "image": [
-        "10",
-        0
-      ]
+      "image": "{i2i_image}"
     },
     "class_type": "ImageResize+",
     "_meta": {
       "title": "🔧 Image Resize"
     }
+  },
+  "18": {
+    "inputs": {
+      "images": [
+        "8",
+        0
+      ]
+    },
+    "class_type": "PreviewImage",
+    "_meta": {
+      "title": "Preview Image"
+    }
   }
-}
 }

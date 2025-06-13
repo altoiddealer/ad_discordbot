@@ -43,10 +43,10 @@
     "lora_04": "None",
     "strength_04": 1,
 
-    "steps": 20,
+    "steps": 25,
     "cfg_scale": 8,
-    "sampler_name": "euler",
-    "scheduler": "scheduler"
+    "sampler_name": "dpmpp_2m",
+    "scheduler": "normal"
   },
 
   "3": {
@@ -121,19 +121,6 @@
       "title": "VAE Decode"
     }
   },
-  "9": {
-    "inputs": {
-      "filename_prefix": "ComfyUI",
-      "images": [
-        "8",
-        0
-      ]
-    },
-    "class_type": "SaveImage",
-    "_meta": {
-      "title": "Save Image"
-    }
-  },
   "10": {
     "inputs": {
       "image": "{i2i_image}"
@@ -146,7 +133,7 @@
   "12": {
     "inputs": {
       "pixels": [
-        "10",
+        "20",
         0
       ],
       "vae": [
@@ -190,6 +177,33 @@
     "class_type": "Lora Loader Stack (rgthree)",
     "_meta": {
       "title": "Lora Loader Stack (rgthree)"
+    }
+  },
+  "18": {
+    "inputs": {
+      "images": [
+        "8",
+        0
+      ]
+    },
+    "class_type": "PreviewImage",
+    "_meta": {
+      "title": "Preview Image"
+    }
+  },
+  "20": {
+    "inputs": {
+      "width": "{width}",
+      "height": "{height}",
+      "interpolation": "nearest",
+      "method": "stretch",
+      "condition": "always",
+      "multiple_of": 0,
+      "image": "{i2i_image}"
+    },
+    "class_type": "ImageResize+",
+    "_meta": {
+      "title": "\ud83d\udd27 Image Resize"
     }
   }
 }
