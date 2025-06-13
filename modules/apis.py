@@ -2101,8 +2101,8 @@ class TTSGenEndpoint_PostGenerate(TTSGenEndpoint):
         if isinstance(result, bytes):
             file_format = detect_audio_format(result)
             if file_format in ["mp3", "wav"]:
-                result = await processing.save_any_file(response.body, file_format=file_format, file_path='tts', response=response)
-                return result['path']
+                file_data = await processing.save_any_file(result, file_format=file_format, file_path='tts', response=response)
+                return file_data['path']
 
         return None
 
