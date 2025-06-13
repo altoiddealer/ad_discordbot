@@ -1376,7 +1376,7 @@ class ImgGenClient(APIClient):
             images_task = asyncio.create_task(self.post_for_images(ep_for_mode, img_payload))
             progress_task = asyncio.create_task(self.track_t2i_i2i_progress(ictx=ictx))
             # Wait for images_task to complete
-            headered_images_list = await images_task
+            images_list = await images_task
             # Once images_task is done, cancel progress_task
             if progress_task and not progress_task.done():
                 progress_task.cancel()
@@ -1386,16 +1386,34 @@ class ImgGenClient(APIClient):
                     pass
 
             images = []
+            pnginfo = None
+
             # Process raw image list
-            for i, base64_with_header in enumerate(headered_images_list):
-                base64_str = split_at_first_comma(base64_with_header)
+            for i, item in enumerate(images_list):
+
+                # Determine the input type and clean if necessary
+                if isinstance(item, str):
+                    data = split_at_first_comma(item)
+                else:
+                    data = item  # Already bytes or list of ints
+
                 # Get PNG Info for first image
                 if i == 0 and self.post_pnginfo:
-                    pnginfo_data = await self.post_image_for_pnginfo_data(base64_str)
+                    if isinstance(data, str):  # Ensure we pass str to the pnginfo function
+                        pnginfo_data = await self.post_image_for_pnginfo_data(data)
+                    elif isinstance(data, bytes):
+                        # Convert to base64 for pnginfo extraction
+                        b64str = base64.b64encode(data).decode()
+                        pnginfo_data = await self.post_image_for_pnginfo_data(b64str)
+                    else:
+                        log.warning(f"Unsupported data type for pnginfo: {type(data)}")
+                        pnginfo_data = None
+
                     if pnginfo_data:
                         pnginfo = PngImagePlugin.PngInfo()
                         pnginfo.add_text("parameters", pnginfo_data)
-                images.append(self.decode_and_save_for_index(i, base64_str, pnginfo))
+
+                images.append(self.decode_and_save_for_index(i, data, pnginfo))
             return images, pnginfo
 
         except Exception as e:
