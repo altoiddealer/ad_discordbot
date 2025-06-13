@@ -1289,7 +1289,7 @@ class ImgGenClient(APIClient):
     get_controlnet_control_types: Optional["ImgGenEndpoint_GetControlNetControlTypes"] = None
     get_history: Optional["ImgGenEndpoint_GetHistory"] = None
     get_view: Optional["ImgGenEndpoint_GetView"] = None
-    post_upload: Optional["ImgGenEndpoint"] = None
+    post_upload: Optional["ImgGenEndpoint_PostUpload"] = None
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -2211,10 +2211,11 @@ class ImgGenEndpoint_PostUpload(ImgGenEndpoint):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
-    async def upload_file(self, file, file_type:str='image'):
+    async def upload_file(self, file, file_type:str):
+        mime_category = file_type.strip().lower().split('/')[0]
         payload = self.get_payload()
-        payload['files'] = {file_type: file}
-        path_vars = file_type if '{}' in self.path else None
+        payload['files'] = {mime_category: file}
+        path_vars = mime_category if '{}' in self.path else None
         await self.call(payload_map=payload, path_vars=path_vars)
 
 class APIResponse:
@@ -2652,15 +2653,14 @@ class StepExecutor:
 
                     kind = filetype.guess(file_bytes)
                     mime_type = kind.mime if kind else 'application/octet-stream'
-                    mime_category = mime_type.split('/')[0]
+                    mime_category = mime_type.strip().lower().split('/')[0]
                     # Prepare a file-like object
                     file_obj = io.BytesIO(file_bytes)
                     file_obj.name = filename
 
-                    file = {"file": file_obj, "filename": filename, "content_type": mime_type}
-                    bytes = file_bytes
+                    file = {mime_category: {"file": file_obj, "filename": filename, "content_type": mime_type}}
 
-                    return {"file_dict": file, "bytes": bytes}
+                    return {"file": file, "bytes": file_bytes, "file_format": mime_category}
                 else:
                     raise ValueError("[StepExecutor] Expected file attachment but none provided.")
             else:
