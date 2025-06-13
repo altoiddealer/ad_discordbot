@@ -1762,6 +1762,20 @@ class Endpoint:
 
         return final_cleaned
 
+    async def handle_main_response(self, results: Any, response:"APIResponse"|None):
+        if response:
+            # Automatically handle responses from known APIs
+            expected_response_data = await self.get_expected_response_data(response)
+            if expected_response_data:
+                return expected_response_data
+
+        # Optional key extraction (bypasses StepExecutor)
+        extract_keys:Optional[str|list[str]] = self.get_extract_keys()
+        if extract_keys is not None:
+            if isinstance(extract_keys, str) or \
+                (isinstance(extract_keys, list) and all(key is not None for key in extract_keys)):
+                return self.extract_main_keys(results, extract_keys)
+
     def clean_payload(self, payload):
         if isinstance(payload, dict):
             payload = remove_keys(payload, keys_to_remove={"__overrides__", "_comment"})
@@ -1877,7 +1891,7 @@ class Endpoint:
 
         if self.method is None:
             log.info(f"[{self.name}] has 'null' method. The input data will be returned as response data.")
-            results = json_payload
+            results = json_payload or data_payload
         else:            
             if sanitize:
                 if json_payload and isinstance(json_payload, dict):
@@ -1906,21 +1920,18 @@ class Endpoint:
             if not isinstance(response, APIResponse):
                 return response
 
-        results = response.body
+            results = response.body
 
-        if main and response:
-            # Automatically handle responses from known APIs
-            expected_response_data = await self.get_expected_response_data(response)
-            if expected_response_data:
-                return expected_response_data
-
-            # Optional key extraction (bypasses StepExecutor)
-            extract_keys:Optional[str|list[str]] = self.get_extract_keys()
-            if extract_keys is not None:
-                if isinstance(extract_keys, str) or \
-                    (isinstance(extract_keys, list) and all(key is not None for key in extract_keys)):
-                    return self.extract_main_keys(results, extract_keys)
-
+        if main:
+            # Try handling response from "main functions"
+            try:
+                return self.handle_main_response(results, response)
+            except Exception as e:
+                if not bot_database.was_warned(f'{self.name}_main_error'):
+                    log.error(f'[{self.name}] Error while handling an expected API response tpye/value: {e}'
+                              f'[{self.name}] Falling back to "response_handling". (Only logging this error once)')
+                    bot_database.update_was_warned(f'{self.name}_main_error')
+    
         # ws_response = await self.process_ws_request(json_payload, data_payload, input_data, **kwargs)
         # Hand off full response to StepExecutor
         if isinstance(self.response_handling, list):
@@ -1929,6 +1940,7 @@ class Endpoint:
             results = await handler.run()
 
         return results
+
 
     async def poll(self,
                    return_values: dict,
