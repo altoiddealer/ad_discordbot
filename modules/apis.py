@@ -14,7 +14,7 @@ import filetype
 from modules.typing import CtxInteraction
 from typing import get_type_hints, get_type_hints, get_origin, get_args, Any, Tuple, Optional, Union, Callable, AsyncGenerator
 from modules.utils_shared import client, shared_path, bot_database, load_file, get_api
-from modules.utils_misc import valueparser, progress_bar, set_key, extract_key, remove_keys, deep_merge, split_at_first_comma, guess_format_from_headers
+from modules.utils_misc import valueparser, progress_bar, set_key, extract_key, remove_keys, deep_merge, split_at_first_comma, detect_audio_format
 import modules.utils_processing as processing
 
 from modules.logs import import_track, get_logger; import_track(__file__, fp=True); log = get_logger(__name__)  # noqa: E702
@@ -1908,7 +1908,7 @@ class Endpoint:
 
         results = response.body
 
-        if main:
+        if main and response:
             # Automatically handle responses from known APIs
             expected_response_data = await self.get_expected_response_data(response)
             if expected_response_data:
@@ -2097,9 +2097,10 @@ class TTSGenEndpoint_PostGenerate(TTSGenEndpoint):
                     get_audio_ep = self.client.endpoints['Get Audio']
                     response = await get_audio_ep.call(response_type="bytes", path_vars=output_url)
 
-        if isinstance(response.body, bytes):
-            file_format = guess_format_from_headers(response.headers)
-            if file_format.lower().endswith(("mp3", "wav")):
+        result = response if not isinstance(response, APIResponse) else response.body
+        if isinstance(result, bytes):
+            file_format = detect_audio_format(result)
+            if file_format in ["mp3", "wav"]:
                 result = await processing.save_any_file(response.body, file_format=file_format, file_path='tts', response=response)
                 return result['path']
 
