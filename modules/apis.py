@@ -1925,7 +1925,10 @@ class Endpoint:
         if main:
             # Try handling response from "main functions"
             try:
-                return self.handle_main_response(results, response)
+                expected_main_result = self.handle_main_response(results, response)
+                if expected_main_result:
+                    return expected_main_result
+
             except Exception as e:
                 if not bot_database.was_warned(f'{self.name}_main_error'):
                     log.error(f'[{self.name}] Error while handling an expected API response tpye/value: {e}'
