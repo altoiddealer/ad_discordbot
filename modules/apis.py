@@ -1762,7 +1762,7 @@ class Endpoint:
 
         return final_cleaned
 
-    async def handle_main_response(self, results: Any, response:"APIResponse"|None):
+    async def handle_main_response(self, results: Any, response: Union["APIResponse", None]):
         if response:
             # Automatically handle responses from known APIs
             expected_response_data = await self.get_expected_response_data(response)
