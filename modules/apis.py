@@ -2657,7 +2657,10 @@ class StepExecutor:
                     file_obj = io.BytesIO(file_bytes)
                     file_obj.name = filename
 
-                    return {"file": file_obj, "filename": filename, "content_type": mime_type}
+                    file = {"file": file_obj, "filename": filename, "content_type": mime_type}
+                    bytes = file_bytes
+
+                    return {"file_dict": file, "bytes": bytes}
                 else:
                     raise ValueError("[StepExecutor] Expected file attachment but none provided.")
             else:
