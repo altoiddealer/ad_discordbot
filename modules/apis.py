@@ -14,7 +14,7 @@ import filetype
 from modules.typing import CtxInteraction
 from typing import get_type_hints, get_type_hints, get_origin, get_args, Any, Tuple, Optional, Union, Callable, AsyncGenerator
 from modules.utils_shared import client, shared_path, bot_database, load_file, get_api
-from modules.utils_misc import valueparser, progress_bar, set_key, extract_key, remove_keys, deep_merge, split_at_first_comma
+from modules.utils_misc import valueparser, progress_bar, set_key, extract_key, remove_keys, deep_merge, split_at_first_comma, guess_format_from_headers
 import modules.utils_processing as processing
 
 from modules.logs import import_track, get_logger; import_track(__file__, fp=True); log = get_logger(__name__)  # noqa: E702
@@ -1906,15 +1906,15 @@ class Endpoint:
             if not isinstance(response, APIResponse):
                 return response
 
+        results = response.body
+
+        if main:
             # Automatically handle responses from known APIs
             expected_response_data = await self.get_expected_response_data(response)
             if expected_response_data:
                 return expected_response_data
 
-            results = response.body
-
-        # Optional key extraction (bypasses StepExecutor)
-        if main:
+            # Optional key extraction (bypasses StepExecutor)
             extract_keys:Optional[str|list[str]] = self.get_extract_keys()
             if extract_keys is not None:
                 if isinstance(extract_keys, str) or \
@@ -2023,7 +2023,7 @@ class Endpoint:
             **kwargs
         )
 
-    async def get_expected_response_data(self, response):
+    async def get_expected_response_data(self, response:"APIResponse"):
         return None
 
     # Extracts the key values from the API response, for the Endpoint's key names defined in user API settings
@@ -2085,24 +2085,25 @@ class TTSGenEndpoint_PostGenerate(TTSGenEndpoint):
         return self.output_file_path_key
 
     async def get_expected_response_data(self, response:"APIResponse"):
-        return None
-        # if isinstance(self.client, TTSGenClient_AllTalk):
-        #     if isinstance(response.body, dict):
-        #         output_file_path = response.body.get('output_file_path')
-        #     if isinstance(response.body, bytes):
-        #         config = {
+        if isinstance(response.body, dict):
+            output_file_path = response.body.get(self.output_file_path_key)
+            if isinstance(output_file_path, str):
+                if os.path.exists(output_file_path) and output_file_path.lower().endswith(("mp3", "wav")):
+                    return output_file_path
+                if isinstance(self.client, TTSGenClient_AllTalk) \
+                    and response.body.get('output_file_url') \
+                    and self.client.endpoints.get('Get Audio'):
+                    output_url = response.body['output_file_url']
+                    get_audio_ep = self.client.endpoints['Get Audio']
+                    response = await get_audio_ep.call(response_type="bytes", path_vars=output_url)
 
-        #         }
-        #         return await processing.save_any_file(response.body, config)
-        #         resp_format = processing.detect_audio_format(response)
-        #        output_dir = os.path.join(shared_path.output_dir, self.response_handling.get('save_dir', ''))
-        #        if not config.path_allowed(output_dir):
-        #            raise RuntimeError(f"Tried saving to a path which is not in config.yaml 'allowed_paths': {output_dir}")
-        #         save_prefix = os.path.join(shared_path.output_dir, self.response_handling.get('save_prefix', ''))
-        #         save_format = self.response_handling.get('save_format', resp_format)
-        #         audio_fp:str = processing.save_audio_bytes(response, output_dir, input_format=resp_format, file_prefix=save_prefix, output_format=save_format)
-        #         return audio_fp
-        #     return None
+        if isinstance(response.body, bytes):
+            file_format = guess_format_from_headers(response.headers)
+            if file_format.lower().endswith(("mp3", "wav")):
+                result = await processing.save_any_file(response.body, file_format=file_format, file_path='tts', response=response)
+                return result['path']
+
+        return None
 
 # ImgGen Endpoint Subclasses
 class ImgGenEndpoint(Endpoint):
