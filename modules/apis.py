@@ -2663,7 +2663,7 @@ class StepExecutor:
 
                     file = {mime_category: {"file": file_obj, "filename": filename, "content_type": mime_type}}
 
-                    return {"file": file, "bytes": file_bytes, "file_format": mime_category, "filename": filename}
+                    return {"file": file, "bytes": file_bytes, "file_format": mime_type, "filename": filename}
                 else:
                     raise ValueError("[StepExecutor] Expected file attachment but none provided.")
             else:
