@@ -1925,7 +1925,7 @@ class Endpoint:
         if main:
             # Try handling response from "main functions"
             try:
-                expected_main_result = self.handle_main_response(results, response)
+                expected_main_result = await self.handle_main_response(results, response)
                 if expected_main_result:
                     return expected_main_result
 
