@@ -5,7 +5,7 @@ cd "$(dirname "${BASH_SOURCE[0]}")"
 if [[ "$(pwd)" =~ " " ]]; then echo This script relies on Miniconda which can not be silently installed under a path with spaces. && exit; fi
 
 # Check for special characters in installation path
-if [[ "$(pwd)" =~ [!#\$%&\(\)*+,;<=>?@\[\]\^`{|}~] ]]; then
+if [[ "$(pwd)" =~ [!#\$%\&\(\)\*\+,\;\<\=\>\?@\[\]\^\`\{|\}\~] ]]; then
     echo "WARNING: Special characters were detected in the installation path!"
     echo "This can cause the installation to fail!"
 fi
@@ -21,78 +21,6 @@ case "${OS_ARCH}" in
     aarch64*)   OS_ARCH="aarch64";;
     *)          echo "Unknown system architecture: $OS_ARCH! This script runs only on x86_64 or arm64" && exit
 esac
-
-# Define paths
-HOME_DIR="$(pwd)"
-PARENT_DIR="$(realpath "$HOME_DIR/..")"
-INSTALL_DIR="$HOME_DIR/installer_files"
-CONDA_HOME="$INSTALL_DIR/conda"
-ENV_HOME="$INSTALL_DIR/env"
-CONDA_PARENT="$PARENT_DIR/installer_files/conda"
-ENV_PARENT="$PARENT_DIR/installer_files/env"
-
-# Read user_env.txt into ENV_FLAG
-ENV_FLAG=""
-if [[ -f "$INSTALL_DIR/user_env.txt" ]]; then
-    ENV_FLAG=$(< "$INSTALL_DIR/user_env.txt")
-fi
-
-# Assign paths based on ENV_FLAG
-if [[ "$ENV_FLAG" == "$ENV_HOME" ]]; then
-    CONDA_ROOT_PREFIX="$CONDA_HOME"
-    INSTALL_ENV_DIR="$ENV_HOME"
-    goto activate_conda
-fi
-if [[ "$ENV_FLAG" == "$ENV_PARENT" ]]; then
-    CONDA_ROOT_PREFIX="$CONDA_PARENT"
-    INSTALL_ENV_DIR="$ENV_PARENT"
-    goto activate_conda
-fi
-
-# First-run setup
-echo "Welcome to ad_discordbot"
-
-echo "Checking for existing Conda installation..."
-if [[ -x "$CONDA_PARENT/bin/conda" ]]; then
-    echo "The bot can be integrated with your existing text-generation-webui environment."
-    echo "[A] Integrate with TGWUI *Recommended*"
-    echo "[B] Create and use own environment"
-    echo "[N] Nothing, exit script"
-    read -p "Enter A, B, or N: " USER_CHOICE
-    USER_CHOICE=${USER_CHOICE,,} # Convert to lowercase
-
-    if [[ "$USER_CHOICE" == "a" ]]; then
-        CONDA_ROOT_PREFIX="$CONDA_PARENT"
-        INSTALL_ENV_DIR="$ENV_PARENT"
-        goto activate_conda
-    elif [[ "$USER_CHOICE" == "b" ]]; then
-        setup_conda
-        goto activate_conda
-    elif [[ "$USER_CHOICE" == "n" ]]; then
-        echo "Exiting script."
-        exit
-    else
-        echo "Invalid input. Please enter A, B, or N."
-        exec "$0"
-    fi
-else
-    echo "No existing Conda installation detected. Install standalone?"
-    echo "[Y] Yes, install standalone"
-    echo "[N] No, exit"
-    read -p "Enter Y or N: " USER_CHOICE
-    USER_CHOICE=${USER_CHOICE,,}
-    
-    if [[ "$USER_CHOICE" == "y" ]]; then
-        setup_conda
-        goto activate_conda
-    elif [[ "$USER_CHOICE" == "n" ]]; then
-        echo "Exiting script."
-        exit
-    else
-        echo "Invalid input. Please enter Y or N."
-        exec "$0"
-    fi
-fi
 
 # Function to install Conda and setup environment
 setup_conda() {
@@ -141,4 +69,81 @@ activate_conda() {
     python "$HOME_DIR/one_click.py" --conda-env-path "$INSTALL_ENV_DIR" "$@"
 }
 
-activate_conda "$@"
+# Define paths
+HOME_DIR="$(pwd)"
+PARENT_DIR="$(realpath "$HOME_DIR/..")"
+INSTALL_DIR="$HOME_DIR/installer_files"
+CONDA_HOME="$INSTALL_DIR/conda"
+ENV_HOME="$INSTALL_DIR/env"
+CONDA_PARENT="$PARENT_DIR/installer_files/conda"
+ENV_PARENT="$PARENT_DIR/installer_files/env"
+
+# Read user_env.txt into ENV_FLAG
+ENV_FLAG=""
+if [[ -f "$INSTALL_DIR/user_env.txt" ]]; then
+    ENV_FLAG=$(< "$INSTALL_DIR/user_env.txt")
+fi
+
+# Assign paths based on ENV_FLAG
+if [[ "$ENV_FLAG" == "$ENV_HOME" ]]; then
+    CONDA_ROOT_PREFIX="$CONDA_HOME"
+    INSTALL_ENV_DIR="$ENV_HOME"
+    activate_conda "$@"
+    exit
+fi
+if [[ "$ENV_FLAG" == "$ENV_PARENT" ]]; then
+    CONDA_ROOT_PREFIX="$CONDA_PARENT"
+    INSTALL_ENV_DIR="$ENV_PARENT"
+    activate_conda "$@"
+    exit
+fi
+
+# First-run setup
+echo "Welcome to ad_discordbot"
+
+echo "Checking for existing Conda installation..."
+if [[ -x "$CONDA_PARENT/bin/conda" ]]; then
+    echo "The bot can be integrated with your existing text-generation-webui environment."
+    echo "[A] Integrate with TGWUI *Recommended*"
+    echo "[B] Create and use own environment"
+    echo "[N] Nothing, exit script"
+    read -p "Enter A, B, or N: " USER_CHOICE
+    USER_CHOICE=${USER_CHOICE,,} # Convert to lowercase
+
+    if [[ "$USER_CHOICE" == "a" ]]; then
+        CONDA_ROOT_PREFIX="$CONDA_PARENT"
+        INSTALL_ENV_DIR="$ENV_PARENT"
+        activate_conda "$@"
+    elif [[ "$USER_CHOICE" == "b" ]]; then
+        setup_conda
+        CONDA_ROOT_PREFIX="$CONDA_HOME"
+        INSTALL_ENV_DIR="$ENV_HOME"
+        activate_conda "$@"
+    elif [[ "$USER_CHOICE" == "n" ]]; then
+        echo "Exiting script."
+        exit
+    else
+        echo "Invalid input. Please enter A, B, or N."
+        exec "$0"
+    fi
+else
+    echo "No existing Conda installation detected. Install standalone?"
+    echo "[Y] Yes, install standalone"
+    echo "[N] No, exit"
+    read -p "Enter Y or N: " USER_CHOICE
+    USER_CHOICE=${USER_CHOICE,,}
+    
+    if [[ "$USER_CHOICE" == "y" ]]; then
+        setup_conda
+        CONDA_ROOT_PREFIX="$CONDA_HOME"
+        INSTALL_ENV_DIR="$ENV_HOME"
+        activate_conda "$@"
+    elif [[ "$USER_CHOICE" == "n" ]]; then
+        echo "Exiting script."
+        exit
+    else
+        echo "Invalid input. Please enter Y or N."
+        exec "$0"
+    fi
+fi
+
