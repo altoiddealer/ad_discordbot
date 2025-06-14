@@ -6371,6 +6371,9 @@ class ImgModel(SettingsBase):
     def clean_payload(self, payload:dict):
         pass
 
+    def fix_update_values(self, updates:dict):
+        pass
+
     def handle_payload_updates(self, updates:dict, task:"Task") -> dict:
         task.vars.update_from_dict(updates)
 
@@ -6448,6 +6451,9 @@ class ImgModel(SettingsBase):
     
     def collect_loras(self, text:str, task:"Task") -> str:
         return text
+
+    def check_sampler_or_scheduler_value(self, value: str) -> str:
+        pass
 
     def collect_model_names(self, imgmodels:list):
         if not imgmodels:
@@ -6861,6 +6867,34 @@ class ImgModel_Comfy(ImgModel):
 
         task.vars.update_from_dict(imgcmd_vars)
 
+    def check_sampler_or_scheduler_value(self, value: str) -> str:
+        comfy_values = [v.lower() for v in api.imggen._sampler_names + api.imggen._schedulers]
+        if not comfy_values:
+            return value
+        normalized = value.strip().lower().replace("+", "p").replace(" ", "_")
+        if normalized.startswith("k_"):
+            normalized = normalized[2:]
+        if normalized in comfy_values:
+            return normalized
+        manual_fallbacks = {"dpmpp_2m_sde_heun": "dpmpp_2m_sde",
+                            "ddim_cfgpp": "ddim",
+                            "plms": "lms",
+                            "unipc": "uni_pc",
+                            "restart": "res_multistep",
+                            "sgmuniform": "sgm_uniform",
+                            "ddim": "ddim_uniform",
+                            "uniform": "ddim_uniform"}
+        return manual_fallbacks.get(normalized, value)
+
+    def fix_update_values(self, updates: dict):
+        for k, v in updates.items():
+            if k in ['sampler_name', 'scheduler'] and isinstance(v, str):
+                updates[k] = self.check_sampler_or_scheduler_value(v)
+
+    def handle_payload_updates(self, updates:dict, task:"Task") -> dict:
+        self.fix_update_values(updates)
+        task.vars.update_from_dict(updates)
+
 class ImgModel_SDWebUI(ImgModel):
     def __init__(self):
         super().__init__()
@@ -6880,8 +6914,14 @@ class ImgModel_SDWebUI(ImgModel):
         else:
             raise TypeError("Unsupported image input type.")
         return base64.b64encode(file_bytes).decode('utf-8')
+    
+    def fix_update_values(self, updates: dict):
+        for k, v in updates.items():
+            if k in ['sampler_name', 'scheduler'] and isinstance(v, str):
+                updates[k] = self.check_sampler_or_scheduler_value(v)
 
     def handle_payload_updates(self, updates:dict, task:"Task"):
+        self.fix_update_values(updates)
         update_dict(task.payload, updates)
 
     def apply_payload_param_variances(self, updates:dict, task:"Task"):
@@ -7005,6 +7045,24 @@ class ImgModel_SDWebUI(ImgModel):
         task.payload['alwayson_scripts']['reactor']['args'].update(reactor)
         if reactor.get('mask'):
             task.payload['alwayson_scripts']['reactor']['args']['save_original'] = True
+
+    def check_sampler_or_scheduler_value(self, value: str) -> str:
+        mapping = {'euler_cfg_pp': 'k_euler',
+                   'euler_ancestral_cfg_pp': 'k_euler_ancestral',
+                   'dpm_2_ancestral': 'k_dpm_2_a',
+                   'dpmpp_2s_ancestral': 'k_dpmpp_2s_a',
+                   'dpmpp_2s_ancestral_cfg_pp': 'k_dpmpp_2s_a',
+                   'dpmpp_sde_gpu': 'k_dpmpp_sde',
+                   'dpmpp_2m_cfg_pp': 'k_dpmpp_2m',
+                   'dpmpp_2m_sde_gpu': 'k_dpmpp_2m_sde',
+                   'dpmpp_3m_sde_gpu': 'k_dpmpp_3m_sde',
+                   'res_multistep': 'restart',
+                   'res_multistep_cfg_pp': 'restart',
+                   'res_multistep_ancestral': 'restart',
+                   'res_multistep_ancestral_cfg_pp': 'restart',
+                   'uni_pc': 'unipc',
+                   'uni_pc_bh2': 'unipc'}
+        return mapping.get(value, value)
 
 class ImgModel_A1111(ImgModel_SDWebUI):
     def __init__(self):

@@ -1295,6 +1295,8 @@ class ImgGenClient(APIClient):
         super().__init__(*args, **kwargs)
         imggen_config:dict = apisettings.get_config_for("imggen")
         self._bind_main_endpoints(imggen_config)
+        self._sampler_names:list[str] = []
+        self._schedulers:list[str] = []
 
     def _get_endpoint_class_map(self) -> dict[str, type]:
         return {"post_txt2img": ImgGenEndpoint_PostTxt2Img,
@@ -1453,6 +1455,19 @@ class ImgGenClient_Comfy(ImgGenClient):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
+    async def main_setup_tasks(self):
+        try:
+            response = await self.request(endpoint='/object_info/KSampler', method='GET', retry=0, timeout=5)
+            if response and isinstance(response, APIResponse):
+                sampler_name = response.body.get('KSampler', {}).get('input', {}).get('required', {}).get('sampler_name')
+                if isinstance(sampler_name, list) and isinstance(sampler_name[0], list):
+                    self._sampler_names = sampler_name[0]
+                scheduler = response.body.get('KSampler', {}).get('input', {}).get('required', {}).get('scheduler')
+                if isinstance(scheduler, list) and isinstance(scheduler[0], list):
+                    self._schedulers = scheduler[0]
+        except Exception:
+            pass
+
     async def main_imggen(self, img_payload:dict, mode:str="txt2img", task=None) -> Tuple[list[Image.Image], None]:
         ictx = None
         if task:
@@ -1547,6 +1562,9 @@ class TTSGenClient(APIClient):
         except Exception as e:
             log.error(f'Error fetching options for "/speak" command via API: {e}')
             return None, None
+
+    def is_alltalk(self) -> bool:
+        return isinstance(self, TTSGenClient_AllTalk)
 
 class TTSGenClient_AllTalk(TTSGenClient):
     def __init__(self, *args, **kwargs):
