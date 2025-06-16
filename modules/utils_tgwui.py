@@ -18,13 +18,43 @@ from modules.utils_misc import check_probability
 sys.path.append(shared_path.dir_tgwui)
 
 import modules.extensions as extensions_module
-from modules.chat import chatbot_wrapper, load_character, save_history, get_stopping_strings, generate_chat_prompt, generate_reply
 from modules import shared
 from modules import utils
 from modules.LoRA import add_lora_to_model
 from modules.models import load_model, unload_model
 from modules.models_settings import get_model_metadata, update_model_parameters, get_fallback_settings, infer_loader
 from modules.prompts import count_tokens
+
+# Import chat functions dynamically to avoid circular imports
+def get_chat_functions():
+    from modules.chat import chatbot_wrapper, load_character, save_history, get_stopping_strings, generate_chat_prompt
+    from modules.text_generation import generate_reply
+    return chatbot_wrapper, load_character, save_history, get_stopping_strings, generate_chat_prompt, generate_reply
+
+def load_character(character, name1, name2):
+    """Wrapper function that dynamically imports load_character to avoid circular imports"""
+    chatbot_wrapper, load_character_func, save_history, get_stopping_strings, generate_chat_prompt, generate_reply = get_chat_functions()
+    return load_character_func(character, name1, name2)
+
+def chatbot_wrapper(*args, **kwargs):
+    """Wrapper function that dynamically imports chatbot_wrapper to avoid circular imports"""
+    chatbot_wrapper_func, load_character, save_history, get_stopping_strings, generate_chat_prompt, generate_reply = get_chat_functions()
+    return chatbot_wrapper_func(*args, **kwargs)
+
+def save_history(*args, **kwargs):
+    """Wrapper function that dynamically imports save_history to avoid circular imports"""
+    chatbot_wrapper, load_character, save_history_func, get_stopping_strings, generate_chat_prompt, generate_reply = get_chat_functions()
+    return save_history_func(*args, **kwargs)
+
+def count_tokens(*args, **kwargs):
+    """Wrapper function that dynamically imports count_tokens to avoid circular imports"""
+    from modules.prompts import count_tokens as count_tokens_func
+    return count_tokens_func(*args, **kwargs)
+
+def unload_model(*args, **kwargs):
+    """Wrapper function that dynamically imports unload_model to avoid circular imports"""
+    from modules.models import unload_model as unload_model_func
+    return unload_model_func(*args, **kwargs)
 
 from modules.logs import import_track, get_logger; import_track(__file__, fp=True); log = get_logger(__name__)  # noqa: E702
 logging = log
@@ -353,6 +383,8 @@ tgwui = TGWUI()
 
 def custom_chatbot_wrapper(text, state, regenerate=False, _continue=False, loading_message=True, for_ui=False, stream_tts=False):
     # 'stream_tts' CUSTOM FOR BOT
+    _, _, _, get_stopping_strings, generate_chat_prompt, generate_reply = get_chat_functions()
+    
     history = state['history']
     output = copy.deepcopy(history)
     output = extensions_module.apply_extensions('history', output)
