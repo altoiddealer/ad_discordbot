@@ -2,7 +2,7 @@
 # To control VAE / additional modules for your models:
 #       - A1111/ReForge: set a "preferred VAE" for each model by clicking "Checkpoints" tab, then the Tool icon for each model ("Edit Metadata")
 #       - Forge: Use 'forge_additional_modules' (examples below)
-#       - ComfyUI / other clients: Add key values under `payload` like "vae: <valid value for the vae>" then use payload injection (include {vae} in your payload file where it should be injected)
+#       - ComfyUI / other clients: Add key values under `payload` like "vae: <valid value for the vae>" then use payload injection (see example 'advanced' payloads)
 
 settings:
   # Filter - Only collect models which include matching text. [''] = No filtering (loads all models)
@@ -25,26 +25,28 @@ settings:
   # Controls whether to check the presets below when updating models. Otherwise, only settings will apply from dict_base_settings.yaml (not specific to models / resolutions)
   guess_model_params: true
 
-# When changing imgmodels, Presets are scored by matching/failing 'filter', 'exclude', and 'max_filesize' criteria.
-# Including "exact_match" for a specific model will bypass scoring / etc.
+# When changing imgmodels, Presets are scored by matching/failing 'filter' and 'exclude' criteria.
+# More matching filter strings awards more points.  More matching exclude strings deducts more points.
+# Including "exact_match" for a specific model will bypass scoring system.
+# Rename checkpoints if they are missing model type verbiage
 
-# Duplicate and update to add more presets to the list.
+# You can add/remove presets in this list.
 # Payload values from matched preset will override matching keys in txt2img/img2img endpoint payloads
-# "width" and "height" are used to directly affect the '/image' Size options!! ***
+# *** "width" and "height" are used to directly affect the '/image' Size options!! ***
 presets:
-  - max_filesize: 6.0
-    filter: ['']
-    exclude: ['xl']
+  - filter: [sd15]
+    exclude: [xl, flux]
     exact_match: ''
     payload:
       width: 512
       height: 512
     tags:
       - tag_preset_name: SD15 Tags
+    # Only applicable if main Imggen client is ComfyUI
+    comfy_delete_nodes: [VAELoader, FluxGuidance, DualCLIPLoaderGGUF, LoadFluxModelGGUF, DualCLIPLoader, LoadFluxModel]
 
-  - max_filesize: 9.0
-    filter: ['turbo']
-    exclude: ['']
+  - filter: [turbo]
+    exclude: [flux]
     exact_match: ''
     payload:
       width: 1024
@@ -52,10 +54,10 @@ presets:
     tags:
       - tag_preset_name: SDXL Tags
       - tag_preset_name: SDXL Turbo Payload
+    comfy_delete_nodes: [VAELoader, FluxGuidance, DualCLIPLoaderGGUF, LoadFluxModelGGUF, DualCLIPLoader, LoadFluxModel]
 
-  - max_filesize: 9.0
-    filter: ['xl']
-    exclude: ['turbo']
+  - filter: [xl]
+    exclude: [turbo, flux]
     exact_match: ''
     payload:
       width: 1024
@@ -63,26 +65,28 @@ presets:
     tags:
       - tag_preset_name: SDXL Tags
       - tag_preset_name: SDXL Payload
+    comfy_delete_nodes: [VAELoader, FluxGuidance, DualCLIPLoaderGGUF, LoadFluxModelGGUF, DualCLIPLoader, LoadFluxModel]
 
-  - exact_match: 'sdxl_realvisxlV40_v40Bakedvae'
+  - exact_match: 'sdxl_realvisxlV40_v40Bakedvae' # example usage of 'exact_match'
     payload:
       width: 1024
       height: 1024
     tags:
       - tag_preset_name: SDXL Tags
       - tag_preset_name: SDXL Payload
+    comfy_delete_nodes: [VAELoader, FluxGuidance, DualCLIPLoaderGGUF, LoadFluxModelGGUF, DualCLIPLoader, LoadFluxModel]
 
-  - max_filesize: 100.0
-    filter: ['flux']
-    exclude: ['xl']
+  - filter: [flux]
+    exclude: [gguf, xl, turbo, sd15]
     payload:
       width: 1024
       height: 1024
+      cfg_scale: 1.0
       # EXAMPLE USAGE FOR SETTING MODULES IF USING COMFYUI (or any other "non-A1111-like" API).
       #       NOTE: Add each item to the '__overrides__' dict in your payload, then reference with {placeholder_syntax}
       # vae: ae.safetensors                         # maps to "{vae}"
-      # clip: clip_l.safetensors                    # maps to "{clip}"
-      # text_encoder: t5xxl_fp8_e4m3fn.safetensors  # maps to "{text_encoder}"
+      # clip1: clip_l.safetensors                   # maps to "{clip1}"
+      # clip2: t5xxl_fp16.safetensors               # maps to "{clip2}"
       
       # EXAMPLE USAGE FOR SETTING MODULES IF USING FORGE
       # override_settings:
@@ -92,3 +96,17 @@ presets:
       #     - t5xxl_fp8_e4m3fn.safetensors
     tags:
       - tag_preset_name: Flux Payload
+    comfy_delete_nodes: [DualCLIPLoaderGGUF, LoadFluxModelGGUF]
+
+  - filter: [gguf, flux]
+    exclude: [xl, turbo, sd15]
+    payload:
+      width: 1024
+      height: 1024
+      cfg_scale: 1.0
+      # vae: ae.safetensors                         # maps to "{vae}"
+      # clip1_gguf: clip_l.safetensors              # maps to "{clip1_gguf}"
+      # clip2_gguf: t5xxl_fp8_e4m3fn.safetensors    # maps to "{clip2_gguf}"
+    tags:
+      - tag_preset_name: Flux Payload
+    comfy_delete_nodes: [DualCLIPLoader, LoadFluxModel]

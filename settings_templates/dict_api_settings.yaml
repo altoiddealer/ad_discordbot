@@ -159,22 +159,19 @@ all_apis:
       - name: Post txt2img
         path: /prompt
         method: POST
-        payload_base: comfyui_txt2img.json # comfyui_txt2img_loras.json - requires 'rgthree-comfy' nodes
+        payload_base: comfyui_txt2img.json # comfyui_txt2img_loras_and_model-types.json / comfyui_txt2img_loras.json --- requires 'rgthree-comfy' nodes
         payload_type: json
       - name: Post img2img
         path: /prompt
         method: POST
-        payload_base: comfyui_img2img.json # comfyui_img2img_loras.json - requires 'rgthree-comfy' nodes
+        payload_base: comfyui_img2img.json # comfyui_img2img_loras_and_model-types.json / comfyui_img2img_loras.json --- requires 'rgthree-comfy' nodes
         payload_type: json
       - {name: History, path: "/history/{}", method: GET} # ex: prompt_id is formatted into {}
       - {name: View, path: /view, method: GET, payload_type: query, response_type: bytes}
       - {name: Upload, path: "/upload/{}", method: POST, headers: {Content-Type: multipart/form-data}, payload_type: multipart, payload: upload_files.yaml} # ex: "image" is formatted into {}
       - {name: Cancel, path: /interrupt, method: POST}
-      - name: Get Checkpoints
-        path: "/object_info/CheckpointLoaderSimple"
-        method: GET
-        response_handling:
-          - extract_key: CheckpointLoaderSimple.input.required.ckpt_name[0] # list of models
+      # Placeholder. The bot will automatically fetch model values for CheckpointLoaderSimple, UnetLoaderGGUF and UNETLoader. Create an Github issue if you feel more should be included.
+      - {name: Get Checkpoints, path: "/object_info/CheckpointLoaderSimple", method: GET}
       # 'method: null' will skip API call, and simply return the payload as the result. In this case, user needs to manually configure a '/user/payload/cnet_data.yaml'
       - {name: Get Cnet Control Types, path: /anything/at/all, method: null, payload_base: cnet_data.json}
 

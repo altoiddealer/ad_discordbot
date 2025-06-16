@@ -1,5 +1,9 @@
 {
   "_comment": [
+    "This payload includes nodes for loading most model types, connected to Any Switch nodes.",
+    "The bot script can be configured to delete specific nodes per model type (see dict_imgmodels.yaml).",
+    "For example, if the Flux related nodes are deleted, Any Switch allows it to fallback to the basic Load Checkpoint loader (SD1.5 / SDXL / etc).",
+
     "For main bot functions, the script can automatically collect/inject LoRAs if this syntax is used in user/LLM text: <lora:FilenameOfLoRA:0.5>",
     "ComfyUI expects the extension included in filename value. If missing, bot will automatically add '.safetensors'",
     "REQUIRED: 'rgthree' node pack (for the LoRA Loader Stack custom node)",
@@ -46,7 +50,12 @@
     "steps": 25,
     "cfg_scale": 8,
     "sampler_name": "dpmpp_2m",
-    "scheduler": "normal"
+    "scheduler": "normal",
+    "vae": "ae.safetensors",
+    "clip1": "clip_l.safetensors",
+    "clip2": "t5xxl_fp16.safetensors",
+    "clip1_gguf": "clip_l.safetensors",
+    "clip2_gguf": "t5xxl_fp8_e4m3fn.safetensors"
   },
 
   "3": {
@@ -58,11 +67,11 @@
       "scheduler": "{scheduler}",
       "denoise": "{denoising_strength}",
       "model": [
-        "17",
+        "14",
         0
       ],
       "positive": [
-        "6",
+        "31",
         0
       ],
       "negative": [
@@ -70,7 +79,7 @@
         0
       ],
       "latent_image": [
-        "12",
+        "38",
         0
       ]
     },
@@ -79,11 +88,20 @@
       "title": "KSampler"
     }
   },
+  "4": {
+    "inputs": {
+      "ckpt_name": "{ckpt_name}"
+    },
+    "class_type": "CheckpointLoaderSimple",
+    "_meta": {
+      "title": "Load Checkpoint"
+    }
+  },
   "6": {
     "inputs": {
       "text": "{prompt}",
       "clip": [
-        "17",
+        "14",
         1
       ]
     },
@@ -96,7 +114,7 @@
     "inputs": {
       "text": "{neg_prompt}",
       "clip": [
-        "17",
+        "14",
         1
       ]
     },
@@ -112,8 +130,8 @@
         0
       ],
       "vae": [
-        "14",
-        2
+        "29",
+        0
       ]
     },
     "class_type": "VAEDecode",
@@ -121,41 +139,7 @@
       "title": "VAE Decode"
     }
   },
-  "10": {
-    "inputs": {
-      "image": "{i2i_image}"
-    },
-    "class_type": "LoadImage",
-    "_meta": {
-      "title": "Load Image"
-    }
-  },
-  "12": {
-    "inputs": {
-      "pixels": [
-        "20",
-        0
-      ],
-      "vae": [
-        "14",
-        2
-      ]
-    },
-    "class_type": "VAEEncode",
-    "_meta": {
-      "title": "VAE Encode"
-    }
-  },
   "14": {
-    "inputs": {
-      "ckpt_name": "{ckpt_name}"
-    },
-    "class_type": "CheckpointLoaderSimple",
-    "_meta": {
-      "title": "Load Checkpoint"
-    }
-  },
-  "17": {
     "inputs": {
       "lora_01": "{lora_01}",
       "strength_01": "{strength_01}",
@@ -166,12 +150,12 @@
       "lora_04": "{lora_04}",
       "strength_04": "{strength_04}",
       "model": [
-        "14",
+        "27",
         0
       ],
       "clip": [
-        "14",
-        1
+        "28",
+        0
       ]
     },
     "class_type": "Lora Loader Stack (rgthree)",
@@ -179,7 +163,117 @@
       "title": "Lora Loader Stack (rgthree)"
     }
   },
-  "18": {
+  "16": {
+    "inputs": {
+      "vae_name": "{vae}"
+    },
+    "class_type": "VAELoader",
+    "_meta": {
+      "title": "VAELoader"
+    }
+  },
+  "17": {
+    "inputs": {
+      "guidance": 3.5,
+      "conditioning": [
+        "6",
+        0
+      ]
+    },
+    "class_type": "FluxGuidance",
+    "_meta": {
+      "title": "FluxGuidance"
+    }
+  },
+  "19": {
+    "inputs": {
+      "clip_name1": "{clip1_gguf}",
+      "clip_name2": "{clip2_gguf}",
+      "type": "flux"
+    },
+    "class_type": "DualCLIPLoaderGGUF",
+    "_meta": {
+      "title": "DualCLIPLoaderGGUF"
+    }
+  },
+  "20": {
+    "inputs": {
+      "unet_name": "{ckpt_name}"
+    },
+    "class_type": "UnetLoaderGGUF",
+    "_meta": {
+      "title": "LoadFluxModelGGUF"
+    }
+  },
+  "21": {
+    "inputs": {
+      "clip_name1": "{clip1}",
+      "clip_name2": "{clip2}",
+      "type": "flux",
+      "device": "default"
+    },
+    "class_type": "DualCLIPLoader",
+    "_meta": {
+      "title": "DualCLIPLoader"
+    }
+  },
+  "27": {
+    "inputs": {
+      "any_01": [
+        "20",
+        0
+      ],
+      "any_02": [
+        "34",
+        0
+      ],
+      "any_03": [
+        "4",
+        0
+      ]
+    },
+    "class_type": "Any Switch (rgthree)",
+    "_meta": {
+      "title": "Model Switch"
+    }
+  },
+  "28": {
+    "inputs": {
+      "any_01": [
+        "19",
+        0
+      ],
+      "any_02": [
+        "21",
+        0
+      ],
+      "any_03": [
+        "4",
+        1
+      ]
+    },
+    "class_type": "Any Switch (rgthree)",
+    "_meta": {
+      "title": "Clip Switch"
+    }
+  },
+  "29": {
+    "inputs": {
+      "any_01": [
+        "16",
+        0
+      ],
+      "any_02": [
+        "4",
+        2
+      ]
+    },
+    "class_type": "Any Switch (rgthree)",
+    "_meta": {
+      "title": "VAE Switch"
+    }
+  },
+  "30": {
     "inputs": {
       "images": [
         "8",
@@ -191,7 +285,42 @@
       "title": "Preview Image"
     }
   },
-  "20": {
+  "31": {
+    "inputs": {
+      "any_01": [
+        "17",
+        0
+      ],
+      "any_02": [
+        "6",
+        0
+      ]
+    },
+    "class_type": "Any Switch (rgthree)",
+    "_meta": {
+      "title": "FluxGuidance Switch"
+    }
+  },
+  "34": {
+    "inputs": {
+      "unet_name": "{ckpt_name}",
+      "weight_dtype": "default"
+    },
+    "class_type": "UNETLoader",
+    "_meta": {
+      "title": "LoadFluxModel"
+    }
+  },
+  "36": {
+    "inputs": {
+      "image": "{i2i_image}"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "Load Image"
+    }
+  },
+  "37": {
     "inputs": {
       "width": "{width}",
       "height": "{height}",
@@ -200,13 +329,29 @@
       "condition": "always",
       "multiple_of": 0,
       "image": [
-        "10",
+        "36",
         0
       ]
     },
     "class_type": "ImageResize+",
     "_meta": {
       "title": "Image Resize"
+    }
+  },
+  "38": {
+    "inputs": {
+      "pixels": [
+        "37",
+        0
+      ],
+      "vae": [
+        "29",
+        0
+      ]
+    },
+    "class_type": "VAEEncode",
+    "_meta": {
+      "title": "VAE Encode"
     }
   }
 }
