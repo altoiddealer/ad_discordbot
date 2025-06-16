@@ -199,11 +199,14 @@
       "method": "stretch",
       "condition": "always",
       "multiple_of": 0,
-      "image": "{i2i_image}"
+      "image": [
+        "10",
+        0
+      ]
     },
     "class_type": "ImageResize+",
     "_meta": {
-      "title": "\ud83d\udd27 Image Resize"
+      "title": "Image Resize"
     }
   }
 }

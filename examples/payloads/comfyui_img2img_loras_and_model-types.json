@@ -52,10 +52,8 @@
     "sampler_name": "dpmpp_2m",
     "scheduler": "normal",
     "vae": "ae.safetensors",
-    "diffusers_model": "flux1_devFP8Kijai11GB.safetensors",
     "clip1": "clip_l.safetensors",
     "clip2": "t5xxl_fp16.safetensors",
-    "flux_gguf_model": "flux1-dev-Q4_K_S.gguf",
     "clip1_gguf": "clip_l.safetensors",
     "clip2_gguf": "t5xxl_fp8_e4m3fn.safetensors"
   },
@@ -81,7 +79,7 @@
         0
       ],
       "latent_image": [
-        "5",
+        "38",
         0
       ]
     },
@@ -97,17 +95,6 @@
     "class_type": "CheckpointLoaderSimple",
     "_meta": {
       "title": "Load Checkpoint"
-    }
-  },
-  "5": {
-    "inputs": {
-      "width": "{width}",
-      "height": "{height}",
-      "batch_size": 1
-    },
-    "class_type": "EmptyLatentImage",
-    "_meta": {
-      "title": "Empty Latent Image"
     }
   },
   "6": {
@@ -211,7 +198,7 @@
   },
   "20": {
     "inputs": {
-      "unet_name": "{flux_gguf_model}"
+      "unet_name": "{ckpt_name}"
     },
     "class_type": "UnetLoaderGGUF",
     "_meta": {
@@ -316,12 +303,55 @@
   },
   "34": {
     "inputs": {
-      "unet_name": "{flux_model}",
+      "unet_name": "{ckpt_name}",
       "weight_dtype": "default"
     },
     "class_type": "UNETLoader",
     "_meta": {
       "title": "LoadFluxModel"
+    }
+  },
+  "36": {
+    "inputs": {
+      "image": "{i2i_image}"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "Load Image"
+    }
+  },
+  "37": {
+    "inputs": {
+      "width": "{width}",
+      "height": "{height}",
+      "interpolation": "nearest",
+      "method": "stretch",
+      "condition": "always",
+      "multiple_of": 0,
+      "image": [
+        "36",
+        0
+      ]
+    },
+    "class_type": "ImageResize+",
+    "_meta": {
+      "title": "Image Resize"
+    }
+  },
+  "38": {
+    "inputs": {
+      "pixels": [
+        "37",
+        0
+      ],
+      "vae": [
+        "29",
+        0
+      ]
+    },
+    "class_type": "VAEEncode",
+    "_meta": {
+      "title": "VAE Encode"
     }
   }
 }

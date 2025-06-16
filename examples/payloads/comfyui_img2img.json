@@ -151,11 +151,14 @@
       "method": "fill / crop",
       "condition": "always",
       "multiple_of": 0,
-      "image": "{i2i_image}"
+      "image": [
+        "10",
+        0
+      ]
     },
     "class_type": "ImageResize+",
     "_meta": {
-      "title": "🔧 Image Resize"
+      "title": "Image Resize"
     }
   },
   "18": {
