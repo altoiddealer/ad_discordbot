@@ -170,11 +170,8 @@ all_apis:
       - {name: View, path: /view, method: GET, payload_type: query, response_type: bytes}
       - {name: Upload, path: "/upload/{}", method: POST, headers: {Content-Type: multipart/form-data}, payload_type: multipart, payload: upload_files.yaml} # ex: "image" is formatted into {}
       - {name: Cancel, path: /interrupt, method: POST}
-      - name: Get Checkpoints
-        path: "/object_info/CheckpointLoaderSimple"
-        method: GET
-        response_handling:
-          - extract_key: CheckpointLoaderSimple.input.required.ckpt_name[0] # list of models
+      # Placeholder. The bot will automatically fetch model values for CheckpointLoaderSimple, UnetLoaderGGUF and UNETLoader. Create an Github issue if you feel more should be included.
+      - {name: Get Checkpoints, path: "/object_info/CheckpointLoaderSimple", method: GET}
       # 'method: null' will skip API call, and simply return the payload as the result. In this case, user needs to manually configure a '/user/payload/cnet_data.yaml'
       - {name: Get Cnet Control Types, path: /anything/at/all, method: null, payload_base: cnet_data.json}
 

@@ -6525,40 +6525,37 @@ class ImgModel(SettingsBase):
     async def get_filtered_imgmodels_list(self, ictx:CtxInteraction=None) -> list:
         all_imgmodels = []
         try:
-            all_imgmodels = await api.imggen.get_imgmodels.call()
+            all_imgmodels = await api.imggen.fetch_imgmodels()
             return await self.filter_imgmodels(all_imgmodels, ictx)
         except Exception as e:
             log.error(f"Error fetching image models: {e}")
         return all_imgmodels
 
     # Check filesize/filters with selected imgmodel to assume resolution / tags
-    async def guess_model_data(self, imgmodel_data:dict, presets:list[dict]) -> dict|None:
+    async def guess_model_data(self, imgmodel_data: dict, presets: list[dict]) -> dict | None:
         try:
             imgmodel = imgmodel_data.get(self._any_key)
             match_counts = []
+
             for preset in presets:
-                preset_copy = preset.copy()
-                exact_match = preset_copy.pop('exact_match', '')
+                exact_match = preset.get('exact_match', '')
                 if exact_match and imgmodel == exact_match:
                     log.info(f'Applying exact match imgmodel preset for "{exact_match}".')
-                    return preset_copy
+                    return preset
 
-                filter_list = [f for f in preset_copy.pop('filter', []) if f.strip()]
-                exclude_list = [e for e in preset_copy.pop('exclude', []) if e.strip()]
+                filter_list = [f for f in preset.get('filter', []) if f.strip()]
+                exclude_list = [e for e in preset.get('exclude', []) if e.strip()]
                 match_count = 0
 
-                if filter_list:
-                    if any(re.search(re.escape(filter_text), imgmodel, re.IGNORECASE) for filter_text in filter_list):
+                for filter_text in filter_list:
+                    if re.search(re.escape(filter_text), imgmodel, re.IGNORECASE):
                         match_count += 1
-                    else:
-                        match_count -= 1
-                if exclude_list:
-                    if not any(re.search(re.escape(exclude_text), imgmodel, re.IGNORECASE) for exclude_text in exclude_list):
-                        match_count += 1
-                    else:
+
+                for exclude_text in exclude_list:
+                    if re.search(re.escape(exclude_text), imgmodel, re.IGNORECASE):
                         match_count -= 1
 
-                match_counts.append((preset_copy, match_count))
+                match_counts.append((preset, match_count))
 
             match_counts.sort(key=lambda x: x[1], reverse=True)
             matched_preset = match_counts[0][0] if match_counts else None
@@ -6601,6 +6598,9 @@ class ImgModel(SettingsBase):
     # subclass behavior
     def get_extra_settings(self, imgmodel_data:dict) -> dict:
         return {}
+    
+    def collect_extra_preset_data(self, matched_preset:dict):
+        pass
 
     # Merge selected imgmodel/tag data with base settings
     async def update_imgmodel_options(self, imgmodel_data:dict) -> Tuple[dict, list]:
@@ -6615,6 +6615,7 @@ class ImgModel(SettingsBase):
                 if matched_preset:
                     imgmodel_tags = matched_preset.pop('tags', [])
                     imgmodel_options = matched_preset.get('payload', {})
+                    self.collect_extra_preset_data(matched_preset)
             # Unpack any tag presets
             imgmodel_tags = base_tags.update_tags(imgmodel_tags)
         except Exception as e:
@@ -6792,8 +6793,38 @@ class ImgModel_Comfy(ImgModel):
         self._value_key = api.imggen.get_imgmodels.imgmodel_value_key or 'title'
         self._filename_key = api.imggen.get_imgmodels.imgmodel_filename_key or ''
         self._any_key = self._name_key or self._value_key or ''
+        self.delete_nodes:list[str] = []
+
+    def delete_conflicting_nodes_for_model_type(self, payload: dict):
+        node_ids_to_delete = {node_id for node_id, node in payload.items()
+                              if node.get("_meta", {}).get('title') in self.delete_nodes}
+        # Remove matched nodes
+        for node_id in node_ids_to_delete:
+            del payload[node_id]
+
+        for node in payload.values():
+            inputs:dict = node.get("inputs", {})
+            keys_to_delete = []
+
+            for key, value in inputs.items():
+                if isinstance(value, list):
+                    # Remove any [node_id, port_index] references
+                    filtered_list = [v for v in value
+                                     if not (isinstance(v, list) and str(v[0]) in node_ids_to_delete)]
+                    # Also remove if it's a single [node_id, port_index]
+                    if isinstance(value[0], (list, str)) and str(value[0]) in node_ids_to_delete:
+                        keys_to_delete.append(key)
+                    else:
+                        inputs[key] = filtered_list or None
+                elif isinstance(value, (str, int)):
+                    if str(value) in node_ids_to_delete:
+                        keys_to_delete.append(key)
+
+            for key in keys_to_delete:
+                inputs.pop(key, None)
 
     def clean_payload(self, payload: dict):
+        self.delete_conflicting_nodes_for_model_type(payload)
         prompt_value = payload.get('prompt')
         if prompt_value is None:
             prompt_value = copy.deepcopy(payload)
@@ -6802,6 +6833,9 @@ class ImgModel_Comfy(ImgModel):
 
     async def post_options(self, options_payload:dict):
         pass
+
+    def collect_extra_preset_data(self, matched_preset:dict):
+        self.delete_nodes = matched_preset.get('comfy_delete_nodes', [])
 
     async def get_imgmodel_data(self, imgmodel_value:str, ictx:CtxInteraction=None) -> dict:
         return {self._name_key: imgmodel_value,
@@ -6894,6 +6928,7 @@ class ImgModel_Comfy(ImgModel):
     def handle_payload_updates(self, updates:dict, task:"Task") -> dict:
         self.fix_update_values(updates)
         task.vars.update_from_dict(updates)
+
 
 class ImgModel_SDWebUI(ImgModel):
     def __init__(self):

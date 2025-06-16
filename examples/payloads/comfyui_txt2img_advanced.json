@@ -1,0 +1,327 @@
+{
+  "_comment": [
+    "This payload includes nodes for loading most model types, connected to Any Switch nodes.",
+    "The bot script can be configured to delete specific nodes per model type (see dict_imgmodels.yaml).",
+    "For example, if the Flux related nodes are deleted, Any Switch allows it to fallback to the basic Load Checkpoint loader (SD1.5 / SDXL / etc).",
+
+    "For main bot functions, the script can automatically collect/inject LoRAs if this syntax is used in user/LLM text: <lora:FilenameOfLoRA:0.5>",
+    "ComfyUI expects the extension included in filename value. If missing, bot will automatically add '.safetensors'",
+    "REQUIRED: 'rgthree' node pack (for the LoRA Loader Stack custom node)",
+
+    "ad_discordbot has a flexible and sensible system to inject dynamic values from the bot script into payloads.",
+    "Simply copy/paste '__overrides__' section to any payload, then reference {prompt}, {width}, etc.",
+    "The values in '__overrides__' are defaults which the bot can update before injecting -> sending to the API.",
+    "You are not restricted to these variables. You can define your own via the Tags system (the 'payload' tag), and in 'dict_imgmodels.yaml' (model presets).",
+    "Any key values you set, will be injected into '__overrides__' and resolved into the payload.",
+    "NOTE: when using {seed} it will inject a randomized seed integer.",
+    "NOTE: The last items (from 'steps' down) are examples you could define and use - these are not currently set by the bot script directly."
+  ],
+
+  "__overrides__": {
+    "prompt": "beautiful scenery nature glass bottle landscape, purple galaxy bottle,",
+    "neg_prompt": "text, watermark",
+    "width": 1024,
+    "height": 1024,
+    "ckpt_name": "sdxl\\epicrealismXL_vxviLastfameRealism.safetensors",
+    "seed": "156680208700286",
+    "i2i_image": "example.png",
+    "i2i_mask": "mask.png",
+    "denoising_strength": 0.87,
+    "cnet_image": "input.png",
+    "cnet_mask": "input_mask.png",
+    "cnet_model": "diffusers_xl_depth_full",
+    "cnet_module": "depth_midas",
+    "cnet_weight": 1.0,
+    "cnet_processor_res": 64,
+    "cnet_guidance_start": 0.0,
+    "cnet_guidance_end": 1.0,
+    "cnet_threshold_a": 64,
+    "cnet_threshold_b": 64,
+    "character": "M1nty",
+    "lora_01": "None",
+    "strength_01": 1,
+    "lora_02": "None",
+    "strength_02": 1,
+    "lora_03": "None",
+    "strength_03": 1,
+    "lora_04": "None",
+    "strength_04": 1,
+
+    "steps": 25,
+    "cfg_scale": 8,
+    "sampler_name": "dpmpp_2m",
+    "scheduler": "normal",
+    "vae": "ae.safetensors",
+    "diffusers_model": "flux1_devFP8Kijai11GB.safetensors",
+    "clip1": "clip_l.safetensors",
+    "clip2": "t5xxl_fp16.safetensors",
+    "flux_gguf_model": "flux1-dev-Q4_K_S.gguf",
+    "clip1_gguf": "clip_l.safetensors",
+    "clip2_gguf": "t5xxl_fp8_e4m3fn.safetensors"
+  },
+
+  "3": {
+    "inputs": {
+      "seed": "{seed}",
+      "steps": "{steps}",
+      "cfg": "{cfg_scale}",
+      "sampler_name": "{sampler_name}",
+      "scheduler": "{scheduler}",
+      "denoise": "{denoising_strength}",
+      "model": [
+        "14",
+        0
+      ],
+      "positive": [
+        "31",
+        0
+      ],
+      "negative": [
+        "7",
+        0
+      ],
+      "latent_image": [
+        "5",
+        0
+      ]
+    },
+    "class_type": "KSampler",
+    "_meta": {
+      "title": "KSampler"
+    }
+  },
+  "4": {
+    "inputs": {
+      "ckpt_name": "{ckpt_name}"
+    },
+    "class_type": "CheckpointLoaderSimple",
+    "_meta": {
+      "title": "Load Checkpoint"
+    }
+  },
+  "5": {
+    "inputs": {
+      "width": "{width}",
+      "height": "{height}",
+      "batch_size": 1
+    },
+    "class_type": "EmptyLatentImage",
+    "_meta": {
+      "title": "Empty Latent Image"
+    }
+  },
+  "6": {
+    "inputs": {
+      "text": "{prompt}",
+      "clip": [
+        "14",
+        1
+      ]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {
+      "title": "CLIP Text Encode (Prompt)"
+    }
+  },
+  "7": {
+    "inputs": {
+      "text": "{neg_prompt}",
+      "clip": [
+        "14",
+        1
+      ]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {
+      "title": "CLIP Text Encode (Prompt)"
+    }
+  },
+  "8": {
+    "inputs": {
+      "samples": [
+        "3",
+        0
+      ],
+      "vae": [
+        "29",
+        0
+      ]
+    },
+    "class_type": "VAEDecode",
+    "_meta": {
+      "title": "VAE Decode"
+    }
+  },
+  "14": {
+    "inputs": {
+      "lora_01": "{lora_01}",
+      "strength_01": "{strength_01}",
+      "lora_02": "{lora_02}",
+      "strength_02": "{strength_02}",
+      "lora_03": "{lora_03}",
+      "strength_03": "{strength_03}",
+      "lora_04": "{lora_04}",
+      "strength_04": "{strength_04}",
+      "model": [
+        "27",
+        0
+      ],
+      "clip": [
+        "28",
+        0
+      ]
+    },
+    "class_type": "Lora Loader Stack (rgthree)",
+    "_meta": {
+      "title": "Lora Loader Stack (rgthree)"
+    }
+  },
+  "16": {
+    "inputs": {
+      "vae_name": "{vae}"
+    },
+    "class_type": "VAELoader",
+    "_meta": {
+      "title": "VAELoader"
+    }
+  },
+  "17": {
+    "inputs": {
+      "guidance": 3.5,
+      "conditioning": [
+        "6",
+        0
+      ]
+    },
+    "class_type": "FluxGuidance",
+    "_meta": {
+      "title": "FluxGuidance"
+    }
+  },
+  "19": {
+    "inputs": {
+      "clip_name1": "{clip1_gguf}",
+      "clip_name2": "{clip2_gguf}",
+      "type": "flux"
+    },
+    "class_type": "DualCLIPLoaderGGUF",
+    "_meta": {
+      "title": "DualCLIPLoaderGGUF"
+    }
+  },
+  "20": {
+    "inputs": {
+      "unet_name": "{flux_gguf_model}"
+    },
+    "class_type": "UnetLoaderGGUF",
+    "_meta": {
+      "title": "LoadFluxModelGGUF"
+    }
+  },
+  "21": {
+    "inputs": {
+      "clip_name1": "{clip1}",
+      "clip_name2": "{clip2}",
+      "type": "flux",
+      "device": "default"
+    },
+    "class_type": "DualCLIPLoader",
+    "_meta": {
+      "title": "DualCLIPLoader"
+    }
+  },
+  "27": {
+    "inputs": {
+      "any_01": [
+        "20",
+        0
+      ],
+      "any_02": [
+        "34",
+        0
+      ],
+      "any_03": [
+        "4",
+        0
+      ]
+    },
+    "class_type": "Any Switch (rgthree)",
+    "_meta": {
+      "title": "Model Switch"
+    }
+  },
+  "28": {
+    "inputs": {
+      "any_01": [
+        "19",
+        0
+      ],
+      "any_02": [
+        "21",
+        0
+      ],
+      "any_03": [
+        "4",
+        1
+      ]
+    },
+    "class_type": "Any Switch (rgthree)",
+    "_meta": {
+      "title": "Clip Switch"
+    }
+  },
+  "29": {
+    "inputs": {
+      "any_01": [
+        "16",
+        0
+      ],
+      "any_02": [
+        "4",
+        2
+      ]
+    },
+    "class_type": "Any Switch (rgthree)",
+    "_meta": {
+      "title": "VAE Switch"
+    }
+  },
+  "30": {
+    "inputs": {
+      "images": [
+        "8",
+        0
+      ]
+    },
+    "class_type": "PreviewImage",
+    "_meta": {
+      "title": "Preview Image"
+    }
+  },
+  "31": {
+    "inputs": {
+      "any_01": [
+        "17",
+        0
+      ],
+      "any_02": [
+        "6",
+        0
+      ]
+    },
+    "class_type": "Any Switch (rgthree)",
+    "_meta": {
+      "title": "FluxGuidance Switch"
+    }
+  },
+  "34": {
+    "inputs": {
+      "unet_name": "{flux_model}",
+      "weight_dtype": "default"
+    },
+    "class_type": "UNETLoader",
+    "_meta": {
+      "title": "LoadFluxModel"
+    }
+  }
+}

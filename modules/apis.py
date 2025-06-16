@@ -1003,7 +1003,7 @@ class APIClient:
         interval: float = 1.0,
         duration: int = -1,
         num_yields: int = -1,
-        timeout: int = 30,
+        timeout: int = 60,
         type_filter: Optional[list[str]] = None,
         data_filter: Optional[dict] = None,
         completion_condition: Optional[Callable[[dict], bool]] = None,
@@ -1315,6 +1315,9 @@ class ImgGenClient(APIClient):
     def _default_endpoint_class(self):
         return ImgGenEndpoint
     
+    async def fetch_imgmodels(self):
+        return await self.get_imgmodels.call()
+    
     def decode_and_save_for_index(self, i: int, data: str | bytes | list, pnginfo=None) -> Image.Image:
         if isinstance(data, str):
             try:
@@ -1455,17 +1458,39 @@ class ImgGenClient_Comfy(ImgGenClient):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
+    async def get_comfy_settings_values_for(self, class_type:str, labels:str | list[str]) -> list|dict:
+        '''Returns dict if list of labels. Returns list for just one label string'''
+        def extract_values_for_label(req:dict, label:str):
+            values = req.get(label)
+            if isinstance(values, list) and isinstance(values[0], list):
+                return values[0]
+            return []
+        response = await self.request(endpoint=f'/object_info/{class_type}', method='GET', retry=0, timeout=5)
+        if response and isinstance(response, APIResponse):
+            req = response.body.get(class_type, {}).get('input', {}).get('required', {})
+            if isinstance(labels, str):
+                return extract_values_for_label(req, labels)
+            elif isinstance(labels, list):
+                values = {}
+                for label in labels:
+                    values[label] = extract_values_for_label(req, label)
+                return values
+            return []
+
+    async def fetch_imgmodels(self) -> list:
+        all_imgmodels = []
+        all_imgmodels.extend(await self.get_comfy_settings_values_for(class_type='CheckpointLoaderSimple', labels='ckpt_name'))
+        all_imgmodels.extend(await self.get_comfy_settings_values_for(class_type='UnetLoaderGGUF', labels='unet_name'))
+        all_imgmodels.extend(await self.get_comfy_settings_values_for(class_type='UNETLoader', labels='unet_name'))
+        return all_imgmodels
+
     async def main_setup_tasks(self):
         try:
-            response = await self.request(endpoint='/object_info/KSampler', method='GET', retry=0, timeout=5)
-            if response and isinstance(response, APIResponse):
-                sampler_name = response.body.get('KSampler', {}).get('input', {}).get('required', {}).get('sampler_name')
-                if isinstance(sampler_name, list) and isinstance(sampler_name[0], list):
-                    self._sampler_names = sampler_name[0]
-                scheduler = response.body.get('KSampler', {}).get('input', {}).get('required', {}).get('scheduler')
-                if isinstance(scheduler, list) and isinstance(scheduler[0], list):
-                    self._schedulers = scheduler[0]
-        except Exception:
+            data = await self.get_comfy_settings_values_for(class_type='KSampler', labels=['sampler_name', 'scheduler'])
+            self._sampler_names = data.get('sampler_name', [])
+            self._schedulers = data.get('scheduler', [])
+        except Exception as e:
+            log.error(f"Error: {e}")
             pass
 
     async def main_imggen(self, img_payload:dict, mode:str="txt2img", task=None) -> Tuple[list[Image.Image], None]:
