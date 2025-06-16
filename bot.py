@@ -14,7 +14,7 @@ import os
 import warnings
 import discord
 from discord.ext import commands
-from discord import app_commands, File
+from discord import app_commands, File, abc
 import typing
 import io
 import base64
@@ -4879,6 +4879,122 @@ if imggen_enabled:
         except Exception as e:
             log.error(f"An error occurred in image(): {e}")
             traceback.print_exc()
+
+#################################################################
+#################### DYNAMIC USER COMMANDS ######################
+#################################################################
+# Map from string type to actual type annotation
+type_map = {
+    "string": str,
+    "user": discord.User,
+    "int": int,
+    "bool": bool,
+    "float": float,
+    "channel": discord.abc.GuildChannel,
+    "role": discord.Role,
+    "mentionable": Union[discord.User, discord.Role],
+    "attachment": discord.Attachment,
+}
+
+async def setup_hook():
+    print("Loading Dynamic Commands!")
+    await load_dynamic_commands()
+
+import inspect
+import types
+
+async def load_dynamic_commands():
+    command_data = load_file(os.path.join(shared_path.dir_root, 'user', 'settings', 'dict_commands.yaml'))
+    for cmd in command_data:
+        name = cmd["command_name"]
+        description = cmd.get("description", "No description")
+        options = cmd.get("options", [])
+
+        # Signature parameter list (start with interaction)
+        parameters = [
+            inspect.Parameter(
+                "interaction",
+                inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                annotation=discord.Interaction,
+            )
+        ]
+
+        # Store choice metadata for later injection
+        option_metadata = []
+
+        for opt in options:
+            opt_name = opt["name"]
+            opt_type_str = opt["type"]
+            opt_type = type_map[opt_type_str]
+            required = opt.get("required", True)
+            choices_raw = opt.get("choices")
+
+            if choices_raw and isinstance(choices_raw[0], dict):
+                # Choice objects with name-value mapping
+                annotation = app_commands.Choice[str]
+                choices = [app_commands.Choice(name=c["name"], value=c["value"]) for c in choices_raw]
+            else:
+                annotation = opt_type
+                choices = None
+
+            param = inspect.Parameter(
+                name=opt_name,
+                kind=inspect.Parameter.KEYWORD_ONLY,
+                default=inspect.Parameter.empty if required else None,
+                annotation=annotation,
+            )
+            parameters.append(param)
+            option_metadata.append({"name": opt_name, "choices": choices})
+
+        # Create function signature
+        sig = inspect.Signature(parameters)
+
+        def make_callback(command_name):
+            async def callback_template(*args, **kwargs):
+                interaction = kwargs.pop("interaction", args[0] if args else None)
+
+                # Convert app_commands.Choice to their value
+                clean_kwargs = {
+                    k: (v.value if isinstance(v, app_commands.Choice) else v)
+                    for k, v in kwargs.items()
+                }
+
+                await interaction.response.send_message(
+                    f"Command `{command_name}` invoked with: {clean_kwargs}"
+                )
+
+            return callback_template
+
+        callback_template = make_callback(name)
+        dynamic_callback = types.FunctionType(
+            callback_template.__code__,
+            globals(),
+            name,
+            argdefs=(),
+            closure=callback_template.__closure__,
+        )
+        dynamic_callback.__annotations__ = {p.name: p.annotation for p in parameters}
+        dynamic_callback.__signature__ = sig
+
+        command = app_commands.Command(
+            name=name,
+            description=description,
+            callback=dynamic_callback
+        )
+
+        # Inject choices (private API workaround)
+        for meta in option_metadata:
+            if meta["choices"]:
+                param_name = meta["name"]
+                if param_name in command._params:
+                    command._params[param_name].choices = meta["choices"]
+                else:
+                    print(f"⚠ Warning: Parameter '{param_name}' not found in command._params")
+
+        print(f"Registering command: /{name}")
+        client.tree.add_command(command)
+
+asyncio.run(setup_hook())
 
 #################################################################
 ######################### MISC COMMANDS #########################

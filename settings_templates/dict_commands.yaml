@@ -1,0 +1,118 @@
+- command_name: greet
+  description: Greet someone
+  options:
+    - name: user
+      description: The user to greet
+      type: user
+      required: true
+
+- command_name: echo
+  description: Echo a message
+  options:
+    - name: message
+      description: The message to echo
+      type: string
+      required: true
+
+- command_name: assign_role
+  description: Assign a role to a user
+  options:
+    - name: user
+      description: The user to assign a role to
+      type: user
+      required: true
+    - name: role
+      description: The role to assign
+      type: role
+      required: true
+
+- command_name: move_user
+  description: Move a user to a channel
+  options:
+    - name: user
+      description: The user to move
+      type: user
+      required: true
+    - name: channel
+      description: The channel to move the user to
+      type: channel
+      required: true
+
+- command_name: set_volume
+  description: Set the volume level
+  options:
+    - name: level
+      description: Volume level (0.0 - 1.0)
+      type: float
+      required: true
+
+- command_name: set_color
+  description: Pick a color
+  options:
+    - name: color
+      description: Your favorite color
+      type: string
+      required: true
+      choices:
+        - name: Red
+          value: "#FF0000"
+        - name: Green
+          value: "#00FF00"
+        - name: Blue
+          value: "#0000FF"
+
+- command_name: ban_user
+  description: Ban a user with optional reason and delete message days
+  options:
+    - name: user
+      description: User to ban
+      type: user
+      required: true
+    - name: reason
+      description: Reason for ban
+      type: string
+      required: false
+    - name: delete_days
+      description: Days of messages to delete (0-7)
+      type: int
+      required: false
+
+- command_name: choose
+  description: Choose between two options
+  options:
+    - name: option1
+      description: First option
+      type: string
+      required: true
+    - name: option2
+      description: Second option
+      type: string
+      required: true
+
+- command_name: send_file
+  description: Send an attachment
+  options:
+    - name: file
+      description: File to send
+      type: attachment
+      required: true
+
+- command_name: notify
+  description: Notify a mentionable (user or role)
+  options:
+    - name: target
+      description: User or role to notify
+      type: mentionable
+      required: true
+
+- command_name: report_bug
+  description: Report a bug with optional urgency
+  options:
+    - name: description
+      description: Describe the bug
+      type: string
+      required: true
+    - name: urgent
+      description: Is it urgent?
+      type: bool
+      required: false
