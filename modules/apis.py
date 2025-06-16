@@ -1297,6 +1297,7 @@ class ImgGenClient(APIClient):
         self._bind_main_endpoints(imggen_config)
         self._sampler_names:list[str] = []
         self._schedulers:list[str] = []
+        self._lora_names:list[str] = []
 
     def _get_endpoint_class_map(self) -> dict[str, type]:
         return {"post_txt2img": ImgGenEndpoint_PostTxt2Img,
@@ -1489,6 +1490,7 @@ class ImgGenClient_Comfy(ImgGenClient):
             data = await self.get_comfy_settings_values_for(class_type='KSampler', labels=['sampler_name', 'scheduler'])
             self._sampler_names = data.get('sampler_name', [])
             self._schedulers = data.get('scheduler', [])
+            self._lora_names = await self.get_comfy_settings_values_for(class_type='LoraLoader', labels='lora_name')
         except Exception as e:
             log.error(f"Error: {e}")
             pass

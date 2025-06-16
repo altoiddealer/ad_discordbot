@@ -6844,22 +6844,17 @@ class ImgModel_Comfy(ImgModel):
     def collect_loras(self, insert_text: str, task:"Task") -> str:
         lora_matches = patterns.sd_lora_split.findall(insert_text)
         if lora_matches:
-            lora_extensions = ('.pt', '.pth', '.ckpt', '.safetensors', '.bin', '.onnx', '.h5', '.hdf5', '.pkl', '.npz')
+            valid_lora_names:list[str] = api.imggen._lora_names
             for name, strength_str in lora_matches:
                 try:
                     strength = float(strength_str)
                 except ValueError:
                     continue  # Skip malformed weights
-
                 name = name.strip()
-                ext = os.path.splitext(name)[1].lower()
-                if ext == '' or ext not in lora_extensions:
-                    if not bot_database.was_warned("comfy_lora_ext"):
-                        log.warning(f"LoRA syntax was matched, but the value does not include a valid extension (which ComfyUI expects).")
-                        log.warning(f'Updating "{name}" to "{name}.safetensors" (along with any future LoRA matches missing extension)')
-                        bot_database.update_was_warned("comfy_lora_ext")
-                    name = f"{name}.safetensors"
-
+                for valid_name in valid_lora_names:
+                    if name in valid_name:
+                        name = valid_name
+                        break
                 task.vars.add_lora(name, strength)
         # Return cleaned text (remove all <lora:...:...> tags)
         return patterns.sd_lora.sub('', insert_text)
