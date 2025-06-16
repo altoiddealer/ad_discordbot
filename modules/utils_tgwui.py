@@ -383,7 +383,7 @@ tgwui = TGWUI()
 
 def custom_chatbot_wrapper(text, state, regenerate=False, _continue=False, loading_message=True, for_ui=False, stream_tts=False):
     # 'stream_tts' CUSTOM FOR BOT
-    chatbot_wrapper, load_character, save_history, get_stopping_strings, generate_chat_prompt, generate_reply = get_chat_functions()
+    _, _, _, get_stopping_strings, generate_chat_prompt, generate_reply = get_chat_functions()
     
     history = state['history']
     output = copy.deepcopy(history)
