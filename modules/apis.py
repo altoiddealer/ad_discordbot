@@ -140,6 +140,9 @@ def resolve_imggen_subclassing(name: str) -> type["ImgGenClient"]:
     if 'comfy' in name_lower:
         log.info(f"{name} recognized as ComfyUI.")
         return ImgGenClient_Comfy
+    elif 'swarm' in name_lower:
+        log.info(f"{name} recognized as SwarmUI.")
+        return ImgGenClient_Swarm
     elif any(x in name_lower for x in ['stable', 'a1111', 'sdwebui', 'forge']):
         if 'reforge' in name_lower:
             log.info(f"{name} recognized as ReForge.")
@@ -1434,6 +1437,9 @@ class ImgGenClient(APIClient):
     def is_comfy(self) -> bool:
         return isinstance(self, ImgGenClient_Comfy)
 
+    def is_swarm(self) -> bool:
+        return isinstance(self, ImgGenClient_Swarm)
+
     def is_sdwebui_variant(self) -> bool:
         return isinstance(self, ImgGenClient_SDWebUI)
 
@@ -1452,6 +1458,19 @@ class ImgGenClient(APIClient):
 class ImgGenClient_SDWebUI(ImgGenClient):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+
+class ImgGenClient_Swarm(ImgGenClient):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        session_id = None
+
+    async def main_setup_tasks(self):
+        try:
+            response:APIResponse = await self.request(endpoint='/API/GetNewSession', json={}, method='POST', retry=0, timeout=5)
+            self.session_id = response.body.get('session_id')
+        except Exception as e:
+            log.error(f"Error: {e}")
+            pass
 
 class ImgGenClient_Comfy(ImgGenClient):
     get_history: Optional["ImgGenEndpoint"] = None
