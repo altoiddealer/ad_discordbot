@@ -500,7 +500,7 @@ class APIClient:
     async def main_setup_tasks(self):
         pass
 
-    def add_required_values_to_payload(payload:dict):
+    def add_required_values_to_payload(self, payload:dict):
         pass
 
     def get_endpoint(self, endpoint_name:str, strict=False) -> "Endpoint":
