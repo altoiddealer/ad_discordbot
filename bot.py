@@ -6425,6 +6425,24 @@ class ImgModel(SettingsBase):
         if not bot_database.was_warned('reactor_unsupported'):
             log.warning("[TAGS] ReActor was triggered, but is currently only supported for A1111-like Web UIs (A1111/Forge/ReForge)")
             bot_database.update_was_warned('reactor_unsupported')
+    
+    async def handle_image_bytes(self, image:bytes, file_type: Optional[str] = None, filename: Optional[str] = None) -> str:
+        if not api.imggen.post_upload:
+            return base64.b64encode(image).decode('utf-8')
+        else:
+            # Detect MIME type
+            kind = filetype.guess(image)
+            mime_type = kind.mime if kind else 'application/octet-stream'
+            mime_category = mime_type.split('/')[0]
+            # Use file_category as default if file_type is not provided
+            resolved_file_type = file_type or mime_category
+            # Prepare a file-like object
+            file_obj = io.BytesIO(image)
+            file_obj.name = filename
+            file = {"file": file_obj, "filename": filename, "content_type": mime_type}
+
+            await api.imggen.post_upload.upload_file(file=file, file_type=resolved_file_type)
+            return filename
 
     async def handle_image_input(self, source: Union[discord.Attachment, bytes], file_type: Optional[str] = None, filename: Optional[str] = None) -> str:
         """
@@ -6443,23 +6461,9 @@ class ImgModel(SettingsBase):
                 raise ValueError("Filename must be provided when passing bytes.")
         else:
             raise TypeError("Unsupported image input type. Expected discord.Attachment or bytes.")
+        
+        return await self.handle_image_bytes(file_bytes, file_type, filename)
 
-        if not api.imggen.post_upload:
-            return base64.b64encode(file_bytes).decode('utf-8')
-        else:
-            # Detect MIME type
-            kind = filetype.guess(file_bytes)
-            mime_type = kind.mime if kind else 'application/octet-stream'
-            mime_category = mime_type.split('/')[0]
-            # Use file_category as default if file_type is not provided
-            resolved_file_type = file_type or mime_category
-            # Prepare a file-like object
-            file_obj = io.BytesIO(file_bytes)
-            file_obj.name = filename
-            file = {"file": file_obj, "filename": filename, "content_type": mime_type}
-
-            await api.imggen.post_upload.upload_file(file=file, file_type=resolved_file_type)
-            return filename
         
     def get_sampler_and_scheduler_mapping(self) -> dict:
         return {}
@@ -6885,18 +6889,6 @@ class ImgModel_Comfy(ImgModel):
     async def get_imgmodel_data(self, imgmodel_value:str, ictx:CtxInteraction=None) -> dict:
         return {self._name_key: imgmodel_value,
                 self._value_key: imgmodel_value}
-    
-    # async def handle_image_input(self, source: Union[discord.Attachment, bytes], file_type: Optional[str] = None, filename: Optional[str] = None) -> str:
-    #     file_bytes = await attachment.read()
-    #     filename = attachment.filename
-    #     # Detect MIME type
-    #     kind = filetype.guess(file_bytes)
-    #     mime_type = kind.mime if kind else 'application/octet-stream'
-    #     # Prepare a file-like object
-    #     file_obj = io.BytesIO(file_bytes)
-    #     file_obj.name = filename
-    #     # Return file dict
-    #     return {"file": file_obj, "filename": filename, "content_type": mime_type}
 
     def apply_imgcmd_params(self, task:"Task"):
         imgcmd_vars = {}
@@ -7012,6 +7004,9 @@ class ImgModel_Swarm(ImgModel):
             if k in ['sampler_name', 'scheduler'] and isinstance(v, str):
                 updates[k] = self.check_sampler_or_scheduler_value(v)
 
+    async def handle_image_bytes(self, image:bytes, file_type: Optional[str] = None, filename: Optional[str] = None) -> str:
+        return base64.b64encode(image).decode('utf-8')
+
     def handle_payload_updates(self, updates:dict, task:"Task") -> dict:
         self.fix_update_values(updates)
         task.vars.update_from_dict(updates)
@@ -7026,14 +7021,8 @@ class ImgModel_SDWebUI(ImgModel):
         self._filename_key:str = 'filename'
         self._imgmodel_input_key:str = 'sd_model_checkpoint'
 
-    async def handle_image_input(self, source: Union[discord.Attachment, bytes], file_type: Optional[str] = None, filename: Optional[str] = None) -> str:
-        if isinstance(source, discord.Attachment):
-            file_bytes = await source.read()
-        elif isinstance(source, bytes):
-            file_bytes = source
-        else:
-            raise TypeError("Unsupported image input type.")
-        return base64.b64encode(file_bytes).decode('utf-8')
+    async def handle_image_bytes(self, image:bytes, file_type: Optional[str] = None, filename: Optional[str] = None) -> str:
+        return base64.b64encode(image).decode('utf-8')
     
     def fix_update_values(self, updates: dict):
         for k, v in updates.items():
