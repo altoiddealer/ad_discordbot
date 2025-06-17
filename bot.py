@@ -6953,8 +6953,12 @@ class ImgModel_Swarm(ImgModel):
         self._imgmodel_input_key:str = 'model'
 
     async def post_options(self, options_payload:dict):
-        payload = {'model': options_payload['model']}         
-        await api.imggen.post_options.call(input_data=payload, sanitize=True)
+        payload = {'model': options_payload['model']}
+        response = await api.imggen.post_options.call(input_data=payload, sanitize=True)
+        if response and response.get('error'):
+            error = response['error']
+            log.error(f"[Post Options] Error changing ImgModel for Swarm: {error}")
+            raise
 
     # def collect_extra_preset_data(self, matched_preset:dict):
     #     self.delete_nodes = matched_preset.get('comfy_delete_nodes', [])
