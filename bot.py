@@ -6353,17 +6353,18 @@ class ImgModel(SettingsBase):
         self._guild_id = None
         self._guild_name = None
         # Convenience keys
-        self._name_key = api.imggen.get_imgmodels.imgmodel_name_key or ''
-        self._value_key = api.imggen.get_imgmodels.imgmodel_value_key or ''
-        self._filename_key = api.imggen.get_imgmodels.imgmodel_filename_key or ''
-        self._any_key = self._name_key or self._value_key or self._filename_key or ''
+        get_imgmodels_ep = getattr(api.imggen, 'get_imgmodels', None)
+        self._name_key:str = getattr(get_imgmodels_ep, 'imgmodel_name_key', '')
+        self._value_key:str = getattr(get_imgmodels_ep, 'imgmodel_value_key', '')
+        self._filename_key:str = getattr(get_imgmodels_ep, 'imgmodel_filename_key', '')
+        self._any_key:str = self._name_key or self._value_key or self._filename_key or ''
 
         post_options_ep = getattr(api.imggen, 'post_options', None)
         self._imgmodel_input_key:Optional[str] = getattr(post_options_ep, 'imgmodel_input_key', None)
         # database-like
-        self.last_imgmodel_name: str = ''
-        self.last_imgmodel_value: str = ''
-        self.last_imgmodel_res: int = 1024
+        self.last_imgmodel_name:str = ''
+        self.last_imgmodel_value:str = ''
+        self.last_imgmodel_res:int = 1024
         # Override base values
         self.payload_mods:dict = {}
         self.tags:TAG_LIST = []
@@ -6448,12 +6449,46 @@ class ImgModel(SettingsBase):
 
             await api.imggen.post_upload.upload_file(file=file, file_type=resolved_file_type)
             return filename
+        
+    def get_sampler_and_scheduler_mapping(self) -> dict:
+        return {}
     
-    def collect_loras(self, text:str, task:"Task") -> str:
-        return text
+    def normalize_sampler_name(self, name:str) -> str:
+        normalized = name.strip().lower().replace("+", "p").replace(" ", "_")
+        if normalized.startswith("k_"):
+            normalized = normalized[2:]
+        return normalized
 
     def check_sampler_or_scheduler_value(self, value: str) -> str:
-        pass
+        valid_values = [v.lower() for v in api.imggen._sampler_names + api.imggen._schedulers]
+        if not valid_values:
+            return value
+        normalized = self.normalize_sampler_name(value)
+        if normalized in valid_values:
+            return normalized
+        mapping = self.get_sampler_and_scheduler_mapping()
+        return mapping.get(normalized, value)
+
+    def collect_loras(self, prompt: str, task:"Task") -> str:
+        if not api.imggen._lora_names:
+            return prompt
+
+        lora_matches = patterns.sd_lora_split.findall(prompt)
+        if lora_matches:
+            valid_lora_names:list[str] = api.imggen._lora_names
+            for name, strength_str in lora_matches:
+                try:
+                    strength = float(strength_str)
+                except ValueError:
+                    continue  # Skip malformed weights
+                name = name.strip()
+                for valid_name in valid_lora_names:
+                    if name in valid_name:
+                        name = valid_name
+                        break
+                task.vars.add_lora(name, strength)
+        # Return cleaned text (remove all <lora:...:...> tags)
+        return patterns.sd_lora.sub('', prompt)
 
     def collect_model_names(self, imgmodels:list):
         if not imgmodels:
@@ -6534,12 +6569,14 @@ class ImgModel(SettingsBase):
     # Check filesize/filters with selected imgmodel to assume resolution / tags
     async def guess_model_data(self, imgmodel_data: dict, presets: list[dict]) -> dict | None:
         try:
-            imgmodel = imgmodel_data.get(self._any_key)
+            imgmodel_name = imgmodel_data.get(self._name_key) or ''
+            imgmodel_value = imgmodel_data.get(self._value_key) or ''
+            imgmodel = imgmodel_value or imgmodel_name
             match_counts = []
 
             for preset in presets:
-                exact_match = preset.get('exact_match', '')
-                if exact_match and imgmodel == exact_match:
+                exact_match = preset.get('exact_match')
+                if exact_match and exact_match in [imgmodel_name, imgmodel_value]:
                     log.info(f'Applying exact match imgmodel preset for "{exact_match}".')
                     return preset
 
@@ -6789,10 +6826,12 @@ class ImgModel_Comfy(ImgModel):
     def __init__(self):
         super().__init__()
         # Convenience keys
-        self._name_key = api.imggen.get_imgmodels.imgmodel_name_key or 'model_name'
-        self._value_key = api.imggen.get_imgmodels.imgmodel_value_key or 'title'
-        self._filename_key = api.imggen.get_imgmodels.imgmodel_filename_key or ''
-        self._any_key = self._name_key or self._value_key or ''
+        get_imgmodels_ep = getattr(api.imggen, 'get_imgmodels', None)
+        self._name_key:str = getattr(get_imgmodels_ep, 'imgmodel_name_key', 'model_name')
+        self._value_key:str = getattr(get_imgmodels_ep, 'imgmodel_value_key', 'title')
+        self._filename_key:str = getattr(get_imgmodels_ep, 'imgmodel_filename_key', '')
+        self._any_key:str = self._name_key or self._value_key or ''
+
         self.delete_nodes:list[str] = []
 
     def delete_conflicting_nodes_for_model_type(self, payload: dict):
@@ -6841,24 +6880,6 @@ class ImgModel_Comfy(ImgModel):
         return {self._name_key: imgmodel_value,
                 self._value_key: imgmodel_value}
     
-    def collect_loras(self, insert_text: str, task:"Task") -> str:
-        lora_matches = patterns.sd_lora_split.findall(insert_text)
-        if lora_matches:
-            valid_lora_names:list[str] = api.imggen._lora_names
-            for name, strength_str in lora_matches:
-                try:
-                    strength = float(strength_str)
-                except ValueError:
-                    continue  # Skip malformed weights
-                name = name.strip()
-                for valid_name in valid_lora_names:
-                    if name in valid_name:
-                        name = valid_name
-                        break
-                task.vars.add_lora(name, strength)
-        # Return cleaned text (remove all <lora:...:...> tags)
-        return patterns.sd_lora.sub('', insert_text)
-    
     # async def handle_image_input(self, source: Union[discord.Attachment, bytes], file_type: Optional[str] = None, filename: Optional[str] = None) -> str:
     #     file_bytes = await attachment.read()
     #     filename = attachment.filename
@@ -6896,24 +6917,87 @@ class ImgModel_Comfy(ImgModel):
 
         task.vars.update_from_dict(imgcmd_vars)
 
-    def check_sampler_or_scheduler_value(self, value: str) -> str:
-        comfy_values = [v.lower() for v in api.imggen._sampler_names + api.imggen._schedulers]
-        if not comfy_values:
-            return value
-        normalized = value.strip().lower().replace("+", "p").replace(" ", "_")
-        if normalized.startswith("k_"):
-            normalized = normalized[2:]
-        if normalized in comfy_values:
-            return normalized
-        manual_fallbacks = {"dpmpp_2m_sde_heun": "dpmpp_2m_sde",
-                            "ddim_cfgpp": "ddim",
-                            "plms": "lms",
-                            "unipc": "uni_pc",
-                            "restart": "res_multistep",
-                            "sgmuniform": "sgm_uniform",
-                            "ddim": "ddim_uniform",
-                            "uniform": "ddim_uniform"}
-        return manual_fallbacks.get(normalized, value)
+    def get_sampler_and_scheduler_mapping(self) -> dict:
+        return {"dpmpp_2m_sde_heun": "dpmpp_2m_sde",
+                "ddim_cfgpp": "ddim",
+                "plms": "lms",
+                "unipc": "uni_pc",
+                "restart": "res_multistep",
+                "sgmuniform": "sgm_uniform",
+                "ddim": "ddim_uniform",
+                "uniform": "ddim_uniform"}
+
+    def fix_update_values(self, updates: dict):
+        for k, v in updates.items():
+            if k in ['sampler_name', 'scheduler'] and isinstance(v, str):
+                updates[k] = self.check_sampler_or_scheduler_value(v)
+
+    def handle_payload_updates(self, updates:dict, task:"Task") -> dict:
+        self.fix_update_values(updates)
+        task.vars.update_from_dict(updates)
+
+
+class ImgModel_Swarm(ImgModel):
+    def __init__(self):
+        super().__init__()
+        # Convenience keys
+        get_imgmodels_ep = getattr(api.imggen, 'get_imgmodels', None)
+        self._name_key:str = getattr(get_imgmodels_ep, 'imgmodel_name_key', 'model_name')
+        self._value_key:str = getattr(get_imgmodels_ep, 'imgmodel_value_key', 'title')
+        self._filename_key:str = getattr(get_imgmodels_ep, 'imgmodel_filename_key', '')
+        self._any_key:str = self._name_key or self._value_key or ''
+
+        self.delete_nodes:list[str] = []
+
+    async def post_options(self, options_payload:dict):
+        pass
+
+    # def collect_extra_preset_data(self, matched_preset:dict):
+    #     self.delete_nodes = matched_preset.get('comfy_delete_nodes', [])
+
+    async def get_imgmodel_data(self, imgmodel_value:str, ictx:CtxInteraction=None) -> dict:
+        return {self._name_key: imgmodel_value,
+                self._value_key: imgmodel_value}
+
+    def apply_imgcmd_params(self, task:"Task"):
+        imgcmd_vars = {}
+        imgcmd_params = task.params.imgcmd
+        if imgcmd_params.get('size'):
+            imgcmd_vars['width'] = imgcmd_params['size']['width']
+            imgcmd_vars['height'] = imgcmd_params['size']['height']
+        if imgcmd_params.get('img2img'):
+            if imgcmd_params['img2img'].get('image'):
+                imgcmd_vars['i2i_image'] = imgcmd_params['img2img']['image']['filename']
+            if imgcmd_params['img2img'].get('mask'):
+                imgcmd_vars['i2i_mask'] = imgcmd_params['img2img']['mask']['filename']
+            if imgcmd_params['img2img'].get('denoising_strength'):
+                imgcmd_vars['denoising_strength'] = imgcmd_params['img2img']['denoising_strength']
+        if imgcmd_params.get('cnet_dict'):
+            # TODO support ControlNet in /image cmd for ComfyUI
+            log.warning("ControlNet not yet supported for ComfyUI via /image command")
+            # cnet_dict = imgcmd_params['cnet_dict']
+            # for key, value in cnet_dict.items():
+            #     attr_name = f'cnet_{key}'
+            #     imgcmd_vars[attr_name] = value
+        if imgcmd_params.get('face_swap'):
+            imgcmd_vars['face_swap'] = imgcmd_params['face_swap']['filename']
+
+        task.vars.update_from_dict(imgcmd_vars)
+
+    def get_sampler_and_scheduler_mapping(self) -> dict:
+        return {"euler_a": "euler_ancestral",
+                "dpmpp_2m_sde_heun": "dpmpp_2m_sde",
+                "ddim_cfgpp": "ddim",
+                "plms": "lms",
+                "unipc": "uni_pc",
+                "restart": "res_multistep",
+                "sgmuniform": "sgm_uniform",
+                "ddim": "ddim_uniform",
+                "uniform": "ddim_uniform",
+                "polyexponential": "exponential",
+                "align_your_steps_gits": "align_your_steps",
+                "align_your_steps_11": "align_your_steps",
+                "align_your_steps_32": "align_your_steps"}
 
     def fix_update_values(self, updates: dict):
         for k, v in updates.items():
@@ -6929,12 +7013,15 @@ class ImgModel_SDWebUI(ImgModel):
     def __init__(self):
         super().__init__()
         # Convenience keys
-        self._name_key = api.imggen.get_imgmodels.imgmodel_name_key or 'model_name'
-        self._value_key = api.imggen.get_imgmodels.imgmodel_value_key or 'title'
-        self._filename_key = api.imggen.get_imgmodels.imgmodel_filename_key or 'filename'
-        self._any_key = self._name_key or self._value_key or self._filename_key or ''
-        if hasattr(api.imggen, 'post_options') and api.imggen.post_options:
-            self._imgmodel_input_key:str = api.imggen.post_options.imgmodel_input_key or 'sd_model_checkpoint'
+        # Convenience keys
+        get_imgmodels_ep = getattr(api.imggen, 'get_imgmodels', None)
+        self._name_key:str = getattr(get_imgmodels_ep, 'imgmodel_name_key', 'model_name')
+        self._value_key:str = getattr(get_imgmodels_ep, 'imgmodel_value_key', 'title')
+        self._filename_key:str = getattr(get_imgmodels_ep, 'imgmodel_filename_key', 'filename')
+        self._any_key:str = self._name_key or self._value_key or self._filename_key or ''
+
+        post_options_ep = getattr(api.imggen, 'post_options', None)
+        self._imgmodel_input_key:Optional[str] = getattr(post_options_ep, 'imgmodel_input_key', 'sd_model_checkpoint')
 
     async def handle_image_input(self, source: Union[discord.Attachment, bytes], file_type: Optional[str] = None, filename: Optional[str] = None) -> str:
         if isinstance(source, discord.Attachment):
@@ -7076,22 +7163,25 @@ class ImgModel_SDWebUI(ImgModel):
         if reactor.get('mask'):
             task.payload['alwayson_scripts']['reactor']['args']['save_original'] = True
 
+    def get_sampler_and_scheduler_mapping(self) -> dict:
+        return {'euler_cfg_pp': 'k_euler',
+                'euler_ancestral_cfg_pp': 'k_euler_ancestral',
+                'dpm_2_ancestral': 'k_dpm_2_a',
+                'dpmpp_2s_ancestral': 'k_dpmpp_2s_a',
+                'dpmpp_2s_ancestral_cfg_pp': 'k_dpmpp_2s_a',
+                'dpmpp_sde_gpu': 'k_dpmpp_sde',
+                'dpmpp_2m_cfg_pp': 'k_dpmpp_2m',
+                'dpmpp_2m_sde_gpu': 'k_dpmpp_2m_sde',
+                'dpmpp_3m_sde_gpu': 'k_dpmpp_3m_sde',
+                'res_multistep': 'restart',
+                'res_multistep_cfg_pp': 'restart',
+                'res_multistep_ancestral': 'restart',
+                'res_multistep_ancestral_cfg_pp': 'restart',
+                'uni_pc': 'unipc',
+                'uni_pc_bh2': 'unipc'}
+
     def check_sampler_or_scheduler_value(self, value: str) -> str:
-        mapping = {'euler_cfg_pp': 'k_euler',
-                   'euler_ancestral_cfg_pp': 'k_euler_ancestral',
-                   'dpm_2_ancestral': 'k_dpm_2_a',
-                   'dpmpp_2s_ancestral': 'k_dpmpp_2s_a',
-                   'dpmpp_2s_ancestral_cfg_pp': 'k_dpmpp_2s_a',
-                   'dpmpp_sde_gpu': 'k_dpmpp_sde',
-                   'dpmpp_2m_cfg_pp': 'k_dpmpp_2m',
-                   'dpmpp_2m_sde_gpu': 'k_dpmpp_2m_sde',
-                   'dpmpp_3m_sde_gpu': 'k_dpmpp_3m_sde',
-                   'res_multistep': 'restart',
-                   'res_multistep_cfg_pp': 'restart',
-                   'res_multistep_ancestral': 'restart',
-                   'res_multistep_ancestral_cfg_pp': 'restart',
-                   'uni_pc': 'unipc',
-                   'uni_pc_bh2': 'unipc'}
+        mapping = self.get_sampler_and_scheduler_mapping()
         return mapping.get(value, value)
 
 class ImgModel_A1111(ImgModel_SDWebUI):
@@ -7286,6 +7376,8 @@ class Settings(BaseFileMemory):
         else:
             if api.imggen.is_comfy():
                 self.imgmodel = ImgModel_Comfy()
+            elif api.imggen.is_swarm():
+                self.imgmodel = ImgModel_Swarm()
             elif api.imggen.is_reforge():
                 self.imgmodel = ImgModel_ReForge()
             elif api.imggen.is_forge():

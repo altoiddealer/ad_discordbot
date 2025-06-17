@@ -500,6 +500,9 @@ class APIClient:
     async def main_setup_tasks(self):
         pass
 
+    def add_required_values_to_payload(payload:dict):
+        pass
+
     def get_endpoint(self, endpoint_name:str, strict=False) -> "Endpoint":
         endpoint = self.endpoints.get(endpoint_name)
         if not endpoint:
@@ -1462,15 +1465,49 @@ class ImgGenClient_SDWebUI(ImgGenClient):
 class ImgGenClient_Swarm(ImgGenClient):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        session_id = None
+        self.session_id = None
+
+    def add_required_values_to_payload(self, payload:dict):
+        payload['session_id'] = self.session_id
+
+    def get_settings_list_for(self, response, key:str):
+        if not isinstance(response, APIResponse):
+            return []
+        return response.body.get(key, [])
 
     async def main_setup_tasks(self):
         try:
             response:APIResponse = await self.request(endpoint='/API/GetNewSession', json={}, method='POST', retry=0, timeout=5)
-            self.session_id = response.body.get('session_id')
+            self.session_id = response.body['session_id']
+        except Exception as e:
+            log.error(f'[{self.name}] Error getting session_id (required for this client): {e}')
+            return await self.go_offline()
+        try:
+            params_resp:APIResponse = await self.request(endpoint='/API/ListT2IParams', json={'session_id': self.session_id}, method='POST', retry=0, timeout=5)
+            params_list = self.get_settings_list_for(params_resp, 'list')
+            for settings_dict in params_list:
+                if settings_dict.get('id') == 'sampler':
+                    self._sampler_names = settings_dict.get('values', [])
+                elif settings_dict.get('id') == 'scheduler':
+                    self._schedulers = settings_dict.get('values', [])
+
+            loras_resp:APIResponse = await self.request(endpoint='/API/ListModels', json={'session_id': self.session_id, 'path': '', 'subtype': 'LoRA', 'depth': 10}, method='POST', retry=0, timeout=5)
+            loras_list = self.get_settings_list_for(loras_resp, 'files')
+            for lora_dict in loras_list:
+                if lora_dict.get('name'):
+                    self._lora_names.append(lora_dict['name'])
         except Exception as e:
             log.error(f"Error: {e}")
             pass
+
+    async def fetch_imgmodels(self) -> list:
+        all_imgmodels = []
+        response:APIResponse = await self.request(endpoint='/API/ListModels', json={'session_id': self.session_id, 'path': '', 'depth': 10}, method='POST', retry=0, timeout=5)
+        model_list = self.get_settings_list_for(response, 'files')
+        for model_dict in model_list:
+            if model_dict.get('name'):
+                all_imgmodels.append(model_dict['name'])
+        return all_imgmodels
 
 class ImgGenClient_Comfy(ImgGenClient):
     get_history: Optional["ImgGenEndpoint"] = None
@@ -1843,6 +1880,7 @@ class Endpoint:
     def clean_payload(self, payload):
         if isinstance(payload, dict):
             payload = remove_keys(payload, keys_to_remove={"__overrides__", "_comment"})
+            self.client.add_required_values_to_payload(payload)
         return payload
 
     def prepare_aiohttp_formdata(self, data_payload: dict = None, files_payload: dict = None) -> aiohttp.FormData:
