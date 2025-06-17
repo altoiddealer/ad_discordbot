@@ -6354,12 +6354,11 @@ class ImgModel(SettingsBase):
         self._guild_name = None
         # Convenience keys
         get_imgmodels_ep = getattr(api.imggen, 'get_imgmodels', None)
+        post_options_ep = getattr(api.imggen, 'post_options', None)
+
         self._name_key:str = getattr(get_imgmodels_ep, 'imgmodel_name_key', '')
         self._value_key:str = getattr(get_imgmodels_ep, 'imgmodel_value_key', '')
         self._filename_key:str = getattr(get_imgmodels_ep, 'imgmodel_filename_key', '')
-        self._any_key:str = self._name_key or self._value_key or self._filename_key or ''
-
-        post_options_ep = getattr(api.imggen, 'post_options', None)
         self._imgmodel_input_key:Optional[str] = getattr(post_options_ep, 'imgmodel_input_key', None)
         # database-like
         self.last_imgmodel_name:str = ''
@@ -6368,6 +6367,18 @@ class ImgModel(SettingsBase):
         # Override base values
         self.payload_mods:dict = {}
         self.tags:TAG_LIST = []
+
+    def get_any_imgmodel_key(self, priority:str='name') -> str:
+        # Look for the first non-empty value in priority order
+        keys = ['name', 'value', 'filename']
+        if priority != 'name':
+            keys.remove(priority)
+            keys.insert(0, priority)
+        for k in keys:
+            value = getattr(self, f'_{k}_key', '')
+            if value:
+                return value
+        return ''
 
     def clean_payload(self, payload:dict):
         pass
@@ -6495,7 +6506,7 @@ class ImgModel(SettingsBase):
             return []
         first = imgmodels[0]
         if isinstance(first, dict):
-            display_key = self._any_key
+            display_key = self.get_any_imgmodel_key()
             return [i[display_key] for i in imgmodels]
         elif isinstance(first, str):
             return imgmodels
@@ -6601,19 +6612,13 @@ class ImgModel(SettingsBase):
             log.error(f"Error guessing selected imgmodel data: {e}")
             return {}
 
+    def clean_options_before_saving(self, options:dict) -> dict:
+        return options
+
     # Save new Img model data
     async def save_new_imgmodel_options(self, ictx:CtxInteraction, new_imgmodel_options:dict, imgmodel_tags):
-        # Remove options we do not want to retain in Settings
-        override_settings:dict = new_imgmodel_options.get('override_settings', {})
-        if override_settings and not config.is_per_server_imgmodels():
-            imgmodel_options = list(override_settings.keys())  # list all options
-            if imgmodel_options:
-                log.info(f"[Change Imgmodel] Applying Options which won't be retained for next bot startup: {imgmodel_options}")
-            # Remove override_settings
-            new_imgmodel_options.pop('override_settings')
-
         # Update settings
-        self.payload_mods = new_imgmodel_options
+        self.payload_mods = self.clean_options_before_saving(new_imgmodel_options)
         self.tags = imgmodel_tags
 
         # Check if old/new average resolution is different
@@ -6660,10 +6665,7 @@ class ImgModel(SettingsBase):
         return imgmodel_options, imgmodel_tags
 
     async def post_options(self, options_payload:dict):
-        try:
-            await api.imggen.post_options.call(input_data=options_payload, sanitize=True)
-        except Exception as e:
-            log.error(f"Error posting updated imgmodel settings to API: {e}")
+        await api.imggen.post_options.call(input_data=options_payload, sanitize=True)
 
     async def change_imgmodel(self, imgmodel_data:dict, ictx:CtxInteraction=None, save:bool=True) -> dict:
         # Retain model details
@@ -6676,14 +6678,19 @@ class ImgModel(SettingsBase):
         # Collect options payload
         options_payload = api.imggen.post_options.get_payload() if getattr(api.imggen, 'post_options', None) else {}
         if self._imgmodel_input_key:
-            options_payload[self._imgmodel_input_key] = imgmodel_data[self._any_key]
-        
+            value_key = self.get_any_imgmodel_key(priority='value')
+            options_payload[self._imgmodel_input_key] = imgmodel_data[value_key]
+
         # Factors extras (override_settings, etc) if applicable
         options_payload.update(self.get_extra_settings(imgmodel_options))
 
         # Post new settings to API (Per-server must be payload-driven)
         if not config.is_per_server_imgmodels():
-            await self.post_options(options_payload)
+            try:
+                await self.post_options(options_payload)
+            except Exception as e:
+                log.error(f"Error posting updated imgmodel settings to API: {e}")
+                raise
 
         # Save settings
         if save:
@@ -6776,8 +6783,8 @@ class ImgModel(SettingsBase):
 
     # From change_imgmodel_task
     async def change_imgmodel_task(self, task:"Task"):
-        print_model_name:str = task.params.imgmodel.get(self._name_key) or task.params.imgmodel.get(self._value_key, '')
-        imgmodel_value:str = task.params.imgmodel.get(self._any_key)
+        print_model_name:str = task.params.imgmodel.get(self.get_any_imgmodel_key(priority='name'))
+        imgmodel_value:str = task.params.imgmodel.get(self.get_any_imgmodel_key(priority='value'))
 
         if not imgmodel_value:
             await task.embeds.send('change', 'Failed to change Img model:', f'Img model not found: {print_model_name}')
@@ -6826,11 +6833,10 @@ class ImgModel_Comfy(ImgModel):
     def __init__(self):
         super().__init__()
         # Convenience keys
-        get_imgmodels_ep = getattr(api.imggen, 'get_imgmodels', None)
-        self._name_key:str = getattr(get_imgmodels_ep, 'imgmodel_name_key', 'model_name')
-        self._value_key:str = getattr(get_imgmodels_ep, 'imgmodel_value_key', 'title')
-        self._filename_key:str = getattr(get_imgmodels_ep, 'imgmodel_filename_key', '')
-        self._any_key:str = self._name_key or self._value_key or ''
+        self._name_key:str = 'model_name'
+        self._value_key:str = 'title'
+        self._filename_key:str = ''
+        self._imgmodel_input_key = None
 
         self.delete_nodes:list[str] = []
 
@@ -6941,16 +6947,14 @@ class ImgModel_Swarm(ImgModel):
     def __init__(self):
         super().__init__()
         # Convenience keys
-        get_imgmodels_ep = getattr(api.imggen, 'get_imgmodels', None)
-        self._name_key:str = getattr(get_imgmodels_ep, 'imgmodel_name_key', 'model_name')
-        self._value_key:str = getattr(get_imgmodels_ep, 'imgmodel_value_key', 'title')
-        self._filename_key:str = getattr(get_imgmodels_ep, 'imgmodel_filename_key', '')
-        self._any_key:str = self._name_key or self._value_key or ''
-
-        self.delete_nodes:list[str] = []
+        self._name_key:str = 'model_name'
+        self._value_key:str = 'title'
+        self._filename_key:str = ''
+        self._imgmodel_input_key:str = 'model'
 
     async def post_options(self, options_payload:dict):
-        pass
+        payload = {'model': options_payload['model']}         
+        await api.imggen.post_options.call(input_data=payload, sanitize=True)
 
     # def collect_extra_preset_data(self, matched_preset:dict):
     #     self.delete_nodes = matched_preset.get('comfy_delete_nodes', [])
@@ -7013,15 +7017,10 @@ class ImgModel_SDWebUI(ImgModel):
     def __init__(self):
         super().__init__()
         # Convenience keys
-        # Convenience keys
-        get_imgmodels_ep = getattr(api.imggen, 'get_imgmodels', None)
-        self._name_key:str = getattr(get_imgmodels_ep, 'imgmodel_name_key', 'model_name')
-        self._value_key:str = getattr(get_imgmodels_ep, 'imgmodel_value_key', 'title')
-        self._filename_key:str = getattr(get_imgmodels_ep, 'imgmodel_filename_key', 'filename')
-        self._any_key:str = self._name_key or self._value_key or self._filename_key or ''
-
-        post_options_ep = getattr(api.imggen, 'post_options', None)
-        self._imgmodel_input_key:Optional[str] = getattr(post_options_ep, 'imgmodel_input_key', 'sd_model_checkpoint')
+        self._name_key:str = 'model_name'
+        self._value_key:str = 'title'
+        self._filename_key:str = 'filename'
+        self._imgmodel_input_key:str = 'sd_model_checkpoint'
 
     async def handle_image_input(self, source: Union[discord.Attachment, bytes], file_type: Optional[str] = None, filename: Optional[str] = None) -> str:
         if isinstance(source, discord.Attachment):
@@ -7183,6 +7182,17 @@ class ImgModel_SDWebUI(ImgModel):
     def check_sampler_or_scheduler_value(self, value: str) -> str:
         mapping = self.get_sampler_and_scheduler_mapping()
         return mapping.get(value, value)
+
+    def clean_options_before_saving(self, options:dict) -> dict:
+        # Remove options we do not want to retain in Settings
+        override_settings:dict = options.get('override_settings', {})
+        if override_settings and not config.is_per_server_imgmodels():
+            imgmodel_options = list(override_settings.keys())  # list all options
+            if imgmodel_options:
+                log.info(f"[Change Imgmodel] Applying Options which won't be retained for next bot startup: {imgmodel_options}")
+            # Remove override_settings
+            options.pop('override_settings')
+        return options
 
 class ImgModel_A1111(ImgModel_SDWebUI):
     def __init__(self):
