@@ -133,7 +133,7 @@ def disable_unsupported_features():
         log.warning('Layerdiffuse is enabled in config.yaml, but is currently only supported by SD Forge. Disabling.')
         config.imggen['extensions']['layerdiffuse_enabled'] = False
     if config.imggen.get('extensions', {}).get('loractl', {}).get('enabled', False) and not api.imggen.supports_loractrl():
-        log.warning('Loractrl feature is enabled in config.yaml, but is currently only supported by SD Forge/ReForge. Disabling.')
+        log.warning('Loractl-scaling feature is enabled in config.yaml, but is currently only supported by SD Forge/ReForge. Disabling.')
         config.imggen['extensions']['loractl']['enabled'] = False
 
 # Feature to automatically change imgmodels periodically
@@ -142,8 +142,8 @@ async def init_auto_change_imgmodels():
     if imgmodels_data and imgmodels_data.get('settings', {}).get('auto_change_imgmodels', {}).get('enabled', False):
         if config.is_per_server_imgmodels():
             for guild_id, settings in guild_settings.items():
-                settings.imgmodel._guild_id = settings._guild_id # store Guild ID
-                settings.imgmodel._guild_name = settings._guild_id # store Guild Name
+                settings.imgmodel._guild_id = guild_id # store Guild ID
+                settings.imgmodel._guild_name = guild_id # store Guild Name
                 await bg_task_queue.put(settings.imgmodel.start_auto_change_imgmodels())
         else:
             await bg_task_queue.put(bot_settings.imgmodel.start_auto_change_imgmodels())
@@ -3625,7 +3625,7 @@ class Tasks(TaskProcessing):
             # Apply tags relevant to Img gen
             await self.process_img_payload_tags(img_payload_mods)
             # Process loractl
-            if config.imggen['extensions'].get('loractl', {}).get('enabled', False):
+            if config.loractl_enabled():
                 self.apply_loractl()
             # Apply tags relevant to Img prompts
             self.process_img_prompt_tags()
@@ -3635,7 +3635,7 @@ class Tasks(TaskProcessing):
             # Apply menu selections from /image command
             self.imgmodel_settings.apply_imgcmd_params(task=self)
             # Apply updated prompt/negative prompt to payload
-            self.imgmodel_settings.apply_prompts_to_task(self)
+            self.imgmodel_settings.apply_final_prompts_for_task(self)
             # Apply vars overrides
             self.override_payload()
             # Clean anything up that gets messy
@@ -6393,7 +6393,7 @@ class ImgModel(SettingsBase):
     def override_payload(self, task:"Task") -> dict:
         return self.handle_payload_updates(self.payload_mods, task)
     
-    def apply_prompts_to_task(self, task:"Task"):
+    def apply_final_prompts_for_task(self, task:"Task"):
         active_ep = task.params.get_active_imggen_ep()
         prompt_key, neg_prompt_key = active_ep.get_prompt_keys()
         if prompt_key:
@@ -6464,7 +6464,6 @@ class ImgModel(SettingsBase):
         
         return await self.handle_image_bytes(file_bytes, file_type, filename)
 
-        
     def get_sampler_and_scheduler_mapping(self) -> dict:
         return {}
     
@@ -6669,7 +6668,11 @@ class ImgModel(SettingsBase):
         return imgmodel_options, imgmodel_tags
 
     async def post_options(self, options_payload:dict):
-        await api.imggen.post_options.call(input_data=options_payload, sanitize=True)
+        try:
+            await api.imggen.post_options.call(input_data=options_payload, sanitize=True)
+        except Exception as e:
+            log.error(f"Error posting updated imgmodel settings to API: {e}")
+            raise
 
     async def change_imgmodel(self, imgmodel_data:dict, ictx:CtxInteraction=None, save:bool=True) -> dict:
         # Retain model details
@@ -6690,11 +6693,7 @@ class ImgModel(SettingsBase):
 
         # Post new settings to API (Per-server must be payload-driven)
         if not config.is_per_server_imgmodels():
-            try:
-                await self.post_options(options_payload)
-            except Exception as e:
-                log.error(f"Error posting updated imgmodel settings to API: {e}")
-                raise
+            await self.post_options(options_payload)
 
         # Save settings
         if save:
@@ -6890,6 +6889,9 @@ class ImgModel_Comfy(ImgModel):
         return {self._name_key: imgmodel_value,
                 self._value_key: imgmodel_value}
 
+    def apply_final_prompts_for_task(self, task:"Task"):
+        pass
+
     def apply_imgcmd_params(self, task:"Task"):
         imgcmd_vars = {}
         imgcmd_params = task.params.imgcmd
@@ -6934,7 +6936,6 @@ class ImgModel_Comfy(ImgModel):
         self.fix_update_values(updates)
         task.vars.update_from_dict(updates)
 
-
 class ImgModel_Swarm(ImgModel):
     def __init__(self):
         super().__init__()
@@ -6948,41 +6949,34 @@ class ImgModel_Swarm(ImgModel):
         payload = {'model': options_payload['model']}
         response = await api.imggen.post_options.call(input_data=payload, sanitize=True)
         if response and response.get('error'):
-            error = response['error']
-            log.error(f"[Post Options] Error changing ImgModel for Swarm: {error}")
-            raise
-
-    # def collect_extra_preset_data(self, matched_preset:dict):
-    #     self.delete_nodes = matched_preset.get('comfy_delete_nodes', [])
+            raise Exception(response['error'])
 
     async def get_imgmodel_data(self, imgmodel_value:str, ictx:CtxInteraction=None) -> dict:
         return {self._name_key: imgmodel_value,
                 self._value_key: imgmodel_value}
 
-    def apply_imgcmd_params(self, task:"Task"):
-        imgcmd_vars = {}
-        imgcmd_params = task.params.imgcmd
-        if imgcmd_params.get('size'):
-            imgcmd_vars['width'] = imgcmd_params['size']['width']
-            imgcmd_vars['height'] = imgcmd_params['size']['height']
-        if imgcmd_params.get('img2img'):
-            if imgcmd_params['img2img'].get('image'):
-                imgcmd_vars['i2i_image'] = imgcmd_params['img2img']['image']['filename']
-            if imgcmd_params['img2img'].get('mask'):
-                imgcmd_vars['i2i_mask'] = imgcmd_params['img2img']['mask']['filename']
-            if imgcmd_params['img2img'].get('denoising_strength'):
-                imgcmd_vars['denoising_strength'] = imgcmd_params['img2img']['denoising_strength']
-        if imgcmd_params.get('cnet_dict'):
-            # TODO support ControlNet in /image cmd for ComfyUI
-            log.warning("ControlNet not yet supported for ComfyUI via /image command")
-            # cnet_dict = imgcmd_params['cnet_dict']
-            # for key, value in cnet_dict.items():
-            #     attr_name = f'cnet_{key}'
-            #     imgcmd_vars[attr_name] = value
-        if imgcmd_params.get('face_swap'):
-            imgcmd_vars['face_swap'] = imgcmd_params['face_swap']['filename']
+    def apply_final_prompts_for_task(self, task:"Task"):
+        task.payload['prompt'] = task.prompt
+        task.payload['negative_prompt'] = task.neg_prompt
 
-        task.vars.update_from_dict(imgcmd_vars)
+    def apply_imgcmd_params(self, task:"Task"):
+        try:
+            imgcmd_params = task.params.imgcmd
+            size: Optional[dict]       = imgcmd_params['size']
+            face_swap :Optional[str]   = imgcmd_params['face_swap']
+            controlnet: Optional[dict] = imgcmd_params['controlnet']
+            img2img: dict              = imgcmd_params['img2img']
+            img2img_mask               = img2img.get('mask', '')
+
+            if img2img:
+                task.payload['init_images'] = [img2img['image']]
+                task.payload['denoising_strength'] = img2img['denoising_strength']
+            if img2img_mask:
+                task.payload['mask'] = img2img_mask
+            if size:
+                task.payload.update(size)
+        except Exception as e:
+            log.error(f"Error applying imgcmd params: {e}")
 
     def get_sampler_and_scheduler_mapping(self) -> dict:
         return {"euler_a": "euler_ancestral",
@@ -6999,17 +6993,20 @@ class ImgModel_Swarm(ImgModel):
                 "align_your_steps_11": "align_your_steps",
                 "align_your_steps_32": "align_your_steps"}
 
+    async def handle_image_bytes(self, image:bytes, file_type: Optional[str] = None, filename: Optional[str] = None) -> str:
+        return base64.b64encode(image).decode('utf-8')
+    
     def fix_update_values(self, updates: dict):
         for k, v in updates.items():
             if k in ['sampler_name', 'scheduler'] and isinstance(v, str):
                 updates[k] = self.check_sampler_or_scheduler_value(v)
 
-    async def handle_image_bytes(self, image:bytes, file_type: Optional[str] = None, filename: Optional[str] = None) -> str:
-        return base64.b64encode(image).decode('utf-8')
-
-    def handle_payload_updates(self, updates:dict, task:"Task") -> dict:
+    def handle_payload_updates(self, updates:dict, task:"Task"):
         self.fix_update_values(updates)
-        task.vars.update_from_dict(updates)
+        update_dict(task.payload, updates)
+
+    def apply_payload_param_variances(self, updates:dict, task:"Task"):
+        sum_update_dict(task.payload, updates)
 
 
 class ImgModel_SDWebUI(ImgModel):
@@ -7035,6 +7032,10 @@ class ImgModel_SDWebUI(ImgModel):
 
     def apply_payload_param_variances(self, updates:dict, task:"Task"):
         sum_update_dict(task.payload, updates)
+
+    def apply_final_prompts_for_task(self, task:"Task"):
+        task.payload['prompt'] = task.prompt
+        task.payload['negative_prompt'] = task.neg_prompt
 
     def apply_imgcmd_params(self, task:"Task"):
         try:
@@ -7064,7 +7065,7 @@ class ImgModel_SDWebUI(ImgModel):
                     cnet_args.append({})
                 cnet_args[0].update(controlnet)
         except Exception as e:
-            log.error(f"Error initializing imgcmd params: {e}")
+            log.error(f"Error applying imgcmd params: {e}")
 
     def clean_payload(self, payload:dict):
         try:
