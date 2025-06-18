@@ -2594,7 +2594,7 @@ class TaskProcessing(TaskAttributes):
             # Img2Img handling
             if img2img and (api.imggen.is_sdwebui_variant() or api.imggen.is_swarm()):
                 self.params.mode = 'img2img'
-                if api.imggen.is_swarm()
+                if api.imggen.is_swarm():
                     self.payload['initimage'] = str(img2img)
                 else:
                     self.payload['init_images'] = [str(img2img)]

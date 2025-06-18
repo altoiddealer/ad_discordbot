@@ -1365,6 +1365,17 @@ class ImgGenClient(APIClient):
         # post for image gen data
         return await self.post_pnginfo.call(input_data=pnginfo_payload, main=True)
 
+    async def call_track_progress(self, ictx=None):
+        await self.track_progress(endpoint=self.get_progress,
+                                  progress_key=self.get_progress.progress_key,
+                                  eta_key=self.get_progress.eta_key,
+                                  max_key=self.get_progress.max_key,
+                                  message="Generating image",
+                                  ictx=ictx)
+        
+    async def process_images_results(self, images:Any):
+        return images
+
     async def track_t2i_i2i_progress(self, ictx=None):
         from modules.utils_discord import Embeds
         embeds = Embeds()
@@ -1378,12 +1389,8 @@ class ImgGenClient(APIClient):
                                     "Refer to the wiki for more info (https://github.com/altoiddealer/ad_discordbot/wiki).")
                         bot_database.update_was_warned("imggen_websocket_progress")
             else:
-                await self.track_progress(endpoint=self.get_progress,
-                                          progress_key=self.get_progress.progress_key,
-                                          eta_key=self.get_progress.eta_key,
-                                          max_key=self.get_progress.max_key,
-                                          message="Generating image",
-                                          ictx=ictx)
+                await self.call_track_progress(ictx=ictx)
+
         except Exception as e:
             log.error(f'Error tracking {self.name} image generation progress: {e}')
         finally:
@@ -1399,7 +1406,7 @@ class ImgGenClient(APIClient):
             images_task = asyncio.create_task(self.post_for_images(ep_for_mode, img_payload))
             progress_task = asyncio.create_task(self.track_t2i_i2i_progress(ictx=ictx))
             # Wait for images_task to complete
-            images_list = await images_task
+            images_results = await images_task
             # Once images_task is done, cancel progress_task
             if progress_task and not progress_task.done():
                 progress_task.cancel()
@@ -1407,6 +1414,8 @@ class ImgGenClient(APIClient):
                     await progress_task
                 except asyncio.CancelledError:
                     pass
+
+            images_list = await self.process_images_results(self, images_results)
 
             images = []
             pnginfo = None
@@ -1473,10 +1482,33 @@ class ImgGenClient_SDWebUI(ImgGenClient):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
+    async def call_track_progress(self, ictx=None):
+        await self.track_progress(endpoint=self.get_progress,
+                                  progress_key='progress',
+                                  eta_key='eta_relative',
+                                  max_key=None,
+                                  message="Generating image",
+                                  ictx=ictx)
+
 class ImgGenClient_Swarm(ImgGenClient):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.session_id = None
+
+    async def process_images_results(self, results:dict):
+        images = []
+        image_results = results.get('images', [])
+        for result in image_results:
+            response = await self.request(endpoint='/View', json={result}, method='POST', retry=0, timeout=10)
+            images.append(response.body)
+        return images
+
+    async def call_track_progress(self, ictx=None):
+        await self.track_progress(endpoint=self.get_progress,
+                                  progress_key='gen_progress.current_percent',
+                                  max_key='gen_progress.overall_percent',
+                                  message="Generating image",
+                                  ictx=ictx)
 
     def add_required_values_to_payload(self, payload:dict):
         payload['session_id'] = self.session_id
