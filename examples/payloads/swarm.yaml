@@ -1,0 +1,15 @@
+prompt: ''
+negativeprompt: ''
+seed: -1
+steps: 25
+cfgscale: 7.0
+width: 1024
+height: 1024
+sampler: euler
+scheduler: normal
+vae: None
+images: 1
+batchsize: 1
+variationseed: -1
+variationseedstrength: 0.0
+automaticvae: false

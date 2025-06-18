@@ -40,7 +40,7 @@ from modules.utils_files import load_file, merge_base, save_yaml_file  # noqa: F
 from modules.utils_shared import client, TOKEN, is_tgwui_integrated, shared_path, bg_task_queue, task_event, flows_queue, flows_event, patterns, bot_emojis, config, bot_database, get_api
 from modules.database import StarBoard, Statistics, BaseFileMemory
 from modules.utils_misc import check_probability, fix_dict, set_key, deep_merge, update_dict, sum_update_dict, random_value_from_range, convert_lists_to_tuples, \
-    get_time, format_time, format_time_difference, get_normalized_weights, valueparser  # noqa: F401
+    consolidate_prompt_strings, get_time, format_time, format_time_difference, get_normalized_weights, valueparser  # noqa: F401
 from modules.utils_processing import resolve_placeholders
 from modules.utils_discord import Embeds, guild_only, guild_or_owner_only, configurable_for_dm_if, is_direct_message, ireply, sleep_delete_message, send_long_message, \
     EditMessageModal, SelectedListItem, SelectOptionsView, get_user_ctx_inter, get_message_ctx_inter, apply_reactions_to_messages, replace_msg_in_history_and_discord, MAX_MESSAGE_LENGTH, muffled_send  # noqa: F401
@@ -2590,15 +2590,20 @@ class TaskProcessing(TaskAttributes):
             # ReActor face swap handling
             if reactor and config.reactor_enabled():
                 self.imgmodel_settings.apply_reactor(reactor, self)
-            # Tags currently only supported by SDWebUI clients
-            if api.imggen.is_sdwebui_variant():
-                # Img2Img handling
-                if img2img:
+
+            # Img2Img handling
+            if img2img and (api.imggen.is_sdwebui_variant() or api.imggen.is_swarm()):
+                self.params.mode = 'img2img'
+                if api.imggen.is_swarm()
+                    self.payload['initimage'] = str(img2img)
+                else:
                     self.payload['init_images'] = [str(img2img)]
-                    self.params.mode = 'img2img'
                 # Inpaint Mask handling
                 if img2img_mask:
-                    self.payload['mask'] = str(img2img_mask)
+                    if api.imggen.is_swarm():
+                        self.payload['maskimage'] = str(img2img_mask)
+                    else:
+                        self.payload['mask'] = str(img2img_mask)
         except Exception as e:
             log.error(f"[TAGS] Error processing Img tags: {e}")
             traceback.print_exc()
@@ -6387,6 +6392,7 @@ class ImgModel(SettingsBase):
         pass
 
     def handle_payload_updates(self, updates:dict, task:"Task") -> dict:
+        self.fix_update_values(updates)
         task.vars.update_from_dict(updates)
 
     # Update vars and __overrides__ dict in user's default payload with any imgmodel payload mods
@@ -6406,6 +6412,7 @@ class ImgModel(SettingsBase):
         task.update_vars_from_imgcmd()
 
     def apply_payload_param_variances(self, updates:dict, task:"Task"):
+        self.fix_update_values(updates)
         summed_updates = sum_update_dict(vars(task.vars), updates, in_place=False, updates_only=True, merge_unmatched=False)
         task.vars.update_from_dict(summed_updates)
 
@@ -6890,7 +6897,7 @@ class ImgModel_Comfy(ImgModel):
                 self._value_key: imgmodel_value}
 
     def apply_final_prompts_for_task(self, task:"Task"):
-        pass
+        task.update_vars()
 
     def apply_imgcmd_params(self, task:"Task"):
         imgcmd_vars = {}
@@ -6945,6 +6952,10 @@ class ImgModel_Swarm(ImgModel):
         self._filename_key:str = ''
         self._imgmodel_input_key:str = 'model'
 
+    def clean_payload(self, payload):
+        # resolves duplicate negatives while preserving order
+        payload['negativeprompt'] = consolidate_prompt_strings(payload.get('negativeprompt', ''))
+
     async def post_options(self, options_payload:dict):
         payload = {'model': options_payload['model']}
         response = await api.imggen.post_options.call(input_data=payload, sanitize=True)
@@ -6969,10 +6980,10 @@ class ImgModel_Swarm(ImgModel):
             img2img_mask               = img2img.get('mask', '')
 
             if img2img:
-                task.payload['init_images'] = [img2img['image']]
-                task.payload['denoising_strength'] = img2img['denoising_strength']
+                task.payload['initimage'] = img2img['image']
+                task.payload['initimagenoise'] = (1.0 - img2img['denoising_strength'])
             if img2img_mask:
-                task.payload['mask'] = img2img_mask
+                task.payload['maskimage'] = img2img_mask
             if size:
                 task.payload.update(size)
         except Exception as e:
@@ -6998,20 +7009,27 @@ class ImgModel_Swarm(ImgModel):
     
     def fix_update_values(self, updates: dict):
         key_map = {'cfg_scale': 'cfgscale',
-                   'negative_prompt': 'negative_prompt'}
+                   'negative_prompt': 'negativeprompt',
+                   'CLIP_stop_at_last_layers': 'clipstopatlayer',
+                   'sd_vae': 'vae',
+                   'distilled_cfg_scale': 'fluxguidancescale',
+                   'denoising_strength': 'initimagenoise',
+                   'sampler_name': 'sampler'}
         for old_key, new_key in key_map.items():
             if old_key in updates:
+                if old_key == 'denoising_strength':
+                    updates[old_key] = 1.0 - updates[old_key]
                 updates[new_key] = updates.pop(old_key)
-
-        for k, v in updates.items():
-            if k in ['sampler_name', 'scheduler'] and isinstance(v, str):
-                updates[k] = self.check_sampler_or_scheduler_value(v)
+        for key in ['sampler', 'scheduler']:
+            if key in updates:
+                updates[key] = self.check_sampler_or_scheduler_value(updates[key])
 
     def handle_payload_updates(self, updates:dict, task:"Task"):
         self.fix_update_values(updates)
         update_dict(task.payload, updates)
 
     def apply_payload_param_variances(self, updates:dict, task:"Task"):
+        self.fix_update_values(updates)
         sum_update_dict(task.payload, updates)
 
 
@@ -7037,6 +7055,7 @@ class ImgModel_SDWebUI(ImgModel):
         update_dict(task.payload, updates)
 
     def apply_payload_param_variances(self, updates:dict, task:"Task"):
+        self.fix_update_values(updates)
         sum_update_dict(task.payload, updates)
 
     def apply_final_prompts_for_task(self, task:"Task"):
@@ -7075,17 +7094,8 @@ class ImgModel_SDWebUI(ImgModel):
 
     def clean_payload(self, payload:dict):
         try:
-            # Remove duplicate negative prompts while preserving original order
-            negative_prompt_list = payload.get('negative_prompt', '').split(', ')
-            unique_values_set = set()
-            unique_values_list = []
-            for value in negative_prompt_list:
-                if value not in unique_values_set:
-                    unique_values_set.add(value)
-                    unique_values_list.append(value)
-            processed_negative_prompt = ', '.join(unique_values_list)
-            payload['negative_prompt'] = processed_negative_prompt
-
+            # resolves duplicate negatives while preserving order
+            payload['negative_prompt'] = consolidate_prompt_strings(payload.get('negative_prompt', ''))
             ## Clean up extension keys
             # get alwayson_scripts dict
             alwayson_scripts:dict = payload.get('alwayson_scripts', {})
