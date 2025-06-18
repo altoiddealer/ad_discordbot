@@ -133,36 +133,53 @@ class APISettings():
 
 apisettings = APISettings()
 
+# Mapping keywords to ImgGenClient subclasses
+def get_imggen_client_map():
+    return [(["comfy"], ImgGenClient_Comfy, "ComfyUI"),
+            (["swarm"], ImgGenClient_Swarm, "SwarmUI"),
+            (["reforge"], ImgGenClient_SDWebUI, "ReForge"),
+            (["forge"], ImgGenClient_SDWebUI, "Forge"),
+            (["stable", "a1111", "sdwebui"], ImgGenClient_SDWebUI, "A1111")]
 
-def resolve_imggen_subclassing(name: str) -> type["ImgGenClient"]:
-    log.info(f"Checking if main ImgGen client '{name}' is a known API (name has Comfy / A1111 / Forge / ReForge)")
-    name_lower = name.lower()
-    if 'comfy' in name_lower:
-        log.info(f"{name} recognized as ComfyUI.")
-        return ImgGenClient_Comfy
-    elif 'swarm' in name_lower:
-        log.info(f"{name} recognized as SwarmUI.")
-        return ImgGenClient_Swarm
-    elif any(x in name_lower for x in ['stable', 'a1111', 'sdwebui', 'forge']):
-        if 'reforge' in name_lower:
-            log.info(f"{name} recognized as ReForge.")
-        elif 'forge' in name_lower:
-            log.info(f"{name} recognized as Forge.")
-        else:
-            log.info(f"{name} recognized as A1111.")
-        return ImgGenClient_SDWebUI # Don't need to subclass these API objects... yet
-    else:
-        log.info(f'{name} is an unknown Imggen client. "main bot functions" will rely heavily on user configuration. Please report any issues on the Github project page.')
-    return ImgGenClient
+# Mapping keywords to TTSGenClient subclasses
+def get_ttsgen_client_map():
+    return [(["alltalk"], TTSGenClient_AllTalk, "Alltalk")]
 
-def resolve_ttsgen_subclassing(name: str) -> type["TTSGenClient"]:
-    log.info(f"Checking if main TTSGen client '{name}' is a known API (name has Alltalk)")
+MAP_FUNCTIONS = {"imggen": get_imggen_client_map,
+                 "ttsgen": get_ttsgen_client_map}
+
+def _assign_from_map(name: str, client_type:str, default_class: type|None = None) -> type:
     name_lower = name.lower()
-    if 'alltalk' in name_lower:
-        log.info(f"{name} recognized as Alltalk.")
-        return TTSGenClient_AllTalk
-    log.info(f'{name} is an unknown TTS client. "main bot functions" will rely heavily on user configuration. Please report any issues on the Github project page.')
-    return TTSGenClient
+
+    # Dynamically get the mapping function
+    map_func = MAP_FUNCTIONS.get(client_type)
+    if not callable(map_func):
+        log.error(f"No client map function defined for client type '{client_type}'")
+        return APIClient
+
+    client_map = map_func()
+    for keywords, client_class, label in client_map:
+        if any(k in name_lower for k in keywords):
+            log.info(f"{name} recognized as {label}.")
+            return client_class
+    if default_class:
+        log.info(f"{name} is an unknown '{client_type}' client. Main bot functions will rely heavily on user configuration.")
+        return default_class
+    return None
+
+def assign_client_classes(name: str, func_type: str|None = None) -> type["APIClient"]:
+    log.info(f"Checking if client '{name}' is a known API")
+    if func_type == "imggen":
+        return _assign_from_map(name, 'imggen', ImgGenClient)
+    elif func_type == "ttsgen":
+        return _assign_from_map(name, 'ttsgen', TTSGenClient)
+
+    # Try both without defaulting to base classes unless necessary
+    for client_type in ['imggen', 'ttsgen']:
+        ClientClass = _assign_from_map(name, client_type)
+        if ClientClass:
+            return ClientClass
+    return APIClient
 
 class API:
     def __init__(self):
@@ -185,8 +202,6 @@ class API:
         # Reverse lookup for matching API names to their function type
         main_api_name_map = {v.get("api_name"): k for k, v in apisettings.main_settings.items()
                              if isinstance(v, dict) and v.get("api_name")}
-        # Map function type to specialized client class
-        client_type_map = apisettings.get_client_type_map()
         
         check_clients_online = []
 
@@ -209,13 +224,9 @@ class API:
             # Determine if this API is a "main" one
             api_func_type = main_api_name_map.get(name)
             is_main = api_func_type is not None
+
             # Determine which client class to use
-            if api_func_type == "imggen":
-                ClientClass = resolve_imggen_subclassing(name)
-            elif api_func_type == "ttsgen":
-                ClientClass = resolve_ttsgen_subclassing(name)
-            else:
-                ClientClass = client_type_map.get(api_func_type, APIClient)
+            ClientClass = assign_client_classes(name, api_func_type)
 
             # Collect all valid user APIs
             try:
