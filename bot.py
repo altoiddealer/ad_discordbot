@@ -6957,7 +6957,7 @@ class ImgModel_Swarm(ImgModel):
 
     def apply_final_prompts_for_task(self, task:"Task"):
         task.payload['prompt'] = task.prompt
-        task.payload['negative_prompt'] = task.neg_prompt
+        task.payload['negativeprompt'] = task.neg_prompt
 
     def apply_imgcmd_params(self, task:"Task"):
         try:
@@ -6997,6 +6997,12 @@ class ImgModel_Swarm(ImgModel):
         return base64.b64encode(image).decode('utf-8')
     
     def fix_update_values(self, updates: dict):
+        key_map = {'cfg_scale': 'cfgscale',
+                   'negative_prompt': 'negative_prompt'}
+        for old_key, new_key in key_map.items():
+            if old_key in updates:
+                updates[new_key] = updates.pop(old_key)
+
         for k, v in updates.items():
             if k in ['sampler_name', 'scheduler'] and isinstance(v, str):
                 updates[k] = self.check_sampler_or_scheduler_value(v)
