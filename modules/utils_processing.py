@@ -210,6 +210,7 @@ def resolve_placeholders(config: Any, context: dict, log_prefix: str = '', log_s
 def build_completion_condition(condition_config: dict, context_vars: dict = None) -> Callable[[dict], bool]:
     """
     Builds a callable that checks if a websocket message meets a user-defined condition.
+    If only a key's presence is important, value can be "*" or Ellipsis (...)
 
     Example input:
     {
@@ -247,10 +248,17 @@ def build_completion_condition(condition_config: dict, context_vars: dict = None
                     if not isinstance(actual, dict):
                         return False
                     for sub_key, sub_expected in expected.items():
-                        if actual.get(sub_key) != sub_expected:
+                        if sub_expected in [Ellipsis, "*"]:
+                            if sub_key not in actual:
+                                return False
+                        elif actual.get(sub_key) != sub_expected:
                             return False
+
                 else:
-                    if actual != expected:
+                    if expected in [Ellipsis, "*"]:
+                        if key not in msg:
+                            return False
+                    elif actual != expected:
                         return False
             return True
         except Exception:

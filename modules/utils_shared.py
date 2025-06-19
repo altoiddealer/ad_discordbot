@@ -239,6 +239,8 @@ class Config(BaseFileMemory):
         return self.imggen.get('extensions', {}).get('layerdiffuse_enabled', False)
     def reactor_enabled(self) -> bool:
         return self.imggen.get('extensions', {}).get('reactor_enabled', False)
+    def loractl_enabled(self) -> bool:
+        return self.imggen.get('extensions', {}).get('loractl', {}).get('enabled', False)
 
 config = Config()
 
