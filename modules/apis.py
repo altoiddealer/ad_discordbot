@@ -1395,7 +1395,7 @@ class ImgGenClient(APIClient):
             pil_images.append(self.decode_and_save_for_index(i, data, pnginfo))
         return pil_images, pnginfo
 
-    async def receive_image_results(self, images:Any):
+    async def unpack_image_results(self, images:Any):
         return images
 
     async def call_track_progress(self, ictx=None):
@@ -1445,7 +1445,7 @@ class ImgGenClient(APIClient):
                 except asyncio.CancelledError:
                     pass
 
-            images_list = await self.receive_image_results(images_results)
+            images_list = await self.unpack_image_results(images_results)
 
             return await self.process_image_results(images_list) # Returns (list of PIL images, pnginfo)
 
@@ -1496,6 +1496,21 @@ class ImgGenClient_Swarm(ImgGenClient):
         super().__init__(*args, **kwargs)
         self.session_id = None
 
+    async def unpack_image_results(self, results:dict) -> list[bytes]:
+        response = await self.request(endpoint=str(results['image']), method='GET', retry=0, timeout=10)
+        return [response.body]
+
+    async def call_track_progress(self, ictx=None) -> list[dict]:
+        completion_condition = processing.build_completion_condition({'image': "*"})
+        return await self.track_progress(endpoint=None,
+                                         use_ws=True,
+                                         ictx=ictx,
+                                         message="Generating image",
+                                         type_filter=None,
+                                         data_filter=None,
+                                         progress_key='gen_progress.overall_percent',
+                                         completion_condition=completion_condition)
+
     async def connect_websocket(self):
         if not self.session:
             self.session = aiohttp.ClientSession()
@@ -1510,47 +1525,20 @@ class ImgGenClient_Swarm(ImgGenClient):
             self.ws = None
             raise
 
-    async def receive_image_results(self, results:dict):
-        images = []
-        result = str(results['image'])
-        response = await self.request(endpoint='{}', path_vars=result, method='GET', retry=0, timeout=10)
-        images.append(response.body)
-        return images
-
-    async def call_track_progress(self, ictx=None):
-        completion_condition = processing.build_completion_condition({'image': "*"})
-        return await self.track_progress(endpoint=None,
-                                         use_ws=True,
-                                         ictx=ictx,
-                                         message="Generating image",
-                                         type_filter=None,
-                                         data_filter=None,
-                                         progress_key='gen_progress.overall_percent',
-                                         completion_condition=completion_condition)
-
-    async def call_ws(self, payload):
+    async def post_for_images(self, img_payload:dict, ictx=None) -> list[str]:
         if not self.ws or self.ws.closed:
             await self.connect_websocket()
-        payload['session_id'] = self.session_id
-        await self.ws.send_json(payload)
-
-    async def post_for_images(self, endpoint:"ImgGenEndpoint", img_payload:dict, ictx=None) -> list[str]:
-        await self.call_ws(img_payload)
-        results = await self.call_track_progress(ictx=ictx)
-        await self.ws.close()
-        final_result = results[-1]
+        img_payload['session_id'] = self.session_id
+        await self.ws.send_json(img_payload)
+        results_list = await self.call_track_progress(ictx=ictx)
+        final_result = results_list[-1]
         return final_result
 
     async def main_imggen(self, img_payload:dict, mode:str="txt2img", ictx=None) -> Tuple[list[Image.Image], Optional[PngImagePlugin.PngInfo]]:
         try:
-            ep_for_mode:Union[ImgGenEndpoint_PostTxt2Img, ImgGenEndpoint_PostImg2Img] = getattr(self, f'post_{mode}')
-            # Wait for images_task to complete
-            images_results = await self.post_for_images(ep_for_mode, img_payload, ictx=ictx)
-
-            images_list = await self.receive_image_results(images_results)
-
+            images_results = await self.post_for_images(img_payload, ictx=ictx)
+            images_list = await self.unpack_image_results(images_results)
             return await self.process_image_results(images_list) # Returns (list of PIL images, pnginfo)
-
         except Exception as e:
             from modules.utils_discord import Embeds
             embeds = Embeds()
@@ -1563,7 +1551,7 @@ class ImgGenClient_Swarm(ImgGenClient):
     def add_required_values_to_payload(self, payload:dict):
         payload['session_id'] = self.session_id
 
-    def get_settings_list_for(self, response, key:str):
+    def _get_settings_list_for(self, response, key:str):
         if not isinstance(response, APIResponse):
             return []
         return response.body.get(key, [])
@@ -1576,16 +1564,17 @@ class ImgGenClient_Swarm(ImgGenClient):
             log.error(f'[{self.name}] Error getting session_id (required for this client): {e}')
             return await self.go_offline()
         try:
+            # Collect valid samplers and schedulers
             params_resp:APIResponse = await self.request(endpoint='/API/ListT2IParams', json={'session_id': self.session_id}, method='POST', retry=0, timeout=5)
-            params_list = self.get_settings_list_for(params_resp, 'list')
+            params_list = self._get_settings_list_for(params_resp, 'list')
             for settings_dict in params_list:
                 if settings_dict.get('id') == 'sampler':
                     self._sampler_names = settings_dict.get('values', [])
                 elif settings_dict.get('id') == 'scheduler':
                     self._schedulers = settings_dict.get('values', [])
-
+            # Collect valid LoRAs
             loras_resp:APIResponse = await self.request(endpoint='/API/ListModels', json={'session_id': self.session_id, 'path': '', 'subtype': 'LoRA', 'depth': 10}, method='POST', retry=0, timeout=5)
-            loras_list = self.get_settings_list_for(loras_resp, 'files')
+            loras_list = self._get_settings_list_for(loras_resp, 'files')
             for lora_dict in loras_list:
                 if lora_dict.get('name'):
                     self._lora_names.append(lora_dict['name'])
@@ -1596,7 +1585,7 @@ class ImgGenClient_Swarm(ImgGenClient):
     async def fetch_imgmodels(self) -> list:
         all_imgmodels = []
         response:APIResponse = await self.request(endpoint='/API/ListModels', json={'session_id': self.session_id, 'path': '', 'depth': 10}, method='POST', retry=0, timeout=5)
-        model_list = self.get_settings_list_for(response, 'files')
+        model_list = self._get_settings_list_for(response, 'files')
         for model_dict in model_list:
             if model_dict.get('name'):
                 all_imgmodels.append(model_dict['name'])

@@ -19,7 +19,7 @@ bot_api_functions:
   #                     - Define a "response_handling" for this endpoint (in 'all_apis') so it returns a file path after the last 'step'
 
   imggen:
-    # This section can be mostly ignored if using known APIs: 'Forge', 'Reforge', 'Comfy', or 'A1111' (must include this in the name!!).
+    # This section can be mostly ignored if using known APIs: 'Forge', 'Reforge', 'Comfy', 'Swarm', or 'A1111' (must include this in the name!!).
     api_name: SD Forge
     post_txt2img:
       endpoint_name: Post txt2img
@@ -105,41 +105,16 @@ all_apis:
       - {name: Get Cnet Control Types, path: /controlnet/control_types, method: GET}
       - {name: Post Server Restart, path: /sdapi/v1/server-restart, method: POST, retry: 0}
 
-  - name: Text Generation WebUI
-    url: http://127.0.0.1:7861
+  - name: SwarmUI
+    url: http://localhost:7801
     enabled: false
     default_headers: {Content-Type: application/json}
-    default_timeout: 60
-    auth: null
-    endpoints: []
-
-  - name: AllTalk TTS v2
-    url: http://127.0.0.1:7851
-    enabled: false
-    default_headers:
-      Content-Type: application/x-www-form-urlencoded
-    default_timeout: 120
+    default_timeout: 240
     auth: null
     endpoints:
-      - {name: Get TTS Voices, path: /api/voices, method: GET, timeout: 10}
-      - name: Get Audio
-        path: "{}" # uses 'path_vars' from response_handling to automatically complete the path (ex: '/audio/myoutputfile.wav')
-        method: GET
-      - name: Post TTS Generate
-        path: /api/tts-generate
-        method: POST
-        # Note: response_handling is bypassed in bot main functions if using the "_key" method in 'bot_api_functions' (first section of this file)
-        response_handling:
-          - extract_key: output_file_url
-            save_as: output_url
-          - call_api:
-             client_name: AllTalk TTS v2
-             endpoint_name: Get Audio
-             response_type: bytes
-             path_vars: "{output_url}" # API call will return audio bytes
-          - save:
-              file_format: wav
-              returns: path
+      - {name: Post txt2img, path: /API/GenerateText2ImageWS, method: POST, payload_base: swarm.yaml, payload_type: json}
+      - {name: Post img2img, path: /API/GenerateText2ImageWS, method: POST, payload_base: swarm.yaml, payload_type: json}
+      - {name: Post Options, path: /API/SelectModel, method: POST}
 
   - name: ComfyUI
     url: http://127.0.0.1:8188
@@ -175,6 +150,41 @@ all_apis:
       # 'method: null' will skip API call, and simply return the payload as the result. In this case, user needs to manually configure a '/user/payload/cnet_data.yaml'
       - {name: Get Cnet Control Types, path: /anything/at/all, method: null, payload_base: cnet_data.json}
 
+  - name: AllTalk TTS v2
+    url: http://127.0.0.1:7851
+    enabled: false
+    default_headers:
+      Content-Type: application/x-www-form-urlencoded
+    default_timeout: 120
+    auth: null
+    endpoints:
+      - {name: Get TTS Voices, path: /api/voices, method: GET, timeout: 10}
+      - name: Get Audio
+        path: "{}" # uses 'path_vars' from response_handling to automatically complete the path (ex: '/audio/myoutputfile.wav')
+        method: GET
+      - name: Post TTS Generate
+        path: /api/tts-generate
+        method: POST
+        # Note: response_handling is bypassed in bot main functions if using the "_key" method in 'bot_api_functions' (first section of this file)
+        response_handling:
+          - extract_key: output_file_url
+            save_as: output_url
+          - call_api:
+             client_name: AllTalk TTS v2
+             endpoint_name: Get Audio
+             response_type: bytes
+             path_vars: "{output_url}" # API call will return audio bytes
+          - save:
+              file_format: wav
+              returns: path
+  
+  - name: Text Generation WebUI
+    url: http://127.0.0.1:7861
+    enabled: false
+    default_headers: {Content-Type: application/json}
+    default_timeout: 60
+    auth: null
+    endpoints: []
 
 # Create presets here which can be injected in any 'endpoint', or in any 'response_handling' / 'workflow' steps.
 presets:
