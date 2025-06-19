@@ -502,7 +502,7 @@ class APIClient:
         # Create and retain reusable session per API
         self.session = aiohttp.ClientSession()
         if self.ws_config:
-            await self._connect_websocket()
+            await self.connect_websocket()
         await self._fetch_openapi_schema()
         self._assign_endpoint_schemas()
         await self._resolve_deferred_payloads()
@@ -551,7 +551,7 @@ class APIClient:
         await self.setup()
         log.info(f"[{self.name}] enabled. Use '/toggle_api' to disable.")
 
-    async def _connect_websocket(self):
+    async def connect_websocket(self):
         if not self.session:
             self.session = aiohttp.ClientSession()
         url = self.ws_config.build_url(self.url)
@@ -584,7 +584,7 @@ class APIClient:
                         method=ep_dict.get("method", "GET"),
                         response_type=ep_dict.get("response_type", "json"),
                         payload_type=ep_dict.get("payload_type", "any"),
-                        payload_config=ep_dict.get("payload_base"),
+                        payload_config=ep_dict.get("payload_base", ep_dict.get("payload")),
                         response_handling=ep_dict.get("response_handling"),
                         headers=ep_dict.get("headers", self.default_headers),
                         stream=ep_dict.get("stream", False),
@@ -990,7 +990,7 @@ class APIClient:
         timeout = timeout or self.default_timeout
 
         if not self.ws or self.ws.closed:
-            await self._connect_websocket()
+            await self.connect_websocket()
 
         try:
             await self.ws.send_json(json)
@@ -1062,7 +1062,7 @@ class APIClient:
 
             try:
                 if not self.ws or self.ws.closed:
-                    await self._connect_websocket()
+                    await self.connect_websocket()
 
                 try:
                     MIN_RECEIVE_TIMEOUT = 1.0
@@ -1209,6 +1209,7 @@ class APIClient:
 
             async for update in poller:
                 try:
+                    print("UPDATE:", update)
                     # Collect updates
                     updates.append(update)
 
@@ -1365,6 +1366,41 @@ class ImgGenClient(APIClient):
         # post for image gen data
         return await self.post_pnginfo.call(input_data=pnginfo_payload, main=True)
 
+    async def process_image_results(self, images:list) -> tuple[list, PngImagePlugin.PngInfo]:
+        images = []
+        pnginfo = None
+
+        # Process raw image list
+        for i, item in enumerate(images):
+
+            # Determine the input type and clean if necessary
+            if isinstance(item, str):
+                data = split_at_first_comma(item)
+            else:
+                data = item  # Already bytes or list of ints
+
+            # Get PNG Info for first image
+            if i == 0 and self.post_pnginfo:
+                if isinstance(data, str):  # Ensure we pass str to the pnginfo function
+                    pnginfo_data = await self.post_image_for_pnginfo_data(data)
+                elif isinstance(data, bytes):
+                    # Convert to base64 for pnginfo extraction
+                    b64str = base64.b64encode(data).decode()
+                    pnginfo_data = await self.post_image_for_pnginfo_data(b64str)
+                else:
+                    log.warning(f"Unsupported data type for pnginfo: {type(data)}")
+                    pnginfo_data = None
+
+                if pnginfo_data:
+                    pnginfo = PngImagePlugin.PngInfo()
+                    pnginfo.add_text("parameters", pnginfo_data)
+
+            images.append(self.decode_and_save_for_index(i, data, pnginfo))
+        return images, pnginfo
+
+    async def receive_image_results(self, images:Any):
+        return images
+
     async def call_track_progress(self, ictx=None):
         await self.track_progress(endpoint=self.get_progress,
                                   progress_key=self.get_progress.progress_key,
@@ -1372,9 +1408,6 @@ class ImgGenClient(APIClient):
                                   max_key=self.get_progress.max_key,
                                   message="Generating image",
                                   ictx=ictx)
-        
-    async def process_images_results(self, images:Any):
-        return images
 
     async def track_t2i_i2i_progress(self, ictx=None):
         from modules.utils_discord import Embeds
@@ -1415,38 +1448,9 @@ class ImgGenClient(APIClient):
                 except asyncio.CancelledError:
                     pass
 
-            images_list = await self.process_images_results(self, images_results)
+            images_list = await self.receive_image_results(images_results)
 
-            images = []
-            pnginfo = None
-
-            # Process raw image list
-            for i, item in enumerate(images_list):
-
-                # Determine the input type and clean if necessary
-                if isinstance(item, str):
-                    data = split_at_first_comma(item)
-                else:
-                    data = item  # Already bytes or list of ints
-
-                # Get PNG Info for first image
-                if i == 0 and self.post_pnginfo:
-                    if isinstance(data, str):  # Ensure we pass str to the pnginfo function
-                        pnginfo_data = await self.post_image_for_pnginfo_data(data)
-                    elif isinstance(data, bytes):
-                        # Convert to base64 for pnginfo extraction
-                        b64str = base64.b64encode(data).decode()
-                        pnginfo_data = await self.post_image_for_pnginfo_data(b64str)
-                    else:
-                        log.warning(f"Unsupported data type for pnginfo: {type(data)}")
-                        pnginfo_data = None
-
-                    if pnginfo_data:
-                        pnginfo = PngImagePlugin.PngInfo()
-                        pnginfo.add_text("parameters", pnginfo_data)
-
-                images.append(self.decode_and_save_for_index(i, data, pnginfo))
-            return images, pnginfo
+            return self.process_image_results(images_list) # Returns (list of PIL images, pnginfo)
 
         except Exception as e:
             from modules.utils_discord import Embeds
@@ -1494,8 +1498,23 @@ class ImgGenClient_Swarm(ImgGenClient):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.session_id = None
+        self.ws_config = WebSocketConnectionConfig()
 
-    async def process_images_results(self, results:dict):
+    async def connect_websocket(self):
+        if not self.session:
+            self.session = aiohttp.ClientSession()
+        ws_url = self.url.replace("http://", "ws://").replace("https://", "wss://")
+        ws_url = f"{ws_url}/API/GenerateText2ImageWS"
+        try:
+            self.ws = await self.session.ws_connect(ws_url)
+            log.info(
+                f"[{self.name}] WebSocket connection established ({ws_url})")
+        except Exception as e:
+            log.error(f"[{self.name}] failed to connect to WebSocket: {e}")
+            self.ws = None
+            raise
+
+    async def receive_image_results(self, results:dict):
         images = []
         image_results = results.get('images', [])
         for result in image_results:
@@ -1504,11 +1523,50 @@ class ImgGenClient_Swarm(ImgGenClient):
         return images
 
     async def call_track_progress(self, ictx=None):
-        await self.track_progress(endpoint=self.get_progress,
-                                  progress_key='gen_progress.current_percent',
-                                  max_key='gen_progress.overall_percent',
-                                  message="Generating image",
-                                  ictx=ictx)
+        await self.track_progress(endpoint=None,
+                                    use_ws=True,
+                                    ictx=ictx,
+                                    message="Generating image",
+                                    progress_key='gen_progress.current_percent',
+                                    max_key='gen_progress.overall_percent')
+
+        # await self.track_progress(endpoint=self.get_progress,
+        #                           progress_key='gen_progress.current_percent',
+        #                           max_key='gen_progress.overall_percent',
+        #                           message="Generating image",
+        #                           ictx=ictx)
+
+    async def call_ws(self, payload):
+        if not self.ws or self.ws.closed:
+            await self.connect_websocket()
+
+        payload['session_id'] = self.session_id
+
+        await self.ws.send_json(payload)
+
+    async def post_for_images(self, endpoint:"ImgGenEndpoint", img_payload:dict, ictx=None) -> list[str]:
+        await self.call_ws(img_payload)
+        await self.call_track_progress(ictx=ictx)
+
+
+    async def main_imggen(self, img_payload:dict, mode:str="txt2img", ictx=None) -> Tuple[list[Image.Image], Optional[PngImagePlugin.PngInfo]]:
+        try:
+            ep_for_mode:Union[ImgGenEndpoint_PostTxt2Img, ImgGenEndpoint_PostImg2Img] = getattr(self, f'post_{mode}')
+            # Wait for images_task to complete
+            images_results = await self.post_for_images(ep_for_mode, img_payload, ictx=ictx)
+
+            images_list = await self.receive_image_results(images_results)
+
+            return self.process_image_results(images_list) # Returns (list of PIL images, pnginfo)
+
+        except Exception as e:
+            from modules.utils_discord import Embeds
+            embeds = Embeds()
+            e_prefix = f'[{self.name}] Error processing images'
+            log.error(f'{e_prefix}: {e}')
+            restart_msg = f'\nIf {self.name} remains unresponsive, consider using "/restart_sd_client" command.' if self.post_server_restart else ''
+            await embeds.send('img_send', e_prefix, f'{e}{restart_msg}')
+            return [], None    
 
     def add_required_values_to_payload(self, payload:dict):
         payload['session_id'] = self.session_id
@@ -1621,7 +1679,7 @@ class ImgGenClient_Comfy(ImgGenClient):
                 return [], None
 
             images = []
-            await asyncio.sleep(1)
+
             history = await self.get_history.call(path_vars=prompt_id, task=task)
             outputs = history[prompt_id]['outputs']
             for i, node_id in enumerate(outputs):

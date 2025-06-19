@@ -6955,10 +6955,12 @@ class ImgModel_Swarm(ImgModel):
     def clean_payload(self, payload):
         # resolves duplicate negatives while preserving order
         payload['negativeprompt'] = consolidate_prompt_strings(payload.get('negativeprompt', ''))
+        payload['model'] = self.last_imgmodel_value
+        print("self.last_imgmodel_value:", self.last_imgmodel_value)
 
     async def post_options(self, options_payload:dict):
         payload = {'model': options_payload['model']}
-        response = await api.imggen.post_options.call(input_data=payload, sanitize=True)
+        response = await api.imggen.post_options.call(input_data=payload)
         if response and response.get('error'):
             raise Exception(response['error'])
 
