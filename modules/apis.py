@@ -1528,11 +1528,14 @@ class ImgGenClient_Swarm(ImgGenClient):
     async def post_for_images(self, img_payload:dict, ictx=None) -> list[str]:
         if not self.ws or self.ws.closed:
             await self.connect_websocket()
-        img_payload['session_id'] = self.session_id
-        await self.ws.send_json(img_payload)
-        results_list = await self.call_track_progress(ictx=ictx)
-        final_result = results_list[-1]
-        return final_result
+        try:
+            img_payload['session_id'] = self.session_id
+            img_payload['images'] = 1
+            await self.ws.send_json(img_payload)
+            results_list = await self.call_track_progress(ictx=ictx)
+            return results_list.pop()
+        finally:
+            await self.ws.close()
 
     async def main_imggen(self, img_payload:dict, mode:str="txt2img", ictx=None) -> Tuple[list[Image.Image], Optional[PngImagePlugin.PngInfo]]:
         try:
