@@ -1,8 +1,8 @@
 # altoiddealer's Discord Bot
 
-### Uniting [text-generation-webui](https://github.com/oobabooga/text-generation-webui) and Stable Diffusion ([A1111](https://github.com/AUTOMATIC1111/stable-diffusion-webui) / [Forge](https://github.com/lllyasviel/stable-diffusion-webui-forge) / [ReForge](https://github.com/Panchovix/stable-diffusion-webui-reForge)) for casual fun, creativity & professional use.
+### Uniting [text-generation-webui](https://github.com/oobabooga/text-generation-webui) and Image Generation ([A1111](https://github.com/AUTOMATIC1111/stable-diffusion-webui) / [Forge](https://github.com/lllyasviel/stable-diffusion-webui-forge) / [ReForge](https://github.com/Panchovix/stable-diffusion-webui-reForge) / [ComfyUI](https://github.com/comfyanonymous/ComfyUI) / [SwarmUI](https://github.com/mcmonkeyprojects/SwarmUI) / And More!) for casual fun, creativity & professional use.
 
-- Both **text-generation-webui** and **Stable Diffusion** are **optional.**
+- Both **text-generation-webui** and **Image Generation** are **optional.**
 - The features of both can be independently enabled/disabled in the main config file.
 
 ---
@@ -27,6 +27,10 @@
 
 <details>
   <summary>click to expand</summary>
+
+   **06/19/2025:** Added **SwarmUI Support!**
+   
+  ---
 
    **06/10/2025:** Major Feature: **Universal API System!**. **ComfyUI Support!**
 
