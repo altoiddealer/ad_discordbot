@@ -1529,8 +1529,7 @@ class ImgGenClient_Swarm(ImgGenClient):
         if not self.ws or self.ws.closed:
             await self.connect_websocket()
         try:
-            img_payload['session_id'] = self.session_id
-            img_payload['images'] = 1
+            self.add_required_values_to_payload(img_payload)
             await self.ws.send_json(img_payload)
             results_list = await self.call_track_progress(ictx=ictx)
             return results_list.pop()

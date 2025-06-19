@@ -10,3 +10,4 @@ scheduler: normal
 vae: None
 variationseed: -1
 variationseedstrength: 0.0
+donotsave: true

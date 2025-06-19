@@ -6956,6 +6956,7 @@ class ImgModel_Swarm(ImgModel):
         # resolves duplicate negatives while preserving order
         payload['negativeprompt'] = consolidate_prompt_strings(payload.get('negativeprompt', ''))
         payload['model'] = self.last_imgmodel_value
+        payload['donotsaveintermediates'] = True
         payload['images'] = 1
 
     async def post_options(self, options_payload:dict):
