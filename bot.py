@@ -6956,7 +6956,6 @@ class ImgModel_Swarm(ImgModel):
         # resolves duplicate negatives while preserving order
         payload['negativeprompt'] = consolidate_prompt_strings(payload.get('negativeprompt', ''))
         payload['model'] = self.last_imgmodel_value
-        print("self.last_imgmodel_value:", self.last_imgmodel_value)
 
     async def post_options(self, options_payload:dict):
         payload = {'model': options_payload['model']}
@@ -6983,7 +6982,7 @@ class ImgModel_Swarm(ImgModel):
 
             if img2img:
                 task.payload['initimage'] = img2img['image']
-                task.payload['initimagenoise'] = (1.0 - img2img['denoising_strength'])
+                task.payload['initimagecreativity'] = img2img['denoising_strength']
             if img2img_mask:
                 task.payload['maskimage'] = img2img_mask
             if size:
@@ -7015,12 +7014,10 @@ class ImgModel_Swarm(ImgModel):
                    'CLIP_stop_at_last_layers': 'clipstopatlayer',
                    'sd_vae': 'vae',
                    'distilled_cfg_scale': 'fluxguidancescale',
-                   'denoising_strength': 'initimagenoise',
+                   'denoising_strength': 'initimagecreativity',
                    'sampler_name': 'sampler'}
         for old_key, new_key in key_map.items():
             if old_key in updates:
-                if old_key == 'denoising_strength':
-                    updates[old_key] = 1.0 - updates[old_key]
                 updates[new_key] = updates.pop(old_key)
         for key in ['sampler', 'scheduler']:
             if key in updates:

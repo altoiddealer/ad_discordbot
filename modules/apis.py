@@ -1028,7 +1028,7 @@ class APIClient:
         """
         Stream messages from WebSocket and yield structured data at most once per yield_interval seconds.
         
-        - return_values: Dict of key -> dotpath to extract
+        - return_values: Dict of key -> dot/bracket path to extract
         - type_filter: List of message types to process
         - data_filter: Dict of required key-values in data field
         - duration: Time in seconds before polling stops
@@ -1209,7 +1209,6 @@ class APIClient:
 
             async for update in poller:
                 try:
-                    print("UPDATE:", update)
                     # Collect updates
                     updates.append(update)
 
@@ -1230,7 +1229,6 @@ class APIClient:
 
                     # Completion check
                     if completion_condition and completion_condition(update):
-                        updates.pop() # Remove completion condition
                         break
                     elif not completion_condition and progress >= 1.0:
                         break
@@ -1366,13 +1364,12 @@ class ImgGenClient(APIClient):
         # post for image gen data
         return await self.post_pnginfo.call(input_data=pnginfo_payload, main=True)
 
-    async def process_image_results(self, images:list) -> tuple[list, PngImagePlugin.PngInfo]:
-        images = []
+    async def process_image_results(self, images_list:list) -> tuple[list, PngImagePlugin.PngInfo]:
+        pil_images = []
         pnginfo = None
 
         # Process raw image list
-        for i, item in enumerate(images):
-
+        for i, item in enumerate(images_list):
             # Determine the input type and clean if necessary
             if isinstance(item, str):
                 data = split_at_first_comma(item)
@@ -1395,8 +1392,8 @@ class ImgGenClient(APIClient):
                     pnginfo = PngImagePlugin.PngInfo()
                     pnginfo.add_text("parameters", pnginfo_data)
 
-            images.append(self.decode_and_save_for_index(i, data, pnginfo))
-        return images, pnginfo
+            pil_images.append(self.decode_and_save_for_index(i, data, pnginfo))
+        return pil_images, pnginfo
 
     async def receive_image_results(self, images:Any):
         return images
@@ -1450,7 +1447,7 @@ class ImgGenClient(APIClient):
 
             images_list = await self.receive_image_results(images_results)
 
-            return self.process_image_results(images_list) # Returns (list of PIL images, pnginfo)
+            return await self.process_image_results(images_list) # Returns (list of PIL images, pnginfo)
 
         except Exception as e:
             from modules.utils_discord import Embeds
@@ -1498,7 +1495,6 @@ class ImgGenClient_Swarm(ImgGenClient):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.session_id = None
-        self.ws_config = WebSocketConnectionConfig()
 
     async def connect_websocket(self):
         if not self.session:
@@ -1516,38 +1512,34 @@ class ImgGenClient_Swarm(ImgGenClient):
 
     async def receive_image_results(self, results:dict):
         images = []
-        image_results = results.get('images', [])
-        for result in image_results:
-            response = await self.request(endpoint='/View', json={result}, method='POST', retry=0, timeout=10)
-            images.append(response.body)
+        result = str(results['image'])
+        response = await self.request(endpoint='{}', path_vars=result, method='GET', retry=0, timeout=10)
+        images.append(response.body)
         return images
 
     async def call_track_progress(self, ictx=None):
-        await self.track_progress(endpoint=None,
-                                    use_ws=True,
-                                    ictx=ictx,
-                                    message="Generating image",
-                                    progress_key='gen_progress.current_percent',
-                                    max_key='gen_progress.overall_percent')
-
-        # await self.track_progress(endpoint=self.get_progress,
-        #                           progress_key='gen_progress.current_percent',
-        #                           max_key='gen_progress.overall_percent',
-        #                           message="Generating image",
-        #                           ictx=ictx)
+        completion_condition = processing.build_completion_condition({'image': "*"})
+        return await self.track_progress(endpoint=None,
+                                         use_ws=True,
+                                         ictx=ictx,
+                                         message="Generating image",
+                                         type_filter=None,
+                                         data_filter=None,
+                                         progress_key='gen_progress.overall_percent',
+                                         completion_condition=completion_condition)
 
     async def call_ws(self, payload):
         if not self.ws or self.ws.closed:
             await self.connect_websocket()
-
         payload['session_id'] = self.session_id
-
         await self.ws.send_json(payload)
 
     async def post_for_images(self, endpoint:"ImgGenEndpoint", img_payload:dict, ictx=None) -> list[str]:
         await self.call_ws(img_payload)
-        await self.call_track_progress(ictx=ictx)
-
+        results = await self.call_track_progress(ictx=ictx)
+        await self.ws.close()
+        final_result = results[-1]
+        return final_result
 
     async def main_imggen(self, img_payload:dict, mode:str="txt2img", ictx=None) -> Tuple[list[Image.Image], Optional[PngImagePlugin.PngInfo]]:
         try:
@@ -1557,7 +1549,7 @@ class ImgGenClient_Swarm(ImgGenClient):
 
             images_list = await self.receive_image_results(images_results)
 
-            return self.process_image_results(images_list) # Returns (list of PIL images, pnginfo)
+            return await self.process_image_results(images_list) # Returns (list of PIL images, pnginfo)
 
         except Exception as e:
             from modules.utils_discord import Embeds
