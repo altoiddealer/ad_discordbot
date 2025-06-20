@@ -31,7 +31,7 @@ base_tags:
 
   # Tag for image censoring feature
   - trigger: 'nude,erotic'
-    llm_censoring: true           # true = blocks text from being generated
+    llm_censoring: false          # true = blocks text from being generated
     img_censoring: 0              # 0 = disabled / 1 = blur image / 2 = block image from being generated
 
   # Tag to trigger Instruct mode with better reasoning params
