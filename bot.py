@@ -2356,8 +2356,7 @@ class TaskProcessing(TaskAttributes):
 
     def process_img_prompt_tags(self:Union["Task","Tasks"]):
         try:
-            collect_loras = lambda text: self.imgmodel_settings.collect_loras(text, task=self)
-            self.prompt = self.tags.process_tag_insertions(self.prompt, pre_insert_callback=collect_loras)
+            self.prompt = self.tags.process_tag_insertions(self.prompt)
             updated_positive_prompt = self.prompt
             updated_negative_prompt = self.neg_prompt
 
@@ -2379,8 +2378,13 @@ class TaskProcessing(TaskAttributes):
                 if 'negative_prompt_suffix' in tag:
                     join = join if updated_negative_prompt else ''
                     updated_negative_prompt = updated_negative_prompt + join + tag['negative_prompt_suffix']
+            
             self.prompt = updated_positive_prompt
             self.neg_prompt = updated_negative_prompt
+
+            if api.imggen._lora_names:
+                self.prompt = self.imgmodel_settings.handle_loras(self.prompt, task=self)
+                self.neg_prompt = self.imgmodel_settings.handle_loras(self.neg_prompt, task=self)
 
         except Exception as e:
             log.error(f"Error processing Img prompt tags: {e}")
@@ -6489,26 +6493,36 @@ class ImgModel(SettingsBase):
         mapping = self.get_sampler_and_scheduler_mapping()
         return mapping.get(normalized, value)
 
-    def collect_loras(self, prompt: str, task:"Task") -> str:
+    def parse_lora_matches(self, text: str) -> list[tuple[str, str, str, float, str]]:
+        """
+        Returns list of (full_tag, original_name, strength_str, strength_float, resolved_name)
+        """
+        matches = []
         if not api.imggen._lora_names:
-            return prompt
+            return matches
 
-        lora_matches = patterns.sd_lora_split.findall(prompt)
-        if lora_matches:
-            valid_lora_names:list[str] = api.imggen._lora_names
-            for name, strength_str in lora_matches:
-                try:
-                    strength = float(strength_str)
-                except ValueError:
-                    continue  # Skip malformed weights
-                name = name.strip()
-                for valid_name in valid_lora_names:
-                    if name in valid_name:
-                        name = valid_name
-                        break
-                task.vars.add_lora(name, strength)
-        # Return cleaned text (remove all <lora:...:...> tags)
-        return patterns.sd_lora.sub('', prompt)
+        lora_matches = patterns.sd_lora_split.findall(text)
+        if not lora_matches:
+            return matches
+
+        valid_lora_names = api.imggen._lora_names
+
+        for name, strength_str in lora_matches:
+            try:
+                strength = float(strength_str)
+            except ValueError:
+                continue
+            stripped = name.strip()
+            resolved = next((v for v in valid_lora_names if stripped in v), stripped)
+            full_tag = f"<lora:{name}:{strength_str}>"
+            matches.append((full_tag, name, strength_str, strength, resolved))
+        return matches
+
+    def handle_loras(self, text: str, task: "Task") -> str:
+        for full_tag, _, _, strength, resolved_name in self.parse_lora_matches(text):
+            task.vars.add_lora(resolved_name, strength)
+            text = text.replace(full_tag, '')
+        return text
 
     def collect_model_names(self, imgmodels:list):
         if not imgmodels:
@@ -6957,6 +6971,13 @@ class ImgModel_Swarm(ImgModel):
         payload['model'] = self.last_imgmodel_value
         payload['donotsaveintermediates'] = True
         payload['images'] = 1
+
+    def handle_loras(self, text: str, task: "Task") -> str:
+        for full_tag, _, strength_str, _, resolved_name in self.parse_lora_matches(text):
+            # Replace the tag with an updated version where the name is replaced
+            updated_tag = f"<lora:{resolved_name}:{strength_str}>"
+            text = text.replace(full_tag, updated_tag)
+        return text
 
     async def post_options(self, options_payload:dict):
         payload = {'model': options_payload['model']}
