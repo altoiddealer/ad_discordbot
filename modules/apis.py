@@ -14,7 +14,7 @@ import filetype
 from modules.typing import CtxInteraction
 from typing import get_type_hints, get_type_hints, get_origin, get_args, Any, Tuple, Optional, Union, Callable, AsyncGenerator
 from modules.utils_shared import client, shared_path, bot_database, load_file, get_api
-from modules.utils_misc import valueparser, progress_bar, set_key, extract_key, remove_keys, deep_merge, split_at_first_comma, detect_audio_format
+from modules.utils_misc import valueparser, progress_bar, set_key, extract_key, remove_keys, deep_merge, split_at_first_comma, is_base64, detect_audio_format
 import modules.utils_processing as processing
 
 from modules.logs import import_track, get_logger; import_track(__file__, fp=True); log = get_logger(__name__)  # noqa: E702
@@ -1350,12 +1350,11 @@ class ImgGenClient(APIClient):
             decoded = data
         else:
             raise TypeError(f"Expected str, bytes, or list of ints, got {type(data)}")
-
         image = Image.open(io.BytesIO(decoded))
         image.save(f"{shared_path.dir_temp_images}/temp_img_{i}.png", pnginfo=pnginfo)
         return image
 
-    async def post_image_for_pnginfo_data(self, image_data:str):
+    async def _post_image_for_pnginfo_data(self, image_data:str):
         # Build payload
         pnginfo_payload = self.post_pnginfo.get_payload()
         info_key = self.post_pnginfo.pnginfo_image_key
@@ -1364,38 +1363,29 @@ class ImgGenClient(APIClient):
         # post for image gen data
         return await self.post_pnginfo.call(input_data=pnginfo_payload, main=True)
 
-    async def process_image_results(self, images_list:list) -> tuple[list, PngImagePlugin.PngInfo]:
-        pil_images = []
-        pnginfo = None
+    async def extract_pnginfo(self, data: str|bytes|list, images_list:list) -> PngImagePlugin.PngInfo | None:
+        if not self.post_pnginfo:
+            return None
+        if isinstance(data, str):
+            pnginfo_data = await self._post_image_for_pnginfo_data(data)
+        elif isinstance(data, bytes):
+            b64str = base64.b64encode(data).decode()
+            pnginfo_data = await self._post_image_for_pnginfo_data(b64str)
+        else:
+            log.warning(f"Unsupported data type for pnginfo: {type(data)}")
+            pnginfo_data = None
+        if pnginfo_data:
+            pnginfo = PngImagePlugin.PngInfo()
+            pnginfo.add_text("parameters", pnginfo_data)
+            return pnginfo
+        return None
 
-        # Process raw image list
-        for i, item in enumerate(images_list):
-            # Determine the input type and clean if necessary
-            if isinstance(item, str):
-                data = split_at_first_comma(item)
-            else:
-                data = item  # Already bytes or list of ints
+    async def resolve_image_data(self, item, index: int) -> str|bytes|list:
+        if isinstance(item, str):
+            return split_at_first_comma(item)
+        return item
 
-            # Get PNG Info for first image
-            if i == 0 and self.post_pnginfo:
-                if isinstance(data, str):  # Ensure we pass str to the pnginfo function
-                    pnginfo_data = await self.post_image_for_pnginfo_data(data)
-                elif isinstance(data, bytes):
-                    # Convert to base64 for pnginfo extraction
-                    b64str = base64.b64encode(data).decode()
-                    pnginfo_data = await self.post_image_for_pnginfo_data(b64str)
-                else:
-                    log.warning(f"Unsupported data type for pnginfo: {type(data)}")
-                    pnginfo_data = None
-
-                if pnginfo_data:
-                    pnginfo = PngImagePlugin.PngInfo()
-                    pnginfo.add_text("parameters", pnginfo_data)
-
-            pil_images.append(self.decode_and_save_for_index(i, data, pnginfo))
-        return pil_images, pnginfo
-
-    async def unpack_image_results(self, images:Any):
+    async def unpack_image_results(self, images:Any) -> str|bytes|list:
         return images
 
     async def call_track_progress(self, ictx=None):
@@ -1406,7 +1396,7 @@ class ImgGenClient(APIClient):
                                   message="Generating image",
                                   ictx=ictx)
 
-    async def track_t2i_i2i_progress(self, ictx=None):
+    async def _track_t2i_i2i_progress(self, ictx=None):
         from modules.utils_discord import Embeds
         embeds = Embeds()
         try:
@@ -1420,35 +1410,45 @@ class ImgGenClient(APIClient):
                         bot_database.update_was_warned("imggen_websocket_progress")
             else:
                 await self.call_track_progress(ictx=ictx)
-
         except Exception as e:
             log.error(f'Error tracking {self.name} image generation progress: {e}')
         finally:
             await embeds.delete('img_gen')
 
-    async def post_for_images(self, endpoint:"ImgGenEndpoint", img_payload:dict) -> list[str]:
-        return await endpoint.call(input_data=img_payload, main=True)
+    async def call_imggen_endpoint(self, img_payload:dict,  mode:str="txt2img"):
+        ep_for_mode:Union[ImgGenEndpoint_PostTxt2Img, ImgGenEndpoint_PostImg2Img] = getattr(self, f'post_{mode}')
+        return await ep_for_mode.call(input_data=img_payload, main=True)
+
+    async def post_for_images(self, img_payload:dict,  mode:str="txt2img", ictx=None) -> list[str]:
+        # Start progress task and generation task concurrently
+        images_task = asyncio.create_task(self.call_imggen_endpoint(img_payload, mode))
+        progress_task = asyncio.create_task(self._track_t2i_i2i_progress(ictx=ictx))
+        # Wait for images_task to complete
+        images_results = await images_task
+        # Once images_task is done, cancel progress_task
+        if progress_task and not progress_task.done():
+            progress_task.cancel()
+            try:
+                await progress_task
+            except asyncio.CancelledError:
+                pass
+        return images_results
 
     async def main_imggen(self, img_payload:dict, mode:str="txt2img", ictx=None) -> Tuple[list[Image.Image], Optional[PngImagePlugin.PngInfo]]:
+        img_obj_list = []
+        pnginfo = None
         try:
-            ep_for_mode:Union[ImgGenEndpoint_PostTxt2Img, ImgGenEndpoint_PostImg2Img] = getattr(self, f'post_{mode}')
-            # Start progress task and generation task concurrently
-            images_task = asyncio.create_task(self.post_for_images(ep_for_mode, img_payload))
-            progress_task = asyncio.create_task(self.track_t2i_i2i_progress(ictx=ictx))
-            # Wait for images_task to complete
-            images_results = await images_task
-            # Once images_task is done, cancel progress_task
-            if progress_task and not progress_task.done():
-                progress_task.cancel()
-                try:
-                    await progress_task
-                except asyncio.CancelledError:
-                    pass
-
+            # Get the results
+            images_results = await self.post_for_images(img_payload, mode, ictx=ictx)
+            # Ensure the results are a list of base64 or bytes
             images_list = await self.unpack_image_results(images_results)
-
-            return await self.process_image_results(images_list) # Returns (list of PIL images, pnginfo)
-
+            # Optionally add png info to first result > save > returns PIL images and pnginfo
+            for i, item in enumerate(images_list):
+                data = await self.resolve_image_data(item, i)
+                if i == 0:
+                    pnginfo = await self.extract_pnginfo(data, images_list)
+                img_obj = self.decode_and_save_for_index(i, data, pnginfo)
+                img_obj_list.append(img_obj)
         except Exception as e:
             from modules.utils_discord import Embeds
             embeds = Embeds()
@@ -1456,7 +1456,7 @@ class ImgGenClient(APIClient):
             log.error(f'{e_prefix}: {e}')
             restart_msg = f'\nIf {self.name} remains unresponsive, consider using "/restart_sd_client" command.' if self.post_server_restart else ''
             await embeds.send('img_send', e_prefix, f'{e}{restart_msg}')
-            return [], None        
+        return img_obj_list, pnginfo   
 
     def is_comfy(self) -> bool:
         return isinstance(self, ImgGenClient_Comfy)
@@ -1496,10 +1496,6 @@ class ImgGenClient_Swarm(ImgGenClient):
         super().__init__(*args, **kwargs)
         self.session_id = None
 
-    async def unpack_image_results(self, results:dict) -> list[bytes]:
-        response = await self.request(endpoint=str(results['image']), method='GET', retry=0, timeout=10)
-        return [response.body]
-
     async def call_track_progress(self, ictx=None) -> list[dict]:
         completion_condition = processing.build_completion_condition({'image': "*"})
         return await self.track_progress(endpoint=None,
@@ -1524,31 +1520,35 @@ class ImgGenClient_Swarm(ImgGenClient):
             log.error(f"[{self.name}] failed to connect to WebSocket: {e}")
             self.ws = None
             raise
+    
+    async def extract_pnginfo(self, data, images_list) -> None:
+        return None
 
-    async def post_for_images(self, img_payload:dict, ictx=None) -> list[str]:
+    async def resolve_image_data(self, item:dict, index: int) -> bytes:
+        image:str = item['image']
+        if image.startswith('View/'):
+            # Is a path that needs to get bytes from server
+            response = await self.request(endpoint=image, method='GET', retry=0, timeout=10)
+            return response.body
+        else:
+            # Is base64 string
+            data = split_at_first_comma(image)
+            return base64.b64decode(data)
+
+    async def unpack_image_results(self, results:list) -> list[dict]:
+        # Return the last dict value returned by poll_ws()
+        last_dict:dict = results.pop()
+        return [last_dict]
+
+    async def post_for_images(self, img_payload:dict,  mode:str="txt2img", ictx=None) -> list[str]:
         if not self.ws or self.ws.closed:
             await self.connect_websocket()
         try:
             self.add_required_values_to_payload(img_payload)
             await self.ws.send_json(img_payload)
-            results_list = await self.call_track_progress(ictx=ictx)
-            return results_list.pop()
+            return await self.call_track_progress(ictx=ictx)
         finally:
             await self.ws.close()
-
-    async def main_imggen(self, img_payload:dict, mode:str="txt2img", ictx=None) -> Tuple[list[Image.Image], Optional[PngImagePlugin.PngInfo]]:
-        try:
-            images_results = await self.post_for_images(img_payload, ictx=ictx)
-            images_list = await self.unpack_image_results(images_results)
-            return await self.process_image_results(images_list) # Returns (list of PIL images, pnginfo)
-        except Exception as e:
-            from modules.utils_discord import Embeds
-            embeds = Embeds()
-            e_prefix = f'[{self.name}] Error processing images'
-            log.error(f'{e_prefix}: {e}')
-            restart_msg = f'\nIf {self.name} remains unresponsive, consider using "/restart_sd_client" command.' if self.post_server_restart else ''
-            await embeds.send('img_send', e_prefix, f'{e}{restart_msg}')
-            return [], None    
 
     def add_required_values_to_payload(self, payload:dict):
         payload['session_id'] = self.session_id
