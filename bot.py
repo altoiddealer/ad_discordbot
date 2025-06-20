@@ -6906,9 +6906,9 @@ class ImgModel_Comfy(ImgModel):
             imgcmd_vars['height'] = imgcmd_params['size']['height']
         if imgcmd_params.get('img2img'):
             if imgcmd_params['img2img'].get('image'):
-                imgcmd_vars['i2i_image'] = imgcmd_params['img2img']['image']['filename']
+                imgcmd_vars['i2i_image'] = imgcmd_params['img2img']['image']
             if imgcmd_params['img2img'].get('mask'):
-                imgcmd_vars['i2i_mask'] = imgcmd_params['img2img']['mask']['filename']
+                imgcmd_vars['i2i_mask'] = imgcmd_params['img2img']['mask']
             if imgcmd_params['img2img'].get('denoising_strength'):
                 imgcmd_vars['denoising_strength'] = imgcmd_params['img2img']['denoising_strength']
         if imgcmd_params.get('cnet_dict'):
@@ -6919,7 +6919,7 @@ class ImgModel_Comfy(ImgModel):
             #     attr_name = f'cnet_{key}'
             #     imgcmd_vars[attr_name] = value
         if imgcmd_params.get('face_swap'):
-            imgcmd_vars['face_swap'] = imgcmd_params['face_swap']['filename']
+            imgcmd_vars['face_swap'] = imgcmd_params['face_swap']
 
         task.vars.update_from_dict(imgcmd_vars)
 
