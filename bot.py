@@ -120,21 +120,22 @@ async def process_tasks_in_background():
 ########################## BOT STARTUP ##########################
 #################################################################
 def disable_unsupported_features():
-    if config.controlnet_enabled() and not api.imggen.is_sdwebui_variant():
-        log.warning('ControlNet is enabled in config.yaml, but is currently only supported by A1111-like WebUIs (A1111/Forge/ReForge). Disabling.')
-        config.imggen['extensions']['controlnet_enabled'] = False
-    if config.reactor_enabled() and not api.imggen.is_sdwebui_variant():
-        log.warning('ReActor is enabled in config.yaml, but is currently only supported by A1111-like WebUIs (A1111/Forge/ReForge). Disabling.')
-        config.imggen['extensions']['reactor_enabled'] = False
-    if config.forgecouple_enabled() and not api.imggen.is_forge():
-        log.warning('Forge Couple is enabled in config.yaml, but is currently only supported by SD Forge. Disabling.')
-        config.imggen['extensions']['forgecouple_enabled'] = False
-    if config.layerdiffuse_enabled() and not api.imggen.is_forge():
-        log.warning('Layerdiffuse is enabled in config.yaml, but is currently only supported by SD Forge. Disabling.')
-        config.imggen['extensions']['layerdiffuse_enabled'] = False
-    if config.imggen.get('extensions', {}).get('loractl', {}).get('enabled', False) and not api.imggen.supports_loractrl():
-        log.warning('Loractl-scaling feature is enabled in config.yaml, but is currently only supported by SD Forge/ReForge. Disabling.')
-        config.imggen['extensions']['loractl']['enabled'] = False
+    if callable(api.imggen):
+        if config.controlnet_enabled() and not api.imggen.is_sdwebui_variant():
+            log.warning('ControlNet is enabled in config.yaml, but is currently only supported by A1111-like WebUIs (A1111/Forge/ReForge). Disabling.')
+            config.imggen['extensions']['controlnet_enabled'] = False
+        if config.reactor_enabled() and not api.imggen.is_sdwebui_variant():
+            log.warning('ReActor is enabled in config.yaml, but is currently only supported by A1111-like WebUIs (A1111/Forge/ReForge). Disabling.')
+            config.imggen['extensions']['reactor_enabled'] = False
+        if config.forgecouple_enabled() and not api.imggen.is_forge():
+            log.warning('Forge Couple is enabled in config.yaml, but is currently only supported by SD Forge. Disabling.')
+            config.imggen['extensions']['forgecouple_enabled'] = False
+        if config.layerdiffuse_enabled() and not api.imggen.is_forge():
+            log.warning('Layerdiffuse is enabled in config.yaml, but is currently only supported by SD Forge. Disabling.')
+            config.imggen['extensions']['layerdiffuse_enabled'] = False
+        if config.imggen.get('extensions', {}).get('loractl', {}).get('enabled', False) and not api.imggen.supports_loractrl():
+            log.warning('Loractl-scaling feature is enabled in config.yaml, but is currently only supported by SD Forge/ReForge. Disabling.')
+            config.imggen['extensions']['loractl']['enabled'] = False
 
 # Feature to automatically change imgmodels periodically
 async def init_auto_change_imgmodels():
@@ -4536,9 +4537,7 @@ if imggen_enabled:
 
     use_llm_status = 'Whether to send your prompt to LLM. Results may vary!' if tgwui_enabled else '**option disabled** (LLM is not integrated)'
 
-    using_imggen_client_name = f' using {api.imggen.name}' if api.imggen else ''
-
-    @client.hybrid_command(name="image", description=f"Generate an image{using_imggen_client_name}")
+    @client.hybrid_command(name="image", description=f"Generate an image{f' using {api.imggen.name}' if api.imggen else ''}")
     @app_commands.describe(use_llm=use_llm_status)
     @app_commands.describe(style='Applies a positive/negative prompt preset')
     @app_commands.describe(img2img='Diffuses from an input image instead of pure latent noise.')
