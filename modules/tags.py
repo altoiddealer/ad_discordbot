@@ -304,7 +304,7 @@ class Tags():
         except Exception as e:
             log.error(f"Error matching tags for img phase: {e}")
 
-    def process_tag_insertions(self, prompt:str, pre_insert_callback: Optional[Callable[[dict, str], str]] = None) -> str:
+    def process_tag_insertions(self, prompt:str) -> str:
         try:
             # iterate over a copy of the matches, preserving the structure of the original matches list
             tuple_matches = copy.deepcopy(self.matches) # type: ignore
@@ -324,9 +324,6 @@ class Tags():
                 if insert_text is None:
                     log.error(f"Error processing matched tag {item}. Skipping this tag.")
                 else:
-                    # Callback to handle LORAs if applicable (ComfyUI)
-                    if pre_insert_callback:
-                        insert_text = pre_insert_callback(insert_text)
                     if insert_method == 'replace':
                         if insert_text == '':
                             prompt = prompt[:start] + prompt[end:].lstrip()
