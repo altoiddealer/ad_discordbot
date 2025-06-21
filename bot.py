@@ -40,7 +40,7 @@ from modules.utils_files import load_file, merge_base, save_yaml_file  # noqa: F
 from modules.utils_shared import client, TOKEN, is_tgwui_integrated, shared_path, bg_task_queue, task_event, flows_queue, flows_event, patterns, bot_emojis, config, bot_database, get_api
 from modules.database import StarBoard, Statistics, BaseFileMemory
 from modules.utils_misc import check_probability, fix_dict, set_key, deep_merge, update_dict, sum_update_dict, random_value_from_range, convert_lists_to_tuples, \
-    get_time, format_time, format_time_difference, get_normalized_weights, valueparser  # noqa: F401
+    consolidate_prompt_strings, get_time, format_time, format_time_difference, get_normalized_weights, valueparser  # noqa: F401
 from modules.utils_processing import resolve_placeholders
 from modules.utils_discord import Embeds, guild_only, guild_or_owner_only, configurable_for_dm_if, is_direct_message, ireply, sleep_delete_message, send_long_message, \
     EditMessageModal, SelectedListItem, SelectOptionsView, get_user_ctx_inter, get_message_ctx_inter, apply_reactions_to_messages, replace_msg_in_history_and_discord, MAX_MESSAGE_LENGTH, muffled_send  # noqa: F401
@@ -120,21 +120,22 @@ async def process_tasks_in_background():
 ########################## BOT STARTUP ##########################
 #################################################################
 def disable_unsupported_features():
-    if config.controlnet_enabled() and not api.imggen.is_sdwebui_variant():
-        log.warning('ControlNet is enabled in config.yaml, but is currently only supported by A1111-like WebUIs (A1111/Forge/ReForge). Disabling.')
-        config.imggen['extensions']['controlnet_enabled'] = False
-    if config.reactor_enabled() and not api.imggen.is_sdwebui_variant():
-        log.warning('ReActor is enabled in config.yaml, but is currently only supported by A1111-like WebUIs (A1111/Forge/ReForge). Disabling.')
-        config.imggen['extensions']['reactor_enabled'] = False
-    if config.forgecouple_enabled() and not api.imggen.is_forge():
-        log.warning('Forge Couple is enabled in config.yaml, but is currently only supported by SD Forge. Disabling.')
-        config.imggen['extensions']['forgecouple_enabled'] = False
-    if config.layerdiffuse_enabled() and not api.imggen.is_forge():
-        log.warning('Layerdiffuse is enabled in config.yaml, but is currently only supported by SD Forge. Disabling.')
-        config.imggen['extensions']['layerdiffuse_enabled'] = False
-    if config.imggen.get('extensions', {}).get('loractl', {}).get('enabled', False) and not api.imggen.supports_loractrl():
-        log.warning('Loractrl feature is enabled in config.yaml, but is currently only supported by SD Forge/ReForge. Disabling.')
-        config.imggen['extensions']['loractl']['enabled'] = False
+    if callable(api.imggen):
+        if config.controlnet_enabled() and not api.imggen.is_sdwebui_variant():
+            log.warning('ControlNet is enabled in config.yaml, but is currently only supported by A1111-like WebUIs (A1111/Forge/ReForge). Disabling.')
+            config.imggen['extensions']['controlnet_enabled'] = False
+        if config.reactor_enabled() and not api.imggen.is_sdwebui_variant():
+            log.warning('ReActor is enabled in config.yaml, but is currently only supported by A1111-like WebUIs (A1111/Forge/ReForge). Disabling.')
+            config.imggen['extensions']['reactor_enabled'] = False
+        if config.forgecouple_enabled() and not api.imggen.is_forge():
+            log.warning('Forge Couple is enabled in config.yaml, but is currently only supported by SD Forge. Disabling.')
+            config.imggen['extensions']['forgecouple_enabled'] = False
+        if config.layerdiffuse_enabled() and not api.imggen.is_forge():
+            log.warning('Layerdiffuse is enabled in config.yaml, but is currently only supported by SD Forge. Disabling.')
+            config.imggen['extensions']['layerdiffuse_enabled'] = False
+        if config.imggen.get('extensions', {}).get('loractl', {}).get('enabled', False) and not api.imggen.supports_loractrl():
+            log.warning('Loractl-scaling feature is enabled in config.yaml, but is currently only supported by SD Forge/ReForge. Disabling.')
+            config.imggen['extensions']['loractl']['enabled'] = False
 
 # Feature to automatically change imgmodels periodically
 async def init_auto_change_imgmodels():
@@ -142,8 +143,8 @@ async def init_auto_change_imgmodels():
     if imgmodels_data and imgmodels_data.get('settings', {}).get('auto_change_imgmodels', {}).get('enabled', False):
         if config.is_per_server_imgmodels():
             for guild_id, settings in guild_settings.items():
-                settings.imgmodel._guild_id = settings._guild_id # store Guild ID
-                settings.imgmodel._guild_name = settings._guild_id # store Guild Name
+                settings.imgmodel._guild_id = guild_id # store Guild ID
+                settings.imgmodel._guild_name = guild_id # store Guild Name
                 await bg_task_queue.put(settings.imgmodel.start_auto_change_imgmodels())
         else:
             await bg_task_queue.put(bot_settings.imgmodel.start_auto_change_imgmodels())
@@ -2355,8 +2356,7 @@ class TaskProcessing(TaskAttributes):
 
     def process_img_prompt_tags(self:Union["Task","Tasks"]):
         try:
-            collect_loras = lambda text: self.imgmodel_settings.collect_loras(text, task=self)
-            self.prompt = self.tags.process_tag_insertions(self.prompt, pre_insert_callback=collect_loras)
+            self.prompt = self.tags.process_tag_insertions(self.prompt)
             updated_positive_prompt = self.prompt
             updated_negative_prompt = self.neg_prompt
 
@@ -2378,8 +2378,13 @@ class TaskProcessing(TaskAttributes):
                 if 'negative_prompt_suffix' in tag:
                     join = join if updated_negative_prompt else ''
                     updated_negative_prompt = updated_negative_prompt + join + tag['negative_prompt_suffix']
+            
             self.prompt = updated_positive_prompt
             self.neg_prompt = updated_negative_prompt
+
+            if api.imggen._lora_names:
+                self.prompt = self.imgmodel_settings.handle_loras(self.prompt, task=self)
+                self.neg_prompt = self.imgmodel_settings.handle_loras(self.neg_prompt, task=self)
 
         except Exception as e:
             log.error(f"Error processing Img prompt tags: {e}")
@@ -2590,15 +2595,20 @@ class TaskProcessing(TaskAttributes):
             # ReActor face swap handling
             if reactor and config.reactor_enabled():
                 self.imgmodel_settings.apply_reactor(reactor, self)
-            # Tags currently only supported by SDWebUI clients
-            if api.imggen.is_sdwebui_variant():
-                # Img2Img handling
-                if img2img:
+
+            # Img2Img handling
+            if img2img and (api.imggen.is_sdwebui_variant() or api.imggen.is_swarm()):
+                self.params.mode = 'img2img'
+                if api.imggen.is_swarm():
+                    self.payload['initimage'] = str(img2img)
+                else:
                     self.payload['init_images'] = [str(img2img)]
-                    self.params.mode = 'img2img'
                 # Inpaint Mask handling
                 if img2img_mask:
-                    self.payload['mask'] = str(img2img_mask)
+                    if api.imggen.is_swarm():
+                        self.payload['maskimage'] = str(img2img_mask)
+                    else:
+                        self.payload['mask'] = str(img2img_mask)
         except Exception as e:
             log.error(f"[TAGS] Error processing Img tags: {e}")
             traceback.print_exc()
@@ -3625,7 +3635,7 @@ class Tasks(TaskProcessing):
             # Apply tags relevant to Img gen
             await self.process_img_payload_tags(img_payload_mods)
             # Process loractl
-            if config.imggen['extensions'].get('loractl', {}).get('enabled', False):
+            if config.loractl_enabled():
                 self.apply_loractl()
             # Apply tags relevant to Img prompts
             self.process_img_prompt_tags()
@@ -3635,7 +3645,7 @@ class Tasks(TaskProcessing):
             # Apply menu selections from /image command
             self.imgmodel_settings.apply_imgcmd_params(task=self)
             # Apply updated prompt/negative prompt to payload
-            self.imgmodel_settings.apply_prompts_to_task(self)
+            self.imgmodel_settings.apply_final_prompts_for_task(self)
             # Apply vars overrides
             self.override_payload()
             # Clean anything up that gets messy
@@ -4531,9 +4541,7 @@ if imggen_enabled:
 
     use_llm_status = 'Whether to send your prompt to LLM. Results may vary!' if tgwui_enabled else '**option disabled** (LLM is not integrated)'
 
-    using_imggen_client_name = f' using {api.imggen.name}' if api.imggen else ''
-
-    @client.hybrid_command(name="image", description=f"Generate an image{using_imggen_client_name}")
+    @client.hybrid_command(name="image", description=f"Generate an image{f' using {api.imggen.name}' if api.imggen else ''}")
     @app_commands.describe(use_llm=use_llm_status)
     @app_commands.describe(style='Applies a positive/negative prompt preset')
     @app_commands.describe(img2img='Diffuses from an input image instead of pure latent noise.')
@@ -6469,20 +6477,32 @@ class ImgModel(SettingsBase):
         self._guild_id = None
         self._guild_name = None
         # Convenience keys
-        self._name_key = api.imggen.get_imgmodels.imgmodel_name_key or ''
-        self._value_key = api.imggen.get_imgmodels.imgmodel_value_key or ''
-        self._filename_key = api.imggen.get_imgmodels.imgmodel_filename_key or ''
-        self._any_key = self._name_key or self._value_key or self._filename_key or ''
-
+        get_imgmodels_ep = getattr(api.imggen, 'get_imgmodels', None)
         post_options_ep = getattr(api.imggen, 'post_options', None)
+
+        self._name_key:str = getattr(get_imgmodels_ep, 'imgmodel_name_key', '')
+        self._value_key:str = getattr(get_imgmodels_ep, 'imgmodel_value_key', '')
+        self._filename_key:str = getattr(get_imgmodels_ep, 'imgmodel_filename_key', '')
         self._imgmodel_input_key:Optional[str] = getattr(post_options_ep, 'imgmodel_input_key', None)
         # database-like
-        self.last_imgmodel_name: str = ''
-        self.last_imgmodel_value: str = ''
-        self.last_imgmodel_res: int = 1024
+        self.last_imgmodel_name:str = ''
+        self.last_imgmodel_value:str = ''
+        self.last_imgmodel_res:int = 1024
         # Override base values
         self.payload_mods:dict = {}
         self.tags:TAG_LIST = []
+
+    def get_any_imgmodel_key(self, priority:str='name') -> str:
+        # Look for the first non-empty value in priority order
+        keys = ['name', 'value', 'filename']
+        if priority != 'name':
+            keys.remove(priority)
+            keys.insert(0, priority)
+        for k in keys:
+            value = getattr(self, f'_{k}_key', '')
+            if value:
+                return value
+        return ''
 
     def clean_payload(self, payload:dict):
         pass
@@ -6491,13 +6511,14 @@ class ImgModel(SettingsBase):
         pass
 
     def handle_payload_updates(self, updates:dict, task:"Task") -> dict:
+        self.fix_update_values(updates)
         task.vars.update_from_dict(updates)
 
     # Update vars and __overrides__ dict in user's default payload with any imgmodel payload mods
     def override_payload(self, task:"Task") -> dict:
         return self.handle_payload_updates(self.payload_mods, task)
     
-    def apply_prompts_to_task(self, task:"Task"):
+    def apply_final_prompts_for_task(self, task:"Task"):
         active_ep = task.params.get_active_imggen_ep()
         prompt_key, neg_prompt_key = active_ep.get_prompt_keys()
         if prompt_key:
@@ -6510,6 +6531,7 @@ class ImgModel(SettingsBase):
         task.update_vars_from_imgcmd()
 
     def apply_payload_param_variances(self, updates:dict, task:"Task"):
+        self.fix_update_values(updates)
         summed_updates = sum_update_dict(vars(task.vars), updates, in_place=False, updates_only=True, merge_unmatched=False)
         task.vars.update_from_dict(summed_updates)
 
@@ -6529,6 +6551,24 @@ class ImgModel(SettingsBase):
         if not bot_database.was_warned('reactor_unsupported'):
             log.warning("[TAGS] ReActor was triggered, but is currently only supported for A1111-like Web UIs (A1111/Forge/ReForge)")
             bot_database.update_was_warned('reactor_unsupported')
+    
+    async def handle_image_bytes(self, image:bytes, file_type: Optional[str] = None, filename: Optional[str] = None) -> str:
+        if not api.imggen.post_upload:
+            return base64.b64encode(image).decode('utf-8')
+        else:
+            # Detect MIME type
+            kind = filetype.guess(image)
+            mime_type = kind.mime if kind else 'application/octet-stream'
+            mime_category = mime_type.split('/')[0]
+            # Use file_category as default if file_type is not provided
+            resolved_file_type = file_type or mime_category
+            # Prepare a file-like object
+            file_obj = io.BytesIO(image)
+            file_obj.name = filename
+            file = {"file": file_obj, "filename": filename, "content_type": mime_type}
+
+            await api.imggen.post_upload.upload_file(file=file, file_type=resolved_file_type)
+            return filename
 
     async def handle_image_input(self, source: Union[discord.Attachment, bytes], file_type: Optional[str] = None, filename: Optional[str] = None) -> str:
         """
@@ -6547,36 +6587,65 @@ class ImgModel(SettingsBase):
                 raise ValueError("Filename must be provided when passing bytes.")
         else:
             raise TypeError("Unsupported image input type. Expected discord.Attachment or bytes.")
+        
+        return await self.handle_image_bytes(file_bytes, file_type, filename)
 
-        if not api.imggen.post_upload:
-            return base64.b64encode(file_bytes).decode('utf-8')
-        else:
-            # Detect MIME type
-            kind = filetype.guess(file_bytes)
-            mime_type = kind.mime if kind else 'application/octet-stream'
-            mime_category = mime_type.split('/')[0]
-            # Use file_category as default if file_type is not provided
-            resolved_file_type = file_type or mime_category
-            # Prepare a file-like object
-            file_obj = io.BytesIO(file_bytes)
-            file_obj.name = filename
-            file = {"file": file_obj, "filename": filename, "content_type": mime_type}
-
-            await api.imggen.post_upload.upload_file(file=file, file_type=resolved_file_type)
-            return filename
+    def get_sampler_and_scheduler_mapping(self) -> dict:
+        return {}
     
-    def collect_loras(self, text:str, task:"Task") -> str:
-        return text
+    def normalize_sampler_name(self, name:str) -> str:
+        normalized = name.strip().lower().replace("+", "p").replace(" ", "_")
+        if normalized.startswith("k_"):
+            normalized = normalized[2:]
+        return normalized
 
     def check_sampler_or_scheduler_value(self, value: str) -> str:
-        pass
+        valid_values = [v.lower() for v in api.imggen._sampler_names + api.imggen._schedulers]
+        if not valid_values:
+            return value
+        normalized = self.normalize_sampler_name(value)
+        if normalized in valid_values:
+            return normalized
+        mapping = self.get_sampler_and_scheduler_mapping()
+        return mapping.get(normalized, value)
+
+    def parse_lora_matches(self, text: str) -> list[tuple[str, str, str, float, str]]:
+        """
+        Returns list of (full_tag, original_name, strength_str, strength_float, resolved_name)
+        """
+        matches = []
+        if not api.imggen._lora_names:
+            return matches
+
+        lora_matches = patterns.sd_lora_split.findall(text)
+        if not lora_matches:
+            return matches
+
+        valid_lora_names = api.imggen._lora_names
+
+        for name, strength_str in lora_matches:
+            try:
+                strength = float(strength_str)
+            except ValueError:
+                continue
+            stripped = name.strip()
+            resolved = next((v for v in valid_lora_names if stripped in v), stripped)
+            full_tag = f"<lora:{name}:{strength_str}>"
+            matches.append((full_tag, name, strength_str, strength, resolved))
+        return matches
+
+    def handle_loras(self, text: str, task: "Task") -> str:
+        for full_tag, _, _, strength, resolved_name in self.parse_lora_matches(text):
+            task.vars.add_lora(resolved_name, strength)
+            text = text.replace(full_tag, '')
+        return text
 
     def collect_model_names(self, imgmodels:list):
         if not imgmodels:
             return []
         first = imgmodels[0]
         if isinstance(first, dict):
-            display_key = self._any_key
+            display_key = self.get_any_imgmodel_key()
             return [i[display_key] for i in imgmodels]
         elif isinstance(first, str):
             return imgmodels
@@ -6650,12 +6719,14 @@ class ImgModel(SettingsBase):
     # Check filesize/filters with selected imgmodel to assume resolution / tags
     async def guess_model_data(self, imgmodel_data: dict, presets: list[dict]) -> dict | None:
         try:
-            imgmodel = imgmodel_data.get(self._any_key)
+            imgmodel_name = imgmodel_data.get(self._name_key) or ''
+            imgmodel_value = imgmodel_data.get(self._value_key) or ''
+            imgmodel = imgmodel_value or imgmodel_name
             match_counts = []
 
             for preset in presets:
-                exact_match = preset.get('exact_match', '')
-                if exact_match and imgmodel == exact_match:
+                exact_match = preset.get('exact_match')
+                if exact_match and exact_match in [imgmodel_name, imgmodel_value]:
                     log.info(f'Applying exact match imgmodel preset for "{exact_match}".')
                     return preset
 
@@ -6680,19 +6751,13 @@ class ImgModel(SettingsBase):
             log.error(f"Error guessing selected imgmodel data: {e}")
             return {}
 
+    def clean_options_before_saving(self, options:dict) -> dict:
+        return options
+
     # Save new Img model data
     async def save_new_imgmodel_options(self, ictx:CtxInteraction, new_imgmodel_options:dict, imgmodel_tags):
-        # Remove options we do not want to retain in Settings
-        override_settings:dict = new_imgmodel_options.get('override_settings', {})
-        if override_settings and not config.is_per_server_imgmodels():
-            imgmodel_options = list(override_settings.keys())  # list all options
-            if imgmodel_options:
-                log.info(f"[Change Imgmodel] Applying Options which won't be retained for next bot startup: {imgmodel_options}")
-            # Remove override_settings
-            new_imgmodel_options.pop('override_settings')
-
         # Update settings
-        self.payload_mods = new_imgmodel_options
+        self.payload_mods = self.clean_options_before_saving(new_imgmodel_options)
         self.tags = imgmodel_tags
 
         # Check if old/new average resolution is different
@@ -6743,6 +6808,7 @@ class ImgModel(SettingsBase):
             await api.imggen.post_options.call(input_data=options_payload, sanitize=True)
         except Exception as e:
             log.error(f"Error posting updated imgmodel settings to API: {e}")
+            raise
 
     async def change_imgmodel(self, imgmodel_data:dict, ictx:CtxInteraction=None, save:bool=True) -> dict:
         # Retain model details
@@ -6755,8 +6821,9 @@ class ImgModel(SettingsBase):
         # Collect options payload
         options_payload = api.imggen.post_options.get_payload() if getattr(api.imggen, 'post_options', None) else {}
         if self._imgmodel_input_key:
-            options_payload[self._imgmodel_input_key] = imgmodel_data[self._any_key]
-        
+            value_key = self.get_any_imgmodel_key(priority='value')
+            options_payload[self._imgmodel_input_key] = imgmodel_data[value_key]
+
         # Factors extras (override_settings, etc) if applicable
         options_payload.update(self.get_extra_settings(imgmodel_options))
 
@@ -6855,8 +6922,8 @@ class ImgModel(SettingsBase):
 
     # From change_imgmodel_task
     async def change_imgmodel_task(self, task:"Task"):
-        print_model_name:str = task.params.imgmodel.get(self._name_key) or task.params.imgmodel.get(self._value_key, '')
-        imgmodel_value:str = task.params.imgmodel.get(self._any_key)
+        print_model_name:str = task.params.imgmodel.get(self.get_any_imgmodel_key(priority='name'))
+        imgmodel_value:str = task.params.imgmodel.get(self.get_any_imgmodel_key(priority='value'))
 
         if not imgmodel_value:
             await task.embeds.send('change', 'Failed to change Img model:', f'Img model not found: {print_model_name}')
@@ -6905,10 +6972,11 @@ class ImgModel_Comfy(ImgModel):
     def __init__(self):
         super().__init__()
         # Convenience keys
-        self._name_key = api.imggen.get_imgmodels.imgmodel_name_key or 'model_name'
-        self._value_key = api.imggen.get_imgmodels.imgmodel_value_key or 'title'
-        self._filename_key = api.imggen.get_imgmodels.imgmodel_filename_key or ''
-        self._any_key = self._name_key or self._value_key or ''
+        self._name_key:str = 'model_name'
+        self._value_key:str = 'title'
+        self._filename_key:str = ''
+        self._imgmodel_input_key = None
+
         self.delete_nodes:list[str] = []
 
     def delete_conflicting_nodes_for_model_type(self, payload: dict):
@@ -6956,36 +7024,9 @@ class ImgModel_Comfy(ImgModel):
     async def get_imgmodel_data(self, imgmodel_value:str, ictx:CtxInteraction=None) -> dict:
         return {self._name_key: imgmodel_value,
                 self._value_key: imgmodel_value}
-    
-    def collect_loras(self, insert_text: str, task:"Task") -> str:
-        lora_matches = patterns.sd_lora_split.findall(insert_text)
-        if lora_matches:
-            valid_lora_names:list[str] = api.imggen._lora_names
-            for name, strength_str in lora_matches:
-                try:
-                    strength = float(strength_str)
-                except ValueError:
-                    continue  # Skip malformed weights
-                name = name.strip()
-                for valid_name in valid_lora_names:
-                    if name in valid_name:
-                        name = valid_name
-                        break
-                task.vars.add_lora(name, strength)
-        # Return cleaned text (remove all <lora:...:...> tags)
-        return patterns.sd_lora.sub('', insert_text)
-    
-    # async def handle_image_input(self, source: Union[discord.Attachment, bytes], file_type: Optional[str] = None, filename: Optional[str] = None) -> str:
-    #     file_bytes = await attachment.read()
-    #     filename = attachment.filename
-    #     # Detect MIME type
-    #     kind = filetype.guess(file_bytes)
-    #     mime_type = kind.mime if kind else 'application/octet-stream'
-    #     # Prepare a file-like object
-    #     file_obj = io.BytesIO(file_bytes)
-    #     file_obj.name = filename
-    #     # Return file dict
-    #     return {"file": file_obj, "filename": filename, "content_type": mime_type}
+
+    def apply_final_prompts_for_task(self, task:"Task"):
+        task.update_vars()
 
     def apply_imgcmd_params(self, task:"Task"):
         imgcmd_vars = {}
@@ -6995,9 +7036,9 @@ class ImgModel_Comfy(ImgModel):
             imgcmd_vars['height'] = imgcmd_params['size']['height']
         if imgcmd_params.get('img2img'):
             if imgcmd_params['img2img'].get('image'):
-                imgcmd_vars['i2i_image'] = imgcmd_params['img2img']['image']['filename']
+                imgcmd_vars['i2i_image'] = imgcmd_params['img2img']['image']
             if imgcmd_params['img2img'].get('mask'):
-                imgcmd_vars['i2i_mask'] = imgcmd_params['img2img']['mask']['filename']
+                imgcmd_vars['i2i_mask'] = imgcmd_params['img2img']['mask']
             if imgcmd_params['img2img'].get('denoising_strength'):
                 imgcmd_vars['denoising_strength'] = imgcmd_params['img2img']['denoising_strength']
         if imgcmd_params.get('cnet_dict'):
@@ -7008,28 +7049,19 @@ class ImgModel_Comfy(ImgModel):
             #     attr_name = f'cnet_{key}'
             #     imgcmd_vars[attr_name] = value
         if imgcmd_params.get('face_swap'):
-            imgcmd_vars['face_swap'] = imgcmd_params['face_swap']['filename']
+            imgcmd_vars['face_swap'] = imgcmd_params['face_swap']
 
         task.vars.update_from_dict(imgcmd_vars)
 
-    def check_sampler_or_scheduler_value(self, value: str) -> str:
-        comfy_values = [v.lower() for v in api.imggen._sampler_names + api.imggen._schedulers]
-        if not comfy_values:
-            return value
-        normalized = value.strip().lower().replace("+", "p").replace(" ", "_")
-        if normalized.startswith("k_"):
-            normalized = normalized[2:]
-        if normalized in comfy_values:
-            return normalized
-        manual_fallbacks = {"dpmpp_2m_sde_heun": "dpmpp_2m_sde",
-                            "ddim_cfgpp": "ddim",
-                            "plms": "lms",
-                            "unipc": "uni_pc",
-                            "restart": "res_multistep",
-                            "sgmuniform": "sgm_uniform",
-                            "ddim": "ddim_uniform",
-                            "uniform": "ddim_uniform"}
-        return manual_fallbacks.get(normalized, value)
+    def get_sampler_and_scheduler_mapping(self) -> dict:
+        return {"dpmpp_2m_sde_heun": "dpmpp_2m_sde",
+                "ddim_cfgpp": "ddim",
+                "plms": "lms",
+                "unipc": "uni_pc",
+                "restart": "res_multistep",
+                "sgmuniform": "sgm_uniform",
+                "ddim": "ddim_uniform",
+                "uniform": "ddim_uniform"}
 
     def fix_update_values(self, updates: dict):
         for k, v in updates.items():
@@ -7040,26 +7072,115 @@ class ImgModel_Comfy(ImgModel):
         self.fix_update_values(updates)
         task.vars.update_from_dict(updates)
 
+class ImgModel_Swarm(ImgModel):
+    def __init__(self):
+        super().__init__()
+        # Convenience keys
+        self._name_key:str = 'model_name'
+        self._value_key:str = 'title'
+        self._filename_key:str = ''
+        self._imgmodel_input_key:str = 'model'
+
+    def clean_payload(self, payload):
+        # resolves duplicate negatives while preserving order
+        payload['negativeprompt'] = consolidate_prompt_strings(payload.get('negativeprompt', ''))
+        payload['model'] = self.last_imgmodel_value
+        payload['donotsaveintermediates'] = True
+        payload['images'] = 1
+
+    def handle_loras(self, text: str, task: "Task") -> str:
+        for full_tag, _, strength_str, _, resolved_name in self.parse_lora_matches(text):
+            # Replace the tag with an updated version where the name is replaced
+            updated_tag = f"<lora:{resolved_name}:{strength_str}>"
+            text = text.replace(full_tag, updated_tag)
+        return text
+
+    async def post_options(self, options_payload:dict):
+        payload = {'model': options_payload['model']}
+        response = await api.imggen.post_options.call(input_data=payload)
+        if response and response.get('error'):
+            raise Exception(response['error'])
+
+    async def get_imgmodel_data(self, imgmodel_value:str, ictx:CtxInteraction=None) -> dict:
+        return {self._name_key: imgmodel_value,
+                self._value_key: imgmodel_value}
+
+    def apply_final_prompts_for_task(self, task:"Task"):
+        task.payload['prompt'] = task.prompt
+        task.payload['negativeprompt'] = task.neg_prompt
+
+    def apply_imgcmd_params(self, task:"Task"):
+        try:
+            imgcmd_params = task.params.imgcmd
+            size: Optional[dict]       = imgcmd_params['size']
+            face_swap :Optional[str]   = imgcmd_params['face_swap']
+            controlnet: Optional[dict] = imgcmd_params['controlnet']
+            img2img: dict              = imgcmd_params['img2img']
+            img2img_mask               = img2img.get('mask', '')
+
+            if img2img:
+                task.payload['initimage'] = img2img['image']
+                task.payload['initimagecreativity'] = img2img['denoising_strength']
+            if img2img_mask:
+                task.payload['maskimage'] = img2img_mask
+            if size:
+                task.payload.update(size)
+        except Exception as e:
+            log.error(f"Error applying imgcmd params: {e}")
+
+    def get_sampler_and_scheduler_mapping(self) -> dict:
+        return {"euler_a": "euler_ancestral",
+                "dpmpp_2m_sde_heun": "dpmpp_2m_sde",
+                "ddim_cfgpp": "ddim",
+                "plms": "lms",
+                "unipc": "uni_pc",
+                "restart": "res_multistep",
+                "sgmuniform": "sgm_uniform",
+                "ddim": "ddim_uniform",
+                "uniform": "ddim_uniform",
+                "polyexponential": "exponential",
+                "align_your_steps_gits": "align_your_steps",
+                "align_your_steps_11": "align_your_steps",
+                "align_your_steps_32": "align_your_steps"}
+
+    async def handle_image_bytes(self, image:bytes, file_type: Optional[str] = None, filename: Optional[str] = None) -> str:
+        return base64.b64encode(image).decode('utf-8')
+    
+    def fix_update_values(self, updates: dict):
+        key_map = {'cfg_scale': 'cfgscale',
+                   'negative_prompt': 'negativeprompt',
+                   'CLIP_stop_at_last_layers': 'clipstopatlayer',
+                   'sd_vae': 'vae',
+                   'distilled_cfg_scale': 'fluxguidancescale',
+                   'denoising_strength': 'initimagecreativity',
+                   'sampler_name': 'sampler'}
+        for old_key, new_key in key_map.items():
+            if old_key in updates:
+                updates[new_key] = updates.pop(old_key)
+        for key in ['sampler', 'scheduler']:
+            if key in updates:
+                updates[key] = self.check_sampler_or_scheduler_value(updates[key])
+
+    def handle_payload_updates(self, updates:dict, task:"Task"):
+        self.fix_update_values(updates)
+        update_dict(task.payload, updates)
+
+    def apply_payload_param_variances(self, updates:dict, task:"Task"):
+        self.fix_update_values(updates)
+        sum_update_dict(task.payload, updates)
+
 
 class ImgModel_SDWebUI(ImgModel):
     def __init__(self):
         super().__init__()
         # Convenience keys
-        self._name_key = api.imggen.get_imgmodels.imgmodel_name_key or 'model_name'
-        self._value_key = api.imggen.get_imgmodels.imgmodel_value_key or 'title'
-        self._filename_key = api.imggen.get_imgmodels.imgmodel_filename_key or 'filename'
-        self._any_key = self._name_key or self._value_key or self._filename_key or ''
-        if hasattr(api.imggen, 'post_options') and api.imggen.post_options:
-            self._imgmodel_input_key:str = api.imggen.post_options.imgmodel_input_key or 'sd_model_checkpoint'
+        self._name_key:str = 'model_name'
+        self._value_key:str = 'title'
+        self._filename_key:str = 'filename'
+        self._imgmodel_input_key:str = 'sd_model_checkpoint'
 
-    async def handle_image_input(self, source: Union[discord.Attachment, bytes], file_type: Optional[str] = None, filename: Optional[str] = None) -> str:
-        if isinstance(source, discord.Attachment):
-            file_bytes = await source.read()
-        elif isinstance(source, bytes):
-            file_bytes = source
-        else:
-            raise TypeError("Unsupported image input type.")
-        return base64.b64encode(file_bytes).decode('utf-8')
+    async def handle_image_bytes(self, image:bytes, file_type: Optional[str] = None, filename: Optional[str] = None) -> str:
+        return base64.b64encode(image).decode('utf-8')
     
     def fix_update_values(self, updates: dict):
         for k, v in updates.items():
@@ -7071,7 +7192,12 @@ class ImgModel_SDWebUI(ImgModel):
         update_dict(task.payload, updates)
 
     def apply_payload_param_variances(self, updates:dict, task:"Task"):
+        self.fix_update_values(updates)
         sum_update_dict(task.payload, updates)
+
+    def apply_final_prompts_for_task(self, task:"Task"):
+        task.payload['prompt'] = task.prompt
+        task.payload['negative_prompt'] = task.neg_prompt
 
     def apply_imgcmd_params(self, task:"Task"):
         try:
@@ -7101,21 +7227,12 @@ class ImgModel_SDWebUI(ImgModel):
                     cnet_args.append({})
                 cnet_args[0].update(controlnet)
         except Exception as e:
-            log.error(f"Error initializing imgcmd params: {e}")
+            log.error(f"Error applying imgcmd params: {e}")
 
     def clean_payload(self, payload:dict):
         try:
-            # Remove duplicate negative prompts while preserving original order
-            negative_prompt_list = payload.get('negative_prompt', '').split(', ')
-            unique_values_set = set()
-            unique_values_list = []
-            for value in negative_prompt_list:
-                if value not in unique_values_set:
-                    unique_values_set.add(value)
-                    unique_values_list.append(value)
-            processed_negative_prompt = ', '.join(unique_values_list)
-            payload['negative_prompt'] = processed_negative_prompt
-
+            # resolves duplicate negatives while preserving order
+            payload['negative_prompt'] = consolidate_prompt_strings(payload.get('negative_prompt', ''))
             ## Clean up extension keys
             # get alwayson_scripts dict
             alwayson_scripts:dict = payload.get('alwayson_scripts', {})
@@ -7192,23 +7309,37 @@ class ImgModel_SDWebUI(ImgModel):
         if reactor.get('mask'):
             task.payload['alwayson_scripts']['reactor']['args']['save_original'] = True
 
+    def get_sampler_and_scheduler_mapping(self) -> dict:
+        return {'euler_cfg_pp': 'k_euler',
+                'euler_ancestral_cfg_pp': 'k_euler_ancestral',
+                'dpm_2_ancestral': 'k_dpm_2_a',
+                'dpmpp_2s_ancestral': 'k_dpmpp_2s_a',
+                'dpmpp_2s_ancestral_cfg_pp': 'k_dpmpp_2s_a',
+                'dpmpp_sde_gpu': 'k_dpmpp_sde',
+                'dpmpp_2m_cfg_pp': 'k_dpmpp_2m',
+                'dpmpp_2m_sde_gpu': 'k_dpmpp_2m_sde',
+                'dpmpp_3m_sde_gpu': 'k_dpmpp_3m_sde',
+                'res_multistep': 'restart',
+                'res_multistep_cfg_pp': 'restart',
+                'res_multistep_ancestral': 'restart',
+                'res_multistep_ancestral_cfg_pp': 'restart',
+                'uni_pc': 'unipc',
+                'uni_pc_bh2': 'unipc'}
+
     def check_sampler_or_scheduler_value(self, value: str) -> str:
-        mapping = {'euler_cfg_pp': 'k_euler',
-                   'euler_ancestral_cfg_pp': 'k_euler_ancestral',
-                   'dpm_2_ancestral': 'k_dpm_2_a',
-                   'dpmpp_2s_ancestral': 'k_dpmpp_2s_a',
-                   'dpmpp_2s_ancestral_cfg_pp': 'k_dpmpp_2s_a',
-                   'dpmpp_sde_gpu': 'k_dpmpp_sde',
-                   'dpmpp_2m_cfg_pp': 'k_dpmpp_2m',
-                   'dpmpp_2m_sde_gpu': 'k_dpmpp_2m_sde',
-                   'dpmpp_3m_sde_gpu': 'k_dpmpp_3m_sde',
-                   'res_multistep': 'restart',
-                   'res_multistep_cfg_pp': 'restart',
-                   'res_multistep_ancestral': 'restart',
-                   'res_multistep_ancestral_cfg_pp': 'restart',
-                   'uni_pc': 'unipc',
-                   'uni_pc_bh2': 'unipc'}
+        mapping = self.get_sampler_and_scheduler_mapping()
         return mapping.get(value, value)
+
+    def clean_options_before_saving(self, options:dict) -> dict:
+        # Remove options we do not want to retain in Settings
+        override_settings:dict = options.get('override_settings', {})
+        if override_settings and not config.is_per_server_imgmodels():
+            imgmodel_options = list(override_settings.keys())  # list all options
+            if imgmodel_options:
+                log.info(f"[Change Imgmodel] Applying Options which won't be retained for next bot startup: {imgmodel_options}")
+            # Remove override_settings
+            options.pop('override_settings')
+        return options
 
 class ImgModel_A1111(ImgModel_SDWebUI):
     def __init__(self):
@@ -7402,6 +7533,8 @@ class Settings(BaseFileMemory):
         else:
             if api.imggen.is_comfy():
                 self.imgmodel = ImgModel_Comfy()
+            elif api.imggen.is_swarm():
+                self.imgmodel = ImgModel_Swarm()
             elif api.imggen.is_reforge():
                 self.imgmodel = ImgModel_ReForge()
             elif api.imggen.is_forge():

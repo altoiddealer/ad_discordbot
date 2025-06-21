@@ -17,6 +17,19 @@ def progress_bar(value, length=15):
         return f'{bar}'
     except Exception:
         return 0
+    
+def consolidate_prompt_strings(prompt:str) -> str:
+    ''' Removes duplicate prompt strings while preserving original order '''
+    if not prompt:
+        return ''
+    negative_prompt_list = prompt.split(', ')
+    unique_values_set = set()
+    unique_values_list = []
+    for value in negative_prompt_list:
+        if value not in unique_values_set:
+            unique_values_set.add(value)
+            unique_values_list.append(value)
+    return ', '.join(unique_values_list)
 
 def check_probability(probability) -> bool:
     probability = max(0.0, min(1.0, probability))

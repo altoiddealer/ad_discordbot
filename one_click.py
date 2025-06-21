@@ -144,6 +144,13 @@ def check_project():
     parent_is_tgwui = False
     is_tgwui_integrated = False
 
+    project_path = os.path.dirname(install_path)
+    if project_path.startswith('text-generation-webui'):
+        return True, True
+
+    if os.path.basename(parent_dir).startswith('text-generation-webui'):
+        parent_is_tgwui = True
+
     bot_url = "https://github.com/altoiddealer/ad_discordbot"
     bot_git_url = "https://github.com/altoiddealer/ad_discordbot.git"
     tgwui_url = "https://github.com/oobabooga/text-generation-webui"
@@ -151,7 +158,6 @@ def check_project():
     supported_project_urls = [bot_url, bot_git_url, tgwui_url, tgwui_git_url]
 
     # Check if bot is running in a supported project
-    project_path = os.path.dirname(install_path)
     project_url = get_git_remote_url(project_path)
     project_is_tgwui_fork = is_fork_of(project_path, tgwui_url)
 

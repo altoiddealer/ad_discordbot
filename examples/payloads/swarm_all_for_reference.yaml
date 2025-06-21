@@ -1,0 +1,248 @@
+# Basic
+prompt: ''
+negativeprompt: ''
+seed: -1
+steps: 20
+cfgscale: 7.0
+aspectratio: '1:1'
+width: 1024
+height: 1024
+sampler: euler
+scheduler: normal
+vae: None
+clipstopatlayer: -1
+images: 1
+batchsize: 1
+variationseed: -1
+variationseedstrength: 0.0
+
+# VAE advanced
+automaticvae: false
+vaetilesize: 256
+vaetileoverlap: 64
+vaetemporaltilesize: 64
+vaetemporaltileoverlap: 8
+
+# Flux
+fluxguidancescale: 3.5
+fluxdisableguidance: false
+zeronegative: false
+
+# Img2img
+initimage: null
+initimagecreativity: 0.6
+initimageresettonorm: 0.0
+initimagenoise: 0.0
+
+# Inpainting
+maskimage: null
+maskshrinkgrow: 8
+maskblur: 4
+maskgrow: 0
+maskbehavior: Differential
+initimagerecompositemask: true
+useinpaintingencode: false
+
+# Refiner
+refinercontrolpercentage: 0.2
+refinermethod: PostApply
+refinerupscale: 1.0
+refinerdotiling: false
+refinermodel: (Use Base)
+refinervae: None
+refinersteps: 40
+refinercfgscale: 7.0
+refinerupscalemethod: pixel-lanczos
+refinersampler: euler
+refinerscheduler: normal
+refinerhypertile: 256
+
+# Cascade
+cascadelatentcompression: 32
+sdtextencs: CLIP Only
+
+# Controlnet Related
+usereferenceonly: false
+
+# Controlnet 0
+controlnetimageinput: null
+controlnetmodel: (None)
+controlnetpreprocessor: None
+controlnetuniontype: auto
+controlnetstrength: 1.0
+controlnetstart: 0.0
+controlnetend: 1.0
+# Controlnet 1
+controlnettwoimageinput: null
+controlnettwomodel: (None)
+controlnettwopreprocessor: None
+controlnettwouniontype: auto
+controlnettwostrength: 1.0
+controlnettwostart: 0.0
+controlnettwoend: 1.0
+# Controlnet 2
+controlnetthreeimageinput: null
+controlnetthreemodel: (None)
+controlnetthreepreprocessor: None
+controlnetthreeuniontype: auto
+controlnetthreestrength: 1.0
+controlnetthreestart: 0.0
+controlnetthreeend: 1.0
+controlnetpreviewonly: false
+
+# Revision
+revisionstrength: 0.0
+revisionzeroprompt: false
+
+# Misc Relavent
+seamlesstileable: 'false'
+noseedincrement: false
+overridepredictiontype: v
+
+# Misc Advanced
+unsamplerprompt: ''
+
+# Video Related
+trimvideostartframes: 0
+trimvideoendframes: 0
+#
+textvideoframes: 25
+textvideofps: 24
+textvideoboomerang: false
+textvideoformat: webp
+textvideoframeinterpolationmethod: RIFE
+textvideoframeinterpolationmultiplier: 1
+#
+videoframes: 25
+videosteps: 20
+videocfg: 7.0
+videoboomerang: false
+videoresolution: Image Aspect, Model Res
+videovideocreativity: 1.0
+videoformat: webp
+videoendimage: null
+videofps: 24
+videomincfg: 1.0
+videomotionbucket: 127
+videoaugmentationlevel: 0.0
+videoextendframeoverlap: 9
+videoextendformat: webp
+videopreviewtype: animate
+videoframeinterpolationmethod: RIFE
+videoframeinterpolationmultiplier: 1
+# TeaCache
+teacachemode: disabled
+teacachethreshold: 0.25
+
+# Wildcards
+wildcardseed: -1
+wildcardseedbehavior: Random
+
+# Output handling
+imageformat: PNG
+colordepth: 8bit
+overrideoutpathformat: raw/[year]-[month]-[day]/[hour][minute][request_time_inc]-[prompt]-[model]
+modelspecificenhancements: true
+outputintermediateimages: false
+donotsave: false
+donotsaveintermediates: false
+nopreviews: true
+altresolutionheightmultiplier: 1.0
+rawresolution: 1024x1024
+
+# Free U
+freeuapplyto: Both
+freeuversion: '1'
+freeublockone: 1.1
+freeublocktwo: 1.2
+freeuskipone: 0.9
+freeuskiptwo: 0.2
+
+# Segmentation
+savesegmentmask: false
+segmentmaskblur: 10
+segmentmaskgrow: 16
+segmentmaskoversize: 16
+segmentthresholdmax: 1.0
+segmentsortorder: left-right
+segmenttargetresolution: 1024x1024
+
+# Advanced sampler / sigmas
+samplersigmamin: 0.0
+samplersigmamax: 10.0
+sigmashift: 3.0
+samplerrho: 7.0
+ippcfg: 1.5
+
+# Image scoring
+automaticscorer: schuhmann_clip_plus_mlp
+scoremustexceed: 0.5
+takebestnscore: 1
+
+# Dynamic Threshholding
+dtmimicscale: 7.0
+dtthresholdpercentile: 1.0
+dtcfgscalemode: Constant
+dtcfgscaleminimum: 0.0
+dtmimicscalemode: Constant
+dtmimicscaleminimum: 0.0
+dtschedulervalue: 4.0
+dtseparatefeaturechannels: true
+dtscalingstartpoint: MEAN
+dtvariabilitymeasure: AD
+dtinterpolatephi: 1.0
+
+# IP Adaptor
+useipadapter: None
+ipadapterweight: 1.0
+ipadapterstart: 0.0
+ipadapterend: 1.0
+ipadapterweighttype: standard
+
+# Style model
+usestylemodel: None
+stylemodelmergestrength: 1.0
+stylemodelmultiplystrength: 1.0
+stylemodelapplystart: 0.0
+
+# Attention
+selfattentionguidancescale: 0.5
+selfattentionguidancesigmablur: 2.0
+perturbedattentionguidancescale: 3.0
+rescalecfgmultiplier: 0.7
+
+# CFG Advanced
+renormcfg: 0.0
+usecfgzerostar: false
+shiftedlatentaverageinit: false
+nunchakucachethreshold: 0.0
+
+# Gligen
+gligenmodel: None
+
+# System
+setclipdevice: cpu
+torchcompile: Disabled
+
+# Swarm Internals
+webhooks: None
+internalbackendtype: Any
+exactbackendid: '0'
+debugregionalprompting: false
+placeholderparamgroupstarred: false
+placeholderparamgroupuserone: false
+placeholderparamgroupusertwo: false
+placeholderparamgroupuserthree: false
+personalnote: ''
+
+# I DON'T KNOW
+autowebuisampler: Euler a
+enableaitemplate: false
+preferreddtype: automatic
+globalregionfactor: 0.5
+regionalobjectcleanupfactor: 0.0
+maskcompositeunthresholded: false
+colorcorrectionbehavior: None
+removebackground: false
+endstepsearly: 0.0
+gridgenpromptreplace: ''

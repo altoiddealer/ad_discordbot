@@ -1,0 +1,13 @@
+prompt: ''
+negativeprompt: ''
+seed: -1
+steps: 25
+cfgscale: 7.0
+width: 1024
+height: 1024
+sampler: dpmpp_2m
+scheduler: normal
+vae: None
+variationseed: -1
+variationseedstrength: 0.0
+donotsave: true
