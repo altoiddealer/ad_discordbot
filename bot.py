@@ -57,7 +57,7 @@ from discord.app_commands import AppCommandError, CommandInvokeError
 from modules.logs import import_track, get_logger, log_file_handler, log_file_formatter; import_track(__file__, fp=True); log = get_logger(__name__)  # noqa: E702
 logging = log
 
-from modules.apis import API, APIClient, Endpoint, ImgGenEndpoint
+from modules.apis import API, APIClient, Endpoint, ImgGenEndpoint, ImgGenClient, TTSGenClient, TextGenClient
 api:API = asyncio.run(get_api())
 
 imggen_enabled = config.imggen.get('enabled', True)
@@ -5036,6 +5036,85 @@ async def toggle_api(ctx: commands.Context):
             if not speak_cmd_options.voice_hash_dict:
                 await speak_cmd_options.build_options()
 
+@client.hybrid_command(description='Change the API client for a main function (imggen, ttsgen, textgen)')
+@guild_or_owner_only()
+async def change_main_function_api(ctx: commands.Context):
+    all_clients = api.clients or {}
+    if not all_clients:
+        await ctx.send("There are no APIs available.", ephemeral=True)
+        return
+    # Map of function name to (current_client, expected_class)
+    function_specs = {'imggen': (api.imggen, ImgGenClient),
+                      'ttsgen': (api.ttsgen, TTSGenClient),
+                      'textgen': (api.textgen, TextGenClient)}
+    views_to_send = []
+    for func_name, (current_client, expected_cls) in function_specs.items():
+        if not current_client or not current_client.enabled:
+            continue
+        # Filter eligible candidates for replacement
+        eligible_clients = {name: client for name, client in all_clients.items()
+                            if isinstance(client, expected_cls) and client.enabled and client is not current_client}
+        if not eligible_clients:
+            continue
+        # Build select menu entries
+        menu_items = sorted(eligible_clients.keys())
+        # Build views
+        view = SelectOptionsView(menu_items,
+                                 custom_id_prefix=f"{func_name}_api",
+                                 placeholder_prefix=f"{func_name.upper()} API: ",
+                                 unload_item=None)
+        views_to_send.append((func_name, view))
+
+    if not views_to_send:
+        await ctx.send("No alternative enabled clients available for any main function.", ephemeral=True)
+        return
+
+    # Convert to dict for easier lookup
+    views_dict = dict(views_to_send)
+
+    # If multiple function types are eligible, show a menu to pick one
+    if len(views_dict) > 1:
+        class FunctionSelect(discord.Select):
+            def __init__(self, view: 'FunctionSelectView'):
+                self.view_ref = view
+                options = [discord.SelectOption(label=func.upper(), value=func) for func in views_dict]
+                super().__init__(placeholder="Select a function to reassign...", options=options)
+
+            async def callback(self, interaction: discord.Interaction):
+                self.view_ref.selected_func = self.values[0]
+                self.view_ref.interaction = interaction
+                self.view_ref.stop()
+
+        class FunctionSelectView(discord.View):
+            def __init__(self):
+                super().__init__(timeout=60)
+                self.selected_func = None
+                self.interaction = None
+                self.add_item(FunctionSelect(self))
+
+        func_select_view = FunctionSelectView()
+        await ctx.send("Choose a main function to reassign its API client:", view=func_select_view, ephemeral=True)
+        await func_select_view.wait()
+
+        selected_func = func_select_view.selected_func
+        if not selected_func:
+            return  # Timeout or cancelled
+
+        interaction = func_select_view.interaction
+    else:
+        # Only one function type — auto-select it
+        selected_func = next(iter(views_dict))
+        interaction = ctx  # Original interaction
+
+    # Shared final dispatch
+    selected_view = views_dict[selected_func]
+    send_func = interaction.response.send_message if hasattr(interaction, "response") else interaction.send
+    message = await send_func(f"Select new API client for **{selected_func}**:", view=selected_view, ephemeral=True)
+    await selected_view.wait()
+
+    selected_item = selected_view.get_selected()
+    await message.delete()
+    print("selected:", selected_item)
 
 @client.hybrid_command(description="Update dropdown menus without restarting bot script.")
 @guild_or_owner_only()
