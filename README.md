@@ -228,7 +228,8 @@
   - New features being added frequently and easily due to the framework of the ["Tags" system](https://github.com/altoiddealer/ad_discordbot/wiki/tags)
 
 - **TTS Support!**
-  - [alltalk_tts](https://github.com/erew123/alltalk_tts), coqui_tts, silero_tts, [edge_tts](https://github.com/Unorthodox-oddball/text-generation-webui-edge-tts) and elevenlabs_tts
+  - Any TTS software with an API is supported.
+  - TGWUI TTS extensions are also supported:  [alltalk_tts](https://github.com/erew123/alltalk_tts), coqui_tts, silero_tts, [edge_tts](https://github.com/Unorthodox-oddball/text-generation-webui-edge-tts) and elevenlabs_tts
   - Bot can speak on Voice channel, upload copy of audio file, or both!
   - Per-character TTS settings! Give each character a unique voice!
 

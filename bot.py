@@ -1088,7 +1088,7 @@ class Params:
 
         # Image related params
         self.img_censoring: int = kwargs.get('img_censoring', 0)
-        self.mode: str      = kwargs.get('mode', 'txt2img')
+        self.mode: str      = kwargs.get('mode', None)
         self.sd_output_dir: str = kwargs.get('sd_output_dir', '')
 
         # discord/HMessage related params
@@ -2799,6 +2799,7 @@ class TaskProcessing(TaskAttributes):
         try:
             # Apply values set by /image command to prompt/neg_prompt (Additional /image cmd values are applied later)
             imgcmd_params   = self.params.imgcmd
+            self.params.mode = imgcmd_params['img2img'].get('mode', 'txt2img')
             neg_prompt: str = imgcmd_params['neg_prompt']
             style: dict     = imgcmd_params['style']
             positive_style: str = style.get('positive', "{}")

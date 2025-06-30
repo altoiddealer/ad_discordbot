@@ -26,7 +26,7 @@ parent_is_tgwui = False
 is_tgwui_integrated = False
 
 def extract_launcher_args():
-    LAUNCHER_ARGS = {"--conda-env-path", "--update-wizard-linus", "--update-wizard-macos", "--update-wizard-windows", "--update-wizard-wsl", "--update"}
+    LAUNCHER_ARGS = {"--conda-env-path", "--update-wizard-linux", "--update-wizard-macos", "--update-wizard-windows", "--update-wizard-wsl", "--update"}
     """Extracts launcher-only arguments and removes them from sys.argv."""
     launcher_args = {}
     remaining_args = []
