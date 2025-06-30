@@ -57,7 +57,7 @@ from discord.app_commands import AppCommandError, CommandInvokeError
 from modules.logs import import_track, get_logger, log_file_handler, log_file_formatter; import_track(__file__, fp=True); log = get_logger(__name__)  # noqa: E702
 logging = log
 
-from modules.apis import API, APIClient, Endpoint, ImgGenEndpoint
+from modules.apis import API, APIClient, Endpoint, ImgGenEndpoint, ImgGenClient, TTSGenClient, TextGenClient
 api:API = asyncio.run(get_api())
 
 imggen_enabled = config.imggen.get('enabled', True)
@@ -409,13 +409,6 @@ async def post_active_settings(guild:discord.Guild, key_str_list:Optional[list[s
     key_str_list = key_str_list if key_str_list is not None else ['character', 'behavior', 'tags', 'imgmodel', 'llmstate']
     # For configured keys: Delete old settings messages -> Send new settings
     managed_keys = config.discord['post_active_settings'].get('post_settings_for', [])
-
-    # Warn for old config setting
-    old_settings_chan = config.discord['post_active_settings'].get('target_channel_id', None)
-    if old_settings_chan and not bot_database.was_warned('old_settings_chan'):
-        bot_database.update_was_warned('old_settings_chan')
-        log.warning("[Post Active Settings] This feature now uses channels set by a command '/set_server_settings_channel'.")
-        log.warning("[Post Active Settings] Ignoring 'target_channel_id'. Check '.../settings_templates/config.yaml' for current settings.")
 
     # get settings channel if not provided to function
     if channel is None:
@@ -5096,23 +5089,60 @@ async def main(ctx: commands.Context, channel:Optional[discord.TextChannel]=None
     bot_database.save()
     await ctx.reply(action_message, delete_after=15)
 
+
+async def update_ttsgen(ictx:CtxInteraction, status:str='enabled', rebuild_cmd_opts=True):
+    # Enforce only one TTS method enabled
+    enforce_one_tts_method()
+    # Process Voice Clients
+    vc_guild_ids = [ictx.guild.id] if config.is_per_server() else [guild.id for guild in client.guilds]
+    for vc_guild_id in vc_guild_ids:
+        await voice_clients.toggle_voice_client(vc_guild_id, status)
+    if rebuild_cmd_opts:
+        # Build '/speak' options if TTS client was not online during intialization
+        if not speak_cmd_options.voice_hash_dict:
+            await speak_cmd_options.build_options()
+
+async def announce_api_changes(ictx:CtxInteraction, api_name:str, status:str):
+    message = f"{ictx.author.display_name} {status} API"
+    log.info(f"{message}: {api_name}")
+    if bot_embeds.enabled('change'):
+        # Send change embed to interaction channel
+        await bot_embeds.send('change', message, f'**{api_name}**', channel=ictx.channel)
+        if bot_database.announce_channels:
+            # Send embeds to announcement channels
+            await bg_task_queue.put(announce_changes(f'{status} API', f'**{api_name}**', ictx))
+
 @client.hybrid_command(description="Toggle available API Clients on/off")
 @guild_or_owner_only()
 async def toggle_api(ctx: commands.Context):
+    # Collect all clients from api.all_clients
     all_apis = api.clients or {}
     if not all_apis:
         await ctx.send('There are no APIs available', ephemeral=True)
         return
-    # Map the api dict keys to display names for discord menus
-    display_name_to_key = {(f"{key} (enabled)" if client.enabled else f"{key} (disabled)"): key
-                            for key, client in all_apis.items()}
+
+    # Create a reverse map from main clients to their role label
+    main_roles = {id(api.textgen): "main TextGen client",
+                  id(api.imggen): "main ImgGen client",
+                  id(api.ttsgen): "main TTSGen client"}
+
+    # Build display name map with status and potential main role
+    display_name_to_key = {}
+    for key, client in all_apis.items():
+        status = "enabled" if client.enabled else "disabled"
+        main_suffix = f" **{main_roles.get(id(client))}**" if id(client) in main_roles else ""
+        display_name = f"{key} ({status}){main_suffix}"
+        display_name_to_key[display_name] = key
+
     # Use the display names for the menu
-    items_for_api_menus = list(display_name_to_key.keys())
-    items_for_api_menus.sort()
-    apis_view = SelectOptionsView(items_for_api_menus,
-                                    custom_id_prefix='apis',
-                                    placeholder_prefix='APIs: ',
-                                    unload_item=None)
+    items_for_api_menus = sorted(display_name_to_key.keys())
+
+    apis_view = SelectOptionsView(
+        items_for_api_menus,
+        custom_id_prefix='apis',
+        placeholder_prefix='APIs: ',
+        unload_item=None
+    )
     view_message = await ctx.send('### Select an API.', view=apis_view, ephemeral=True)
     await apis_view.wait()
 
@@ -5129,29 +5159,119 @@ async def toggle_api(ctx: commands.Context):
     # Apply Toggle
     new_status_str = await selected_api.toggle()
     if new_status_str is None:
-        await ctx.reply(f"Failed to toggle **{original_key}**.", delete_after=5)
+        await ctx.reply(f"Failed to toggle **{original_key}**.", delete_after=5, ephemeral=True)
         return
-    await ctx.reply(f"**{original_key}** is now **{new_status_str}**", delete_after=5)
+    await ctx.reply(f"**{original_key}** is now **{new_status_str}**", delete_after=5, ephemeral=True)
     
-    # Process TTSGen changes
+    # Process TTSGen API changes
     if selected_api == api.ttsgen:
-        # Enforce only one TTS method enabled
-        enforce_one_tts_method()
-        # Process Voice Clients
-        vc_guild_ids = [ctx.guild.id] if config.is_per_server() else [guild.id for guild in client.guilds]
-        for vc_guild_id in vc_guild_ids:
-            await voice_clients.toggle_voice_client(vc_guild_id, new_status_str)
-        if bot_embeds.enabled('change'):
-            # Send change embed to interaction channel
-            await bot_embeds.send('change', f"{ctx.author.display_name} {new_status_str} API", f'**{original_key}**', channel=ctx.channel)
-            if bot_database.announce_channels:
-                # Send embeds to announcement channels
-                await bg_task_queue.put(announce_changes(f'{new_status_str} API', f'**{original_key}**', ctx))
-        if new_status_str == 'enabled':
-            # Build '/speak' options if TTS client was not online during intialization
-            if not speak_cmd_options.voice_hash_dict:
-                await speak_cmd_options.build_options()
+        await update_ttsgen(ctx, status=new_status_str, rebuild_cmd_opts=(new_status_str == 'enabled'))
 
+    # Announce changes
+    await announce_api_changes(ctx, api_name=original_key, status=new_status_str)
+
+@client.hybrid_command(description='Change the API client for a main function (imggen, ttsgen, textgen)')
+@guild_or_owner_only()
+async def change_main_api(ctx: commands.Context):
+    all_clients = api.clients or {}
+    if not all_clients:
+        await ctx.send("There are no APIs available.", ephemeral=True)
+        return
+    # Map of function name to (current_client, expected_class)
+    function_specs = {'imggen': (api.imggen, ImgGenClient),
+                      'ttsgen': (api.ttsgen, TTSGenClient),
+                      'textgen': (api.textgen, TextGenClient)}
+    views_to_send = []
+    for func_name, (current_client, expected_cls) in function_specs.items():
+        if not current_client or not current_client.enabled:
+            continue
+        # Filter eligible candidates for replacement
+        eligible_clients = {name: client for name, client in all_clients.items()
+                            if isinstance(client, expected_cls) and client.enabled and client is not current_client}
+        if not eligible_clients:
+            continue
+        # Build select menu entries
+        menu_items = sorted(eligible_clients.keys())
+        # Build views
+        view = SelectOptionsView(menu_items,
+                                 custom_id_prefix=f"{func_name}_api",
+                                 placeholder_prefix=f"{func_name.upper()} API: ",
+                                 unload_item=None)
+        views_to_send.append((func_name, view))
+
+    if not views_to_send:
+        await ctx.send("No alternative enabled clients available for any main function.", ephemeral=True)
+        return
+
+    # Convert to dict for easier lookup
+    views_dict = dict(views_to_send)
+
+    # If multiple function types are eligible, show a menu to pick one
+    if len(views_dict) > 1:
+        class FunctionSelect(discord.Select):
+            def __init__(self, view: 'FunctionSelectView'):
+                self.view_ref = view
+                options = [discord.SelectOption(label=func.upper(), value=func) for func in views_dict]
+                super().__init__(placeholder="Select a function to reassign...", options=options)
+
+            async def callback(self, interaction: discord.Interaction):
+                self.view_ref.selected_func = self.values[0]
+                self.view_ref.interaction = interaction
+                self.view_ref.stop()
+
+        class FunctionSelectView(discord.View):
+            def __init__(self):
+                super().__init__(timeout=60)
+                self.selected_func = None
+                self.interaction = None
+                self.add_item(FunctionSelect(self))
+
+        func_select_view = FunctionSelectView()
+        await ctx.send("Choose a main function to reassign its API client:", view=func_select_view, ephemeral=True)
+        await func_select_view.wait()
+
+        selected_func = func_select_view.selected_func
+        if not selected_func:
+            return  # Timeout or cancelled
+
+        interaction = func_select_view.interaction
+    else:
+        # Only one function type — auto-select it
+        selected_func = next(iter(views_dict))
+        interaction = ctx  # Original interaction
+
+    # Shared final dispatch
+    selected_view = views_dict[selected_func]
+    send_func = interaction.response.send_message if hasattr(interaction, "response") else interaction.send
+    message = await send_func(f"Select new API client for **{selected_func}**:", view=selected_view, ephemeral=True)
+    await selected_view.wait()
+
+    selected_item = selected_view.get_selected()
+    await message.delete()
+
+    selected_api:APIClient = all_clients.get(selected_item)
+    # Typicallly if command timed out
+    if not selected_api:
+        return
+
+    setattr(api, selected_func, selected_api)
+
+    await ctx.reply(f"**Main {selected_func}** is now **{selected_item}**", delete_after=5, ephemeral=True)
+
+    # Announce changes
+    await announce_api_changes(ctx, api_name=selected_item, status=f'changed main {selected_func}')
+
+    # Process TTSGen API changes
+    if selected_func == 'imggen':
+        bot_settings.init_imgmodel()
+        if config.is_per_server():
+            for settings in guild_settings.values():
+                settings.init_imgmodel()
+        await imgmodel(ctx)
+
+    # Process TTSGen API changes
+    elif selected_func == 'ttsgen':
+        await update_ttsgen(ctx)
 
 @client.hybrid_command(description="Update dropdown menus without restarting bot script.")
 @guild_or_owner_only()
