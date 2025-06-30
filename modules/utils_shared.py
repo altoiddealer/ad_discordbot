@@ -189,6 +189,8 @@ class Config(BaseFileMemory):
 
     def _sanitize_paths(self):
         raw_paths = self.allowed_paths + [shared_path.output_dir]
+        if is_tgwui_integrated:
+            raw_paths.append(shared_path.dir_tgwui)
         paths = [Path(p) for p in raw_paths]
 
         sanitized = []

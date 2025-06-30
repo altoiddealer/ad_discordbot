@@ -2999,6 +2999,18 @@ class StepExecutor:
         image.info["pnginfo"] = pnginfo
 
         return image
+    
+    async def _step_load_data_file(self, data: Any, path: str):
+        from pathlib import Path
+        from modules.utils_shared import config
+        file_path = Path(path)
+        if not file_path.is_absolute() and not file_path.exists():
+            corrected_path = Path(shared_path.dir_user) / file_path
+            if corrected_path.exists():
+                file_path = corrected_path
+        if not config.path_allowed(file_path):
+            raise RuntimeError(f"Tried loading a file which is not in config.yaml 'allowed_paths': {file_path}")
+        return load_file(file_path, {})
 
     async def _step_save(self, data: Any, config: dict):
         """
