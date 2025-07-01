@@ -5065,22 +5065,27 @@ async def change_main_api(ctx: commands.Context):
                       'ttsgen': (api.ttsgen, TTSGenClient),
                       'textgen': (api.textgen, TextGenClient)}
     views_to_send = []
+
     for func_name, (current_client, expected_cls) in function_specs.items():
-        if not current_client or not current_client.enabled:
-            continue
-        # Filter eligible candidates for replacement
+        # Filter all clients that match the expected class and are enabled
         eligible_clients = {name: client for name, client in all_clients.items()
-                            if isinstance(client, expected_cls) and client.enabled and client is not current_client}
+                            if isinstance(client, expected_cls) and client.enabled}
         if not eligible_clients:
             continue
-        # Build select menu entries
-        menu_items = sorted(eligible_clients.keys())
-        # Build views
-        view = SelectOptionsView(menu_items,
-                                 custom_id_prefix=f"{func_name}_api",
-                                 placeholder_prefix=f"{func_name.upper()} API: ",
-                                 unload_item=None)
-        views_to_send.append((func_name, view))
+
+        # If current client exists, remove it from selection list
+        if current_client in eligible_clients.values():
+            eligible_clients = {name: client for name, client in eligible_clients.items()
+                                if client is not current_client}
+
+        # If at least one client is selectable, show the view
+        if eligible_clients:
+            menu_items = sorted(eligible_clients.keys())
+            view = SelectOptionsView(menu_items,
+                                     custom_id_prefix=f"{func_name}_api",
+                                     placeholder_prefix=f"{func_name.upper()} API: ",
+                                     unload_item=None)
+            views_to_send.append((func_name, view))
 
     if not views_to_send:
         await ctx.send("No alternative enabled clients available for any main function.", ephemeral=True)
