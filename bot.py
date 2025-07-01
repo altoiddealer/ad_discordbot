@@ -5072,12 +5072,10 @@ async def change_main_api(ctx: commands.Context):
                             if isinstance(client, expected_cls) and client.enabled}
         if not eligible_clients:
             continue
-
         # If current client exists, remove it from selection list
         if current_client in eligible_clients.values():
             eligible_clients = {name: client for name, client in eligible_clients.items()
                                 if client is not current_client}
-
         # If at least one client is selectable, show the view
         if eligible_clients:
             menu_items = sorted(eligible_clients.keys())

@@ -2742,7 +2742,7 @@ class StepExecutor:
         input_data = config.pop('input_data', default)
         init_payload = config.pop('init_payload', False)
         if not endpoint: # Websocket
-            return None
+            return default
         # init_payload overrides input_data
         if init_payload:
             log.info(f'[StepExecutor] Step "{step_name}": Fetching payload for "{endpoint.name}" and trying to update placeholders with internal variables.')
