@@ -592,17 +592,17 @@ class APIClient:
                         retry=ep_dict.get("retry", 0),
                         concurrency_limit=ep_dict.get("concurrency_limit", None))
 
-    def _default_endpoint_class(self):
+    def default_endpoint_class(self):
         return Endpoint
 
-    def _get_endpoint_class_map(self) -> dict[str, type]:
+    def get_endpoint_class_map(self) -> dict[str, type]:
         return {}
 
     def _collect_endpoints(self, endpoints_config: list[dict]):
         # Determine applicable settings and endpoint class mappings
         client_type_map = apisettings.get_client_type_map()
-        ep_class_map = self._get_endpoint_class_map()
-        default = self._default_endpoint_class()
+        ep_class_map = self.get_endpoint_class_map()
+        default = self.default_endpoint_class()
 
         # Determine client key (e.g., 'imggen', 'textgen', etc.)
         client_key = next((k for k, cls in client_type_map.items() if isinstance(self, cls)), None)
@@ -1315,7 +1315,7 @@ class ImgGenClient(APIClient):
         self._schedulers:list[str] = []
         self._lora_names:list[str] = []
 
-    def _get_endpoint_class_map(self) -> dict[str, type]:
+    def get_endpoint_class_map(self) -> dict[str, type]:
         return {"post_txt2img": ImgGenEndpoint_PostTxt2Img,
                 "post_img2img": ImgGenEndpoint_PostImg2Img,
                 "get_progress": ImgGenEndpoint_GetProgress,
@@ -1329,7 +1329,7 @@ class ImgGenClient(APIClient):
                 "get_history": ImgGenEndpoint_GetHistory,
                 "get_view": ImgGenEndpoint_GetView}
 
-    def _default_endpoint_class(self):
+    def default_endpoint_class(self):
         return ImgGenEndpoint
     
     async def fetch_imgmodels(self):
@@ -1415,14 +1415,14 @@ class ImgGenClient(APIClient):
         finally:
             await embeds.delete('img_gen')
 
-    async def call_imggen_endpoint(self, img_payload:dict,  mode:str="txt2img"):
+    async def call_imggen_endpoint(self, img_payload:dict, mode:str="txt2img"):
         ep_for_mode:Union[ImgGenEndpoint_PostTxt2Img, ImgGenEndpoint_PostImg2Img] = getattr(self, f'post_{mode}')
         return await ep_for_mode.call(input_data=img_payload, main=True)
 
-    async def post_for_images(self, img_payload:dict,  mode:str="txt2img", ictx=None) -> list[str]:
+    async def post_for_images(self, img_payload:dict, mode:str="txt2img", task=None, ictx=None) -> list[str]:
         # Start progress task and generation task concurrently
         images_task = asyncio.create_task(self.call_imggen_endpoint(img_payload, mode))
-        progress_task = asyncio.create_task(self._track_t2i_i2i_progress(ictx=ictx))
+        progress_task = asyncio.create_task(self._track_t2i_i2i_progress(ictx))
         # Wait for images_task to complete
         images_results = await images_task
         # Once images_task is done, cancel progress_task
@@ -1434,12 +1434,15 @@ class ImgGenClient(APIClient):
                 pass
         return images_results
 
-    async def main_imggen(self, img_payload:dict, mode:str="txt2img", ictx=None) -> Tuple[list[Image.Image], Optional[PngImagePlugin.PngInfo]]:
+    async def _main_imggen(self, task) -> Tuple[list[Image.Image], Optional[PngImagePlugin.PngInfo]]:
         img_obj_list = []
         pnginfo = None
         try:
+            img_payload:dict = task.payload
+            mode:str = task.params.mode
+            ictx = task.ictx
             # Get the results
-            images_results = await self.post_for_images(img_payload, mode, ictx=ictx)
+            images_results = await self.post_for_images(img_payload, mode, task, ictx)
             # Ensure the results are a list of base64 or bytes
             images_list = await self.unpack_image_results(images_results)
             # Optionally add png info to first result > save > returns PIL images and pnginfo
@@ -1540,13 +1543,13 @@ class ImgGenClient_Swarm(ImgGenClient):
         last_dict:dict = results.pop()
         return [last_dict]
 
-    async def post_for_images(self, img_payload:dict,  mode:str="txt2img", ictx=None) -> list[str]:
+    async def post_for_images(self, img_payload:dict, mode:str="txt2img", task=None, ictx=None) -> list[str]:
         if not self.ws or self.ws.closed:
             await self.connect_websocket()
         try:
             self.add_required_values_to_payload(img_payload)
             await self.ws.send_json(img_payload)
-            return await self.call_track_progress(ictx=ictx)
+            return await self.call_track_progress(ictx)
         finally:
             await self.ws.close()
 
@@ -1635,53 +1638,106 @@ class ImgGenClient_Comfy(ImgGenClient):
             log.error(f"Error: {e}")
             pass
 
-    async def main_imggen(self, img_payload:dict, mode:str="txt2img", task=None) -> Tuple[list[Image.Image], None]:
-        ictx = None
-        if task:
-            ictx = task.ictx
-        try:
-            ep_for_mode:ImgGenEndpoint = getattr(self, f'post_{mode}')
-            # Add client_id to payload
-            img_payload['client_id'] = self.ws_config.client_id
-            queued = await ep_for_mode.call(input_data=img_payload, task=task)
-            prompt_id = queued['prompt_id']
-            completion_config = {'type': 'executed',
-                                 'data': {'prompt_id': prompt_id}}
-            # Create a callable condition check based on a completion config
-            completion_condition = processing.build_completion_condition(completion_config, None)
-            await self.track_progress(endpoint=None,
-                                      use_ws=True,
-                                      ictx=ictx,
-                                      message="Generating image",
-                                      return_values={'progress': 'data.value', 'max': 'data.max'},
-                                      type_filter=["progress", "executed"],
-                                      data_filter={'prompt_id': prompt_id},
-                                      completion_condition=completion_condition)
-            if not (self.get_history and self.get_view):
-                log.warning(f'[{self.name}] For progress tracking, "get_history" and "get_view" endpoints must be properly linked to "main_bot_functions" from "all_apis".')
-                return [], None
+    async def extract_pnginfo(self, data, images_list) -> None:
+        return None
 
-            images = []
+    async def _resolve_output_data(self, item:dict) -> bytes:
+        if self.get_view:
+            return await self.get_view.call(input_data=item)
+        else:
+            response:APIResponse = await self.request(endpoint=f'/view', params=item, method='GET', response_type='bytes')
+            return response.body
+    
+    async def resolve_image_data(self, item:dict, index:int) -> bytes:
+        return await self._resolve_output_data(item)
+    
+    async def _fetch_prompt_results(self, prompt_id:str, returns:list[str]=['images'], node_ids:list[int]=[]) -> list[dict]:
+        if self.get_history:
+            history = await self.get_history.call(path_vars=prompt_id)
+        else:
+            response:APIResponse = await self.request(endpoint=f'/history/{prompt_id}', method='GET')
+            history = response.body
+        outputs:dict = history.get(prompt_id, {}).get('outputs', {})
+        results = []
+        for node_id_str, node_output in outputs.items():
+            # filter nodes if any provided in list
+            node_id = int(node_id_str)
+            if node_ids and node_id not in node_ids:
+                continue
+            # collect outputs
+            for output_type in returns:
+                if output_type in node_output:
+                    results.extend(node_output[output_type])
+        return results
 
-            history = await self.get_history.call(path_vars=prompt_id, task=task)
-            outputs = history[prompt_id]['outputs']
-            for i, node_id in enumerate(outputs):
-                node_output = outputs[node_id]
-                if "images" in node_output:
-                    for image_data in node_output["images"]:
-                        image_bytes = await self.get_view.call(input_data=image_data, task=task)
-                        image = self.decode_and_save_for_index(i, image_bytes)
-                        images.append(image)
-            return images, None
+    async def unpack_image_results(self, results: list[dict]) -> list[dict]:
+        prompt_id = results[0]["prompt_id"]
+        return await self._fetch_prompt_results(prompt_id)
 
-        except Exception as e:
-            from modules.utils_discord import Embeds
-            embeds = Embeds()
-            e_prefix = f'[{self.name}] Error processing images'
-            log.error(f'{e_prefix}: {e}')
-            restart_msg = f'\nIf {self.name} remains unresponsive, consider using "/restart_sd_client" command.' if self.post_server_restart else ''
-            await embeds.send('img_send', e_prefix, f'{e}{restart_msg}')
-        return images, None
+    def _nest_payload_in_prompt(self, payload:dict):
+        prompt_value = payload.get('prompt')
+        if prompt_value is None:
+            prompt_value = copy.deepcopy(payload)
+        payload.clear()
+        payload['prompt'] = prompt_value
+
+    async def _post_prompt(self,
+                           img_payload:dict,
+                           mode:str="txt2img",
+                           task=None,
+                           ictx=None,
+                           message:str="Generating image",
+                           endpoint:Union["Endpoint", None]=None) -> str:
+        # Resolve malformatted payload
+        self._nest_payload_in_prompt(img_payload)
+        # Add Client ID to payload
+        img_payload['client_id'] = self.ws_config.client_id
+        # Resolve calling method
+        if mode or endpoint:
+            if mode:
+                endpoint: ImgGenEndpoint = getattr(self, f'post_{mode}')
+            queued = await endpoint.call(input_data=img_payload, task=task)
+        else:
+            response:APIResponse = await self.request(endpoint=f'/prompt', json=img_payload, method='POST')
+            queued = response.body
+        prompt_id = queued['prompt_id']
+        # Create a callable completion condition for progress tracking
+        completion_config = {'type': 'executed',
+                             'data': {'prompt_id': prompt_id}}
+        completion_condition = processing.build_completion_condition(completion_config, None)
+        # Track progress
+        await self.track_progress(endpoint=None,
+                                  use_ws=True,
+                                  ictx=ictx,
+                                  message=message,
+                                  return_values={'progress': 'data.value', 'max': 'data.max'},
+                                  type_filter=["progress", "executed"],
+                                  data_filter={'prompt_id': prompt_id},
+                                  completion_condition=completion_condition)
+        # Return the prompt ID to fetch results
+        return prompt_id
+
+    async def post_for_images(self, img_payload:dict, mode:str="txt2img", task=None, ictx=None) -> list[str]:
+        prompt_id = await self._post_prompt(img_payload, mode, task, ictx)
+        return [{"prompt_id": prompt_id}]
+
+    async def _execute_prompt(self,
+                              payload:dict,
+                              endpoint:Union["Endpoint", None]=None,
+                              message:str="Generating image",
+                              ictx=None,
+                              task=None):
+        # Queue prompt > track progress
+        prompt_id = await self._post_prompt(payload, mode=None, task=task, ictx=ictx, message=message, endpoint=endpoint)
+        # Fetch results (list of bytes)
+        results_list = await self._fetch_prompt_results(prompt_id)
+        # Collect results
+        files_to_send = []
+        for item in results_list:
+            bytes = await self._resolve_output_data(item)
+            save_dict = await processing.save_any_file(bytes, msg_prefix='[StepExecutor] ')
+            files_to_send.append(save_dict['path'])
+        return files_to_send
 
 
 class TextGenClient(APIClient):
@@ -1693,10 +1749,10 @@ class TextGenClient(APIClient):
         # Collect endpoints used for main TextGen functions
         self._bind_main_endpoints(textgen_config)
 
-    def _get_endpoint_class_map(self) -> dict[str, type]:
+    def get_endpoint_class_map(self) -> dict[str, type]:
         return {}
 
-    def _default_endpoint_class(self):
+    def default_endpoint_class(self):
         return TextGenEndpoint
 
 
@@ -1710,12 +1766,12 @@ class TTSGenClient(APIClient):
         ttsgen_config:dict = apisettings.get_config_for("ttsgen")
         self._bind_main_endpoints(ttsgen_config)
 
-    def _get_endpoint_class_map(self) -> dict[str, type]:
+    def get_endpoint_class_map(self) -> dict[str, type]:
         return {"get_voices": TTSGenEndpoint_GetVoices,
                 "get_languages": TTSGenEndpoint_GetLanguages,
                 "post_generate": TTSGenEndpoint_PostGenerate}
 
-    def _default_endpoint_class(self):
+    def default_endpoint_class(self):
         return TTSGenEndpoint
 
     async def fetch_speak_options(self):
@@ -3009,7 +3065,7 @@ class StepExecutor:
             if corrected_path.exists():
                 file_path = corrected_path
         if not config.path_allowed(file_path):
-            raise RuntimeError(f"Tried loading a file which is not in config.yaml 'allowed_paths': {file_path}")
+            raise RuntimeError(f"[StepExecutor] Tried loading a file which is not in config.yaml 'allowed_paths': {file_path}")
         return load_file(file_path, {})
 
     async def _step_save(self, data: Any, config: dict):
@@ -3033,6 +3089,28 @@ class StepExecutor:
                                               use_timestamp=config.get('timestamp', True),
                                               response=self.response,
                                               msg_prefix='[StepExecutor] ')
+
+    async def _step_call_comfy(self, data: Any, config: dict):
+        config['use_ws'] = True
+        if config.get('payload'):
+            config['input_data'] = config.pop('payload')
+
+        api:API = await get_api()
+        client_name, endpoint_name, _ = self.resolve_api_names(config, 'call_comfy')
+        comfy_client:APIClient = api.get_client(client_name=client_name, strict=True)
+        if not isinstance(comfy_client, ImgGenClient_Comfy):
+            raise RuntimeError(f'[StepExecutor] API Client "{client_name}" is not ComfyUI. Cannot run step "call_comfy".')
+
+        endpoint:Optional[Endpoint] = None
+        if endpoint_name:
+            endpoint = comfy_client.get_endpoint(endpoint_name=endpoint_name, strict=True)
+        self.endpoint = endpoint # Helps to resolve API related context
+
+        payload:dict = self.resolve_api_input(data, config, step_name='call_api', default=data, endpoint=endpoint)
+        message:str = config.get('message', 'Generating')
+
+        return await comfy_client._execute_prompt(payload, endpoint, message, self.ictx, self.task)
+
 
 # async def _process_file_input(self, path: str, input_type: str):
 #     if input_type == "text":

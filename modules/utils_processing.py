@@ -52,16 +52,12 @@ async def save_any_file(data: Any,
     output_path.mkdir(parents=True, exist_ok=True)
 
     # 2. Resolve file_format
-    if file_format:
-        file_format = normalize_mime_type(file_format) # Normalize if MIME type like 'image/png'
-    else:
-        if isinstance(response, APIResponse):
+    if not file_format:
+        file_format = guess_format_from_data(data)
+        if not file_format and isinstance(response, APIResponse):
             file_format = guess_format_from_headers(response.headers)
-        if not file_format:
-            file_format = guess_format_from_data(data)
-        if file_format:
-            file_format = normalize_mime_type(file_format)
-            log.info(f'{msg_prefix}Guessed output file format: "{file_format}"')
+        log.info(f'{msg_prefix}Guessed output file format: "{file_format}"')
+    file_format = normalize_mime_type(file_format) # Normalize if MIME type like 'image/png'
 
     full_path = output_path / f"{file_name}.{file_format}"
     file_name = f"{file_name}.{file_format}"

@@ -6,6 +6,7 @@ import math
 import random
 import copy
 import base64
+import filetype
 import mimetypes
 import re
 from typing import Union, Optional, Any
@@ -372,14 +373,9 @@ def guess_format_from_headers(headers: dict) -> str|None:
 
     return None  # fallback to guess_format_from_data
 
-def guess_format_from_data(data) -> str:
-    if isinstance(data, dict):
-        return "json"
-    elif isinstance(data, list):
-        return "csv"
-    elif isinstance(data, bytes):
-        return "bin"
-    return "txt"
+def guess_format_from_data(data, default=None) -> str:
+    kind = filetype.guess(data)
+    return kind.mime if kind else default
 
 def detect_audio_format(data: bytes) -> str:
     if data.startswith(b'ID3') or (len(data) > 1 and data[0] == 0xFF and (data[1] & 0xE0) == 0xE0):
