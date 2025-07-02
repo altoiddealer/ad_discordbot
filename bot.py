@@ -34,14 +34,13 @@ from modules.typing import ChannelID, UserID, MessageID, CtxInteraction  # noqa:
 import signal
 from typing import Union, Literal
 from functools import partial
-import filetype
 
 from modules.utils_files import load_file, merge_base, save_yaml_file  # noqa: F401
 from modules.utils_shared import client, TOKEN, is_tgwui_integrated, shared_path, bg_task_queue, task_event, flows_queue, flows_event, patterns, bot_emojis, config, bot_database, get_api
 from modules.database import StarBoard, Statistics, BaseFileMemory
 from modules.utils_misc import check_probability, fix_dict, set_key, deep_merge, update_dict, sum_update_dict, random_value_from_range, convert_lists_to_tuples, \
-    consolidate_prompt_strings, get_time, format_time, format_time_difference, get_normalized_weights, valueparser  # noqa: F401
-from modules.utils_processing import resolve_placeholders
+    consolidate_prompt_strings, get_time, format_time, format_time_difference, get_normalized_weights, guess_format_from_data, valueparser  # noqa: F401
+from modules.utils_processing import resolve_placeholders, resolve_content_to_send, send_content_to_discord
 from modules.utils_discord import Embeds, guild_only, guild_or_owner_only, configurable_for_dm_if, is_direct_message, ireply, sleep_delete_message, send_long_message, \
     EditMessageModal, SelectedListItem, SelectOptionsView, get_user_ctx_inter, get_message_ctx_inter, apply_reactions_to_messages, replace_msg_in_history_and_discord, MAX_MESSAGE_LENGTH, muffled_send  # noqa: F401
 from modules.utils_aspect_ratios import ar_parts_from_dims, dims_from_ar, avg_from_dims, get_aspect_ratio_parts, calculate_aspect_ratio_sizes  # noqa: F401
@@ -1234,54 +1233,13 @@ class TaskProcessing(TaskAttributes):
             if config.discord['history_reactions'].get('enabled', True):
                 await bg_task_queue.put(apply_reactions_to_messages(self.ictx, self.bot_hmessage, msg_ids_to_react))
         # send any extra content
-        await bg_task_queue.put(self.send_extra_results())
-
-    async def send_extra_results(self:Union["Task","Tasks"]):
-        try:
-            if self.extra_text:
-                header = "**__Extra text__**:\n"
-                delimiter = "\n--------------------------------------------\n"
-                joined_text = delimiter.join(self.extra_text)
-                all_extra_text = header + joined_text
-                await send_long_message(self.channel, all_extra_text)
-            if self.extra_audio:
-                for audio_fp in self.extra_audio:
-                    await voice_clients.process_audio_file(self.ictx, audio_fp)
-            if self.extra_files:
-                # Wrap paths into discord.File
-                files_to_send = [File(f) for f in self.extra_files]
-                if len(files_to_send) == 1:
-                    await self.channel.send(file=files_to_send[0])
-                else:
-                    await self.channel.send(files=files_to_send)
-        except Exception as e:
-            log.error(f"An error occurred while trying to send extra results: {e}")
+        await bg_task_queue.put(send_content_to_discord(self, vc=voice_clients))
 
     def handle_api_results(self: Union["Task", "Tasks"], api_results):
-        # helper
-        def handle_result(api_result):
-            if not isinstance(api_result, str):
-                log.warning('Cannot send API results to Discord (bot currently only supports string, or list of strings)')
-                return
-            target_path = Path(api_result)
-            # If path to a file
-            if target_path.exists():
-                target_path = target_path.resolve()
-
-                if target_path.is_file():
-                    if target_path.suffix.lower() in [".mp3", ".wav"]:
-                        self.extra_audio.append(str(target_path))
-                    else:
-                        self.extra_files.append(str(target_path))
-            else:
-                # Text to send to channel
-                self.extra_text.append(api_result)
-
-        if isinstance(api_results, str):
-            handle_result(api_results)
-        elif isinstance(api_results, list):
-            for result in api_results:
-                handle_result(result)
+        processed_results = resolve_content_to_send(api_results)
+        self.extra_text.extend(processed_results['text'])
+        self.extra_audio.extend(processed_results['audio'])
+        self.extra_files.extend(processed_results['files'])
 
     async def fix_llm_payload(self:Union["Task","Tasks"]):
         # Fix llmgen payload by adding any missing required settings
@@ -2248,7 +2206,7 @@ class TaskProcessing(TaskAttributes):
         reactor_args = self.payload.get('alwayson_scripts', {}).get('reactor', {}).get('args', [])
         last_item = reactor_args[-1] if reactor_args else None
         reactor_mask = reactor_args.pop() if isinstance(last_item, dict) else None
-        images, pnginfo = await api.imggen.main_imggen(self.payload, self.params.mode, self)
+        images, pnginfo = await api.imggen._main_imggen(self)
         # Apply ReActor mask
         reactor = self.payload.get('alwayson_scripts', {}).get('reactor', {})
         if len(images) > 1 and reactor and reactor_mask:
@@ -2997,7 +2955,7 @@ class Tasks(TaskProcessing):
         api_results = await endpoint.call(ictx=self.ictx, **formatted_payload)
         if api_results:
             self.handle_api_results(api_results)
-            await self.send_extra_results()
+            await send_content_to_discord(self, vc=voice_clients)
 
     def format_api_payload(self: "Task", api_payload: dict):
         def recursive_format(value):
@@ -3035,7 +2993,7 @@ class Tasks(TaskProcessing):
         workflow_results = await api.run_workflow(task=self, **formatted_payload)
         if workflow_results:
             self.handle_api_results(workflow_results)
-            await self.send_extra_results()
+            await send_content_to_discord(self, vc=voice_clients)
 
     async def workflow_task(self:"Task"):
         workflow_config = getattr(self, 'workflow_config')
@@ -3670,7 +3628,7 @@ class Tasks(TaskProcessing):
                     await self.channel.send(original_prompt)
 
             # send any extra content
-            await bg_task_queue.put(self.send_extra_results())
+            await bg_task_queue.put(send_content_to_discord(self, vc=voice_clients))
 
             # If switching back to original Img model
             if swap_imgmodel_params:
@@ -5182,22 +5140,25 @@ async def change_main_api(ctx: commands.Context):
                       'ttsgen': (api.ttsgen, TTSGenClient),
                       'textgen': (api.textgen, TextGenClient)}
     views_to_send = []
+
     for func_name, (current_client, expected_cls) in function_specs.items():
-        if not current_client or not current_client.enabled:
-            continue
-        # Filter eligible candidates for replacement
+        # Filter all clients that match the expected class and are enabled
         eligible_clients = {name: client for name, client in all_clients.items()
-                            if isinstance(client, expected_cls) and client.enabled and client is not current_client}
+                            if isinstance(client, expected_cls) and client.enabled}
         if not eligible_clients:
             continue
-        # Build select menu entries
-        menu_items = sorted(eligible_clients.keys())
-        # Build views
-        view = SelectOptionsView(menu_items,
-                                 custom_id_prefix=f"{func_name}_api",
-                                 placeholder_prefix=f"{func_name.upper()} API: ",
-                                 unload_item=None)
-        views_to_send.append((func_name, view))
+        # If current client exists, remove it from selection list
+        if current_client in eligible_clients.values():
+            eligible_clients = {name: client for name, client in eligible_clients.items()
+                                if client is not current_client}
+        # If at least one client is selectable, show the view
+        if eligible_clients:
+            menu_items = sorted(eligible_clients.keys())
+            view = SelectOptionsView(menu_items,
+                                     custom_id_prefix=f"{func_name}_api",
+                                     placeholder_prefix=f"{func_name.upper()} API: ",
+                                     unload_item=None)
+            views_to_send.append((func_name, view))
 
     if not views_to_send:
         await ctx.send("No alternative enabled clients available for any main function.", ephemeral=True)
@@ -6678,8 +6639,7 @@ class ImgModel(SettingsBase):
             return base64.b64encode(image).decode('utf-8')
         else:
             # Detect MIME type
-            kind = filetype.guess(image)
-            mime_type = kind.mime if kind else 'application/octet-stream'
+            mime_type = guess_format_from_data(image, default='application/octet-stream')
             mime_category = mime_type.split('/')[0]
             # Use file_category as default if file_type is not provided
             resolved_file_type = file_type or mime_category
@@ -7130,11 +7090,6 @@ class ImgModel_Comfy(ImgModel):
 
     def clean_payload(self, payload: dict):
         self.delete_conflicting_nodes_for_model_type(payload)
-        prompt_value = payload.get('prompt')
-        if prompt_value is None:
-            prompt_value = copy.deepcopy(payload)
-        payload.clear()
-        payload['prompt'] = prompt_value
 
     async def post_options(self, options_payload:dict):
         pass
