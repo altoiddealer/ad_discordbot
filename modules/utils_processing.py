@@ -14,7 +14,8 @@ from pydub import AudioSegment
 import io
 from typing import Any, Optional, Callable
 from modules.utils_misc import extract_key, normalize_mime_type, guess_format_from_headers, guess_format_from_data, is_base64, valueparser
-from modules.utils_shared import config
+from modules.utils_shared import config, shared_path
+from modules.utils_discord import send_long_message
 
 from modules.logs import import_track, get_logger; import_track(__file__, fp=True); log = get_logger(__name__)  # noqa: E702
 logging = log
@@ -52,16 +53,12 @@ async def save_any_file(data: Any,
     output_path.mkdir(parents=True, exist_ok=True)
 
     # 2. Resolve file_format
-    if file_format:
-        file_format = normalize_mime_type(file_format) # Normalize if MIME type like 'image/png'
-    else:
-        if isinstance(response, APIResponse):
+    if not file_format:
+        file_format = guess_format_from_data(data)
+        if not file_format and isinstance(response, APIResponse):
             file_format = guess_format_from_headers(response.headers)
-        if not file_format:
-            file_format = guess_format_from_data(data)
-        if file_format:
-            file_format = normalize_mime_type(file_format)
-            log.info(f'{msg_prefix}Guessed output file format: "{file_format}"')
+        log.info(f'{msg_prefix}Guessed output file format: "{file_format}"')
+    file_format = normalize_mime_type(file_format) # Normalize if MIME type like 'image/png'
 
     full_path = output_path / f"{file_name}.{file_format}"
     file_name = f"{file_name}.{file_format}"
@@ -266,6 +263,79 @@ def build_completion_condition(condition_config: dict, context_vars: dict = None
 
     return condition_func
 
+def resolve_content_to_send(all_content) -> dict:
+    resolved_content = {'text': [],
+                        'audio': [],
+                        'files': []}
+
+    def sort_content(content):
+        if not isinstance(content, str):
+            log.warning('Cannot send content to Discord (bot currently only supports string, or list of strings)')
+            return
+        target_path = Path(content)
+        if not target_path.is_absolute():
+            try_paths = [shared_path.dir_user / target_path,
+                         shared_path.output_dir / target_path]
+            for path in try_paths:
+                if path.exists():
+                    target_path = path
+                    break
+
+        # If path is a file
+        if target_path.exists():
+            target_path = target_path.resolve()
+
+            if target_path.is_file():
+                filepath = str(target_path)
+                if target_path.suffix.lower() in [".mp3", ".wav"]:
+                    resolved_content['audio'].append(filepath)
+                else:
+                    resolved_content['files'].append(filepath)
+            else:
+                log.error(f'File not found to send to discord: {target_path}')
+                return
+        else:
+            # Text to send to channel
+            resolved_content['text'].append(content)
+
+    if isinstance(all_content, str):
+        sort_content(all_content)
+    elif isinstance(all_content, list):
+        for item in all_content:
+            sort_content(item)
+
+    return resolved_content
+
+async def send_content_to_discord(task=None, ictx=None, text=None, audio=None, files=None, vc=None):
+    ictx = task.ictx if task else ictx
+    if not ictx:
+        raise RuntimeError('A discord interaction is required for send_context_to_discord()')
+    text = task.extra_text if task else text
+    audio = task.extra_audio if task else audio
+    files = task.extra_files if task else files
+    from discord import File
+    try:
+        if text:
+            # header = "**__Extra text__**:\n"
+            delimiter = "\n--------------------------------------------\n"
+            joined_text = delimiter.join(text)
+            # all_extra_text = header + joined_text
+            await send_long_message(ictx.channel, joined_text)
+        if audio:
+            for audio_fp in audio:
+                if vc and ictx:
+                    await vc.process_audio_file(ictx, audio_fp)
+                else:
+                    files.append(audio_fp)
+        if files:
+            # Wrap paths into discord.File
+            files_to_send = [File(f) for f in files]
+            if len(files_to_send) == 1:
+                await ictx.channel.send(file=files_to_send[0])
+            else:
+                await ictx.channel.send(files=files_to_send)
+    except Exception as e:
+        log.error(f"An error occurred while trying to send extra results: {e}")
 
 def decode_base64(data, _config=None):
     return base64.b64decode(data) if isinstance(data, str) else data
