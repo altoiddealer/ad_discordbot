@@ -14,7 +14,7 @@ from pydub import AudioSegment
 import io
 from typing import Any, Optional, Callable
 from modules.utils_misc import extract_key, normalize_mime_type, guess_format_from_headers, guess_format_from_data, is_base64, valueparser
-from modules.utils_shared import config
+from modules.utils_shared import config, shared_path
 from modules.utils_discord import send_long_message
 
 from modules.logs import import_track, get_logger; import_track(__file__, fp=True); log = get_logger(__name__)  # noqa: E702
@@ -273,6 +273,14 @@ def resolve_content_to_send(all_content) -> dict:
             log.warning('Cannot send content to Discord (bot currently only supports string, or list of strings)')
             return
         target_path = Path(content)
+        if not target_path.is_absolute():
+            try_paths = [shared_path.dir_user / target_path,
+                         shared_path.output_dir / target_path]
+            for path in try_paths:
+                if path.exists():
+                    target_path = path
+                    break
+
         # If path is a file
         if target_path.exists():
             target_path = target_path.resolve()
@@ -308,11 +316,11 @@ async def send_content_to_discord(task=None, ictx=None, text=None, audio=None, f
     from discord import File
     try:
         if text:
-            header = "**__Extra text__**:\n"
+            # header = "**__Extra text__**:\n"
             delimiter = "\n--------------------------------------------\n"
             joined_text = delimiter.join(text)
-            all_extra_text = header + joined_text
-            await send_long_message(ictx.channel, all_extra_text)
+            # all_extra_text = header + joined_text
+            await send_long_message(ictx.channel, joined_text)
         if audio:
             for audio_fp in audio:
                 if vc and ictx:
