@@ -1740,7 +1740,8 @@ class ImgGenClient_Comfy(ImgGenClient):
                               message:str="Generating",
                               outputs:list[str]=['images'],
                               output_node_ids:list[int]=[],
-                              completed_node_id:int|None=None):
+                              completed_node_id:int|None=None,
+                              file_path:str=''):
         # Queue prompt > track progress
         prompt_id = await self._post_prompt(payload, mode=None, task=task, ictx=ictx, message=message, endpoint=endpoint, completed_node_id=completed_node_id)
         # Fetch results (list of bytes)
@@ -1749,7 +1750,7 @@ class ImgGenClient_Comfy(ImgGenClient):
         files_to_send = []
         for item in results_list:
             bytes = await self._resolve_output_data(item)
-            save_dict = await processing.save_any_file(bytes, msg_prefix='[StepExecutor] ')
+            save_dict = await processing.save_any_file(bytes, file_path=file_path, msg_prefix='[StepExecutor] ')
             files_to_send.append(save_dict['path'])
         return files_to_send
 
@@ -2929,6 +2930,22 @@ class StepExecutor:
             raise TimeoutError("[StepExecutor] User did not respond in time.")
         finally:
             client.waiting_for.pop(ictx.author.id, None)
+
+    async def _step_send_content(self, data: Any, config: str):
+        """
+        Send text or files to discord. Currently supports string or list of strings.
+
+        Returns:
+          None
+
+        """
+        if not isinstance(config, str) and not isinstance(config, list):
+            log.error("[StepExecutor] Step 'send_content' did not receive valid content (must be string or list of strings)")
+            return None
+
+        resolved_content = processing.resolve_content_to_send(config)
+        await processing.send_content_to_discord(ictx=self.ictx, **resolved_content)
+        return None
 
     def _step_set_key(self, data: dict|list, config: Union[str, dict]) -> Any:
         path = config.get('path')
