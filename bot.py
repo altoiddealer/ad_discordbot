@@ -4843,6 +4843,19 @@ if imggen_enabled:
 #################################################################
 #################### DYNAMIC USER COMMANDS ######################
 #################################################################
+async def execute_user_cmd(command_name: str, params: dict, interaction: discord.Interaction):
+    # Placeholder
+    await interaction.response.send_message(
+        f"Handled `{command_name}` with processed values: {params}"
+    )
+
+async def process_user_cmd_option(value, steps: list):
+    # Placeholder
+    for step in steps:
+        if step == "lower":
+            value = str(value).lower()
+    return value
+
 # Map from string type to actual type annotation
 type_map = {
     "string": str,
@@ -4856,14 +4869,10 @@ type_map = {
     "attachment": discord.Attachment,
 }
 
-async def setup_hook():
-    print("Loading Dynamic Commands!")
-    await load_dynamic_commands()
-
 import inspect
 import types
 
-async def load_dynamic_commands():
+async def load_user_commands():
     command_data = load_file(os.path.join(shared_path.dir_root, 'user', 'settings', 'dict_commands.yaml'))
     for cmd in command_data:
         name = cmd["command_name"]
@@ -4888,6 +4897,7 @@ async def load_dynamic_commands():
             opt_type = type_map[opt_type_str]
             required = opt.get("required", True)
             choices_raw = opt.get("choices")
+            steps:Optional[list] = opt.get("steps") # processing steps for selected value
 
             if choices_raw and isinstance(choices_raw[0], dict):
                 # Choice objects with name-value mapping
@@ -4904,28 +4914,37 @@ async def load_dynamic_commands():
                 annotation=annotation,
             )
             parameters.append(param)
-            option_metadata.append({"name": opt_name, "choices": choices})
+            option_metadata.append({"name": opt_name, "choices": choices, "steps": steps})
 
         # Create function signature
         sig = inspect.Signature(parameters)
 
-        def make_callback(command_name):
+        def make_callback(command_name, option_metadata):
             async def callback_template(*args, **kwargs):
                 interaction = kwargs.pop("interaction", args[0] if args else None)
 
-                # Convert app_commands.Choice to their value
-                clean_kwargs = {
+                # Convert Choices to their actual value
+                raw_kwargs = {
                     k: (v.value if isinstance(v, app_commands.Choice) else v)
                     for k, v in kwargs.items()
                 }
 
-                await interaction.response.send_message(
-                    f"Command `{command_name}` invoked with: {clean_kwargs}"
-                )
+                # Process each value using steps
+                processed_params = {}
+                for meta in option_metadata:
+                    name = meta["name"]
+                    value = raw_kwargs.get(name)
+                    steps = meta.get("steps")
+                    if steps:
+                        value = await process_user_cmd_option(value, steps)
+                    processed_params[name] = value
+
+                # Call final handler
+                await execute_user_cmd(command_name, processed_params, interaction)
 
             return callback_template
 
-        callback_template = make_callback(name)
+        callback_template = make_callback(name, option_metadata)
         dynamic_callback = types.FunctionType(
             callback_template.__code__,
             globals(),
@@ -4951,9 +4970,11 @@ async def load_dynamic_commands():
                 else:
                     print(f"⚠ Warning: Parameter '{param_name}' not found in command._params")
 
-        print(f"Registering command: /{name}")
         client.tree.add_command(command)
+        print(f"Registered user defined command: /{name}")
 
+async def setup_hook():
+    await load_user_commands()
 asyncio.run(setup_hook())
 
 #################################################################
