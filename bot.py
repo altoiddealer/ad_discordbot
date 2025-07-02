@@ -34,6 +34,8 @@ from modules.typing import ChannelID, UserID, MessageID, CtxInteraction  # noqa:
 import signal
 from typing import Union, Literal
 from functools import partial
+import inspect
+import types
 
 from modules.utils_files import load_file, merge_base, save_yaml_file  # noqa: F401
 from modules.utils_shared import client, TOKEN, is_tgwui_integrated, shared_path, bg_task_queue, task_event, flows_queue, flows_event, patterns, bot_emojis, config, bot_database, get_api
@@ -3000,6 +3002,37 @@ class Tasks(TaskProcessing):
         await self.run_workflow_task(workflow_config)
 
     #################################################################
+    ###################### USER COMMAND TASK ########################
+    #################################################################
+    async def user_command_task(self:"Task"):
+        from modules.apis import StepExecutor
+
+        user_cmd_config:dict = getattr(self, 'user_cmd_config')
+        print("user_cmd_config:", user_cmd_config)
+
+        cmd_name:dict = user_cmd_config['user_cmd_name']
+        selections:dict = user_cmd_config['user_cmd_selections']
+        options_meta:dict = user_cmd_config['user_cmd_option_meta']
+        main_steps:dict = user_cmd_config['user_cmd_steps']
+
+        # Process each value with StepExecutor if defined
+        processed_params = {}
+        for meta in options_meta:
+            name = meta["name"]
+            value = selections.get(name)
+            steps = meta.get("steps")
+            if steps:
+                opt_step_executor = StepExecutor(steps, task=self, ictx=self.ictx)
+                value = await opt_step_executor.run(value)
+            processed_params[name] = value
+
+        # Run the main post-processing steps if defined
+        final_executor = StepExecutor(main_steps, task=self, ictx=self.ictx)
+        final_executor.context = processed_params
+        value = await opt_step_executor.run()
+
+
+    #################################################################
     ######################### CONTINUE TASK #########################
     #################################################################
     async def continue_task(self:"Task"):
@@ -4843,19 +4876,6 @@ if imggen_enabled:
 #################################################################
 #################### DYNAMIC USER COMMANDS ######################
 #################################################################
-async def execute_user_cmd(command_name: str, params: dict, interaction: discord.Interaction):
-    # Placeholder
-    await interaction.response.send_message(
-        f"Handled `{command_name}` with processed values: {params}"
-    )
-
-async def process_user_cmd_option(value, steps: list):
-    # Placeholder
-    for step in steps:
-        if step == "lower":
-            value = str(value).lower()
-    return value
-
 # Map from string type to actual type annotation
 type_map = {
     "string": str,
@@ -4869,15 +4889,14 @@ type_map = {
     "attachment": discord.Attachment,
 }
 
-import inspect
-import types
-
 async def load_user_commands():
     command_data = load_file(os.path.join(shared_path.dir_root, 'user', 'settings', 'dict_commands.yaml'))
     for cmd in command_data:
         name = cmd["command_name"]
         description = cmd.get("description", "No description")
         options = cmd.get("options", [])
+        queue_to:str = cmd.get("queue_to", "gen_queue")
+        queue_to = 'gen_queue' if queue_to == 'message_queue' else queue_to # Do not allow to go to Message queue
 
         # Signature parameter list (start with interaction)
         parameters = [
@@ -4919,28 +4938,22 @@ async def load_user_commands():
         # Create function signature
         sig = inspect.Signature(parameters)
 
-        def make_callback(command_name, option_metadata):
+        def make_callback(command_name:str, option_metadata:dict, queue:str, main_steps:list):
             async def callback_template(*args, **kwargs):
                 interaction = kwargs.pop("interaction", args[0] if args else None)
 
                 # Convert Choices to their actual value
-                raw_kwargs = {
-                    k: (v.value if isinstance(v, app_commands.Choice) else v)
-                    for k, v in kwargs.items()
-                }
-
-                # Process each value using steps
-                processed_params = {}
-                for meta in option_metadata:
-                    name = meta["name"]
-                    value = raw_kwargs.get(name)
-                    steps = meta.get("steps")
-                    if steps:
-                        value = await process_user_cmd_option(value, steps)
-                    processed_params[name] = value
-
-                # Call final handler
-                await execute_user_cmd(command_name, processed_params, interaction)
+                raw_kwargs = {k: (v.value if isinstance(v, app_commands.Choice) else v)
+                              for k, v in kwargs.items()}
+                # Create a Task and queue it                
+                user_command_task = Task('user_command', interaction)
+                user_cmd_config = {'user_cmd_name', command_name,
+                                   'user_cmd_selections', raw_kwargs,
+                                   'user_cmd_option_meta', option_metadata,
+                                   'user_cmd_steps', main_steps}
+                setattr(user_command_task, 'user_cmd_config', user_cmd_config)
+                await task_manager.queue_task(user_command_task, queue_name=queue)
+                log.info(f'{interaction.author.display_name} used user defined command "/{command_name}"')
 
             return callback_template
 

@@ -1,10 +1,31 @@
-- command_name: greet
-  description: Greet someone
+- command_name: wan_iv2v
+  description: Generate a video from prompt, starting image, and driving video
   options:
-    - name: user
-      description: The user to greet
-      type: user
+    # Option 1: Prompt
+    - name: prompt
+      description: Text prompt for the video generation
+      type: string
       required: true
+    # Option 2: Reference Image
+    - name: ref_image
+      description: Reference image for the video generation
+      type: attachment
+      required: true
+      steps:
+        - save:
+            file_path: comfy-input
+          returns: name # Extract filename from save result dict
+    # Option 3: Reference Video
+    - name: ref_video
+      description: Reference video for the video generation
+      type: attachment
+      required: true
+      steps:
+        - save:
+            file_path: comfy-input
+          returns: name # Extract filename from save result dict
+  # Name of a Workflow. All selection data will be initialzed in it's context (can be used to resolve payload fields, etc)
+  run_workflow_name: WAN image vid to vid
 
 - command_name: echo
   description: Echo a message
