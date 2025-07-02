@@ -1668,11 +1668,23 @@ class ImgGenClient_Comfy(ImgGenClient):
             for output_type in returns:
                 if output_type in node_output:
                     results.extend(node_output[output_type])
+        if not results:
+            log.warning(f"[{self.name}] No outputs were found for criteria (types: {returns}; node_ids: {node_ids if node_ids else 'ANY'})")
         return results
 
     async def unpack_image_results(self, results: list[dict]) -> list[dict]:
         prompt_id = results[0]["prompt_id"]
         return await self._fetch_prompt_results(prompt_id)
+    
+    def _build_completion_condition(self, prompt_id:str, completed_node_id:int|None=None) -> Callable[[dict], bool]:
+        if completed_node_id is None:
+            completion_config = {'type': 'execution_success',
+                                 'data': {'prompt_id': prompt_id}}
+        else:
+            completion_config = {'type': 'executed',
+                                 'data': {'prompt_id': prompt_id,
+                                          'node': str(completed_node_id)}}
+        return processing.build_completion_condition(completion_config, None)
 
     def _nest_payload_in_prompt(self, payload:dict):
         prompt_value = payload.get('prompt')
@@ -1687,7 +1699,8 @@ class ImgGenClient_Comfy(ImgGenClient):
                            task=None,
                            ictx=None,
                            message:str="Generating image",
-                           endpoint:Union["Endpoint", None]=None) -> str:
+                           endpoint:Union["Endpoint", None]=None,
+                           completed_node_id:int|None=None) -> str:
         # Resolve malformatted payload
         self._nest_payload_in_prompt(img_payload)
         # Add Client ID to payload
@@ -1702,9 +1715,7 @@ class ImgGenClient_Comfy(ImgGenClient):
             queued = response.body
         prompt_id = queued['prompt_id']
         # Create a callable completion condition for progress tracking
-        completion_config = {'type': 'executed',
-                             'data': {'prompt_id': prompt_id}}
-        completion_condition = processing.build_completion_condition(completion_config, None)
+        completion_condition = self._build_completion_condition(prompt_id, completed_node_id)
         # Track progress
         await self.track_progress(endpoint=None,
                                   use_ws=True,
@@ -1724,13 +1735,16 @@ class ImgGenClient_Comfy(ImgGenClient):
     async def _execute_prompt(self,
                               payload:dict,
                               endpoint:Union["Endpoint", None]=None,
-                              message:str="Generating image",
                               ictx=None,
-                              task=None):
+                              task=None,
+                              message:str="Generating",
+                              outputs:list[str]=['images'],
+                              output_node_ids:list[int]=[],
+                              completed_node_id:int|None=None):
         # Queue prompt > track progress
-        prompt_id = await self._post_prompt(payload, mode=None, task=task, ictx=ictx, message=message, endpoint=endpoint)
+        prompt_id = await self._post_prompt(payload, mode=None, task=task, ictx=ictx, message=message, endpoint=endpoint, completed_node_id=completed_node_id)
         # Fetch results (list of bytes)
-        results_list = await self._fetch_prompt_results(prompt_id)
+        results_list = await self._fetch_prompt_results(prompt_id, returns=outputs, node_ids=output_node_ids)
         # Collect results
         files_to_send = []
         for item in results_list:
@@ -3107,9 +3121,10 @@ class StepExecutor:
         self.endpoint = endpoint # Helps to resolve API related context
 
         payload:dict = self.resolve_api_input(data, config, step_name='call_api', default=data, endpoint=endpoint)
-        message:str = config.get('message', 'Generating')
 
-        return await comfy_client._execute_prompt(payload, endpoint, message, self.ictx, self.task)
+        results = await comfy_client._execute_prompt(payload, endpoint, self.ictx, self.task, **config)
+
+        return results
 
 
 # async def _process_file_input(self, path: str, input_type: str):
