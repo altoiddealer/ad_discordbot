@@ -129,7 +129,7 @@ class SharedPath:
     config, config_template = init_user_config_files(dir_user_settings, templates, 'config.yaml')
     api_settings, _ = init_user_config_files(dir_user_settings, templates, 'dict_api_settings.yaml')
     base_settings, _ = init_user_config_files(dir_user_settings, templates, 'dict_base_settings.yaml')
-    user_commands, _ = init_user_config_files(dir_user_settings, templates, 'dict_commands.yaml')
+    custom_commands, _ = init_user_config_files(dir_user_settings, templates, 'dict_commands.yaml')
     cmd_options, _ = init_user_config_files(dir_user_settings, templates, 'dict_cmdoptions.yaml')
     img_models, _ = init_user_config_files(dir_user_settings, templates, 'dict_imgmodels.yaml')
     tags, _ = init_user_config_files(dir_user_settings, templates, 'dict_tags.yaml')

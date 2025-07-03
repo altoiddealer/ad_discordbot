@@ -39,6 +39,11 @@ async def save_any_file(data: Any,
     from modules.apis import APIResponse
     response:Optional[APIResponse] = response
 
+    from discord import Attachment
+    if isinstance(data, Attachment):
+        file_name = Path(data.filename).stem
+        data = await data.read()
+
     # 1. Setup file path & naming
     from modules.utils_shared import shared_path
 

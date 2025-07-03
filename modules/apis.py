@@ -914,13 +914,19 @@ class APIClient:
                           "headers": headers,
                           "auth": auth or self.auth,
                           "timeout": aiohttp.ClientTimeout(total=timeout)}
+        
+        def _remove_meta_keys(payload):
+            if isinstance(payload, dict):
+                payload = remove_keys(payload, keys_to_remove={"__overrides__", "_comment"})
 
         if data is not None:
+            _remove_meta_keys(data)
             request_kwargs["data"] = data
             # Content-Type will be set in Form automatically
             if isinstance(data, aiohttp.FormData) and headers:
                 request_kwargs['headers'].pop("Content-Type", None)
         if json is not None:
+            _remove_meta_keys(json)
             request_kwargs["json"] = json
 
         # Ensure session exists
@@ -2028,7 +2034,6 @@ class Endpoint:
 
     def clean_payload(self, payload):
         if isinstance(payload, dict):
-            payload = remove_keys(payload, keys_to_remove={"__overrides__", "_comment"})
             self.client.add_required_values_to_payload(payload)
         return payload
 
