@@ -4889,7 +4889,8 @@ type_map = {
 }
 
 async def load_user_commands():
-    command_data = load_file(os.path.join(shared_path.dir_root, 'user', 'settings', 'dict_commands.yaml'))
+    commands_file_data = load_file(shared_path.user_commands)
+    command_data:list = commands_file_data.get('commands', [])
     for cmd in command_data:
         name = cmd["command_name"]
         description = cmd.get("description", "No description")

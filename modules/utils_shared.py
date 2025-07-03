@@ -59,19 +59,19 @@ client.waiting_for = {} # type: ignore
 
 class SharedPath:
 
-    def init_user_config_files(root, src_dir, file) -> str:
-        dest_path = os.path.join(root, file)
+    def init_user_config_files(dest_dir, src_dir, file) -> str:
+        dest_path = os.path.join(dest_dir, file)
         src_path = os.path.join(src_dir, file)
         if not os.path.exists(dest_path):
             if os.path.exists(src_path):
                 copyfile(src_path, dest_path)
-                log.info(f'Copied default user setting template "{file}" to "{root}".')
+                log.info(f'Copied default user setting template "{file}" to "{dest_dir}".')
             else:
-                log.error(f'Required settings file "{file}" not found in "{root}" or "{src_dir}".')
+                log.error(f'Required settings file "{file}" not found in "{dest_dir}" or "{src_dir}".')
         return dest_path, src_path
 
-    def init_shared_paths(root, dir, reason) -> str:
-        path = os.path.join(root, dir)
+    def init_shared_paths(root, dir_name:str, reason:str) -> str:
+        path = os.path.join(root, dir_name)
         if not os.path.exists(path) and reason:
             log.info(f'Creating "{path}" for {reason}.')
         os.makedirs(path, exist_ok=True)
@@ -129,6 +129,7 @@ class SharedPath:
     config, config_template = init_user_config_files(dir_user_settings, templates, 'config.yaml')
     api_settings, _ = init_user_config_files(dir_user_settings, templates, 'dict_api_settings.yaml')
     base_settings, _ = init_user_config_files(dir_user_settings, templates, 'dict_base_settings.yaml')
+    user_commands, _ = init_user_config_files(dir_user_settings, templates, 'dict_commands.yaml')
     cmd_options, _ = init_user_config_files(dir_user_settings, templates, 'dict_cmdoptions.yaml')
     img_models, _ = init_user_config_files(dir_user_settings, templates, 'dict_imgmodels.yaml')
     tags, _ = init_user_config_files(dir_user_settings, templates, 'dict_tags.yaml')
