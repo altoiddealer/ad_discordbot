@@ -4895,8 +4895,9 @@ async def load_user_commands():
         name = cmd["command_name"]
         description = cmd.get("description", "No description")
         options = cmd.get("options", [])
+        main_steps = cmd.get("steps", [])
         queue_to:str = cmd.get("queue_to", "gen_queue")
-        queue_to = 'gen_queue' if queue_to == 'message_queue' else queue_to # Do not allow to go to Message queue
+        queue_to = 'gen_queue' if queue_to in ['message_queue', None] else queue_to # Do not allow to go to Message queue
 
         # Signature parameter list (start with interaction)
         parameters = [
@@ -4957,7 +4958,7 @@ async def load_user_commands():
 
             return callback_template
 
-        callback_template = make_callback(name, option_metadata)
+        callback_template = make_callback(name, option_metadata, queue_to, main_steps)
         dynamic_callback = types.FunctionType(
             callback_template.__code__,
             globals(),
