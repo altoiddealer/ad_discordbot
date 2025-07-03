@@ -21,20 +21,25 @@ examples:
         required: true
         steps:
           - save:
-              file_path: comfy-input
+              file_path: comfy-input # This should be a symlink from comfyUI input directory, to your output directory.
+              timestamp: true
             returns: name # Extract filename from save result dict
       # Option 3: Reference Video
       - name: ref_video
         description: Reference video for the video generation
         type: attachment
-        required: true
+        required: false
         steps:
           - save:
               file_path: comfy-input
+              timestamp: true
             returns: name # Extract filename from save result dict
     # All selection data will be initialzed into context (can be used to resolve payload fields, etc)
     steps:
-      - run_workflow: WAN image vid to vid
+      - run_workflow: # Alternatively, the steps from the workflow could just be used here
+          name: WAN image vid to vid
+          input_data: null
+          context: "{context}"
 
   - command_name: send_file
     description: Send an attachment
