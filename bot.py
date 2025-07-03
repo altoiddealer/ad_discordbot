@@ -60,6 +60,7 @@ logging = log
 
 from modules.apis import API, APIClient, Endpoint, ImgGenEndpoint, ImgGenClient, TTSGenClient, TextGenClient
 api:API = asyncio.run(get_api())
+from modules.stepexecutor import call_stepexecutor
 
 imggen_enabled = config.imggen.get('enabled', True)
 
@@ -1237,7 +1238,7 @@ class TaskProcessing(TaskAttributes):
         # send any extra content
         await bg_task_queue.put(send_content_to_discord(self, vc=voice_clients))
 
-    def handle_api_results(self: Union["Task", "Tasks"], api_results):
+    def check_for_send_content(self: Union["Task", "Tasks"], api_results):
         processed_results = resolve_content_to_send(api_results)
         self.extra_text.extend(processed_results['text'])
         self.extra_audio.extend(processed_results['audio'])
@@ -2956,7 +2957,7 @@ class Tasks(TaskProcessing):
         # Call and collect results
         api_results = await endpoint.call(ictx=self.ictx, **formatted_payload)
         if api_results:
-            self.handle_api_results(api_results)
+            self.check_for_send_content(api_results)
             await send_content_to_discord(self, vc=voice_clients)
 
     def format_api_payload(self: "Task", api_payload: dict):
@@ -2992,9 +2993,9 @@ class Tasks(TaskProcessing):
         # formats bot syntax like '{prompt}', {llm_0}, etc
         formatted_payload = self.format_api_payload(config)
         # Run workflow and collect results
-        workflow_results = await api.run_workflow(task=self, **formatted_payload)
+        workflow_results = await call_stepexecutor(task=self, **formatted_payload)
         if workflow_results:
-            self.handle_api_results(workflow_results)
+            self.check_for_send_content(workflow_results)
             await send_content_to_discord(self, vc=voice_clients)
 
     async def workflow_task(self:"Task"):
@@ -3005,8 +3006,6 @@ class Tasks(TaskProcessing):
     ###################### USER COMMAND TASK ########################
     #################################################################
     async def user_command_task(self:"Task"):
-        from modules.apis import StepExecutor
-
         user_cmd_config:dict = getattr(self, 'user_cmd_config')
         print("user_cmd_config:", user_cmd_config)
 
@@ -3022,14 +3021,14 @@ class Tasks(TaskProcessing):
             value = selections.get(name)
             steps = meta.get("steps")
             if steps:
-                opt_step_executor = StepExecutor(steps, task=self, ictx=self.ictx)
-                value = await opt_step_executor.run(value)
+                value = await call_stepexecutor(steps=steps, input_data=value, task=self, prefix=f'Pre-processing results of cmd option "{name}" with ')
             processed_params[name] = value
 
         # Run the main post-processing steps if defined
-        final_executor = StepExecutor(main_steps, task=self, ictx=self.ictx)
-        final_executor.context = processed_params
-        value = await opt_step_executor.run()
+        if main_steps:
+            value = await call_stepexecutor(steps=main_steps, task=self, context=processed_params, prefix=f'Processing command "{cmd_name}" with ')
+            await self.check_for_send_content(value)
+            await send_content_to_discord(self, vc=voice_clients)
 
 
     #################################################################
