@@ -153,7 +153,7 @@ class StepExecutor:
         if "result" in sources:
             config = processing.resolve_placeholders(config, {"result": data}, log_prefix='[StepExecutor]', log_suffix='from prior step "result"')
         if "context" in sources:
-            config = processing.resolve_placeholders(config, self.context, log_prefix='[StepExecutor]', log_suffix='from saved context')
+            config = processing.resolve_placeholders(config, {"context": self.context, **self.context}, log_prefix='[StepExecutor]', log_suffix='from saved context')
         if "task" in sources and self.task:
             config = processing.resolve_placeholders(config, vars(self.task.vars), log_prefix='[StepExecutor]', log_suffix=f'from Task "{self.task.name}" context')
         if "websocket" in sources and self.endpoint and self.endpoint.client.ws_config:
@@ -271,20 +271,12 @@ class StepExecutor:
         input_data = config.pop('input_data', default)
         init_payload = config.pop('init_payload', False)
         if not endpoint: # Websocket
-            return default
+            input_data = default
         # init_payload overrides input_data
         if init_payload:
             log.info(f'[StepExecutor] Step "{step_name}": Fetching payload for "{endpoint.name}" and trying to update placeholders with internal variables.')
             input_data = endpoint.get_payload()
-            # Resolves context data more cleanly for Task variables
-            input_data = self.resolve_api_payload(data, input_data)
-
-        elif input_data is not None:
-            log.info(f'[StepExecutor] Step "{step_name}": Sending "input_data" to "{endpoint.name}". If unwanted, update your step definition with "input_data: null".')
-        else:
-            pass
-
-        return input_data
+        return self.resolve_api_payload(data, input_data)
     
     def resolve_api_names(self, config:dict, step_name:str):
         client_name = config.pop("client_name", None) or config.pop("client", None)
@@ -383,6 +375,11 @@ class StepExecutor:
             log.error(f"[StepExecutor] Error in 'poll_api' step: {e}")
 
         return results
+    
+    async def _step_run_workflow(self, data, config):
+        config['input_data'] = config.pop('input_data', data)
+        config['task'] = self.task
+        return await call_stepexecutor(**config)
 
     async def _step_prompt_user(self, data, config):
         """
@@ -653,9 +650,7 @@ class StepExecutor:
 
         payload:dict = self.resolve_api_input(data, config, step_name='call_api', default=data, endpoint=endpoint)
 
-        results = await comfy_client._execute_prompt(payload, endpoint, self.ictx, self.task, **config)
-
-        return results
+        return await comfy_client._execute_prompt(payload, endpoint, self.ictx, self.task, **config)
 
 
 # async def _process_file_input(self, path: str, input_type: str):

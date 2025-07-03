@@ -13,7 +13,7 @@ import copy
 from modules.typing import CtxInteraction
 from typing import get_type_hints, get_type_hints, get_origin, get_args, Any, Tuple, Optional, Union, Callable, AsyncGenerator
 from modules.utils_shared import shared_path, bot_database, load_file
-from modules.utils_misc import progress_bar, extract_key, remove_keys, deep_merge, split_at_first_comma, detect_audio_format
+from modules.utils_misc import progress_bar, extract_key, deep_merge, split_at_first_comma, detect_audio_format, remove_meta_keys
 import modules.utils_processing as processing
 
 from modules.logs import import_track, get_logger; import_track(__file__, fp=True); log = get_logger(__name__)  # noqa: E702
@@ -914,19 +914,15 @@ class APIClient:
                           "headers": headers,
                           "auth": auth or self.auth,
                           "timeout": aiohttp.ClientTimeout(total=timeout)}
-        
-        def _remove_meta_keys(payload):
-            if isinstance(payload, dict):
-                payload = remove_keys(payload, keys_to_remove={"__overrides__", "_comment"})
 
         if data is not None:
-            _remove_meta_keys(data)
+            data = remove_meta_keys(data)
             request_kwargs["data"] = data
             # Content-Type will be set in Form automatically
             if isinstance(data, aiohttp.FormData) and headers:
                 request_kwargs['headers'].pop("Content-Type", None)
         if json is not None:
-            _remove_meta_keys(json)
+            json = remove_meta_keys(json)
             request_kwargs["json"] = json
 
         # Ensure session exists
@@ -1701,6 +1697,8 @@ class ImgGenClient_Comfy(ImgGenClient):
                            message:str="Generating image",
                            endpoint:Union["Endpoint", None]=None,
                            completed_node_id:int|None=None) -> str:
+        # Ensure meta keys removed
+        img_payload = remove_meta_keys(img_payload)
         # Resolve malformatted payload
         self._nest_payload_in_prompt(img_payload)
         # Add Client ID to payload

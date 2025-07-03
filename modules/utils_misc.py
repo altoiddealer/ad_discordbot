@@ -395,6 +395,11 @@ def image_bytes_to_data_uri(image_bytes: bytes, mime_type: str = "image/png") ->
     encoded = base64.b64encode(image_bytes).decode("utf-8")
     return f"data:{mime_type};base64,{encoded}"
 
+def remove_meta_keys(payload):
+    if isinstance(payload, dict):
+        payload = remove_keys(payload, keys_to_remove={"__overrides__", "_comment"})
+    return payload
+
 class ValueParser:
     """
     Utility to convert loosely formatted string inputs into structured Python values:

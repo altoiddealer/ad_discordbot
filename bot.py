@@ -3007,29 +3007,29 @@ class Tasks(TaskProcessing):
     #################################################################
     async def custom_command_task(self:"Task"):
         custom_cmd_config:dict = getattr(self, 'custom_cmd_config')
-        print("custom_cmd_config:", custom_cmd_config)
-
+        # Unpack config
         cmd_name:dict = custom_cmd_config['custom_cmd_name']
         selections:dict = custom_cmd_config['custom_cmd_selections']
         options_meta:dict = custom_cmd_config['custom_cmd_option_meta']
         main_steps:dict = custom_cmd_config['custom_cmd_steps']
 
-        # Process each value with StepExecutor if defined
+        # Process each option value with StepExecutor if steps are defined
         processed_params = {}
         for meta in options_meta:
             name = meta["name"]
             value = selections.get(name)
+            if value is None:
+                continue  # Skip optional inputs not provided
             steps = meta.get("steps")
             if steps:
                 value = await call_stepexecutor(steps=steps, input_data=value, task=self, prefix=f'Pre-processing results of cmd option "{name}" with ')
             processed_params[name] = value
 
-        # Run the main post-processing steps if defined
+        # Run the command's main steps if defined
         if main_steps:
             value = await call_stepexecutor(steps=main_steps, task=self, context=processed_params, prefix=f'Processing command "{cmd_name}" with ')
-            await self.check_for_send_content(value)
+            self.check_for_send_content(value)
             await send_content_to_discord(self, vc=voice_clients)
-
 
     #################################################################
     ######################### CONTINUE TASK #########################
@@ -4876,6 +4876,8 @@ if imggen_enabled:
 #################### DYNAMIC USER COMMANDS ######################
 #################################################################
 async def load_custom_commands():
+    registered_cmd_names = []
+
     # Map from string type to actual type annotation
     type_map = {"string": str,
                 "user": discord.User,
@@ -4916,7 +4918,10 @@ async def load_custom_commands():
                 opt_type = type_map[opt_type_str]
                 required = opt.get("required", True)
                 choices_raw = opt.get("choices")
-                steps:Optional[list] = opt.get("steps") # processing steps for selected value
+                steps: Optional[list] = opt.get("steps")
+                opt_description = opt.get("description")
+                if opt_description and opt_type_str == "attachment":
+                    opt_description += " (size limits apply)"
 
                 if choices_raw and isinstance(choices_raw[0], dict):
                     # Choice objects with name-value mapping
@@ -4931,7 +4936,10 @@ async def load_custom_commands():
                                         default=inspect.Parameter.empty if required else None,
                                         annotation=annotation)
                 parameters.append(param)
-                option_metadata.append({"name": opt_name, "choices": choices, "steps": steps})
+                option_metadata.append({"name": opt_name,
+                                        "description": opt_description,
+                                        "choices": choices,
+                                        "steps": steps})
 
             # Create function signature
             sig = inspect.Signature(parameters)
@@ -4939,6 +4947,8 @@ async def load_custom_commands():
             def make_callback(command_name:str, option_metadata:dict, queue:str, main_steps:list):
                 async def callback_template(*args, **kwargs):
                     interaction = kwargs.pop("interaction", args[0] if args else None)
+
+                    await ireply(interaction, f'/{command_name}') # send a response msg to the user
 
                     # Convert Choices to their actual value (but not None)
                     raw_kwargs = {k: (v.value if isinstance(v, app_commands.Choice) else v)
@@ -4976,17 +4986,25 @@ async def load_custom_commands():
 
             # Inject choices (private API workaround)
             for meta in option_metadata:
-                if meta["choices"]:
-                    param_name = meta["name"]
-                    if param_name in command._params:
-                        command._params[param_name].choices = meta["choices"]
+                param_name = meta["name"]
+                if param_name in command._params:
+                    param = command._params[param_name]
+                    if meta.get("choices"):
+                        param.choices = meta["choices"]
+                    if hasattr(param, "description"):
+                        param.description = meta["description"]
                     else:
-                        print(f"⚠ Warning: Parameter '{param_name}' not found in command._params")
+                        setattr(param, "description", meta["description"])
+                else:
+                    print(f"⚠ Warning: Parameter '{param_name}' not found in command._params")
 
             client.tree.add_command(command)
-            log.info(f"[Custom Commands] Registered: /{name}")
+            registered_cmd_names.append(name)
         except Exception as e:
             log.error(f'[Custom Commands] An error occured while initializing "/{name}": {e}')
+    if registered_cmd_names:
+        formatted_names = ', '.join(f"'{f'/{name}'}'" for name in registered_cmd_names)
+        log.info(f"[Custom Commands] Registered: {formatted_names}")
 
 async def setup_hook():
     try:
