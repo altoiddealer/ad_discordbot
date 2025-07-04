@@ -85,7 +85,7 @@ all_apis:
   - name: SD Forge
     url: http://127.0.0.1:7860
     enabled: true
-    default_headers: {Content-Type: application/json} # will apply to all endpoints unless 'headers' defined in endpoint.
+    default_headers: {Content-Type: application/json} # will merge with endpoint-specific headers (endpoint keys will have higher priority)
     default_timeout: 10 # seconds to wait before aborting api call
     auth: null # {username: myuser, password: mypass} # dict format with keys 'username' and 'password'
     # Add any endpoints that you may use for bot functions (Tags system, user commands, etc)
