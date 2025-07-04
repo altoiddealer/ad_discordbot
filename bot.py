@@ -3028,6 +3028,7 @@ class Tasks(TaskProcessing):
         # Run the command's main steps if defined
         if main_steps:
             value = await call_stepexecutor(steps=main_steps, task=self, context=processed_params, prefix=f'Processing command "{cmd_name}" with ')
+            await self.embeds.send('img_send', f'{self.user_name} used "/{cmd_name}"', '')
             self.check_for_send_content(value)
             await send_content_to_discord(self, vc=voice_clients)
 
