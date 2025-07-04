@@ -24,7 +24,7 @@ async def call_stepexecutor(name:str=None, steps:list=None, input_data:Any=None,
         raise RuntimeError('[StepExecutor] Received a config without any workflow name or steps provided.')
 
     num_steps = len(processing_steps)
-    log.info(f'[StepExecutor] {prefix}{num_steps} processing steps)')
+    log.info(f'[StepExecutor] {prefix}{num_steps} processing steps')
     handler = StepExecutor(steps=processing_steps, input_data=input_data, task=task, context=context)
     return await handler.run()
 

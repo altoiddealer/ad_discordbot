@@ -3015,8 +3015,10 @@ class Tasks(TaskProcessing):
 
         # Process each option value with StepExecutor if steps are defined
         processed_params = {}
+        option_names = [] # names for logging
         for meta in options_meta:
             name = meta["name"]
+            option_names.append(name)
             value = selections.get(name)
             if value is None:
                 continue  # Skip optional inputs not provided
@@ -3028,9 +3030,11 @@ class Tasks(TaskProcessing):
         # Run the command's main steps if defined
         if main_steps:
             value = await call_stepexecutor(steps=main_steps, task=self, context=processed_params, prefix=f'Processing command "{cmd_name}" with ')
-            await self.embeds.send('img_send', f'{self.user_name} used "/{cmd_name}"', '')
+            await self.embeds.send('img_send', f'{self.user_name} used "/{cmd_name}"', f'Options: {", ".join(optname for optname in option_names)}')
             self.check_for_send_content(value)
             await send_content_to_discord(self, vc=voice_clients)
+        else:
+            await self.embeds.send('img_send', f'{self.user_name} used "/{cmd_name}"', f'Options: {", ".join(optname for optname in option_names)}')
 
     #################################################################
     ######################### CONTINUE TASK #########################
@@ -4924,10 +4928,16 @@ async def load_custom_commands():
                 if opt_description and opt_type_str == "attachment":
                     opt_description += " (size limits apply)"
 
-                if choices_raw and isinstance(choices_raw[0], dict):
-                    # Choice objects with name-value mapping
-                    annotation = app_commands.Choice[str]
-                    choices = [app_commands.Choice(name=c["name"], value=c["value"]) for c in choices_raw]
+                if choices_raw:
+                    if isinstance(choices_raw[0], dict):
+                        # Dict-based: {"name": ..., "value": ...}
+                        annotation = app_commands.Choice[str]
+                        choices = [app_commands.Choice(name=c["name"], value=c["value"]) for c in choices_raw]
+                    else:
+                        # Primitive list (e.g. [0.1, 0.2, 0.3])
+                        value_type = type(choices_raw[0])
+                        annotation = app_commands.Choice[value_type]
+                        choices = [app_commands.Choice(name=str(c), value=c) for c in choices_raw]
                 else:
                     annotation = opt_type
                     choices = None
