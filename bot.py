@@ -3018,10 +3018,10 @@ class Tasks(TaskProcessing):
         option_names = [] # names for logging
         for meta in options_meta:
             name = meta["name"]
-            option_names.append(name)
             value = selections.get(name)
             if value is None:
                 continue  # Skip optional inputs not provided
+            option_names.append(name)
             steps = meta.get("steps")
             if steps:
                 value = await call_stepexecutor(steps=steps, input_data=value, task=self, prefix=f'Pre-processing results of cmd option "{name}" with ')
