@@ -2037,7 +2037,6 @@ class Endpoint:
 
         # Add standard form fields
         if data_payload:
-            print("data_payload:", data_payload)
             for key, value in data_payload.items():
                 form.add_field(name=key, value=str(value))
 
@@ -2260,7 +2259,6 @@ class Endpoint:
             # Build payload
             payload = {'data': {}, 'json': {}, 'params': {}}
             payload.update(self.get_payload())
-            print("Updated payload:", payload)
             payload["files"] = {field_name: file_dict}
 
             path_vars = mime_category if '{}' in self.path else None
