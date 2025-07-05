@@ -12,10 +12,12 @@ from datetime import datetime
 from pathlib import Path
 from pydub import AudioSegment
 import io
+import mimetypes
 from typing import Any, Optional, Callable
 from modules.utils_misc import extract_key, normalize_mime_type, guess_format_from_headers, guess_format_from_data, is_base64, valueparser
-from modules.utils_shared import config, shared_path
+from modules.utils_shared import config, shared_path, get_api
 from modules.utils_discord import send_long_message
+from modules.apis import API
 
 from modules.logs import import_track, get_logger; import_track(__file__, fp=True); log = get_logger(__name__)  # noqa: E702
 logging = log
@@ -275,6 +277,78 @@ def build_completion_condition(condition_config: dict, context_vars: dict = None
 
     return condition_func
 
+def split_files_by_size(normalized_files, max_discord_size=25 * 1024 * 1024):
+    small_files = []
+    large_files = []
+
+    for file in normalized_files:
+        if file["file_size"] < max_discord_size:
+            small_files.append(file)
+        else:
+            large_files.append(file)
+
+    return small_files, large_files
+
+def normalize_file_inputs(input_data, default_filename='file.bin') -> list[dict]:
+    from modules.utils_misc import guess_format_from_data
+
+    input_list = input_data if isinstance(input_data, list) else [input_data]
+    normalized = []
+
+    for item in input_list:
+        file_obj = None
+        should_close = False
+        filename = default_filename
+        mime_type = 'application/octet-stream'
+        file_size = None
+
+        if isinstance(item, dict):
+            data = item.get("bytes") or item.get("file_data")
+            file_path = item.get("file_path")
+            filename = item.get("file_name", default_filename)
+
+            if data:
+                mime_type = guess_format_from_data(data, default="application/octet-stream")
+                file_obj = io.BytesIO(data)
+                file_obj.name = filename  # ✅ safe to assign for BytesIO
+                file_size = len(data)
+
+            elif file_path:
+                filename = os.path.basename(file_path)
+                mime_type = mimetypes.guess_type(filename)[0] or "application/octet-stream"
+                file_obj = open(file_path, "rb")
+                file_size = os.path.getsize(file_path)
+                should_close = True
+
+            else:
+                raise ValueError("Dict input must contain 'bytes'/'file_data' or 'file_path'.")
+
+        elif isinstance(item, bytes):
+            mime_type = guess_format_from_data(item, default="application/octet-stream")
+            file_obj = io.BytesIO(item)
+            file_obj.name = filename  # ✅ safe for BytesIO
+            file_size = len(item)
+
+        elif isinstance(item, str):
+            filename = os.path.basename(item)
+            mime_type = mimetypes.guess_type(filename)[0] or "application/octet-stream"
+            file_obj = open(item, "rb")
+            file_size = os.path.getsize(item)
+            should_close = True
+
+        else:
+            raise TypeError(f"Unsupported input type: {type(item)}")
+
+        normalized.append({
+            "file_obj": file_obj,
+            "filename": filename,
+            "mime_type": mime_type,
+            "file_size": file_size,
+            "should_close": should_close,
+        })
+
+    return normalized
+
 def resolve_content_to_send(all_content) -> dict:
     resolved_content = {'text': [],
                         'audio': [],
@@ -333,19 +407,40 @@ async def send_content_to_discord(task=None, ictx=None, text=None, audio=None, f
             joined_text = delimiter.join(text)
             # all_extra_text = header + joined_text
             await send_long_message(ictx.channel, joined_text)
+
         if audio:
             for audio_fp in audio:
                 if vc and ictx:
                     await vc.process_audio_file(ictx, audio_fp)
                 else:
                     files.append(audio_fp)
+
         if files:
-            # Wrap paths into discord.File
-            files_to_send = [File(f) for f in files]
-            if len(files_to_send) == 1:
-                await ictx.channel.send(file=files_to_send[0])
-            else:
-                await ictx.channel.send(files=files_to_send)
+            normalized = normalize_file_inputs(files)
+            small, large = normalized, None
+            upload_large_files_ep = None
+
+            api:API = await get_api()
+            from modules.apis import Endpoint, apisettings
+            if config.get('upload_large_files', False) and api.upload_large_files and api.upload_large_files.get('enabled', False):
+                expected_name = apisettings.misc_settings.get('upload_large_files', {}).get('post_upload', {}).get('endpoint_name', "(UNDEFINED)")
+                upload_large_files_ep = api.upload_large_files.endpoints.get(expected_name)
+                small, large = split_files_by_size(normalized)
+                if large and not isinstance(upload_large_files_ep, Endpoint):
+                    log.error(f"The bot is configured to upload large files that exceed discord's 25MB limit, but endpoint '{expected_name}' was not found.")
+                    small.extend(large)
+                    large = None                  
+
+            if small:
+                discord_files = [File(f["file_obj"], filename=f["filename"]) for f in small]
+                if len(discord_files) == 1:
+                    await ictx.channel.send(file=discord_files[0])
+                else:
+                    await ictx.channel.send(files=discord_files)
+
+            if large and isinstance(upload_large_files_ep, Endpoint):
+                await upload_large_files_ep.upload_files(normalized_inputs=large)
+
     except Exception as e:
         log.error(f"An error occurred while trying to send extra results: {e}")
 

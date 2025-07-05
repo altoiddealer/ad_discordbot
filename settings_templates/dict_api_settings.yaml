@@ -76,6 +76,13 @@ bot_api_functions:
       language_input_key: language # input key for the language. ex: payload = {'language': 'English', ...}
       voice_input_key: character_voice_gen  # input key for the voice. ex: payload = {'voice': 'Female01.wav', ...}
 
+# More bot functions which require designated clients / endpoints
+misc_api_functions:
+  # Primarily used
+  upload_large_files:
+    api_name: GoFile
+    post_upload:
+      endpoint_name: Post Upload
 
 all_apis:
   # You may define any number of APIs and Endpoints here (a list of dictionaries), making them available to use for various bot functions,
@@ -192,13 +199,15 @@ all_apis:
     enabled: false
     default_headers: {Content-Type: application/json, Authorization: Bearer <**YOUR AUTH TOKEN**>}
     endpoints:
-      - name: Upload
+      - name: Post Upload
         path: /uploadfile
         method: POST
         headers: {Content-Type: multipart/form-data}
         payload_type: multipart
         # payload:
         #   data: {folderId: <**A SPECIFIC FOLDER ID**>} # Optional for this API
+        response_handling:
+          - extract_key: data.downloadPage
 
 # Create presets here which can be injected in any 'endpoint', or in any 'response_handling' / 'workflow' steps.
 presets:

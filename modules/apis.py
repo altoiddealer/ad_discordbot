@@ -125,6 +125,8 @@ class APISettings():
     def collect_settings(self, data:dict):
         # Collect Main APIs
         self.main_settings = data.get('bot_api_functions', {})
+        # Collect Main APIs
+        self.misc_settings = data.get('misc_api_functions', {})
         # Collect Response Handling Presets
         self.collect_presets(data.get('presets', {}))
         # Collect Workflows
@@ -188,6 +190,8 @@ class API:
         self.imggen:Union[ImgGenClient, DummyClient] = DummyClient(ImgGenClient)
         self.textgen:Union[TextGenClient, DummyClient] = DummyClient(TextGenClient)
         self.ttsgen:Union[TTSGenClient, DummyClient] = DummyClient(TTSGenClient)
+        # Misc API functions:
+        self.upload_large_files:Union[APIClient, DummyClient] = DummyClient(APIClient)
         # Collect setup tasks
         self.setup_tasks:list = []
 
@@ -201,6 +205,10 @@ class API:
         # Reverse lookup for matching API names to their function type
         main_api_name_map = {v.get("api_name"): k for k, v in apisettings.main_settings.items()
                              if isinstance(v, dict) and v.get("api_name")}
+        
+        # Misc function bindings (non-main)
+        upload_large_files_name = apisettings.misc_settings.get("upload_large_files", {}).get('api_name')
+        print("upload_large_files_name:", upload_large_files_name)
         
         check_clients_online = []
 
@@ -245,6 +253,10 @@ class API:
                 if is_main:
                     setattr(self, api_func_type, api_client)
                     log.info(f"Registered main {api_func_type} client: {name}")
+                # Handle upload_files assignment
+                if name == upload_large_files_name:
+                    self.upload_large_files = api_client
+                    log.info(f"Registered upload_large_files client: {name}")
                 if hasattr(api_client, 'is_online'):
                     check_clients_online.append(api_client.is_online())
                 # Collect setup tasks
@@ -2196,73 +2208,34 @@ class Endpoint:
         return results
 
     async def upload_files(self, 
-                           input_data: Union[str, bytes, list[Union[str, bytes]], dict[str]],
-                           file_name:str = 'file.bin',
-                           file_obj_key:str = 'file',
-                           **kwargs):
-        import mimetypes
-        from modules.utils_misc import guess_format_from_data
+                        input_data=None,
+                        file_name='file.bin',
+                        file_obj_key='file',
+                        normalized_inputs: list = None,
+                        **kwargs):
 
-        input_datas:list = input_data if isinstance(input_data, list) else [input_data]
+        normalized_files = normalized_inputs or processing.normalize_file_inputs(input_data, file_name)
         results_list = []
 
-        for item in input_datas:
-            # Initialize
-            file_obj = None
-            effective_filename = file_name
-            mime_type = "application/octet-stream"
-            should_close = False
+        for file in normalized_files:
+            file_obj = file['file_obj']
+            file_name = file['file_name']
+            mime_type = file['mime_type']
+            should_close = file['should_close']
 
-            if isinstance(item, dict):
-                # Support both 'bytes' and 'file_data' as data keys
-                data = item.get("bytes") or item.get("file_data")
-                file_path = item.get("file_path")
-                effective_filename = item.get("file_name", file_name)
-
-                if data:
-                    mime_type = guess_format_from_data(data, default="application/octet-stream")
-                    file_obj = io.BytesIO(data)
-                    file_obj.name = effective_filename
-                elif file_path:
-                    effective_filename = os.path.basename(file_path)
-                    mime_type = mimetypes.guess_type(effective_filename)[0] or "application/octet-stream"
-                    file_obj = open(file_path, "rb")
-                    should_close = True
-                else:
-                    raise ValueError("Dict input must contain 'bytes'/'file_data' or 'file_path'.")
-
-            # --- Handle raw bytes input ---
-            elif isinstance(item, bytes):
-                mime_type = guess_format_from_data(item, default="application/octet-stream")
-                file_obj = io.BytesIO(item)
-                file_obj.name = effective_filename
-
-            # --- Handle raw string (assumed to be file path) ---
-            elif isinstance(item, str):
-                effective_filename = os.path.basename(item)
-                mime_type = mimetypes.guess_type(effective_filename)[0] or "application/octet-stream"
-                file_obj = open(item, "rb")
-                should_close = True
-
-            else:
-                raise TypeError(f"Unsupported input type: {type(item)}. Must be str, bytes, dict, or list thereof.")
-
-            # Build file dict
             file_dict = {"file": file_obj,
-                         "filename": effective_filename,
+                         "filename": file_name,
                          "content_type": mime_type}
 
-            # Determine form field name
             mime_category = mime_type.split("/")[0]
             field_name = file_obj_key or mime_category
 
-            # Build payload
-            payload = {'data': {}, 'json': {}, 'params': {}}
-            payload.update(self.get_payload())
-            payload["files"] = {field_name: file_dict}
+            payload = self.get_payload()
+            payload['files'] = {field_name: file_dict}
 
             path_vars = mime_category if '{}' in self.path else None
             result = await self.call(payload_map=payload, path_vars=path_vars, **kwargs)
+
             if isinstance(result, APIResponse):
                 results_list.append(result.body)
             else:
@@ -2271,10 +2244,8 @@ class Endpoint:
             if should_close:
                 file_obj.close()
 
-        if len(results_list) == 1:
-            return results_list[0]
+        return results_list[0] if len(results_list) == 1 else results_list
 
-        return results_list
 
     async def poll(self,
                    return_values: dict,
