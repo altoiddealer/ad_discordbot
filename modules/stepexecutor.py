@@ -375,7 +375,24 @@ class StepExecutor:
             log.error(f"[StepExecutor] Error in 'poll_api' step: {e}")
 
         return results
-    
+
+    async def _step_upload_files(self, data: Any, config: Union[str, dict]) -> Any:
+        """
+        Uploads a file or files to an endpoint.
+
+        Returns the response body (one file) or list of response bodies (multiple files)
+
+        """
+        api:API = await get_api()
+        client_name, endpoint_name, use_ws = self.resolve_api_names(config, 'upload_files')
+        api_client:APIClient = api.get_client(client_name=client_name, strict=True)
+        endpoint:Endpoint = api_client.get_endpoint(endpoint_name=endpoint_name, strict=True)
+        self.endpoint = endpoint # Helps to resolve API related context
+
+        input_data = config.pop('input_data', data)
+
+        return await endpoint.upload_files(input_data, **config)
+
     async def _step_run_workflow(self, data, config):
         config['input_data'] = config.pop('input_data', data)
         config['task'] = self.task
@@ -619,10 +636,10 @@ class StepExecutor:
         - file_name: Optional file name (without extension).
         - file_path: Relative directory inside output_dir.
         - returns: dict containing:
-                "path" (str) - full path to file
-                "format" (str) - file format
-                "name" (str) -  filename
-                "data" - file data
+                "file_path" (str) - full path to file
+                "file_format" (str) - file format without leading period
+                "file_name" (str) - filename including extension
+                "file_data" - original or decoded data as applicable
         """
         return await processing.save_any_file(data=data,
                                               file_format=config.get('file_format'),
@@ -649,7 +666,7 @@ class StepExecutor:
         self.endpoint = endpoint # Helps to resolve API related context
 
         payload:dict = self.resolve_api_input(data, config, step_name='call_api', default=data, endpoint=endpoint)
-
+        
         return await comfy_client._execute_prompt(payload, endpoint, self.ictx, self.task, **config)
 
 

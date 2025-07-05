@@ -6706,17 +6706,7 @@ class ImgModel(SettingsBase):
         if not api.imggen.post_upload:
             return base64.b64encode(image).decode('utf-8')
         else:
-            # Detect MIME type
-            mime_type = guess_format_from_data(image, default='application/octet-stream')
-            mime_category = mime_type.split('/')[0]
-            # Use file_category as default if file_type is not provided
-            resolved_file_type = file_type or mime_category
-            # Prepare a file-like object
-            file_obj = io.BytesIO(image)
-            file_obj.name = filename
-            file = {"file": file_obj, "filename": filename, "content_type": mime_type}
-
-            await api.imggen.post_upload.upload_file(file=file, file_type=resolved_file_type)
+            await api.imggen.post_upload.upload_files(input_data=image, file_name=filename, file_obj_key=file_type)
             return filename
 
     async def handle_image_input(self, source: Union[discord.Attachment, bytes], file_type: Optional[str] = None, filename: Optional[str] = None) -> str:

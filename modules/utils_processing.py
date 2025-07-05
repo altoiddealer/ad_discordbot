@@ -30,11 +30,18 @@ async def save_any_file(data: Any,
     """
     Save input data to a file and returns dict.
 
-    - file_format: Explicit format (e.g. 'json', 'jpg').
+    Arguments:
+    - file_format Explicit format (e.g. 'json', 'jpg').
     - file_name: Optional file name (without extension).
     - file_path: Relative directory inside output_dir.
     - response: optional APIResponse object (if data type is APIResponse.body)
     - msg_prefix: to prefix logging messages
+
+    Returns dict containing:
+    - file_path: full file path string
+    - file_format: format without leading period
+    - file_name: file name including extension
+    - file_data: original or decoded data when applicable
     """
     from modules.apis import APIResponse
     response:Optional[APIResponse] = response
@@ -92,10 +99,10 @@ async def save_any_file(data: Any,
             format_map = {"jpg": "JPEG", "jpeg": "JPEG", "png": "PNG", "webp": "WEBP"}
             data.save(full_path, format=format_map.get(file_format.lower(), file_format.upper()), pnginfo=pnginfo)
             log.info(f"{msg_prefix}Saved image using PIL to {full_path}")
-            return {"path": str(full_path),
-                    "format": file_format,
-                    "name": file_name,
-                    "data": data}
+            return {"file_path": str(full_path),
+                    "file_format": file_format,
+                    "file_name": file_name,
+                    "file_data": data}
 
         # 5b. Proceed with async file saving for everything else
         async with aiofiles.open(full_path, mode) as f:
@@ -135,10 +142,10 @@ async def save_any_file(data: Any,
 
     log.info(f"{msg_prefix}Saved data to {full_path}")
 
-    return {"path": str(full_path),
-            "format": file_format,
-            "name": file_name,
-            "data": data}
+    return {"file_path": str(full_path),
+            "file_format": file_format,
+            "file_name": file_name,
+            "file_data": data}
 
 def resolve_placeholders(config: Any, context: dict, log_prefix: str = '', log_suffix: str = '') -> Any:
     formatted_keys = []

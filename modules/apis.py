@@ -1739,18 +1739,19 @@ class ImgGenClient_Comfy(ImgGenClient):
                               outputs:list[str]=['images'],
                               output_node_ids:list[int]=[],
                               completed_node_id:int|None=None,
-                              file_path:str=''):
+                              file_path:str='',
+                              returns:str='file_path'):
         # Queue prompt > track progress
         prompt_id = await self._post_prompt(payload, mode=None, task=task, ictx=ictx, message=message, endpoint=endpoint, completed_node_id=completed_node_id)
         # Fetch results (list of bytes)
         results_list = await self._fetch_prompt_results(prompt_id, returns=outputs, node_ids=output_node_ids)
         # Collect results
-        files_to_send = []
+        save_file_results = []
         for item in results_list:
             bytes = await self._resolve_output_data(item)
-            save_dict = await processing.save_any_file(bytes, file_path=file_path, msg_prefix='[StepExecutor] ')
-            files_to_send.append(save_dict['path'])
-        return files_to_send
+            save_dict = await processing.save_any_file(bytes, file_path=file_path, msg_prefix='[StepExecutor] ')            
+            save_file_results.append(save_dict[returns] if returns else save_dict)
+        return save_file_results
 
 
 class TextGenClient(APIClient):
@@ -1861,10 +1862,6 @@ class Endpoint:
                 setattr(self, '_deferred_payload_source', payload_config)
 
     def get_payload(self):
-        if self.payload_type == 'multipart':
-            mapping_keys = {'json', 'data', 'params', 'files'}
-            if not mapping_keys.issubset(self.payload):
-                log.error(f"[{self.name}] has 'payload_type: multipart' but payload does not include all required keys: {mapping_keys}")
         return copy.deepcopy(self.payload)
 
     def get_extract_keys(self):
@@ -2040,6 +2037,7 @@ class Endpoint:
 
         # Add standard form fields
         if data_payload:
+            print("data_payload:", data_payload)
             for key, value in data_payload.items():
                 form.add_field(name=key, value=str(value))
 
@@ -2076,11 +2074,10 @@ class Endpoint:
         preferred_content = self.get_preferred_content_type()
         if (payload_type == "multipart" or preferred_content.startswith("multipart/form-data")) \
             and input_data and not payload_map:
-            mapping_keys = {'json', 'data', 'params', 'files'}
-            if mapping_keys.issubset(input_data):
+            if input_data.get('files'):
                 payload_map = input_data
             else:
-                raise ValueError(f"[{self.name}] has 'payload_type: multipart' but payload does not include all required keys: {mapping_keys}")
+                raise ValueError(f"[{self.name}] has 'payload_type: multipart' but payload does not include 'files' key")
         # Use explicit payload map if given
         if payload_map:
             # Fully structured override
@@ -2088,7 +2085,7 @@ class Endpoint:
             data_payload = payload_map.get("data")
             params_payload = payload_map.get("params")
             files_payload = payload_map.get("files")
-            if files_payload and data_payload:
+            if files_payload:
                 data_payload = self.prepare_aiohttp_formdata(data_payload, files_payload)
                 json_payload = None
                 files_payload = None
@@ -2199,6 +2196,87 @@ class Endpoint:
 
         return results
 
+    async def upload_files(self, 
+                           input_data: Union[str, bytes, list[Union[str, bytes]], dict[str]],
+                           file_name:str = 'file.bin',
+                           file_obj_key:str = 'file',
+                           **kwargs):
+        import mimetypes
+        from modules.utils_misc import guess_format_from_data
+
+        input_datas:list = input_data if isinstance(input_data, list) else [input_data]
+        results_list = []
+
+        for item in input_datas:
+            # Initialize
+            file_obj = None
+            effective_filename = file_name
+            mime_type = "application/octet-stream"
+            should_close = False
+
+            if isinstance(item, dict):
+                # Support both 'bytes' and 'file_data' as data keys
+                data = item.get("bytes") or item.get("file_data")
+                file_path = item.get("file_path")
+                effective_filename = item.get("file_name", file_name)
+
+                if data:
+                    mime_type = guess_format_from_data(data, default="application/octet-stream")
+                    file_obj = io.BytesIO(data)
+                    file_obj.name = effective_filename
+                elif file_path:
+                    effective_filename = os.path.basename(file_path)
+                    mime_type = mimetypes.guess_type(effective_filename)[0] or "application/octet-stream"
+                    file_obj = open(file_path, "rb")
+                    should_close = True
+                else:
+                    raise ValueError("Dict input must contain 'bytes'/'file_data' or 'file_path'.")
+
+            # --- Handle raw bytes input ---
+            elif isinstance(item, bytes):
+                mime_type = guess_format_from_data(item, default="application/octet-stream")
+                file_obj = io.BytesIO(item)
+                file_obj.name = effective_filename
+
+            # --- Handle raw string (assumed to be file path) ---
+            elif isinstance(item, str):
+                effective_filename = os.path.basename(item)
+                mime_type = mimetypes.guess_type(effective_filename)[0] or "application/octet-stream"
+                file_obj = open(item, "rb")
+                should_close = True
+
+            else:
+                raise TypeError(f"Unsupported input type: {type(item)}. Must be str, bytes, dict, or list thereof.")
+
+            # Build file dict
+            file_dict = {"file": file_obj,
+                         "filename": effective_filename,
+                         "content_type": mime_type}
+
+            # Determine form field name
+            mime_category = mime_type.split("/")[0]
+            field_name = file_obj_key or mime_category
+
+            # Build payload
+            payload = {'data': {}, 'json': {}, 'params': {}}
+            payload.update(self.get_payload())
+            print("Updated payload:", payload)
+            payload["files"] = {field_name: file_dict}
+
+            path_vars = mime_category if '{}' in self.path else None
+            result = await self.call(payload_map=payload, path_vars=path_vars, **kwargs)
+            if isinstance(result, APIResponse):
+                results_list.append(result.body)
+            else:
+                results_list.append(result)
+
+            if should_close:
+                file_obj.close()
+
+        if len(results_list) == 1:
+            return results_list[0]
+
+        return results_list
 
     async def poll(self,
                    return_values: dict,
@@ -2372,7 +2450,7 @@ class TTSGenEndpoint_PostGenerate(TTSGenEndpoint):
             file_format = detect_audio_format(result)
             if file_format in ["mp3", "wav"]:
                 file_data = await processing.save_any_file(result, file_format=file_format, file_path='tts')
-                return file_data['path']
+                return file_data['file_path']
 
         return None
 
@@ -2468,13 +2546,6 @@ class ImgGenEndpoint_GetView(ImgGenEndpoint):
 class ImgGenEndpoint_PostUpload(ImgGenEndpoint):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-
-    async def upload_file(self, file, file_type:str):
-        mime_category = file_type.strip().lower().split('/')[0]
-        payload = self.get_payload()
-        payload['files'] = {mime_category: file}
-        path_vars = mime_category if '{}' in self.path else None
-        await self.call(payload_map=payload, path_vars=path_vars)
 
 class APIResponse:
     def __init__(

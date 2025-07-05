@@ -176,7 +176,7 @@ all_apis:
              path_vars: "{output_url}" # API call will return audio bytes
           - save:
               file_format: wav
-              returns: path
+              returns: file_path
   
   - name: Text Generation WebUI
     url: http://127.0.0.1:7861
@@ -185,6 +185,20 @@ all_apis:
     default_timeout: 60
     auth: null
     endpoints: []
+
+  # Example for uploading files
+  - name: GoFile
+    url: https://upload.gofile.io
+    enabled: false
+    default_headers: {Content-Type: application/json, Authorization: Bearer <**YOUR AUTH TOKEN**>}
+    endpoints:
+      - name: Upload
+        path: /uploadfile
+        method: POST
+        headers: {Content-Type: multipart/form-data}
+        payload_type: multipart
+        # payload:
+        #   data: {folderId: <**A SPECIFIC FOLDER ID**>} # Optional for this API
 
 # Create presets here which can be injected in any 'endpoint', or in any 'response_handling' / 'workflow' steps.
 presets:
