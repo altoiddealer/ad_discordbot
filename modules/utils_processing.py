@@ -18,6 +18,7 @@ from modules.utils_misc import extract_key, normalize_mime_type, guess_format_fr
 from modules.utils_shared import config, shared_path, get_api
 from modules.utils_discord import send_long_message
 from modules.apis import API, Endpoint, apisettings
+from discord import File
 
 from modules.logs import import_track, get_logger; import_track(__file__, fp=True); log = get_logger(__name__)  # noqa: E702
 logging = log
@@ -397,7 +398,6 @@ async def send_content_to_discord(task=None, ictx=None, text=None, audio=None, f
     text = task.extra_text if task else text
     audio = task.extra_audio if task else audio
     files = task.extra_files if task else files
-    from discord import File
     try:
         if text:
             # header = "**__Extra text__**:\n"
@@ -414,6 +414,7 @@ async def send_content_to_discord(task=None, ictx=None, text=None, audio=None, f
                     files.append(audio_fp)
 
         if files:
+            print("files:", files)
             if normalize:
                 files = normalize_file_inputs(files)
             small, large = files, None
@@ -427,7 +428,7 @@ async def send_content_to_discord(task=None, ictx=None, text=None, audio=None, f
                 if large and not isinstance(upload_large_files_ep, Endpoint):
                     log.error(f"The bot is configured to upload large files that exceed discord's 10MB limit, but endpoint '{expected_name}' was not found.")
                     small.extend(large)
-                    large = None                  
+                    large = None
 
             if small:
                 discord_files = [File(f["file_obj"], filename=f["filename"]) for f in small]
