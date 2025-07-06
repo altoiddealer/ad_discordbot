@@ -2958,7 +2958,7 @@ class Tasks(TaskProcessing):
         api_results = await endpoint.call(ictx=self.ictx, **formatted_payload)
         if api_results:
             self.check_for_send_content(api_results)
-            await send_content_to_discord(self, vc=voice_clients)
+            await bg_task_queue.put(send_content_to_discord(self, vc=voice_clients))
 
     def format_api_payload(self: "Task", api_payload: dict):
         def recursive_format(value):
@@ -2996,7 +2996,7 @@ class Tasks(TaskProcessing):
         workflow_results = await call_stepexecutor(task=self, **formatted_payload)
         if workflow_results:
             self.check_for_send_content(workflow_results)
-            await send_content_to_discord(self, vc=voice_clients)
+            await bg_task_queue.put(send_content_to_discord(self, vc=voice_clients))
 
     async def workflow_task(self:"Task"):
         workflow_config = getattr(self, 'workflow_config')
@@ -3032,7 +3032,7 @@ class Tasks(TaskProcessing):
             value = await call_stepexecutor(steps=main_steps, task=self, context=processed_params, prefix=f'Processing command "{cmd_name}" with ')
             await self.embeds.send('img_send', f'{self.user_name} used "/{cmd_name}"', f'Options: {", ".join(optname for optname in option_names)}')
             self.check_for_send_content(value)
-            await send_content_to_discord(self, vc=voice_clients)
+            await bg_task_queue.put(send_content_to_discord(self, vc=voice_clients))
         else:
             await self.embeds.send('img_send', f'{self.user_name} used "/{cmd_name}"', f'Options: {", ".join(optname for optname in option_names)}')
 
