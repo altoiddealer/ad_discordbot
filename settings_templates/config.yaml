@@ -2,6 +2,7 @@
 
 # Discord settings. Be sure to add your bot token to 'bot_token.yaml'
 discord:
+  # This setting is recommended if you configure the bot to generate large files via APIs. Needs additional config in 'dict_api_settings.yaml' (see 'misc_api_functions').
   upload_large_files: false
   # Feature for the bot to automatically react to messages to indicate special attributes in chat history (hidden, regenerated, continued, etc)
   history_reactions:

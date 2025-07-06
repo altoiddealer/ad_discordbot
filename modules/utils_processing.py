@@ -17,7 +17,7 @@ from typing import Any, Optional, Callable
 from modules.utils_misc import extract_key, normalize_mime_type, guess_format_from_headers, guess_format_from_data, is_base64, valueparser
 from modules.utils_shared import config, shared_path, get_api
 from modules.utils_discord import send_long_message
-from modules.apis import API
+from modules.apis import API, Endpoint, apisettings
 
 from modules.logs import import_track, get_logger; import_track(__file__, fp=True); log = get_logger(__name__)  # noqa: E702
 logging = log
@@ -277,7 +277,7 @@ def build_completion_condition(condition_config: dict, context_vars: dict = None
 
     return condition_func
 
-def split_files_by_size(normalized_files, max_discord_size=25 * 1024 * 1024):
+def split_files_by_size(normalized_files, max_discord_size=10 * 1024 * 1024):
     small_files = []
     large_files = []
 
@@ -421,8 +421,7 @@ async def send_content_to_discord(task=None, ictx=None, text=None, audio=None, f
             upload_large_files_ep = None
 
             api:API = await get_api()
-            from modules.apis import Endpoint, apisettings
-            if config.get('upload_large_files', False) and api.upload_large_files and api.upload_large_files.get('enabled', False):
+            if config.discord.get('upload_large_files', False) and api.upload_large_files and api.upload_large_files.enabled:
                 expected_name = apisettings.misc_settings.get('upload_large_files', {}).get('post_upload', {}).get('endpoint_name', "(UNDEFINED)")
                 upload_large_files_ep = api.upload_large_files.endpoints.get(expected_name)
                 small, large = split_files_by_size(normalized)
@@ -439,7 +438,10 @@ async def send_content_to_discord(task=None, ictx=None, text=None, audio=None, f
                     await ictx.channel.send(files=discord_files)
 
             if large and isinstance(upload_large_files_ep, Endpoint):
-                await upload_large_files_ep.upload_files(normalized_inputs=large)
+                url_strings:list = await upload_large_files_ep.upload_files(normalized_inputs=large)
+                uploaded_files_msg = ''
+                uploaded_files_msg = '\n'.join(f"**Uploaded file** (exceeds discord's 10MB limit): <{url}>" for url in url_strings)
+                await send_long_message(ictx.channel, uploaded_files_msg)
 
     except Exception as e:
         log.error(f"An error occurred while trying to send extra results: {e}")

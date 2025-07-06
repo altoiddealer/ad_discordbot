@@ -207,7 +207,7 @@ all_apis:
         # payload:
         #   data: {folderId: <**A SPECIFIC FOLDER ID**>} # Optional for this API
         response_handling:
-          - extract_key: data.downloadPage
+          - extract_key: data.downloadPage # Gets the download link ('data': {'downloadPage': <the URL>,...})
 
 # Create presets here which can be injected in any 'endpoint', or in any 'response_handling' / 'workflow' steps.
 presets:
