@@ -136,6 +136,22 @@ class APISettings():
 
 apisettings = APISettings()
 
+def validate_misc_function(func_key:str, client:"APIClient"):
+    config_block = apisettings.get_config_for('misc_api_functions', {})
+    func_cfg = config_block.get(func_key, {})
+    for task_key, task_cfg in func_cfg.items():
+        if not isinstance(task_cfg, dict):
+            continue
+        ep_name = task_cfg.get("endpoint_name")
+        if ep_name:
+            endpoint = client.endpoints.get(ep_name)
+            if not endpoint:
+                log.warning(f"Endpoint '{ep_name}' not found for {func_key}.{task_key}")
+                continue
+            for k, v in task_cfg.items():
+                if k != "endpoint_name":
+                    setattr(endpoint, f"_{k}", v)
+
 # Mapping keywords to ImgGenClient subclasses
 def get_imggen_client_map():
     return [(["comfy"], ImgGenClient_Comfy, "ComfyUI"),
@@ -210,9 +226,6 @@ class API:
         misc_api_name_map = {v.get("api_name"): k for k, v in apisettings.misc_settings.items()
                             if isinstance(v, dict) and v.get("api_name")}
         
-        # Misc function bindings (non-main)
-        upload_large_files_name = apisettings.misc_settings.get("upload_large_files", {}).get('api_name')
-        
         check_clients_online = []
 
         # Iterate over all APIs data
@@ -261,6 +274,7 @@ class API:
                 if misc_func_key:
                     setattr(self, misc_func_key, api_client)
                     log.info(f"Registered misc API function '{misc_func_key}': {name}")
+                    validate_misc_function(misc_func_key, api_client)
                 if hasattr(api_client, 'is_online'):
                     check_clients_online.append(api_client.is_online())
                 # Collect setup tasks
@@ -359,6 +373,23 @@ class API:
                         return ep, config
         # Not found
         return None, config
+
+    def get_misc_function_endpoint(self, func_key: str, task_key: str) -> Union["Endpoint", None]:
+        """
+        Safely fetch an attribute from a misc function's task endpoint.
+
+        Special case: attr="endpoint" returns the Endpoint instance itself.
+        """
+        client: APIClient = getattr(self, func_key, None)
+        if not client or not isinstance(client, APIClient):
+            return
+
+        config_block = apisettings.get_config_for('misc_api_functions', {})
+        task_cfg = config_block.get(func_key, {}).get(task_key, {})
+        ep_name = task_cfg.get("endpoint_name")
+
+        if ep_name:
+            return client.endpoints.get(ep_name)
 
 
 class WebSocketConnectionConfig:
@@ -2229,7 +2260,7 @@ class Endpoint:
                          "content_type": mime_type}
 
             mime_category = mime_type.split("/")[0]
-            field_name = file_obj_key or mime_category
+            field_name = getattr(self, '_file_key', None) or file_obj_key or mime_category
 
             payload = self.get_payload()
             payload['files'] = {field_name: file_dict}

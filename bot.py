@@ -42,7 +42,7 @@ from modules.utils_shared import client, TOKEN, is_tgwui_integrated, shared_path
 from modules.database import StarBoard, Statistics, BaseFileMemory
 from modules.utils_misc import check_probability, fix_dict, set_key, deep_merge, update_dict, sum_update_dict, random_value_from_range, convert_lists_to_tuples, \
     consolidate_prompt_strings, get_time, format_time, format_time_difference, get_normalized_weights, guess_format_from_data, valueparser  # noqa: F401
-from modules.utils_processing import resolve_placeholders, resolve_content_to_send, send_content_to_discord
+from modules.utils_processing import resolve_placeholders, collect_content_to_send, send_content_to_discord
 from modules.utils_discord import Embeds, guild_only, guild_or_owner_only, configurable_for_dm_if, is_direct_message, ireply, sleep_delete_message, send_long_message, \
     EditMessageModal, SelectedListItem, SelectOptionsView, get_user_ctx_inter, get_message_ctx_inter, apply_reactions_to_messages, replace_msg_in_history_and_discord, MAX_MESSAGE_LENGTH, muffled_send  # noqa: F401
 from modules.utils_aspect_ratios import ar_parts_from_dims, dims_from_ar, avg_from_dims, get_aspect_ratio_parts, calculate_aspect_ratio_sizes  # noqa: F401
@@ -1227,7 +1227,7 @@ class TaskProcessing(TaskAttributes):
         await bg_task_queue.put(send_content_to_discord(self, vc=voice_clients))
 
     def check_for_send_content(self: Union["Task", "Tasks"], api_results):
-        processed_results = resolve_content_to_send(api_results)
+        processed_results = collect_content_to_send(api_results)
         self.extra_text.extend(processed_results['text'])
         self.extra_audio.extend(processed_results['audio'])
         self.extra_files.extend(processed_results['files'])

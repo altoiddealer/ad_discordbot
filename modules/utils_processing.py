@@ -348,45 +348,56 @@ def normalize_file_inputs(input_data) -> list[dict]:
 
     return normalized
 
-def resolve_content_to_send(all_content) -> dict:
+def collect_content_to_send(all_content) -> dict:
     resolved_content = {'text': [],
                         'audio': [],
                         'files': []}
 
+    def add_file(item):
+        if isinstance(item, Path):
+            resolved_content['files'].append(str(item))
+        elif isinstance(item, (str, bytes, io.BytesIO)):
+            resolved_content['files'].append(item)
+        elif isinstance(item, dict) and ('file_path' in item or \
+                                        (('file_data' in item or 'bytes' in item) and 'file_name' in item)):
+            resolved_content['files'].append(item)
+
     def sort_content(content):
-        if not isinstance(content, str):
-            log.warning('Cannot send content to Discord (bot currently only supports string, or list of strings)')
-            return
-        target_path = Path(content)
-        if not target_path.is_absolute():
-            try_paths = [shared_path.dir_user / target_path,
-                         shared_path.output_dir / target_path]
-            for path in try_paths:
-                if path.exists():
-                    target_path = path
-                    break
+        # Handle strings and Path objects as potential file paths
+        if isinstance(content, (str, Path)):
+            target_path = Path(content)
+            if not target_path.is_absolute():
+                try_paths = [shared_path.dir_user / target_path,
+                             shared_path.output_dir / target_path]
+                for path in try_paths:
+                    if path.exists():
+                        target_path = path
+                        break
 
-        # If path is a file
-        if target_path.exists():
-            target_path = target_path.resolve()
-
-            if target_path.is_file():
-                filepath = str(target_path)
+            if target_path.exists() and target_path.is_file():
+                filepath = str(target_path.resolve())
                 if target_path.suffix.lower() in [".mp3", ".wav"]:
                     resolved_content['audio'].append(filepath)
                 else:
                     resolved_content['files'].append(filepath)
             else:
-                log.error(f'File not found to send to discord: {target_path}')
-                return
-        else:
-            # Text to send to channel
-            resolved_content['text'].append(content)
+                if isinstance(content, str):
+                    resolved_content['text'].append(content)
+                else:
+                    log.warning(f"Unresolved Path object: {content}")
 
-    if isinstance(all_content, str):
-        sort_content(all_content)
-    elif isinstance(all_content, list):
-        for item in all_content:
+        elif isinstance(content, (bytes, io.BytesIO)):
+            add_file(content)
+
+        elif isinstance(content, dict):
+            add_file(content)
+
+        else:
+            log.warning(f"Unsupported content type: {type(content).__name__}")
+
+    all_content = [all_content] if not isinstance(all_content, list) else all_content
+    for item in all_content:
+        if isinstance(item, (str, bytes, io.BytesIO, dict, Path)):
             sort_content(item)
 
     return resolved_content
@@ -414,7 +425,6 @@ async def send_content_to_discord(task=None, ictx=None, text=None, audio=None, f
                     files.append(audio_fp)
 
         if files:
-            print("files:", files)
             if normalize:
                 files = normalize_file_inputs(files)
             small, large = files, None
@@ -423,7 +433,8 @@ async def send_content_to_discord(task=None, ictx=None, text=None, audio=None, f
             api:API = await get_api()
             if config.discord.get('upload_large_files', False) and api.upload_large_files and api.upload_large_files.enabled:
                 expected_name = apisettings.misc_settings.get('upload_large_files', {}).get('post_upload', {}).get('endpoint_name', "(UNDEFINED)")
-                upload_large_files_ep = api.upload_large_files.endpoints.get(expected_name)
+                upload_large_files_ep = api.get_misc_function_endpoint(func_key="upload_large_files",
+                                                                       task_key="post_upload")
                 small, large = split_files_by_size(files)
                 if large and not isinstance(upload_large_files_ep, Endpoint):
                     log.error(f"The bot is configured to upload large files that exceed discord's 10MB limit, but endpoint '{expected_name}' was not found.")

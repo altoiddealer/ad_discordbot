@@ -76,12 +76,13 @@ bot_api_functions:
       language_input_key: language # input key for the language. ex: payload = {'language': 'English', ...}
       voice_input_key: character_voice_gen  # input key for the voice. ex: payload = {'voice': 'Female01.wav', ...}
 
-# More bot functions which require designated clients / endpoints
+# More bot functions which require designated clients / endpoints.
 misc_api_functions:
-  # If enabled and configured, the bot will automatically upload files >10MB instead of attempting to send them (which discord will refuse)
   upload_large_files:
     api_name: GoFile
-    post_upload: {endpoint_name: Post Upload}
+    post_upload:
+      endpoint_name: Post Upload
+      file_key: file
 
 all_apis:
   # You may define any number of APIs and Endpoints here (a list of dictionaries), making them available to use for various bot functions,

@@ -471,7 +471,7 @@ class StepExecutor:
             log.error("[StepExecutor] Step 'send_content' did not receive valid content (must be string or list of strings)")
             return None
 
-        resolved_content = processing.resolve_content_to_send(config)
+        resolved_content = processing.collect_content_to_send(config)
         await processing.send_content_to_discord(ictx=self.ictx, **resolved_content)
         return None
 
