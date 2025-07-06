@@ -729,7 +729,7 @@ class VoiceClients:
                 guild_vc.resume()
                 log.info(f"Audio playback resumed in guild {guild_id}")
 
-    async def upload_audio_file(self, channel: discord.TextChannel, audio_fp: str, bot_hmessage: HMessage | None = None):
+    async def upload_audio_file(self, ictx:CtxInteraction, audio_fp: str):
         bit_rate = int(config.ttsgen.get('mp3_bit_rate', 128))
         ext = os.path.splitext(audio_fp)[1].lower()
         buffer = io.BytesIO()
@@ -749,6 +749,7 @@ class VoiceClients:
             else:
                 log.error(f"Unsupported audio format for upload: {audio_fp}")
                 return
+
             # Make a normalized file dict
             file_info = {"file_obj": buffer,
                          "filename": mp3_filename,
@@ -756,10 +757,7 @@ class VoiceClients:
                          "file_size": len(buffer.getbuffer()),
                          "should_close": False}
 
-            await send_content_to_discord(ictx=None, text=None, files=[file_info], vc=None, normalize=False)
-
-            if bot_hmessage:
-                bot_hmessage.update(audio_id=None)
+            await send_content_to_discord(ictx=ictx, text=None, files=[file_info], vc=None, normalize=False)
 
         except Exception as e:
             log.error(f"Failed to upload audio file '{audio_fp}': {e}")
@@ -768,7 +766,7 @@ class VoiceClients:
         play_mode = int(config.ttsgen.get('play_mode', 0))
         # Upload to interaction channel
         if play_mode > 0:
-            await self.upload_audio_file(ictx.channel, audio_fp, bot_hmessage)
+            await self.upload_audio_file(ictx, audio_fp)
         # Play in voice channel
         is_connected = self.guild_vcs.get(ictx.guild.id)
         if is_connected and play_mode != 1 and not is_direct_message(ictx):
