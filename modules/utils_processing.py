@@ -426,7 +426,7 @@ async def send_content_to_discord(task=None, ictx=None, text=None, audio=None, f
                 upload_large_files_ep = api.upload_large_files.endpoints.get(expected_name)
                 small, large = split_files_by_size(normalized)
                 if large and not isinstance(upload_large_files_ep, Endpoint):
-                    log.error(f"The bot is configured to upload large files that exceed discord's 25MB limit, but endpoint '{expected_name}' was not found.")
+                    log.error(f"The bot is configured to upload large files that exceed discord's 10MB limit, but endpoint '{expected_name}' was not found.")
                     small.extend(large)
                     large = None                  
 

@@ -23,6 +23,7 @@ logging = log
 class APISettings():
     def __init__(self):
         self.main_settings:dict = {}
+        self.misc_settings:dict = {}
         self.presets:dict = {}
         self.workflows:dict = {}
 
@@ -126,7 +127,7 @@ class APISettings():
     def collect_settings(self, data:dict):
         # Collect Main APIs
         self.main_settings = data.get('bot_api_functions', {})
-        # Collect Main APIs
+        # Collect Misc API function assignments
         self.misc_settings = data.get('misc_api_functions', {})
         # Collect Response Handling Presets
         self.collect_presets(data.get('presets', {}))
@@ -203,13 +204,14 @@ class API:
         # Main APIs / Presets / Workflows
         apisettings.collect_settings(data)
 
-        # Reverse lookup for matching API names to their function type
+        # Reverse lookups for matching API names to their function types
         main_api_name_map = {v.get("api_name"): k for k, v in apisettings.main_settings.items()
                              if isinstance(v, dict) and v.get("api_name")}
+        misc_api_name_map = {v.get("api_name"): k for k, v in apisettings.misc_settings.items()
+                            if isinstance(v, dict) and v.get("api_name")}
         
         # Misc function bindings (non-main)
         upload_large_files_name = apisettings.misc_settings.get("upload_large_files", {}).get('api_name')
-        print("upload_large_files_name:", upload_large_files_name)
         
         check_clients_online = []
 
@@ -254,10 +256,11 @@ class API:
                 if is_main:
                     setattr(self, api_func_type, api_client)
                     log.info(f"Registered main {api_func_type} client: {name}")
-                # Handle upload_files assignment
-                if name == upload_large_files_name:
-                    self.upload_large_files = api_client
-                    log.info(f"Registered upload_large_files client: {name}")
+                # Check if this API client corresponds to a misc function
+                misc_func_key = misc_api_name_map.get(name)
+                if misc_func_key:
+                    setattr(self, misc_func_key, api_client)
+                    log.info(f"Registered misc API function '{misc_func_key}': {name}")
                 if hasattr(api_client, 'is_online'):
                     check_clients_online.append(api_client.is_online())
                 # Collect setup tasks
