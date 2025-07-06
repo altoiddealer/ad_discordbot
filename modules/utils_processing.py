@@ -14,7 +14,7 @@ from pydub import AudioSegment
 import io
 import mimetypes
 from typing import Any, Optional, Callable
-from modules.utils_misc import extract_key, normalize_mime_type, guess_format_from_headers, guess_format_from_data, is_base64, valueparser
+from modules.utils_misc import extract_key, normalize_mime_type, guess_format_from_headers, guess_format_from_data, is_base64
 from modules.utils_shared import config, shared_path, get_api
 from modules.utils_discord import send_long_message
 from modules.apis import API, Endpoint, apisettings
@@ -289,23 +289,21 @@ def split_files_by_size(normalized_files, max_discord_size=10 * 1024 * 1024):
 
     return small_files, large_files
 
-def normalize_file_inputs(input_data, default_filename='file.bin') -> list[dict]:
-    from modules.utils_misc import guess_format_from_data
-
+def normalize_file_inputs(input_data) -> list[dict]:
     input_list = input_data if isinstance(input_data, list) else [input_data]
     normalized = []
 
     for item in input_list:
         file_obj = None
         should_close = False
-        filename = default_filename
+        filename = 'file.bin'
         mime_type = 'application/octet-stream'
         file_size = None
 
         if isinstance(item, dict):
             data = item.get("bytes") or item.get("file_data")
             file_path = item.get("file_path")
-            filename = item.get("file_name", default_filename)
+            filename = item.get("file_name", filename)
 
             if data:
                 mime_type = guess_format_from_data(data, default="application/octet-stream")
@@ -392,7 +390,7 @@ def resolve_content_to_send(all_content) -> dict:
 
     return resolved_content
 
-async def send_content_to_discord(task=None, ictx=None, text=None, audio=None, files=None, vc=None):
+async def send_content_to_discord(task=None, ictx=None, text=None, audio=None, files=None, vc=None, normalize=True):
     ictx = task.ictx if task else ictx
     if not ictx:
         raise RuntimeError('A discord interaction is required for send_context_to_discord()')
@@ -416,15 +414,16 @@ async def send_content_to_discord(task=None, ictx=None, text=None, audio=None, f
                     files.append(audio_fp)
 
         if files:
-            normalized = normalize_file_inputs(files)
-            small, large = normalized, None
+            if normalize:
+                files = normalize_file_inputs(files)
+            small, large = files, None
             upload_large_files_ep = None
 
             api:API = await get_api()
             if config.discord.get('upload_large_files', False) and api.upload_large_files and api.upload_large_files.enabled:
                 expected_name = apisettings.misc_settings.get('upload_large_files', {}).get('post_upload', {}).get('endpoint_name', "(UNDEFINED)")
                 upload_large_files_ep = api.upload_large_files.endpoints.get(expected_name)
-                small, large = split_files_by_size(normalized)
+                small, large = split_files_by_size(files)
                 if large and not isinstance(upload_large_files_ep, Endpoint):
                     log.error(f"The bot is configured to upload large files that exceed discord's 10MB limit, but endpoint '{expected_name}' was not found.")
                     small.extend(large)

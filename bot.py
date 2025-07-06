@@ -729,50 +729,40 @@ class VoiceClients:
                 guild_vc.resume()
                 log.info(f"Audio playback resumed in guild {guild_id}")
 
-    def detect_format(self, file_path):
-        try:
-            audio = AudioSegment.from_wav(file_path)
-            return 'wav'
-        except:
-            pass  
-        try:
-            audio = AudioSegment.from_mp3(file_path)
-            return 'mp3'
-        except:
-            pass
-        return None
-
-    async def upload_audio_file(self, channel:discord.TextChannel, audio_fp:str, bot_hmessage:HMessage|None=None):
-        file = audio_fp
-        filename = os.path.basename(file)
-        original_ext = os.path.splitext(filename)[1]
-        correct_ext = original_ext
-        detected_format = self.detect_format(file)
-        if detected_format is None:
-            raise ValueError(f"Could not determine the audio file format for file: {file}")
-        if original_ext != f'.{detected_format}':
-            correct_ext = f'.{detected_format}'
-            new_filename = os.path.splitext(filename)[0] + correct_ext
-            new_file_path = os.path.join(os.path.dirname(file), new_filename)
-            os.rename(file, new_file_path)
-            file = new_file_path
-
-        mp3_filename = os.path.splitext(filename)[0] + '.mp3'
-        
+    async def upload_audio_file(self, channel: discord.TextChannel, audio_fp: str, bot_hmessage: HMessage | None = None):
         bit_rate = int(config.ttsgen.get('mp3_bit_rate', 128))
-        with io.BytesIO() as buffer:
-            if file.endswith('wav'):
-                audio = AudioSegment.from_wav(file)
-            elif file.endswith('mp3'):
-                audio = AudioSegment.from_mp3(file)
+        ext = os.path.splitext(audio_fp)[1].lower()
+        buffer = io.BytesIO()
+        mp3_filename = os.path.splitext(os.path.basename(audio_fp))[0] + '.mp3'
+
+        try:
+            if ext == '.wav':
+                audio = AudioSegment.from_wav(audio_fp)
+                audio.export(buffer, format="mp3", bitrate=f"{bit_rate}k")
+                buffer.seek(0)
+
+            elif ext == '.mp3':
+                with open(audio_fp, 'rb') as f:
+                    buffer.write(f.read())
+                buffer.seek(0)
+
             else:
-                log.error('Recieved invalid audio file format:', file)
-            audio.export(buffer, format="mp3", bitrate=f"{bit_rate}k")
-            mp3_file = File(buffer, filename=mp3_filename)
-            
-            sent_message = await channel.send(file=mp3_file)
-            # if bot_hmessage:
-            #     bot_hmessage.update(audio_id=sent_message.id)
+                log.error(f"Unsupported audio format for upload: {audio_fp}")
+                return
+            # Make a normalized file dict
+            file_info = {"file_obj": buffer,
+                         "filename": mp3_filename,
+                         "mime_type": "audio/mpeg",
+                         "file_size": len(buffer.getbuffer()),
+                         "should_close": False}
+
+            await send_content_to_discord(ictx=None, text=None, files=[file_info], vc=None, normalize=False)
+
+            if bot_hmessage:
+                bot_hmessage.update(audio_id=None)
+
+        except Exception as e:
+            log.error(f"Failed to upload audio file '{audio_fp}': {e}")
 
     async def process_audio_file(self, ictx:CtxInteraction, audio_fp:str, bot_hmessage:Optional[HMessage]=None):
         play_mode = int(config.ttsgen.get('play_mode', 0))
