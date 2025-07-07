@@ -3847,6 +3847,8 @@ class Task(Tasks):
         '''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
         self.name: str = name
         self.ictx: CtxInteraction = ictx
+        self._semaphore:Optional[asyncio.Semaphore] = None
+        self._semaphore_released: bool = False
         # TaskQueue() will initialize the Task's values before it is processed
         self.channel: discord.TextChannel = kwargs.pop('channel', None)
         self.user: Union[discord.User, discord.Member] = kwargs.pop('user', None)
@@ -3976,6 +3978,11 @@ class Task(Tasks):
         self.vars.update(self.ictx)
         self.vars.prompt = self.prompt
         self.vars.neg_prompt = self.neg_prompt
+
+    def release_semaphore(self):
+        if not self._semaphore_released:
+            self._semaphore_released = True
+            self._semaphore.release()
 
     def init_typing(self, start_time=None, end_time=None):
         '''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
@@ -4223,6 +4230,7 @@ class TaskManager:
 
     async def run_and_cleanup(self, qt: QueuedTask, sem: asyncio.Semaphore, channel_id: Optional[int] = None):
         task = qt.task
+        task._semaphore = sem
         queue_name = qt.queue_name
 
         try:
@@ -4247,10 +4255,11 @@ class TaskManager:
             logging.error(f"Error running task {task.name}: {e}")
             traceback.print_exc()
         finally:
-            self.active_queues.discard(queue_name)
-            sem.release()
-            if channel_id is not None:
-                self.locked_channels.discard(channel_id)
+            if not task._semaphore_released:
+                self.active_queues.discard(queue_name)
+                sem.release()
+                if channel_id is not None:
+                    self.locked_channels.discard(channel_id)
             task_event.clear()
 
     async def run_task(self, task: 'Task'):

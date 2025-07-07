@@ -40,6 +40,7 @@ examples:
           name: WAN image vid to vid
           input_data: null
           context: "{context}"
+      - offload: true # Release the Task from whatever queue it is in. In this case it may upload files (time consuming) before sending results to discord
 
   - command_name: send_file
     description: Send an attachment

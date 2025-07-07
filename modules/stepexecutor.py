@@ -235,6 +235,13 @@ class StepExecutor:
         results = await asyncio.gather(*tasks)
         return results
 
+    def _step_offload(self, data: Any, config: Any):
+        if self.task:
+            self.task.release_semaphore()
+        else:
+            log.warning('[StepExecutor] step "offload" had no effect because current execution is not part of a "Task"')
+        return data
+
     def _step_pass(self, data: Any, config: Any):
         return data
     
