@@ -375,17 +375,13 @@ class API:
         return None, config
 
     def get_misc_function_endpoint(self, func_key: str, task_key: str) -> Union["Endpoint", None]:
-        """
-        Safely fetch an attribute from a misc function's task endpoint.
-
-        Special case: attr="endpoint" returns the Endpoint instance itself.
-        """
+        """Safely fetch an endpoint for a misc function"""
         client: APIClient = getattr(self, func_key, None)
-        if not client or not isinstance(client, APIClient):
+        if not isinstance(client, APIClient):
             return
 
-        config_block = apisettings.get_config_for('misc_api_functions', {})
-        task_cfg = config_block.get(func_key, {}).get(task_key, {})
+        misc_settings = apisettings.misc_settings
+        task_cfg = misc_settings.get(func_key, {}).get(task_key, {})
         ep_name = task_cfg.get("endpoint_name")
 
         if ep_name:

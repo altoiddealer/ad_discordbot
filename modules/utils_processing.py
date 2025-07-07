@@ -290,14 +290,13 @@ def split_files_by_size(normalized_files, max_discord_size=10 * 1024 * 1024):
 
     return small_files, large_files
 
-def normalize_file_inputs(input_data) -> list[dict]:
+def normalize_file_inputs(input_data, filename:str='file.bin') -> list[dict]:
     input_list = input_data if isinstance(input_data, list) else [input_data]
     normalized = []
 
     for item in input_list:
         file_obj = None
         should_close = False
-        filename = 'file.bin'
         mime_type = 'application/octet-stream'
         file_size = None
 
@@ -309,7 +308,7 @@ def normalize_file_inputs(input_data) -> list[dict]:
             if data:
                 mime_type = guess_format_from_data(data, default="application/octet-stream")
                 file_obj = io.BytesIO(data)
-                file_obj.name = filename  # ✅ safe to assign for BytesIO
+                file_obj.name = filename
                 file_size = len(data)
 
             elif file_path:
@@ -325,7 +324,7 @@ def normalize_file_inputs(input_data) -> list[dict]:
         elif isinstance(item, bytes):
             mime_type = guess_format_from_data(item, default="application/octet-stream")
             file_obj = io.BytesIO(item)
-            file_obj.name = filename  # ✅ safe for BytesIO
+            file_obj.name = filename
             file_size = len(item)
 
         elif isinstance(item, str):
@@ -426,18 +425,18 @@ async def send_content_to_discord(task=None, ictx=None, text=None, audio=None, f
 
         if files:
             if normalize:
+                # NOTE: bytes + BytesIO objects will fail unless provided in a dict including file_name
                 files = normalize_file_inputs(files)
             small, large = files, None
             upload_large_files_ep = None
 
             api:API = await get_api()
             if config.discord.get('upload_large_files', False) and api.upload_large_files and api.upload_large_files.enabled:
-                expected_name = apisettings.misc_settings.get('upload_large_files', {}).get('post_upload', {}).get('endpoint_name', "(UNDEFINED)")
                 upload_large_files_ep = api.get_misc_function_endpoint(func_key="upload_large_files",
                                                                        task_key="post_upload")
                 small, large = split_files_by_size(files)
                 if large and not isinstance(upload_large_files_ep, Endpoint):
-                    log.error(f"The bot is configured to upload large files that exceed discord's 10MB limit, but endpoint '{expected_name}' was not found.")
+                    log.error(f"The bot is configured to upload large files that exceed discord's 10MB limit, but endpoint was not found.")
                     small.extend(large)
                     large = None
 
@@ -450,8 +449,8 @@ async def send_content_to_discord(task=None, ictx=None, text=None, audio=None, f
 
             if large and isinstance(upload_large_files_ep, Endpoint):
                 url_strings:list = await upload_large_files_ep.upload_files(normalized_inputs=large)
-                uploaded_files_msg = ''
-                uploaded_files_msg = '\n'.join(f"**Uploaded file** (exceeds discord's 10MB limit): <{url}>" for url in url_strings)
+                uploaded_files_msg = "**__Uploaded files exceeding Discord 10MB limit:__**\n"
+                uploaded_files_msg += '\n'.join(f"<{url}>" for url in url_strings)
                 await send_long_message(ictx.channel, uploaded_files_msg)
 
     except Exception as e:
