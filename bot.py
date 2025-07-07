@@ -2994,35 +2994,41 @@ class Tasks(TaskProcessing):
     ###################### USER COMMAND TASK ########################
     #################################################################
     async def custom_command_task(self:"Task"):
-        custom_cmd_config:dict = getattr(self, 'custom_cmd_config')
-        # Unpack config
-        cmd_name:dict = custom_cmd_config['custom_cmd_name']
-        selections:dict = custom_cmd_config['custom_cmd_selections']
-        options_meta:dict = custom_cmd_config['custom_cmd_option_meta']
-        main_steps:dict = custom_cmd_config['custom_cmd_steps']
+        try:
+            custom_cmd_config:dict = getattr(self, 'custom_cmd_config')
+            # Unpack config
+            cmd_name:dict = custom_cmd_config['custom_cmd_name']
+            selections:dict = custom_cmd_config['custom_cmd_selections']
+            options_meta:dict = custom_cmd_config['custom_cmd_option_meta']
+            main_steps:dict = custom_cmd_config['custom_cmd_steps']
 
-        # Process each option value with StepExecutor if steps are defined
-        processed_params = {}
-        option_names = [] # names for logging
-        for meta in options_meta:
-            name = meta["name"]
-            value = selections.get(name)
-            if value is None:
-                continue  # Skip optional inputs not provided
-            option_names.append(name)
-            steps = meta.get("steps")
-            if steps:
-                value = await call_stepexecutor(steps=steps, input_data=value, task=self, prefix=f'Pre-processing results of cmd option "{name}" with ')
-            processed_params[name] = value
+            # Process each option value with StepExecutor if steps are defined
+            processed_params = {}
+            option_names = [] # names for logging
+            for meta in options_meta:
+                name = meta["name"]
+                value = selections.get(name)
+                if value is None:
+                    continue  # Skip optional inputs not provided
+                option_names.append(name)
+                steps = meta.get("steps")
+                if steps:
+                    value = await call_stepexecutor(steps=steps, input_data=value, task=self, prefix=f'Pre-processing results of cmd option "{name}" with ')
+                processed_params[name] = value
 
-        # Run the command's main steps if defined
-        if main_steps:
-            value = await call_stepexecutor(steps=main_steps, task=self, context=processed_params, prefix=f'Processing command "{cmd_name}" with ')
-            await self.embeds.send('img_send', f'{self.user_name} used "/{cmd_name}"', f'Options: {", ".join(optname for optname in option_names)}')
-            self.check_for_send_content(value)
-            await bg_task_queue.put(send_content_to_discord(self, vc=voice_clients))
-        else:
-            await self.embeds.send('img_send', f'{self.user_name} used "/{cmd_name}"', f'Options: {", ".join(optname for optname in option_names)}')
+            # Run the command's main steps if defined
+            if main_steps:
+                value = await call_stepexecutor(steps=main_steps, task=self, context=processed_params, prefix=f'Processing command "{cmd_name}" with ')
+                await self.embeds.send('img_send', f'{self.user_name} used "/{cmd_name}"', f'Options: {", ".join(optname for optname in option_names)}')
+                self.check_for_send_content(value)
+                await bg_task_queue.put(send_content_to_discord(self, vc=voice_clients))
+            else:
+                await self.embeds.send('img_send', f'{self.user_name} used "/{cmd_name}"', f'Options: {", ".join(optname for optname in option_names)}')
+        except Exception as e:
+            e_msg = f'An error occurred while processing "/{cmd_name}"'
+            log.error(f'{e_msg}: {e}')
+            await self.ictx.followup.send(f'{e_msg} \n> {e}', ephemeral=True)
+            raise
 
     #################################################################
     ######################### CONTINUE TASK #########################
@@ -3131,8 +3137,9 @@ class Tasks(TaskProcessing):
         except Exception as e:
             e_msg = 'An error occurred while processing "Continue"'
             log.error(f'{e_msg}: {e}')
-            await self.ictx.followup.send(e_msg, silent=True)
+            await self.ictx.followup.send(f'{e_msg} \n> {e}', silent=True)
             await self.embeds.delete('continue') # delete embed
+            raise
 
     #################################################################
     ####################### REGENERATE TASK #########################
@@ -3254,11 +3261,11 @@ class Tasks(TaskProcessing):
             await self.embeds.delete('regenerate')
             raise
         except Exception as e:
-            print(traceback.format_exc())
             e_msg = 'An error occurred while processing "Regenerate"'
             log.error(f'{e_msg}: {e}')
-            await self.ictx.followup.send(e_msg, silent=True)
+            await self.ictx.followup.send(f'{e_msg} \n> {e}', silent=True)
             await self.embeds.delete('regenerate')
+            raise
 
     #################################################################
     ################# HIDE OR REVEAL HISTORY TASK ###################

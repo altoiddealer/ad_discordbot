@@ -454,7 +454,12 @@ async def send_content_to_discord(task=None, ictx=None, text=None, audio=None, f
                 await send_long_message(ictx.channel, uploaded_files_msg)
 
     except Exception as e:
-        log.error(f"An error occurred while trying to send extra results: {e}")
+        error_message = str(e)
+        if "413 Payload Too Large" in error_message or "Request entity too large" in error_message:
+            log.error("Failed to send files to discord because payload too large. Consider enabling/configuring the 'upload_large_files' feature.")
+        else:
+            log.error(f"An error occurred while trying to send extra results: {error_message}")
+        raise
 
 def decode_base64(data, _config=None):
     return base64.b64decode(data) if isinstance(data, str) else data
