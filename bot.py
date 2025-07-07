@@ -3980,7 +3980,7 @@ class Task(Tasks):
         self.vars.neg_prompt = self.neg_prompt
 
     def release_semaphore(self):
-        if not self._semaphore_released:
+        if self._semaphore and not self._semaphore_released:
             self._semaphore_released = True
             self._semaphore.release()
 
