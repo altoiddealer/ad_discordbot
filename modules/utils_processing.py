@@ -12,10 +12,14 @@ from datetime import datetime
 from pathlib import Path
 from pydub import AudioSegment
 import io
-from typing import Any, Optional, Callable
-from modules.utils_misc import extract_key, normalize_mime_type, guess_format_from_headers, guess_format_from_data, is_base64, valueparser
-from modules.utils_shared import config, shared_path
+import mimetypes
+from typing import Any, Union, Optional, Callable
+from modules.utils_misc import extract_key, normalize_mime_type, guess_format_from_headers, guess_format_from_data, is_base64
+from modules.utils_shared import config, shared_path, get_api
 from modules.utils_discord import send_long_message
+from modules.apis import API, Endpoint, apisettings
+from discord import File
+from modules.typing import CtxInteraction, FILE_INPUT, FILE_LIST
 
 from modules.logs import import_track, get_logger; import_track(__file__, fp=True); log = get_logger(__name__)  # noqa: E702
 logging = log
@@ -26,18 +30,31 @@ async def save_any_file(data: Any,
                         file_path:str='',
                         use_timestamp:bool=True,
                         response = None,
-                        msg_prefix:str = ''):
+                        msg_prefix:str = '',
+                        overwrite:bool = False):
     """
     Save input data to a file and returns dict.
 
-    - file_format: Explicit format (e.g. 'json', 'jpg').
+    Arguments:
+    - file_format Explicit format (e.g. 'json', 'jpg').
     - file_name: Optional file name (without extension).
     - file_path: Relative directory inside output_dir.
     - response: optional APIResponse object (if data type is APIResponse.body)
     - msg_prefix: to prefix logging messages
+
+    Returns dict containing:
+    - file_path: full file path string
+    - file_format: format without leading period
+    - file_name: file name including extension
+    - file_data: original or decoded data when applicable
     """
     from modules.apis import APIResponse
     response:Optional[APIResponse] = response
+
+    from discord import Attachment
+    if isinstance(data, Attachment):
+        file_name = Path(data.filename).stem
+        data = await data.read()
 
     # 1. Setup file path & naming
     from modules.utils_shared import shared_path
@@ -63,6 +80,13 @@ async def save_any_file(data: Any,
     full_path = output_path / f"{file_name}.{file_format}"
     file_name = f"{file_name}.{file_format}"
 
+    if not overwrite and full_path.exists():
+        log.warning(f"{msg_prefix}File already exists (skipped): ...{full_path.parent.name}/{full_path.name}")
+        return {"file_path": str(full_path),
+                "file_format": file_format,
+                "file_name": file_name,
+                "file_data": data}
+
     binary_formats = {"jpg", "jpeg", "png", "webp", "gif", "bmp", "tiff", "mp3", "wav", "ogg", "flac",
                       "mp4", "webm", "avi", "mov", "mkv", "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx",
                       "zip", "rar", "7z", "tar", "gz", "bz2", "exe", "dll", "iso", "bin", "dat"}
@@ -87,10 +111,10 @@ async def save_any_file(data: Any,
             format_map = {"jpg": "JPEG", "jpeg": "JPEG", "png": "PNG", "webp": "WEBP"}
             data.save(full_path, format=format_map.get(file_format.lower(), file_format.upper()), pnginfo=pnginfo)
             log.info(f"{msg_prefix}Saved image using PIL to {full_path}")
-            return {"path": str(full_path),
-                    "format": file_format,
-                    "name": file_name,
-                    "data": data}
+            return {"file_path": str(full_path),
+                    "file_format": file_format,
+                    "file_name": file_name,
+                    "file_data": data}
 
         # 5b. Proceed with async file saving for everything else
         async with aiofiles.open(full_path, mode) as f:
@@ -130,10 +154,10 @@ async def save_any_file(data: Any,
 
     log.info(f"{msg_prefix}Saved data to {full_path}")
 
-    return {"path": str(full_path),
-            "format": file_format,
-            "name": file_name,
-            "data": data}
+    return {"file_path": str(full_path),
+            "file_format": file_format,
+            "file_name": file_name,
+            "file_data": data}
 
 def resolve_placeholders(config: Any, context: dict, log_prefix: str = '', log_suffix: str = '') -> Any:
     formatted_keys = []
@@ -263,57 +287,146 @@ def build_completion_condition(condition_config: dict, context_vars: dict = None
 
     return condition_func
 
-def resolve_content_to_send(all_content) -> dict:
+def split_files_by_size(normalized_files: FILE_LIST,
+                        max_discord_size=10 * 1024 * 1024) -> tuple[list, list]:
+    small_files = []
+    large_files = []
+
+    for file in normalized_files:
+        if file["file_size"] < max_discord_size:
+            small_files.append(file)
+        else:
+            large_files.append(file)
+
+    return small_files, large_files
+
+def normalize_file_inputs(input_data:Union[dict, bytes, str],
+                          filename:str='file.bin') -> FILE_LIST:
+    input_list = input_data if isinstance(input_data, list) else [input_data]
+    normalized = []
+
+    for item in input_list:
+        file_obj = None
+        should_close = False
+        mime_type = 'application/octet-stream'
+        file_size = None
+
+        if isinstance(item, dict):
+            data = item.get("bytes") or item.get("file_data")
+            file_path = item.get("file_path")
+            filename = item.get("file_name", filename)
+
+            if data:
+                mime_type = guess_format_from_data(data, default="application/octet-stream")
+                file_obj = io.BytesIO(data)
+                file_obj.name = filename
+                file_size = len(data)
+
+            elif file_path:
+                filename = os.path.basename(file_path)
+                mime_type = mimetypes.guess_type(filename)[0] or "application/octet-stream"
+                file_obj = open(file_path, "rb")
+                file_size = os.path.getsize(file_path)
+                should_close = True
+
+            else:
+                raise ValueError("Dict input must contain 'bytes'/'file_data' or 'file_path'.")
+
+        elif isinstance(item, bytes):
+            mime_type = guess_format_from_data(item, default="application/octet-stream")
+            file_obj = io.BytesIO(item)
+            file_obj.name = filename
+            file_size = len(item)
+
+        elif isinstance(item, str):
+            filename = os.path.basename(item)
+            mime_type = mimetypes.guess_type(filename)[0] or "application/octet-stream"
+            file_obj = open(item, "rb")
+            file_size = os.path.getsize(item)
+            should_close = True
+
+        else:
+            raise TypeError(f"Unsupported input type: {type(item)}")
+
+        normalized.append({"file_obj": file_obj,
+                           "filename": filename,
+                           "mime_type": mime_type,
+                           "file_size": file_size,
+                           "should_close": should_close})
+
+    return normalized
+
+def collect_content_to_send(all_content) -> dict:
     resolved_content = {'text': [],
                         'audio': [],
                         'files': []}
 
+    def add_file(item):
+        if isinstance(item, Path):
+            resolved_content['files'].append(str(item))
+        elif isinstance(item, (str, bytes, io.BytesIO)):
+            resolved_content['files'].append(item)
+        elif isinstance(item, dict) and ('file_path' in item or \
+                                        (('file_data' in item or 'bytes' in item) and 'file_name' in item)):
+            resolved_content['files'].append(item)
+
     def sort_content(content):
-        if not isinstance(content, str):
-            log.warning('Cannot send content to Discord (bot currently only supports string, or list of strings)')
-            return
-        target_path = Path(content)
-        if not target_path.is_absolute():
-            try_paths = [shared_path.dir_user / target_path,
-                         shared_path.output_dir / target_path]
-            for path in try_paths:
-                if path.exists():
-                    target_path = path
-                    break
+        # Handle strings and Path objects as potential file paths
+        if isinstance(content, (str, Path)):
+            target_path = Path(content)
+            if not target_path.is_absolute():
+                try_paths = [shared_path.dir_user / target_path,
+                             shared_path.output_dir / target_path]
+                for path in try_paths:
+                    if path.exists():
+                        target_path = path
+                        break
 
-        # If path is a file
-        if target_path.exists():
-            target_path = target_path.resolve()
-
-            if target_path.is_file():
-                filepath = str(target_path)
+            if target_path.exists() and target_path.is_file():
+                filepath = str(target_path.resolve())
                 if target_path.suffix.lower() in [".mp3", ".wav"]:
                     resolved_content['audio'].append(filepath)
                 else:
                     resolved_content['files'].append(filepath)
             else:
-                log.error(f'File not found to send to discord: {target_path}')
-                return
-        else:
-            # Text to send to channel
-            resolved_content['text'].append(content)
+                if isinstance(content, str):
+                    resolved_content['text'].append(content)
+                else:
+                    log.warning(f"Unresolved Path object: {content}")
 
-    if isinstance(all_content, str):
-        sort_content(all_content)
-    elif isinstance(all_content, list):
-        for item in all_content:
+        elif isinstance(content, (bytes, io.BytesIO)):
+            add_file(content)
+
+        elif isinstance(content, dict):
+            add_file(content)
+
+        else:
+            log.warning(f"Unsupported content type: {type(content).__name__}")
+
+    all_content = [all_content] if not isinstance(all_content, list) else all_content
+    for item in all_content:
+        if isinstance(item, (str, bytes, io.BytesIO, dict, Path)):
             sort_content(item)
 
     return resolved_content
 
-async def send_content_to_discord(task=None, ictx=None, text=None, audio=None, files=None, vc=None):
+async def send_content_to_discord(task = None,
+                                  ictx: CtxInteraction|None = None,
+                                  text: dict|None = None,
+                                  audio: dict|None = None,
+                                  files: Any|FILE_INPUT|FILE_LIST|None = None,
+                                  vc = None,
+                                  normalize: bool = True):
     ictx = task.ictx if task else ictx
     if not ictx:
         raise RuntimeError('A discord interaction is required for send_context_to_discord()')
-    text = task.extra_text if task else text
-    audio = task.extra_audio if task else audio
-    files = task.extra_files if task else files
-    from discord import File
+    if text is None and task:
+        text = task.extra_text
+    if audio is None and task:
+        audio = task.extra_audio
+    if files is None and task:
+        files = task.extra_files
+
     try:
         if text:
             # header = "**__Extra text__**:\n"
@@ -321,21 +434,53 @@ async def send_content_to_discord(task=None, ictx=None, text=None, audio=None, f
             joined_text = delimiter.join(text)
             # all_extra_text = header + joined_text
             await send_long_message(ictx.channel, joined_text)
+
         if audio:
             for audio_fp in audio:
                 if vc and ictx:
                     await vc.process_audio_file(ictx, audio_fp)
                 else:
                     files.append(audio_fp)
+
         if files:
-            # Wrap paths into discord.File
-            files_to_send = [File(f) for f in files]
-            if len(files_to_send) == 1:
-                await ictx.channel.send(file=files_to_send[0])
-            else:
-                await ictx.channel.send(files=files_to_send)
+            if normalize:
+                # NOTE: bytes + BytesIO objects **WILL FAIL unless provided in a dict including "file_name"**
+                files = normalize_file_inputs(files)
+
+            files: FILE_LIST
+            small, large = files, None
+            upload_large_files_ep = None
+
+            api:API = await get_api()
+            if config.discord.get('upload_large_files', False) and api.upload_large_files and api.upload_large_files.enabled:
+                upload_large_files_ep = api.get_misc_function_endpoint(func_key="upload_large_files",
+                                                                       task_key="post_upload")
+                small, large = split_files_by_size(files)
+                if large and not isinstance(upload_large_files_ep, Endpoint):
+                    log.error(f"The bot is configured to upload large files that exceed discord's 10MB limit, but endpoint was not found.")
+                    small.extend(large)
+                    large = None
+
+            if small:
+                discord_files = [File(f["file_obj"], filename=f["filename"]) for f in small]
+                if len(discord_files) == 1:
+                    await ictx.channel.send(file=discord_files[0])
+                else:
+                    await ictx.channel.send(files=discord_files)
+
+            if large and isinstance(upload_large_files_ep, Endpoint):
+                url_strings:list = await upload_large_files_ep.upload_files(normalized_inputs=large)
+                uploaded_files_msg = "**__Uploaded files exceeding Discord 10MB limit:__**\n"
+                uploaded_files_msg += '\n'.join(f"<{url}>" for url in url_strings)
+                await send_long_message(ictx.channel, uploaded_files_msg)
+
     except Exception as e:
-        log.error(f"An error occurred while trying to send extra results: {e}")
+        error_message = str(e)
+        if "413 Payload Too Large" in error_message or "Request entity too large" in error_message:
+            log.error("Failed to send files to discord because payload too large. Consider enabling/configuring the 'upload_large_files' feature.")
+        else:
+            log.error(f"An error occurred while trying to send extra results: {error_message}")
+        raise
 
 def decode_base64(data, _config=None):
     return base64.b64decode(data) if isinstance(data, str) else data

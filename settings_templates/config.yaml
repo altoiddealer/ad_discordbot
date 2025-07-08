@@ -2,6 +2,8 @@
 
 # Discord settings. Be sure to add your bot token to 'bot_token.yaml'
 discord:
+  # This setting is recommended if you configure the bot to generate large files via APIs. Needs additional config in 'dict_api_settings.yaml' (see 'misc_api_functions').
+  upload_large_files: false
   # Feature for the bot to automatically react to messages to indicate special attributes in chat history (hidden, regenerated, continued, etc)
   history_reactions:
     enabled: true
@@ -9,7 +11,7 @@ discord:
     regen_emoji: '🔃'
     continue_emoji: '⏩'
   direct_messages:
-    allow_chatting: true                  # Allows the bot to interact in direct messages (DMs). Most commands are disabled by default.
+    allow_chatting: true # Allows the bot to interact in direct messages (DMs). Note: Most commands are disabled by default.
     allowed_commands: ['image', 'speak', 'prompt']  # Exclude commands by removing them from list. [] = all disabled
   embed_settings:
     color: 0x1e1f22 # Customize your embeds (0x_______) https://imagecolorpicker.com/
@@ -87,6 +89,7 @@ ttsgen:
 # Imggen settings. If enabled, check API configuration in 'dict_api_settings.yaml'
 imggen:
   enabled: true                 # Controls whether SD WebUI is part of the bot (does not register relavent commands for discord, etc)
+  save_all_outputs: true        # If main image processing returns multiple images, whether to save them all or not
   # The following are only applicable for A1111 / Forge / ReForge (the bot will detect this via API)
   extensions:                   # Only set extensions as True if they are installed AND active in your A1111.
     controlnet_enabled: false   # Requires: sd-webui-controlnet (https://github.com/Mikubill/sd-webui-controlnet) AND configuring 'dict_cmdoptions.yaml'

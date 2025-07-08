@@ -76,6 +76,13 @@ bot_api_functions:
       language_input_key: language # input key for the language. ex: payload = {'language': 'English', ...}
       voice_input_key: character_voice_gen  # input key for the voice. ex: payload = {'voice': 'Female01.wav', ...}
 
+# More bot functions which require designated clients / endpoints.
+misc_api_functions:
+  upload_large_files:
+    api_name: GoFile
+    post_upload:
+      endpoint_name: Post Upload
+      file_key: file
 
 all_apis:
   # You may define any number of APIs and Endpoints here (a list of dictionaries), making them available to use for various bot functions,
@@ -85,7 +92,7 @@ all_apis:
   - name: SD Forge
     url: http://127.0.0.1:7860
     enabled: true
-    default_headers: {Content-Type: application/json} # will apply to all endpoints unless 'headers' defined in endpoint.
+    default_headers: {Content-Type: application/json} # will merge with endpoint-specific headers (endpoint keys will have higher priority)
     default_timeout: 10 # seconds to wait before aborting api call
     auth: null # {username: myuser, password: mypass} # dict format with keys 'username' and 'password'
     # Add any endpoints that you may use for bot functions (Tags system, user commands, etc)
@@ -176,7 +183,7 @@ all_apis:
              path_vars: "{output_url}" # API call will return audio bytes
           - save:
               file_format: wav
-              returns: path
+              returns: file_path
   
   - name: Text Generation WebUI
     url: http://127.0.0.1:7861
@@ -185,6 +192,22 @@ all_apis:
     default_timeout: 60
     auth: null
     endpoints: []
+
+  # Example for uploading files
+  - name: GoFile
+    url: https://upload.gofile.io
+    enabled: false
+    default_headers: {Content-Type: application/json, Authorization: Bearer <**YOUR AUTH TOKEN**>}
+    endpoints:
+      - name: Post Upload
+        path: /uploadfile
+        method: POST
+        headers: {Content-Type: multipart/form-data}
+        payload_type: multipart
+        # payload:
+        #   data: {folderId: <**A SPECIFIC FOLDER ID**>} # Optional for this API
+        response_handling:
+          - extract_key: data.downloadPage # Gets the download link ('data': {'downloadPage': <the URL>,...})
 
 # Create presets here which can be injected in any 'endpoint', or in any 'response_handling' / 'workflow' steps.
 presets:

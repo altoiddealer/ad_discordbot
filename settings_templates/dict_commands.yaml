@@ -1,0 +1,187 @@
+# Configuration for the "Custom Commands" feature
+# Read the Wiki for more information
+
+commands: [] # (delete brackets when using the '-' list item notation)
+
+
+# These have no effect unless moved up into 'commands'
+examples:
+  - command_name: remove_bg
+    description: Remove the background from an image, with optional threshold value
+    options:
+      - name: rembg_image
+        description: The image to remove the background from
+        type: attachment
+        required: true
+        steps:
+          - save:
+              file_path: comfy-input # This should be a symlink from comfyUI input directory, to your output directory.
+              timestamp: false       # Override default timestamp (which could make duplicate inputs in the input dir)
+            returns: file_name       # Extract filename from save result dict
+      - name: threshold
+        description: Adjusts the strength of the edge detection
+        type: string
+        required: false
+        choices: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
+        steps:
+          - type: float
+    # All selection data will be initialzed into context (can be used to resolve payload fields, etc)
+    steps:
+      - load_data_file: comfy_workflows/comfy_remove_bg.json
+      - call_comfy:
+          client: ComfyUI
+          message: Removing background from image
+          file_path: comfy
+
+  - command_name: wan_iv2v
+    description: Generate a video from prompt, starting image, and driving video
+    options:
+      # Option 1: Prompt
+      - name: prompt
+        description: Text prompt for the video generation
+        type: string
+        required: true
+      # Option 2: Reference Image
+      - name: ref_image
+        description: Reference image for the video generation
+        type: attachment
+        required: true
+        steps:
+          - save:
+              file_path: comfy-input # This should be a symlink from comfyUI input directory, to your output directory.
+              timestamp: true
+            returns: file_name # Extract filename from save result dict
+      # Option 3: Reference Video
+      - name: ref_video
+        description: Reference video for the video generation
+        type: attachment
+        required: false
+        steps:
+          - save:
+              file_path: comfy-input
+              timestamp: true
+            returns: file_name # Extract filename from save result dict
+    # All selection data will be initialzed into context (can be used to resolve payload fields, etc)
+    steps:
+      - run_workflow: # Alternatively, the steps from the workflow could just be used here
+          name: WAN image vid to vid
+          input_data: null
+          context: "{context}"
+
+  - command_name: echo_file
+    description: Send an attachment
+    options:
+      - name: file
+        description: File to send
+        type: attachment # discord Attachment field
+        required: true
+        # example of per-option steps
+        steps:
+          - send_content: '{result}' # '{result}' will always resolve from input data, or previous step result.
+
+  - command_name: echo
+    description: Echo a message
+    options:
+      - name: message
+        description: The message to echo
+        type: string # text field
+        required: true
+    # example for steps after options are processed
+    steps:
+      - send_content: '{message}' # Context variables are inherited from option name by default
+
+  # **These are valid command definitions, but actually handling these discord admin-type "steps" is not yet implemented**
+  - command_name: assign_role
+    description: Assign a role to a user
+    options:
+      - name: user
+        description: The user to assign a role to
+        type: user
+        required: true
+      - name: role
+        description: The role to assign
+        type: role
+        required: true
+
+  - command_name: move_user
+    description: Move a user to a channel
+    options:
+      - name: user
+        description: The user to move
+        type: user
+        required: true
+      - name: channel
+        description: The channel to move the user to
+        type: channel
+        required: true
+
+  - command_name: set_volume
+    description: Set the volume level
+    options:
+      - name: level
+        description: Volume level (0.0 - 1.0)
+        type: float
+        required: true
+
+  - command_name: set_color
+    description: Pick a color
+    options:
+      - name: color
+        description: Your favorite color
+        type: string
+        required: true
+        choices:
+          - name: Red
+            value: "#FF0000"
+          - name: Green
+            value: "#00FF00"
+          - name: Blue
+            value: "#0000FF"
+
+  - command_name: ban_user
+    description: Ban a user with optional reason and delete message days
+    options:
+      - name: user
+        description: User to ban
+        type: user
+        required: true
+      - name: reason
+        description: Reason for ban
+        type: string
+        required: false
+      - name: delete_days
+        description: Days of messages to delete (0-7)
+        type: int
+        required: false
+
+  - command_name: choose
+    description: Choose between two options
+    options:
+      - name: option1
+        description: First option
+        type: string
+        required: true
+      - name: option2
+        description: Second option
+        type: string
+        required: true
+
+  - command_name: notify
+    description: Notify a mentionable (user or role)
+    options:
+      - name: target
+        description: User or role to notify
+        type: mentionable
+        required: true
+
+  - command_name: report_bug
+    description: Report a bug with optional urgency
+    options:
+      - name: description
+        description: Describe the bug
+        type: string
+        required: true
+      - name: urgent
+        description: Is it urgent?
+        type: bool
+        required: false

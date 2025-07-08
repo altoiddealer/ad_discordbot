@@ -10,12 +10,12 @@ from PIL import Image, PngImagePlugin
 import io
 import base64
 import copy
-import filetype
-from modules.typing import CtxInteraction
+from modules.typing import CtxInteraction, FILE_INPUT, FILE_LIST
 from typing import get_type_hints, get_type_hints, get_origin, get_args, Any, Tuple, Optional, Union, Callable, AsyncGenerator
-from modules.utils_shared import client, shared_path, bot_database, load_file, get_api
-from modules.utils_misc import valueparser, progress_bar, set_key, extract_key, remove_keys, deep_merge, split_at_first_comma, is_base64, detect_audio_format
+from modules.utils_shared import shared_path, bot_database, load_file
+from modules.utils_misc import progress_bar, extract_key, deep_merge, split_at_first_comma, detect_audio_format, remove_meta_keys
 import modules.utils_processing as processing
+from modules.utils_discord import Embeds
 
 from modules.logs import import_track, get_logger; import_track(__file__, fp=True); log = get_logger(__name__)  # noqa: E702
 logging = log
@@ -23,6 +23,7 @@ logging = log
 class APISettings():
     def __init__(self):
         self.main_settings:dict = {}
+        self.misc_settings:dict = {}
         self.presets:dict = {}
         self.workflows:dict = {}
 
@@ -126,12 +127,30 @@ class APISettings():
     def collect_settings(self, data:dict):
         # Collect Main APIs
         self.main_settings = data.get('bot_api_functions', {})
+        # Collect Misc API function assignments
+        self.misc_settings = data.get('misc_api_functions', {})
         # Collect Response Handling Presets
         self.collect_presets(data.get('presets', {}))
         # Collect Workflows
         self.collect_workflows(data.get('workflows', {}))
 
 apisettings = APISettings()
+
+def validate_misc_function(func_key:str, client:"APIClient"):
+    config_block = apisettings.get_config_for('misc_api_functions', {})
+    func_cfg = config_block.get(func_key, {})
+    for task_key, task_cfg in func_cfg.items():
+        if not isinstance(task_cfg, dict):
+            continue
+        ep_name = task_cfg.get("endpoint_name")
+        if ep_name:
+            endpoint = client.endpoints.get(ep_name)
+            if not endpoint:
+                log.warning(f"Endpoint '{ep_name}' not found for {func_key}.{task_key}")
+                continue
+            for k, v in task_cfg.items():
+                if k != "endpoint_name":
+                    setattr(endpoint, f"_{k}", v)
 
 # Mapping keywords to ImgGenClient subclasses
 def get_imggen_client_map():
@@ -189,6 +208,8 @@ class API:
         self.imggen:Union[ImgGenClient, DummyClient] = DummyClient(ImgGenClient)
         self.textgen:Union[TextGenClient, DummyClient] = DummyClient(TextGenClient)
         self.ttsgen:Union[TTSGenClient, DummyClient] = DummyClient(TTSGenClient)
+        # Misc API functions:
+        self.upload_large_files:Union[APIClient, DummyClient] = DummyClient(APIClient)
         # Collect setup tasks
         self.setup_tasks:list = []
 
@@ -199,9 +220,11 @@ class API:
         # Main APIs / Presets / Workflows
         apisettings.collect_settings(data)
 
-        # Reverse lookup for matching API names to their function type
+        # Reverse lookups for matching API names to their function types
         main_api_name_map = {v.get("api_name"): k for k, v in apisettings.main_settings.items()
                              if isinstance(v, dict) and v.get("api_name")}
+        misc_api_name_map = {v.get("api_name"): k for k, v in apisettings.misc_settings.items()
+                            if isinstance(v, dict) and v.get("api_name")}
         
         check_clients_online = []
 
@@ -246,6 +269,12 @@ class API:
                 if is_main:
                     setattr(self, api_func_type, api_client)
                     log.info(f"Registered main {api_func_type} client: {name}")
+                # Check if this API client corresponds to a misc function
+                misc_func_key = misc_api_name_map.get(name)
+                if misc_func_key:
+                    setattr(self, misc_func_key, api_client)
+                    log.info(f"Registered misc API function '{misc_func_key}': {name}")
+                    validate_misc_function(misc_func_key, api_client)
                 if hasattr(api_client, 'is_online'):
                     check_clients_online.append(api_client.is_online())
                 # Collect setup tasks
@@ -344,12 +373,20 @@ class API:
                         return ep, config
         # Not found
         return None, config
-      
-    async def run_workflow(self, name:str, input_data=None, task=None):
-        workflow_steps = apisettings.get_workflow_steps_for(name)
-        log.info(f'[API Workflows] Running "{name}" with ({len(workflow_steps)} processing steps)')
-        handler = StepExecutor(steps=workflow_steps, input_data=input_data, task=task)
-        return await handler.run()
+
+    def get_misc_function_endpoint(self, func_key: str, task_key: str) -> Union["Endpoint", None]:
+        """Safely fetch an endpoint for a misc function"""
+        client: APIClient = getattr(self, func_key, None)
+        if not isinstance(client, APIClient):
+            return
+
+        misc_settings = apisettings.misc_settings
+        task_cfg = misc_settings.get(func_key, {}).get(task_key, {})
+        ep_name = task_cfg.get("endpoint_name")
+
+        if ep_name:
+            return client.endpoints.get(ep_name)
+
 
 class WebSocketConnectionConfig:
     def __init__(self, **kwargs):
@@ -922,11 +959,13 @@ class APIClient:
                           "timeout": aiohttp.ClientTimeout(total=timeout)}
 
         if data is not None:
+            data = remove_meta_keys(data)
             request_kwargs["data"] = data
             # Content-Type will be set in Form automatically
             if isinstance(data, aiohttp.FormData) and headers:
                 request_kwargs['headers'].pop("Content-Type", None)
         if json is not None:
+            json = remove_meta_keys(json)
             request_kwargs["json"] = json
 
         # Ensure session exists
@@ -1139,13 +1178,14 @@ class APIClient:
                              duration: int = -1,
                              num_yields: int = -1,
                              progress_key: str = "progress",
-                             max_key: Optional[str] = None,
-                             eta_key: Optional[str] = None,
+                             max_key: str|None = None,
+                             eta_key: str|None = None,
                              message: str = 'Generating',
-                             ictx=None,
+                             ictx: CtxInteraction|None = None,
+                             task = None,
                              type_filter: list[str] = ["progress", "executed"], # websocket
-                             data_filter: Optional[dict] = None, # websocket
-                             completion_condition: Optional[Callable[[dict], bool]] = None,
+                             data_filter: dict|None = None, # websocket
+                             completion_condition: Callable[[dict], bool]|None = None,
                              **kwargs) -> list[dict]:
         """
         Polls an endpoint while sending a progress Embed to discord.
@@ -1154,7 +1194,7 @@ class APIClient:
         Otherwise, progress is assumed to be a float between 0.0 and 1.0.
         """
         from modules.utils_discord import Embeds
-        embeds = Embeds(ictx)
+        embeds = task.embeds if task else Embeds(ictx)
 
         # Resolve endpoint / websocket
         if not endpoint and not use_ws:
@@ -1335,7 +1375,10 @@ class ImgGenClient(APIClient):
     async def fetch_imgmodels(self):
         return await self.get_imgmodels.call()
     
-    def decode_and_save_for_index(self, i: int, data: str | bytes | list, pnginfo=None) -> Image.Image:
+    def decode_and_save_for_index(self,
+                                  i: int,
+                                  data: str|bytes|list,
+                                  pnginfo = None) -> FILE_INPUT:
         if isinstance(data, str):
             try:
                 decoded = base64.b64decode(data)
@@ -1350,9 +1393,22 @@ class ImgGenClient(APIClient):
             decoded = data
         else:
             raise TypeError(f"Expected str, bytes, or list of ints, got {type(data)}")
+
+        # Decode and open the image
         image = Image.open(io.BytesIO(decoded))
-        image.save(f"{shared_path.dir_temp_images}/temp_img_{i}.png", pnginfo=pnginfo)
-        return image
+
+        # Save with metadata to BytesIO
+        output_bytes = io.BytesIO()
+        image.save(output_bytes, format="PNG", pnginfo=pnginfo)
+        output_bytes.seek(0)
+        output_bytes.name = f"image_{i}.png"
+        file_size = output_bytes.getbuffer().nbytes
+
+        return {"file_obj": output_bytes,
+                "filename": output_bytes.name,
+                "mime_type": "image/png",
+                "file_size": file_size,
+                "should_close": False}
 
     async def _post_image_for_pnginfo_data(self, image_data:str):
         # Build payload
@@ -1388,20 +1444,18 @@ class ImgGenClient(APIClient):
     async def unpack_image_results(self, images:Any) -> str|bytes|list:
         return images
 
-    async def call_track_progress(self, ictx=None):
+    async def call_track_progress(self, task):
         await self.track_progress(endpoint=self.get_progress,
                                   progress_key=self.get_progress.progress_key,
                                   eta_key=self.get_progress.eta_key,
                                   max_key=self.get_progress.max_key,
                                   message="Generating image",
-                                  ictx=ictx)
+                                  task=task)
 
-    async def _track_t2i_i2i_progress(self, ictx=None):
-        from modules.utils_discord import Embeds
-        embeds = Embeds()
+    async def _track_t2i_i2i_progress(self, task):
         try:
             if not self.get_progress:
-                await embeds.send('img_gen', f'Generating an image with {self.name} ...', '')
+                await task.embeds.send('img_gen', f'Generating an image with {self.name} ...', '')
                 if self.ws:
                     if not bot_database.was_warned("imggen_websocket_progress"):
                         log.warning(f"[{self.name}] If websocket supports tracking progress, and you want to use it for 'main txt2img/img2img', "
@@ -1409,20 +1463,20 @@ class ImgGenClient(APIClient):
                                     "Refer to the wiki for more info (https://github.com/altoiddealer/ad_discordbot/wiki).")
                         bot_database.update_was_warned("imggen_websocket_progress")
             else:
-                await self.call_track_progress(ictx=ictx)
+                await self.call_track_progress(task)
         except Exception as e:
             log.error(f'Error tracking {self.name} image generation progress: {e}')
         finally:
-            await embeds.delete('img_gen')
+            await task.embeds.delete('img_gen')
 
     async def call_imggen_endpoint(self, img_payload:dict, mode:str="txt2img"):
         ep_for_mode:Union[ImgGenEndpoint_PostTxt2Img, ImgGenEndpoint_PostImg2Img] = getattr(self, f'post_{mode}')
         return await ep_for_mode.call(input_data=img_payload, main=True)
 
-    async def post_for_images(self, img_payload:dict, mode:str="txt2img", task=None, ictx=None) -> list[str]:
+    async def post_for_images(self, task, img_payload:dict, mode:str="txt2img") -> list[str]:
         # Start progress task and generation task concurrently
         images_task = asyncio.create_task(self.call_imggen_endpoint(img_payload, mode))
-        progress_task = asyncio.create_task(self._track_t2i_i2i_progress(ictx))
+        progress_task = asyncio.create_task(self._track_t2i_i2i_progress(task))
         # Wait for images_task to complete
         images_results = await images_task
         # Once images_task is done, cancel progress_task
@@ -1434,15 +1488,14 @@ class ImgGenClient(APIClient):
                 pass
         return images_results
 
-    async def _main_imggen(self, task) -> Tuple[list[Image.Image], Optional[PngImagePlugin.PngInfo]]:
-        img_obj_list = []
+    async def _main_imggen(self, task) -> Tuple[FILE_LIST, Optional[PngImagePlugin.PngInfo]]:
+        img_file_list = []
         pnginfo = None
         try:
             img_payload:dict = task.payload
             mode:str = task.params.mode
-            ictx = task.ictx
             # Get the results
-            images_results = await self.post_for_images(img_payload, mode, task, ictx)
+            images_results = await self.post_for_images(task, img_payload, mode)
             # Ensure the results are a list of base64 or bytes
             images_list = await self.unpack_image_results(images_results)
             # Optionally add png info to first result > save > returns PIL images and pnginfo
@@ -1450,16 +1503,14 @@ class ImgGenClient(APIClient):
                 data = await self.resolve_image_data(item, i)
                 if i == 0:
                     pnginfo = await self.extract_pnginfo(data, images_list)
-                img_obj = self.decode_and_save_for_index(i, data, pnginfo)
-                img_obj_list.append(img_obj)
+                img_file:FILE_INPUT = self.decode_and_save_for_index(i, data, pnginfo)
+                img_file_list.append(img_file)
         except Exception as e:
-            from modules.utils_discord import Embeds
-            embeds = Embeds()
             e_prefix = f'[{self.name}] Error processing images'
             log.error(f'{e_prefix}: {e}')
-            restart_msg = f'\nIf {self.name} remains unresponsive, consider using "/restart_sd_client" command.' if self.post_server_restart else ''
-            await embeds.send('img_send', e_prefix, f'{e}{restart_msg}')
-        return img_obj_list, pnginfo   
+            restart_msg = f'\nIf {self.name} remains unresponsive, consider trying "/restart_sd_client" command.' if self.post_server_restart else ''
+            await task.embeds.edit_or_send('img_send', e_prefix, f'{e}{restart_msg}')
+        return img_file_list, pnginfo
 
     def is_comfy(self) -> bool:
         return isinstance(self, ImgGenClient_Comfy)
@@ -1486,24 +1537,24 @@ class ImgGenClient_SDWebUI(ImgGenClient):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
-    async def call_track_progress(self, ictx=None):
+    async def call_track_progress(self, task):
         await self.track_progress(endpoint=self.get_progress,
                                   progress_key='progress',
                                   eta_key='eta_relative',
                                   max_key=None,
                                   message="Generating image",
-                                  ictx=ictx)
+                                  task=task)
 
 class ImgGenClient_Swarm(ImgGenClient):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.session_id = None
 
-    async def call_track_progress(self, ictx=None) -> list[dict]:
+    async def call_track_progress(self, task) -> list[dict]:
         completion_condition = processing.build_completion_condition({'image': "*"})
         return await self.track_progress(endpoint=None,
                                          use_ws=True,
-                                         ictx=ictx,
+                                         task=task,
                                          message="Generating image",
                                          type_filter=None,
                                          data_filter=None,
@@ -1543,13 +1594,13 @@ class ImgGenClient_Swarm(ImgGenClient):
         last_dict:dict = results.pop()
         return [last_dict]
 
-    async def post_for_images(self, img_payload:dict, mode:str="txt2img", task=None, ictx=None) -> list[str]:
+    async def post_for_images(self, task, img_payload:dict, mode:str="txt2img") -> list[str]:
         if not self.ws or self.ws.closed:
             await self.connect_websocket()
         try:
             self.add_required_values_to_payload(img_payload)
             await self.ws.send_json(img_payload)
-            return await self.call_track_progress(ictx)
+            return await self.call_track_progress(task)
         finally:
             await self.ws.close()
 
@@ -1695,12 +1746,14 @@ class ImgGenClient_Comfy(ImgGenClient):
 
     async def _post_prompt(self,
                            img_payload:dict,
-                           mode:str="txt2img",
-                           task=None,
-                           ictx=None,
-                           message:str="Generating image",
-                           endpoint:Union["Endpoint", None]=None,
-                           completed_node_id:int|None=None) -> str:
+                           mode:str = "txt2img",
+                           task = None,
+                           ictx:CtxInteraction|None = None,
+                           message:str = "Generating image",
+                           endpoint:Union["Endpoint", None] = None,
+                           completed_node_id:int|None = None) -> str:
+        # Ensure meta keys removed
+        img_payload = remove_meta_keys(img_payload)
         # Resolve malformatted payload
         self._nest_payload_in_prompt(img_payload)
         # Add Client ID to payload
@@ -1719,6 +1772,7 @@ class ImgGenClient_Comfy(ImgGenClient):
         # Track progress
         await self.track_progress(endpoint=None,
                                   use_ws=True,
+                                  task=task,
                                   ictx=ictx,
                                   message=message,
                                   return_values={'progress': 'data.value', 'max': 'data.max'},
@@ -1728,31 +1782,32 @@ class ImgGenClient_Comfy(ImgGenClient):
         # Return the prompt ID to fetch results
         return prompt_id
 
-    async def post_for_images(self, img_payload:dict, mode:str="txt2img", task=None, ictx=None) -> list[str]:
-        prompt_id = await self._post_prompt(img_payload, mode, task, ictx)
+    async def post_for_images(self, task, img_payload:dict, mode:str="txt2img") -> list[str]:
+        prompt_id = await self._post_prompt(img_payload, mode, task)
         return [{"prompt_id": prompt_id}]
 
     async def _execute_prompt(self,
                               payload:dict,
-                              endpoint:Union["Endpoint", None]=None,
-                              ictx=None,
-                              task=None,
-                              message:str="Generating",
-                              outputs:list[str]=['images'],
-                              output_node_ids:list[int]=[],
-                              completed_node_id:int|None=None,
-                              file_path:str=''):
+                              endpoint:Union["Endpoint", None] = None,
+                              ictx:CtxInteraction|None = None,
+                              task = None,
+                              message:str = "Generating",
+                              outputs:list[str] = ['images'],
+                              output_node_ids:list[int] = [],
+                              completed_node_id:int|None = None,
+                              file_path:str = '',
+                              returns:str = 'file_path'):
         # Queue prompt > track progress
         prompt_id = await self._post_prompt(payload, mode=None, task=task, ictx=ictx, message=message, endpoint=endpoint, completed_node_id=completed_node_id)
         # Fetch results (list of bytes)
         results_list = await self._fetch_prompt_results(prompt_id, returns=outputs, node_ids=output_node_ids)
         # Collect results
-        files_to_send = []
+        save_file_results = []
         for item in results_list:
             bytes = await self._resolve_output_data(item)
-            save_dict = await processing.save_any_file(bytes, file_path=file_path, msg_prefix='[StepExecutor] ')
-            files_to_send.append(save_dict['path'])
-        return files_to_send
+            save_dict = await processing.save_any_file(bytes, file_path=file_path, msg_prefix='[StepExecutor] ')            
+            save_file_results.append(save_dict[returns] if returns else save_dict)
+        return save_file_results
 
 
 class TextGenClient(APIClient):
@@ -1863,10 +1918,6 @@ class Endpoint:
                 setattr(self, '_deferred_payload_source', payload_config)
 
     def get_payload(self):
-        if self.payload_type == 'multipart':
-            mapping_keys = {'json', 'data', 'params', 'files'}
-            if not mapping_keys.issubset(self.payload):
-                log.error(f"[{self.name}] has 'payload_type: multipart' but payload does not include all required keys: {mapping_keys}")
         return copy.deepcopy(self.payload)
 
     def get_extract_keys(self):
@@ -2034,7 +2085,6 @@ class Endpoint:
 
     def clean_payload(self, payload):
         if isinstance(payload, dict):
-            payload = remove_keys(payload, keys_to_remove={"__overrides__", "_comment"})
             self.client.add_required_values_to_payload(payload)
         return payload
 
@@ -2079,11 +2129,10 @@ class Endpoint:
         preferred_content = self.get_preferred_content_type()
         if (payload_type == "multipart" or preferred_content.startswith("multipart/form-data")) \
             and input_data and not payload_map:
-            mapping_keys = {'json', 'data', 'params', 'files'}
-            if mapping_keys.issubset(input_data):
+            if input_data.get('files'):
                 payload_map = input_data
             else:
-                raise ValueError(f"[{self.name}] has 'payload_type: multipart' but payload does not include all required keys: {mapping_keys}")
+                raise ValueError(f"[{self.name}] has 'payload_type: multipart' but payload does not include 'files' key")
         # Use explicit payload map if given
         if payload_map:
             # Fully structured override
@@ -2091,7 +2140,7 @@ class Endpoint:
             data_payload = payload_map.get("data")
             params_payload = payload_map.get("params")
             files_payload = payload_map.get("files")
-            if files_payload and data_payload:
+            if files_payload:
                 data_payload = self.prepare_aiohttp_formdata(data_payload, files_payload)
                 json_payload = None
                 files_payload = None
@@ -2120,12 +2169,12 @@ class Endpoint:
         return json_payload, data_payload, params_payload, files_payload
 
     async def call(self,
-                   input_data: dict = None,
-                   payload_map: dict = None,
-                   sanitize:bool=False,
-                   main:bool=False,
-                   task=None,
-                   ictx=None,
+                   input_data: dict|None = None,
+                   payload_map: dict|None = None,
+                   sanitize: bool = False,
+                   main: bool = False,
+                   task = None,
+                   ictx: CtxInteraction|None = None,
                    **kwargs
                    ) -> Any:
         if self.client is None:
@@ -2196,10 +2245,50 @@ class Endpoint:
         # Hand off full response to StepExecutor
         if isinstance(self.response_handling, list):
             log.info(f'[{self.name}] Executing "response_handling" ({len(self.response_handling)} processing steps)')
+            from modules.stepexecutor import StepExecutor
             handler = StepExecutor(steps=self.response_handling, input_data=response or results, task=task, ictx=ictx, endpoint=self)
             results = await handler.run()
 
         return results
+
+    async def upload_files(self, 
+                           input_data: Any = None,
+                           file_name:str = 'file.bin',
+                           file_obj_key:str = 'file',
+                           normalized_inputs: FILE_LIST|None = None,
+                           **kwargs) -> list:
+
+        normalized_files:FILE_LIST = normalized_inputs or processing.normalize_file_inputs(input_data, file_name)
+        results_list = []
+
+        for file in normalized_files:
+            file_obj = file['file_obj']
+            filename = file['filename']
+            mime_type = file['mime_type']
+            should_close = file['should_close']
+
+            file_dict = {"file": file_obj,
+                         "filename": filename,
+                         "content_type": mime_type}
+
+            mime_category = mime_type.split("/")[0]
+            field_name = getattr(self, '_file_key', None) or file_obj_key or mime_category
+
+            payload = self.get_payload()
+            payload['files'] = {field_name: file_dict}
+
+            path_vars = mime_category if '{}' in self.path else None
+            result = await self.call(payload_map=payload, path_vars=path_vars, **kwargs)
+
+            if isinstance(result, APIResponse):
+                results_list.append(result.body)
+            else:
+                results_list.append(result)
+
+            if should_close:
+                file_obj.close()
+
+        return results_list
 
 
     async def poll(self,
@@ -2374,7 +2463,7 @@ class TTSGenEndpoint_PostGenerate(TTSGenEndpoint):
             file_format = detect_audio_format(result)
             if file_format in ["mp3", "wav"]:
                 file_data = await processing.save_any_file(result, file_format=file_format, file_path='tts')
-                return file_data['path']
+                return file_data['file_path']
 
         return None
 
@@ -2471,13 +2560,6 @@ class ImgGenEndpoint_PostUpload(ImgGenEndpoint):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
-    async def upload_file(self, file, file_type:str):
-        mime_category = file_type.strip().lower().split('/')[0]
-        payload = self.get_payload()
-        payload['files'] = {mime_category: file}
-        path_vars = mime_category if '{}' in self.path else None
-        await self.call(payload_map=payload, path_vars=path_vars)
-
 class APIResponse:
     def __init__(
         self,
@@ -2511,659 +2593,3 @@ class APIResponse:
         elif isinstance(self.body, str):
             return self.body.encode()
         raise TypeError("Response body is not text or bytes")
-
-
-class StepExecutor:
-    def __init__(self, steps: list[dict], input_data: Any = None, task=None, ictx=None, endpoint=None):
-        """
-        Executes a sequence of data transformation steps with optional context storage.
-
-        Steps are defined as a list of single-key dictionaries, where each key is the step type
-        (e.g., "extract_values") and the value is the configuration for that step.
-
-        Each step can optionally include a `save_as` key to store intermediate results in context
-        without affecting the main result passed to the next step.
-        """
-        self.steps = steps
-        self.context: dict[str, Any] = {}
-        self.original_input_data = input_data
-        self.response = input_data if isinstance(input_data, APIResponse) else None
-        self.endpoint:Optional[Endpoint] = endpoint
-        self.task = task
-        self.ictx:Optional[CtxInteraction] = ictx
-        if task:
-            self.ictx = task.ictx
-
-    def _split_step(self, step: dict) -> tuple[str, dict, dict]:
-        step = step.copy()
-        metadata_keys = {"save_as", "on_error", "log", "returns"} #, "skip_if"}  # extensible
-        metadata = {k: step.pop(k) for k in metadata_keys if k in step}
-        if len(step) != 1:
-            raise ValueError(f"[StepExecutor] Invalid step format: {step}")
-        step_name, config = next(iter(step.items()))
-        return step_name, config, metadata
-
-    def _initial_data(self):
-        if isinstance(self.response, APIResponse):
-            return self.response.body
-        return self.original_input_data
-
-    async def run(self, input_data: Any|None = None) -> Any:
-        result = input_data or self._initial_data()
-
-        for step in self.steps:
-            if not isinstance(step, dict):
-                raise ValueError(f"[StepExecutor] Invalid step: {step}")
-
-            step = step.copy()
-
-            step_name, config, meta = self._split_step(step)
-
-            method = getattr(self, f"_step_{step_name}", None)
-            if not method:
-                raise NotImplementedError(f"[StepExecutor] Unsupported step: {step_name}")
-            
-            try:
-                if step_name == "for_each":
-                    # _step_for_each will resolve placeholders per-item
-                    step_result = await method(result, config)
-                else:
-                    # Resolve any placeholders using the current context
-                    config = self._resolve_context_placeholders(result, config)
-                    # Run the step and determine where to store the result
-                    step_result = await method(result, config) if asyncio.iscoroutinefunction(method) else method(result, config)
-
-                result = self._process_step_result(meta, result, step_result, step_name)
-
-            except Exception as e:
-                on_error = meta.get("on_error", "raise")
-                if on_error == "skip":
-                    log.error(f"[StepExecutor] Step '{step_name}' failed and was skipped: {e}")
-                    return result
-                elif on_error == "default":
-                    # Use default value from config or None
-                    default_value = config.get("default", None)
-                    log.error(f"[StepExecutor] Step '{step_name}' failed, using default: {default_value} ({e})")
-                    result = default_value
-                    self._apply_meta_save_as(meta, result, step_name)
-                else:  # Default behavior: raise
-                    log.error(f"[StepExecutor] An error occurred while processing step '{step_name}': {e}")
-                    raise
-
-        # print("final result:", result)
-        return result
-
-    ### Meta Handling
-    def _apply_meta_returns(self, meta:dict, original_input:Any, step_result:Any, step_name:str) -> Any:
-        returns = meta.get("returns", "data")
-        if returns and not isinstance(returns, str):
-            log.warning(f"[StepExecutor] 'returns' value must be a string, not {type(returns).__name__}. Falling back to 'data'.")
-            returns = "data"
-
-        if returns == "data":
-            return step_result
-        if returns == "input":
-            return original_input
-        if returns == "context":
-            return self.context
-        if isinstance(step_result, dict):
-            if returns in step_result:
-                return step_result[returns]
-
-        log.warning(f"[StepExecutor] 'returns': '{returns}' not found in {step_name} step result. Falling back to 'data'.")
-        return step_result
-
-    def _apply_meta_save_as(self, meta:dict, result:Any, step_name:str):
-        save_as = meta.get("save_as")
-        if save_as:
-            self.context[save_as] = result
-            if meta.get("log"):
-                log.info(f'[Step Executor] Saved {step_name} result to context as: {save_as}')
-
-    def _process_step_result(self, meta:dict, original_input:Any, step_result:Any, step_name:str) -> Any:
-        # apply "save_as"
-        self._apply_meta_save_as(meta, step_result, step_name)
-        # apply "returns"
-        processed_result = self._apply_meta_returns(meta, original_input, step_result, step_name)
-        # apply "log"
-        if meta.get("log"):
-            log.info(f'[Step Executor] {step_name} results: {step_result}')
-
-        return processed_result
-
-
-    ### Context Resolution
-    def _resolve_context_placeholders(self, data: Any, config: Any, sources=["result", "context", "task", "websocket"]) -> Any:
-        # Merge context with 'result'
-        if "result" in sources:
-            config = processing.resolve_placeholders(config, {"result": data}, log_prefix='[StepExecutor]', log_suffix='from prior step "result"')
-        if "context" in sources:
-            config = processing.resolve_placeholders(config, self.context, log_prefix='[StepExecutor]', log_suffix='from saved context')
-        if "task" in sources and self.task:
-            config = processing.resolve_placeholders(config, vars(self.task.vars), log_prefix='[StepExecutor]', log_suffix=f'from Task "{self.task.name}" context')
-        if "websocket" in sources and self.endpoint and self.endpoint.client.ws_config:
-            ws_context = self.endpoint.client.ws_config.get_context()
-            config = processing.resolve_placeholders(config, ws_context, log_prefix='[StepExecutor]', log_suffix=f'from "{self.endpoint.client.name}" Websocket context')
-        return config
-    
-
-    ### Steps execution
-    async def _step_for_each(self, data: Any, config: dict) -> list:
-        """
-        Runs a sub-StepExecutor for each item in a list or each key-value pair in a dict.
-
-        Returns:
-            list: A list of results, one per item processed.
-        """
-        source = config.get("in")
-        alias = config.get("as", "item")
-        steps = config.get("steps")
-
-        if not steps or not isinstance(steps, list):
-            raise ValueError("[StepExecutor] 'for_each' step requires a 'steps' list.")
-
-        # Determine iterable: from context (by string) or directly as list/dict
-        items = self.context.get(source) if isinstance(source, str) else source
-
-        if isinstance(items, list):
-            iterable = enumerate(items)
-            get_context = lambda idx, val: {
-                alias: val,
-                f"{alias}_index": idx,
-            }
-        elif isinstance(items, dict):
-            iterable = enumerate(items.items())
-            get_context = lambda idx, pair: {
-                f"{alias}_key": pair[0],
-                f"{alias}_value": pair[1],
-                f"{alias}_index": idx,
-            }
-        else:
-            raise TypeError(f"[StepExecutor] 'for_each' expected list or dict but got {type(items).__name__}")
-
-        results = []
-
-        for index, item in iterable:
-            sub_executor = StepExecutor(steps, task=self.task, ictx=self.ictx, endpoint=self.endpoint)
-            sub_executor.response = self.response
-
-            sub_executor.context = {
-                **self.context,
-                **get_context(index, item),
-            }
-
-            value = item if isinstance(items, list) else item[1]
-            result = await sub_executor.run(value)
-            results.append(result)
-
-        return results
-
-    async def _step_group(self, data: Any, config: list[list[dict]]) -> list:
-        """
-        Executes multiple step sequences in parallel, each defined as a list of steps.
-
-        Each item in the config is a list of steps (a sub-workflow), which is executed
-        in parallel with others.
-
-        Returns:
-            list: The list of results from each parallel sub-sequence.
-        """
-        if not isinstance(config, list) or not all(isinstance(group, list) for group in config):
-            raise ValueError("step_group config must be a list of lists of steps")
-
-        async def run_subgroup(steps: list[dict], index: int):
-            sub_executor = StepExecutor(steps, task=self.task, ictx=self.ictx, endpoint=self.endpoint)
-            sub_executor.response = self.response
-            sub_executor.context = self.context.copy()
-            return await sub_executor.run(data)
-
-        tasks = [run_subgroup(steps, idx) for idx, steps in enumerate(config)]
-        results = await asyncio.gather(*tasks)
-        return results
-
-    def _step_pass(self, data: Any, config: Any):
-        return data
-    
-    def _step_format(self, data: Any, config: str):
-        if not isinstance(config, str):
-            log.warning(f"[StepExecutor] 'format' step expects a string key, got: {type(config).__name__}")
-            return data
-        resolved = self._resolve_context_placeholders(data, config)
-        if isinstance(resolved, str):
-            return valueparser.parse_value(resolved)
-        return resolved
-
-    def _step_return(self, data: Any, config: str) -> Any:
-        """
-        Returns a value from the context using the given key (config).
-        Example: - return: image_list
-        """
-        if not isinstance(config, str):
-            raise ValueError(f"[StepExecutor] 'return' step expects a string key, got: {type(config).__name__}")
-        if config not in self.context:
-            raise KeyError(f"[StepExecutor] Context does not contain key '{config}'")
-        return self.context[config]
-    
-    ### API RELATED STEPS
-    def resolve_api_payload(self, data: Any, payload: Any):
-        # Resolve from all sources except Task
-        payload = self._resolve_context_placeholders(data, payload, sources=["result", "context", "websocket"])
-        # Resolve Task placeholders
-        if self.task:
-            payload = self.task.override_payload(payload)
-        return payload
-
-    def resolve_api_input(self, data:Any, config:dict, step_name:str, default:Any|None=None, endpoint:Endpoint|None=None):
-        input_data = config.pop('input_data', default)
-        init_payload = config.pop('init_payload', False)
-        if not endpoint: # Websocket
-            return default
-        # init_payload overrides input_data
-        if init_payload:
-            log.info(f'[StepExecutor] Step "{step_name}": Fetching payload for "{endpoint.name}" and trying to update placeholders with internal variables.')
-            input_data = endpoint.get_payload()
-            # Resolves context data more cleanly for Task variables
-            input_data = self.resolve_api_payload(data, input_data)
-
-        elif input_data is not None:
-            log.info(f'[StepExecutor] Step "{step_name}": Sending "input_data" to "{endpoint.name}". If unwanted, update your step definition with "input_data: null".')
-        else:
-            pass
-
-        return input_data
-    
-    def resolve_api_names(self, config:dict, step_name:str):
-        client_name = config.pop("client_name", None) or config.pop("client", None)
-        if not client_name:
-            raise ValueError(f'[StepExecutor] API "client_name" was not included in "{step_name}" response handling step')
-        use_ws = config.pop("use_ws", False)
-        endpoint_name = config.pop("endpoint_name", None) or config.pop("endpoint", None)
-        if not endpoint_name and not use_ws:
-            raise ValueError(f'[StepExecutor] API "endpoint_name" was not included in "{step_name}" response handling step')
-        return client_name, endpoint_name, use_ws
-
-    async def _step_get_api_ws_config(self, data: Any, config: Union[str, dict]) -> Any:
-        config['use_ws'] = True
-        api:API = await get_api()
-        client_name, _, _ = self.resolve_api_names(config, 'get_api_ws_config')
-        api_client:APIClient = api.get_client(client_name=client_name, strict=True)
-        if api_client.ws_config is None:
-            raise RuntimeError(f'[StepExecutor] API client "{client_name}" does not have a websocket config to get.')
-        return api_client.ws_config.get_context()
-
-    async def _step_get_api_payload(self, data: Any, config: Union[str, dict]) -> Any:
-        api:API = await get_api()
-        client_name, endpoint_name, use_ws = self.resolve_api_names(config, 'get_api_payload')
-        api_client:APIClient = api.get_client(client_name=client_name, strict=True)
-        endpoint:Endpoint = api_client.get_endpoint(endpoint_name=endpoint_name, strict=True)
-        payload = endpoint.get_payload()
-        # Resolves context data more cleanly for Task variables
-        return self.resolve_api_payload(data, payload)
-
-    async def _step_call_api(self, data: Any, config: Union[str, dict]) -> Any:
-        api:API = await get_api()
-        client_name, endpoint_name, use_ws = self.resolve_api_names(config, 'call_api')
-        api_client:APIClient = api.get_client(client_name=client_name, strict=True)
-        endpoint:Endpoint = api_client.get_endpoint(endpoint_name=endpoint_name, strict=True)
-        self.endpoint = endpoint # Helps to resolve API related context
-
-        input_data = self.resolve_api_input(data, config, step_name='call_api', default=data, endpoint=endpoint)
-
-        response = await endpoint.call(input_data=input_data, **config)
-        if not isinstance(response, APIResponse):
-            return response
-        return response.body
-
-    async def _step_track_progress(self, data: Any, config: dict) -> list[dict]:
-        """
-        Polls an endpoint while sending a progress Embed to discord.
-        """
-        ictx = self.ictx # to send discord Embed to channel
-        api:API = await get_api()
-        client_name, endpoint_name, use_ws = self.resolve_api_names(config, 'track_progress')
-        api_client:APIClient = api.get_client(client_name=client_name, strict=True)
-
-        completion_config = config.pop("completion_condition", None)
-        completion_condition = None
-        if completion_config:
-            completion_condition = processing.build_completion_condition(completion_config, self.context)
-
-        # Resolve polling method
-        endpoint:Optional[Endpoint] = None
-        if not use_ws:
-            endpoint = api_client.get_endpoint(endpoint_name=endpoint_name, strict=True)
-
-        config['input_data'] = self.resolve_api_input(data, config, step_name='track_progress', default=None, endpoint=endpoint)
-
-        return await api_client.track_progress(endpoint=endpoint,
-                                               use_ws=use_ws,
-                                               ictx=ictx,
-                                               completion_condition=completion_condition,
-                                               **config)
-
-    async def _step_poll_api(self, data: Any, config: dict) -> list[dict]:
-        """
-        Polls an endpoint.
-        """
-        api:API = await get_api()
-        client_name, endpoint_name, use_ws = self.resolve_api_names(config, 'poll_api')
-        api_client:APIClient = api.get_client(client_name=client_name, strict=True)
-        endpoint:Endpoint = api_client.get_endpoint(endpoint_name=endpoint_name, strict=True)
-
-        return_values = config.pop("return_values", {})
-        interval = config.pop("interval", 1.0)
-        duration = config.pop("duration", -1)
-        num_yields = config.pop("num_yields", -1)
-
-        config['input_data'] = self.resolve_api_input(data, config, step_name='poll_api', default=data, endpoint=endpoint)
-
-        results = []
-        try:
-            async for result in endpoint.poll(return_values=return_values,
-                                            interval=interval,
-                                            duration=duration,
-                                            num_yields=num_yields,
-                                            **config):
-                results.append(result)
-        except Exception as e:
-            log.error(f"[StepExecutor] Error in 'poll_api' step: {e}")
-
-        return results
-
-    async def _step_prompt_user(self, data, config):
-        """
-        Prompts the user for input via Discord interaction.
-
-        "prompt": "Please upload an image or reply with text",
-        "type": "text" | "file",
-        "timeout": 60
-        """
-        ictx = self.ictx
-        if not ictx:
-            raise RuntimeError("[StepExecutor] Cannot prompt user: 'ictx' (interaction context) is not set")
-        
-        from discord import Message, Attachment
-        ictx:Message
-
-        prompt_text = config.get("prompt", "Please respond.")
-        expected_type = config.get("type", "text")
-        timeout = config.get("timeout", 60)
-
-        # Open DM channel
-        dm_channel = await ictx.author.create_dm()
-
-        # Send the prompt via DM
-        await dm_channel.send(prompt_text)
-
-        def check(msg: Message):
-            return msg.author.id == ictx.author.id and msg.channel.id == dm_channel.id
-
-        # Wait for the response
-        try:
-            client.waiting_for[ictx.author.id] = True
-            msg: Message = await client.wait_for("message", check=check, timeout=timeout)
-
-            if expected_type == "text":
-                return msg.content.strip()
-            elif expected_type == "file":
-                if msg.attachments:
-                    attachment: Attachment = msg.attachments[0]
-                    file_bytes = await attachment.read()
-                    filename = attachment.filename
-
-                    kind = filetype.guess(file_bytes)
-                    mime_type = kind.mime if kind else 'application/octet-stream'
-                    mime_category = mime_type.strip().lower().split('/')[0]
-                    # Prepare a file-like object
-                    file_obj = io.BytesIO(file_bytes)
-                    file_obj.name = filename
-
-                    file = {mime_category: {"file": file_obj, "filename": filename, "content_type": mime_type}}
-
-                    return {"file": file, "bytes": file_bytes, "file_format": mime_type, "filename": filename}
-                else:
-                    raise ValueError("[StepExecutor] Expected file attachment but none provided.")
-            else:
-                raise ValueError(f"[StepExecutor] Unknown input type: {expected_type}")
-
-        except asyncio.TimeoutError:
-            raise TimeoutError("[StepExecutor] User did not respond in time.")
-        finally:
-            client.waiting_for.pop(ictx.author.id, None)
-
-    async def _step_send_content(self, data: Any, config: str):
-        """
-        Send text or files to discord. Currently supports string or list of strings.
-
-        Returns:
-          None
-
-        """
-        if not isinstance(config, str) and not isinstance(config, list):
-            log.error("[StepExecutor] Step 'send_content' did not receive valid content (must be string or list of strings)")
-            return None
-
-        resolved_content = processing.resolve_content_to_send(config)
-        await processing.send_content_to_discord(ictx=self.ictx, **resolved_content)
-        return None
-
-    def _step_set_key(self, data: dict|list, config: Union[str, dict]) -> Any:
-        path = config.get('path')
-        value = config.get('value')
-        return set_key(data, path, value)
-
-    def _step_extract_key(self, data: dict|list, config: Union[str, dict]) -> Any:
-        extracted = extract_key(data, config)
-        return extracted
-
-    def _step_extract_values(self, data: Any, config: dict[str, Union[str, dict]]) -> dict[str, Any]:
-        result = {}
-        for key, path_config in config.items():
-            result[key] = extract_key(data, path_config)
-        return result
-
-    def _step_decode_base64(self, data, config):
-        if isinstance(data, str):
-            if "," in data:
-                data = data.split(",", 1)[1]
-            return base64.b64decode(data)
-        raise TypeError("[StepExecutor] Expected base64 string for 'decode_base64' step")
-
-    def _step_type(self, data, to_type):
-        type_map = {"int": int, "float": float, "str": str, "bool": bool}
-        return type_map[to_type](data)
-    
-    def _step_cast(self, data, config: dict):
-        type_map = {
-            "int": int,
-            "float": float,
-            "str": str,
-            "bool": lambda x: str(x).lower() in ("true", "1", "yes")
-        }
-
-        if not isinstance(data, dict):
-            raise TypeError(f"[StepExecutor] 'cast' step requires a dict input, got {type(data).__name__}")
-
-        result = data.copy()
-        for key, type_name in config.items():
-            if key not in result:
-                log.warning(f"[StepExecutor] 'cast' step: key '{key}' not found in data")
-                continue
-            if type_name not in type_map:
-                raise ValueError(f"[StepExecutor] 'cast' step: unsupported type '{type_name}'")
-            try:
-                result[key] = type_map[type_name](result[key])
-            except Exception as e:
-                log.warning(f"[StepExecutor] Failed to cast '{key}' to {type_name}: {e}")
-
-        return result
-
-    def _step_map(self, data, config: dict):
-        """
-        Transforms each item in a list using a mapping config.
-        Example config:
-            {
-                "as": "dict",          # or "value", "tuple", "custom"
-                "key": "name",         # Used if "as" == "dict"
-            }
-        """
-        if not isinstance(data, list):
-            raise TypeError("[StepExecutor] 'map' step requires list input")
-
-        transform_type = config.get("as", "value")
-
-        if transform_type == "dict":
-            key = config.get("key")
-            if not key:
-                raise ValueError("[StepExecutor] 'map' step with 'dict' transform requires 'key'")
-            return [{key: item} for item in data]
-
-        elif transform_type == "tuple":
-            return [(item,) for item in data]
-
-        # elif transform_type == "custom":
-        #     # Optional: allow arbitrary callable by name (e.g., "lambda x: {'name': x}")
-        #     expr = config.get("lambda")
-        #     if not expr:
-        #         raise ValueError("[StepExecutor] 'map' step with 'custom' transform requires 'lambda'")
-        #     func = eval(expr)  # ⚠️ Only safe in trusted environments!
-        #     return [func(item) for item in data]
-
-        # elif transform_type == "value":
-        #     return data  # no-op
-
-        else:
-            raise ValueError(f"[StepExecutor] Unknown transform type: {transform_type}")
-
-    def _step_regex(self, data, pattern):
-        match = re.search(pattern, data)
-        if not match:
-            log.warning("[StepExecutor] No regex match found")
-            return data
-        return match.group(1) if match.lastindex else match.group(0)
-
-    def _step_eval(self, data, expression):
-        # TODO: Expand eval step
-        return eval(expression, {"data": data})
-
-    def _step_add_pnginfo(self, data: Any, config: dict) -> Image.Image:
-        """
-        Adds PngInfo metadata to an image using values from context or data.
-
-        Config:
-            image (str, optional): Context key to retrieve the image object.
-            metadata (str, optional): Context key to retrieve metadata string.
-
-            If only one is provided, the other is assumed to come from the `data` parameter.
-
-        Returns:
-            Image.Image: Image with PngInfo metadata injected.
-        """
-        image_key = config.get("image")
-        metadata_key = config.get("metadata")
-
-        if image_key and metadata_key:
-            image = self.context.get(image_key)
-            metadata = self.context.get(metadata_key)
-        elif image_key:
-            image = self.context.get(image_key)
-            metadata = data
-        elif metadata_key:
-            metadata = self.context.get(metadata_key)
-            image = data
-        else:
-            raise ValueError("[StepExecutor] 'add_pnginfo' step requires at least one of 'image' or 'metadata' in config")
-
-        if not isinstance(image, Image.Image):
-            raise TypeError(f"[StepExecutor] Expected a PIL.Image.Image for image, got {type(image).__name__}")
-        if not isinstance(metadata, str):
-            raise TypeError(f"[StepExecutor] Expected a string for metadata, got {type(metadata).__name__}")
-
-        pnginfo = PngImagePlugin.PngInfo()
-        pnginfo.add_text("parameters", metadata)
-
-        # Attach pnginfo to image
-        image.info["pnginfo"] = pnginfo
-
-        return image
-    
-    async def _step_load_data_file(self, data: Any, path: str):
-        from pathlib import Path
-        from modules.utils_shared import config
-        file_path = Path(path)
-        if not file_path.is_absolute() and not file_path.exists():
-            corrected_path = Path(shared_path.dir_user) / file_path
-            if corrected_path.exists():
-                file_path = corrected_path
-        if not config.path_allowed(file_path):
-            raise RuntimeError(f"[StepExecutor] Tried loading a file which is not in config.yaml 'allowed_paths': {file_path}")
-        return load_file(file_path, {})
-
-    async def _step_save(self, data: Any, config: dict):
-        """
-        Save input data to a file and return either path, original data, or metadata.
-
-        Config options:
-        - file_format: Explicit format (e.g. 'json', 'jpg').
-        - file_name: Optional file name (without extension).
-        - file_path: Relative directory inside output_dir.
-        - returns: dict containing:
-                "path" (str) - full path to file
-                "format" (str) - file format
-                "name" (str) -  filename
-                "data" - file data
-        """
-        return await processing.save_any_file(data=data,
-                                              file_format=config.get('file_format'),
-                                              file_name=config.get('file_name'),
-                                              file_path=config.get('file_path', ''),
-                                              use_timestamp=config.get('timestamp', True),
-                                              response=self.response,
-                                              msg_prefix='[StepExecutor] ')
-
-    async def _step_call_comfy(self, data: Any, config: dict):
-        config['use_ws'] = True
-        if config.get('payload'):
-            config['input_data'] = config.pop('payload')
-
-        api:API = await get_api()
-        client_name, endpoint_name, _ = self.resolve_api_names(config, 'call_comfy')
-        comfy_client:APIClient = api.get_client(client_name=client_name, strict=True)
-        if not isinstance(comfy_client, ImgGenClient_Comfy):
-            raise RuntimeError(f'[StepExecutor] API Client "{client_name}" is not ComfyUI. Cannot run step "call_comfy".')
-
-        endpoint:Optional[Endpoint] = None
-        if endpoint_name:
-            endpoint = comfy_client.get_endpoint(endpoint_name=endpoint_name, strict=True)
-        self.endpoint = endpoint # Helps to resolve API related context
-
-        payload:dict = self.resolve_api_input(data, config, step_name='call_api', default=data, endpoint=endpoint)
-
-        results = await comfy_client._execute_prompt(payload, endpoint, self.ictx, self.task, **config)
-
-        return results
-
-
-# async def _process_file_input(self, path: str, input_type: str):
-#     if input_type == "text":
-#         async with aiofiles.open(path, mode='r', encoding='utf-8') as f:
-#             return await f.read()
-
-#     elif input_type == "base64":
-#         async with aiofiles.open(path, mode='rb') as f:
-#             raw = await f.read()
-#             return base64.b64encode(raw).decode('utf-8')
-
-#     elif input_type == "file":
-#         # Special behavior — this must be handled outside JSON.
-#         raise ValueError("File upload input type 'file' should be used with multipart/form-data.")
-
-#     elif input_type == "raw":
-#         async with aiofiles.open(path, mode='rb') as f:
-#             return await f.read()
-
-#     elif input_type == "url":
-#         return path  # Just return the path (expected to be a full URL)
-
-#     else:
-#         raise ValueError(f"Unknown input type: {input_type}")

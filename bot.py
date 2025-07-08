@@ -3,7 +3,7 @@ import logging as _logging
 from datetime import datetime, timedelta
 from dataclasses import dataclass, field
 from dataclasses_json import dataclass_json
-from typing import Any, Optional, Tuple
+from typing import Any, Optional, Tuple, Union, Literal
 from pathlib import Path
 import asyncio
 import random
@@ -14,7 +14,7 @@ import os
 import warnings
 import discord
 from discord.ext import commands
-from discord import app_commands, File
+from discord import app_commands, File, abc
 import typing
 import io
 import base64
@@ -30,17 +30,18 @@ import copy
 from shutil import copyfile
 import sys
 import traceback
-from modules.typing import ChannelID, UserID, MessageID, CtxInteraction  # noqa: F401
+from modules.typing import ChannelID, UserID, MessageID, CtxInteraction, FILE_INPUT, FILE_LIST  # noqa: F401
 import signal
-from typing import Union, Literal
 from functools import partial
+import inspect
+import types
 
 from modules.utils_files import load_file, merge_base, save_yaml_file  # noqa: F401
 from modules.utils_shared import client, TOKEN, is_tgwui_integrated, shared_path, bg_task_queue, task_event, flows_queue, flows_event, patterns, bot_emojis, config, bot_database, get_api
 from modules.database import StarBoard, Statistics, BaseFileMemory
 from modules.utils_misc import check_probability, fix_dict, set_key, deep_merge, update_dict, sum_update_dict, random_value_from_range, convert_lists_to_tuples, \
     consolidate_prompt_strings, get_time, format_time, format_time_difference, get_normalized_weights, guess_format_from_data, valueparser  # noqa: F401
-from modules.utils_processing import resolve_placeholders, resolve_content_to_send, send_content_to_discord
+from modules.utils_processing import resolve_placeholders, collect_content_to_send, send_content_to_discord
 from modules.utils_discord import Embeds, guild_only, guild_or_owner_only, configurable_for_dm_if, is_direct_message, ireply, sleep_delete_message, send_long_message, \
     EditMessageModal, SelectedListItem, SelectOptionsView, get_user_ctx_inter, get_message_ctx_inter, apply_reactions_to_messages, replace_msg_in_history_and_discord, MAX_MESSAGE_LENGTH, muffled_send  # noqa: F401
 from modules.utils_aspect_ratios import ar_parts_from_dims, dims_from_ar, avg_from_dims, get_aspect_ratio_parts, calculate_aspect_ratio_sizes  # noqa: F401
@@ -58,6 +59,7 @@ logging = log
 
 from modules.apis import API, APIClient, Endpoint, ImgGenEndpoint, ImgGenClient, TTSGenClient, TextGenClient
 api:API = asyncio.run(get_api())
+from modules.stepexecutor import call_stepexecutor
 
 imggen_enabled = config.imggen.get('enabled', True)
 
@@ -726,56 +728,44 @@ class VoiceClients:
                 guild_vc.resume()
                 log.info(f"Audio playback resumed in guild {guild_id}")
 
-    def detect_format(self, file_path):
-        try:
-            audio = AudioSegment.from_wav(file_path)
-            return 'wav'
-        except:
-            pass  
-        try:
-            audio = AudioSegment.from_mp3(file_path)
-            return 'mp3'
-        except:
-            pass
-        return None
-
-    async def upload_audio_file(self, channel:discord.TextChannel, audio_fp:str, bot_hmessage:HMessage|None=None):
-        file = audio_fp
-        filename = os.path.basename(file)
-        original_ext = os.path.splitext(filename)[1]
-        correct_ext = original_ext
-        detected_format = self.detect_format(file)
-        if detected_format is None:
-            raise ValueError(f"Could not determine the audio file format for file: {file}")
-        if original_ext != f'.{detected_format}':
-            correct_ext = f'.{detected_format}'
-            new_filename = os.path.splitext(filename)[0] + correct_ext
-            new_file_path = os.path.join(os.path.dirname(file), new_filename)
-            os.rename(file, new_file_path)
-            file = new_file_path
-
-        mp3_filename = os.path.splitext(filename)[0] + '.mp3'
-        
+    async def upload_audio_file(self, ictx:CtxInteraction, audio_fp: str):
         bit_rate = int(config.ttsgen.get('mp3_bit_rate', 128))
-        with io.BytesIO() as buffer:
-            if file.endswith('wav'):
-                audio = AudioSegment.from_wav(file)
-            elif file.endswith('mp3'):
-                audio = AudioSegment.from_mp3(file)
+        ext = os.path.splitext(audio_fp)[1].lower()
+        buffer = io.BytesIO()
+        mp3_filename = os.path.splitext(os.path.basename(audio_fp))[0] + '.mp3'
+
+        try:
+            if ext == '.wav':
+                audio = AudioSegment.from_wav(audio_fp)
+                audio.export(buffer, format="mp3", bitrate=f"{bit_rate}k")
+                buffer.seek(0)
+
+            elif ext == '.mp3':
+                with open(audio_fp, 'rb') as f:
+                    buffer.write(f.read())
+                buffer.seek(0)
+
             else:
-                log.error('Recieved invalid audio file format:', file)
-            audio.export(buffer, format="mp3", bitrate=f"{bit_rate}k")
-            mp3_file = File(buffer, filename=mp3_filename)
-            
-            sent_message = await channel.send(file=mp3_file)
-            # if bot_hmessage:
-            #     bot_hmessage.update(audio_id=sent_message.id)
+                log.error(f"Unsupported audio format for upload: {audio_fp}")
+                return
+
+            # Make a normalized file dict
+            file_info:FILE_INPUT = {"file_obj": buffer,
+                                    "filename": mp3_filename,
+                                    "mime_type": "audio/mpeg",
+                                    "file_size": len(buffer.getbuffer()),
+                                    "should_close": False}
+
+            await send_content_to_discord(ictx=ictx, text=None, files=[file_info], vc=None, normalize=False)
+
+        except Exception as e:
+            log.error(f"Failed to upload audio file '{audio_fp}': {e}")
 
     async def process_audio_file(self, ictx:CtxInteraction, audio_fp:str, bot_hmessage:Optional[HMessage]=None):
         play_mode = int(config.ttsgen.get('play_mode', 0))
         # Upload to interaction channel
         if play_mode > 0:
-            await self.upload_audio_file(ictx.channel, audio_fp, bot_hmessage)
+            await self.upload_audio_file(ictx, audio_fp)
         # Play in voice channel
         is_connected = self.guild_vcs.get(ictx.guild.id)
         if is_connected and play_mode != 1 and not is_direct_message(ictx):
@@ -1235,8 +1225,8 @@ class TaskProcessing(TaskAttributes):
         # send any extra content
         await bg_task_queue.put(send_content_to_discord(self, vc=voice_clients))
 
-    def handle_api_results(self: Union["Task", "Tasks"], api_results):
-        processed_results = resolve_content_to_send(api_results)
+    def check_for_send_content(self: Union["Task", "Tasks"], api_results):
+        processed_results = collect_content_to_send(api_results)
         self.extra_text.extend(processed_results['text'])
         self.extra_audio.extend(processed_results['audio'])
         self.extra_files.extend(processed_results['files'])
@@ -2160,49 +2150,91 @@ class TaskProcessing(TaskAttributes):
 
 ####################### MOSTLY IMAGE GEN PROCESSING #########################
 
-    async def layerdiffuse_hack(self:Union["Task","Tasks"], images, pnginfo):
+    async def layerdiffuse_hack(self: Union["Task", "Tasks"], images: FILE_LIST, pnginfo) -> FILE_LIST:
         try:
             ld_output = None
-            # Find the first image with alpha channel
-            for i, image in enumerate(images):
-                if image.mode == 'RGBA':
+            ld_index = None
+
+            # Find the first image with an alpha channel (RGBA)
+            for i, image_dict in enumerate(images):
+                file_obj = image_dict["file_obj"]
+                file_obj.seek(0)
+                img = Image.open(file_obj)
+
+                if img.mode == 'RGBA':
                     if i == 0:
-                        return images # First image already has alpha
-                    ld_output = images.pop(i)
+                        return images  # First image already has alpha
+                    ld_output = img.copy()  # Store the RGBA image
+                    ld_index = i
                     break
+
             if ld_output is None:
                 log.warning("Failed to find layerdiffuse output image")
                 return images
-            temp_dir = shared_path.dir_temp_images
-            # Workaround for layerdiffuse PNG infoReActor + layerdiffuse combination
+
+            # Load and prepare the base image (img0)
             reactor_args = self.payload['alwayson_scripts'].get('reactor', {}).get('args', [])
-            if len(reactor_args) > 1 and reactor_args[1]: # if ReActor was enabled:
-                _, _, _, alpha = ld_output.split()      # Extract alpha channel from layerdiffuse output
-                img0 = Image.open(f'{temp_dir}/temp_img_0.png') # Open first image (with ReActor output)
-                img0 = img0.convert('RGBA')             # Convert it to RGBA
-                img0.putalpha(alpha)                    # apply alpha from layerdiffuse output
-            else:                           # if ReActor was not enabled:
-                img0 = ld_output            # Just replace first image with layerdiffuse output
-            img0.save(f'{temp_dir}/temp_img_0.png', pnginfo=pnginfo) # Save the local image with correct pnginfo
-            images[0] = img0 # Update images list
+            if len(reactor_args) > 1 and reactor_args[1]:  # ReActor enabled
+                # Use first image as base, apply alpha from ld_output
+                base_file = images[0]["file_obj"]
+                base_file.seek(0)
+                img0 = Image.open(base_file).convert("RGBA")
+                _, _, _, alpha = ld_output.split()
+                img0.putalpha(alpha)
+            else:
+                img0 = ld_output  # Use layerdiffuse output directly
+
+            # Replace the BytesIO in the first image dict with updated image
+            output_bytes = io.BytesIO()
+            img0.save(output_bytes, format="PNG", pnginfo=pnginfo)
+            output_bytes.seek(0)
+            output_bytes.name = images[0]["filename"]  # Reuse filename or set new one
+
+            images[0]["file_obj"] = output_bytes
+            images[0]["file_size"] = output_bytes.getbuffer().nbytes
+            images[0]["mime_type"] = "image/png"
+            images[0]["should_close"] = False
+
+            # Remove the original layerdiffuse image from the list
+            if ld_index is not None:
+                images.pop(ld_index)
+
         except Exception as e:
             log.error(f'Error processing layerdiffuse images: {e}')
+
         return images
 
-    async def apply_reactor_mask(self:Union["Task","Tasks"], images: list[Image.Image], pnginfo, reactor_mask):
+    async def apply_reactor_mask(self: Union["Task", "Tasks"], images: FILE_LIST, pnginfo, reactor_mask_b64: str) -> FILE_LIST:
         try:
-            reactor_mask = Image.open(io.BytesIO(base64.b64decode(reactor_mask))).convert('L')
-            orig_image = images[0]                           # Open original image
-            face_image = images.pop(1)                       # Open image with faceswap applied
-            face_image.putalpha(reactor_mask)                # Apply reactor mask as alpha to faceswap image
-            orig_image.paste(face_image, (0, 0), face_image) # Paste the masked faceswap image onto the original
-            orig_image.save(f'{shared_path.dir_temp_images}/temp_img_0.png', pnginfo=pnginfo)  # Save the image with correct pnginfo
-            images[0] = orig_image                           # Replace first image in images list
+            # Load reactor mask from base64, convert to L mode for alpha mask
+            reactor_mask = Image.open(io.BytesIO(base64.b64decode(reactor_mask_b64))).convert('L')
+
+            # Open original and face-swapped image from their respective file_obj streams
+            orig_image_dict = images[0]
+            face_image_dict = images[1]
+            orig_image = Image.open(orig_image_dict["file_obj"]).convert("RGBA")
+            face_image = Image.open(face_image_dict["file_obj"]).convert("RGBA")
+
+            face_image.putalpha(reactor_mask)                # Apply the mask as alpha channel to face image
+            orig_image.paste(face_image, (0, 0), face_image) # Paste the face image (with mask) onto the original
+
+            # Save the modified image back into orig_image_dict's BytesIO buffer
+            new_buf = io.BytesIO()
+            orig_image.save(new_buf, format="PNG", pnginfo=pnginfo)
+            new_buf.seek(0)
+            new_buf.name = orig_image_dict["filename"]
+
+            # Update original dict in place
+            orig_image_dict["file_obj"] = new_buf
+            orig_image_dict["file_size"] = new_buf.getbuffer().nbytes
+
+            # Replace modified dict in the list
+            images[0] = orig_image_dict
         except Exception as e:
             log.error(f'Error masking ReActor output images: {e}')
         return images
 
-    async def img_gen(self:Union["Task","Tasks"]):
+    async def img_gen(self:Union["Task","Tasks"]) -> FILE_LIST:
         reactor_args = self.payload.get('alwayson_scripts', {}).get('reactor', {}).get('args', [])
         last_item = reactor_args[-1] if reactor_args else None
         reactor_mask = reactor_args.pop() if isinstance(last_item, dict) else None
@@ -2220,7 +2252,6 @@ class TaskProcessing(TaskAttributes):
     def resolve_img_output_dir(self:Union["Task","Tasks"]):
         output_dir = shared_path.output_dir
         try:
-            base_dir = os.path.abspath(shared_path.dir_root)
             # Accept value whether it is relative or absolute
             if os.path.isabs(self.params.sd_output_dir):
                 output_dir = self.params.sd_output_dir
@@ -2234,29 +2265,32 @@ class TaskProcessing(TaskAttributes):
             os.makedirs(output_dir, exist_ok=True)
         except Exception as e:
             log.error(f"An error occurred preparing the imggen output dir: {e}")
+            return shared_path.output_dir
         return output_dir
 
-    async def process_image_gen(self:Union["Task","Tasks"]):
+    async def process_image_gen(self: Union["Task", "Tasks"]):
         output_dir = self.resolve_img_output_dir()
         try:
-            # Generate images while saving locally
-            images = await self.img_gen()
+            # Generate images and get file dicts
+            images: FILE_LIST = await self.img_gen()
             if not images:
                 return
-            # Prepare images for discord
-            # If the censor mode is 1 (blur), prefix the image file with "SPOILER_"
-            file_prefix = 'temp_img_' if self.params.img_censoring != 1 else 'SPOILER_temp_img_'
-            temp_dir = shared_path.dir_temp_images
-            image_files = [discord.File(f'{temp_dir}/temp_img_{idx}.png', filename=f'{file_prefix}{idx}.png') for idx in range(len(images))]
-            # Send images to discord
-            if self.params.should_send_image:
-                img_ref_message = getattr(self, 'img_ref_message', None)
-                await self.channel.send(files=image_files, reference=img_ref_message)
-            # Rename and move the image at index 0 to the output dir
+            
+            # Save images locally
+            save_all = config.imggen.get('save_all_outputs', False)
             timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-            main_image = f'{output_dir}/{timestamp}.png'
-            output_path = f'{temp_dir}/temp_img_0.png'
-            copyfile(output_path, main_image)
+            for i, image in enumerate(images):
+                img_idx = f'_{i}' if save_all else ''
+                image_path = os.path.join(output_dir, f"{timestamp}{img_idx}.png")
+                with open(image_path, "wb") as f:
+                    f.write(image["file_obj"].getbuffer())
+                if not save_all:
+                    break
+
+            # Send images to Discord
+            if self.params.should_send_image:
+                await send_content_to_discord(task=self, files=images, normalize=False)
+
         except Exception as e:
             log.error(f"An error occurred when processing image generation: {e}")
 
@@ -2954,8 +2988,8 @@ class Tasks(TaskProcessing):
         # Call and collect results
         api_results = await endpoint.call(ictx=self.ictx, **formatted_payload)
         if api_results:
-            self.handle_api_results(api_results)
-            await send_content_to_discord(self, vc=voice_clients)
+            self.check_for_send_content(api_results)
+            await bg_task_queue.put(send_content_to_discord(self, vc=voice_clients))
 
     def format_api_payload(self: "Task", api_payload: dict):
         def recursive_format(value):
@@ -2990,14 +3024,54 @@ class Tasks(TaskProcessing):
         # formats bot syntax like '{prompt}', {llm_0}, etc
         formatted_payload = self.format_api_payload(config)
         # Run workflow and collect results
-        workflow_results = await api.run_workflow(task=self, **formatted_payload)
+        workflow_results = await call_stepexecutor(task=self, **formatted_payload)
         if workflow_results:
-            self.handle_api_results(workflow_results)
-            await send_content_to_discord(self, vc=voice_clients)
+            self.check_for_send_content(workflow_results)
+            await bg_task_queue.put(send_content_to_discord(self, vc=voice_clients))
 
     async def workflow_task(self:"Task"):
         workflow_config = getattr(self, 'workflow_config')
         await self.run_workflow_task(workflow_config)
+
+    #################################################################
+    ###################### USER COMMAND TASK ########################
+    #################################################################
+    async def custom_command_task(self:"Task"):
+        try:
+            custom_cmd_config:dict = getattr(self, 'custom_cmd_config')
+            # Unpack config
+            cmd_name:dict = custom_cmd_config['custom_cmd_name']
+            selections:dict = custom_cmd_config['custom_cmd_selections']
+            options_meta:dict = custom_cmd_config['custom_cmd_option_meta']
+            main_steps:dict = custom_cmd_config['custom_cmd_steps']
+
+            # Process each option value with StepExecutor if steps are defined
+            processed_params = {}
+            option_names = [] # names for logging
+            for meta in options_meta:
+                name = meta["name"]
+                value = selections.get(name)
+                if value is None:
+                    continue  # Skip optional inputs not provided
+                option_names.append(name)
+                steps = meta.get("steps")
+                if steps:
+                    value = await call_stepexecutor(steps=steps, input_data=value, task=self, prefix=f'Pre-processing results of cmd option "{name}" with ')
+                processed_params[name] = value
+
+            # Run the command's main steps if defined
+            if main_steps:
+                value = await call_stepexecutor(steps=main_steps, task=self, context=processed_params, prefix=f'Processing command "{cmd_name}" with ')
+                await self.embeds.send('img_send', f'{self.user_name} used "/{cmd_name}"', f'Options: {", ".join(optname for optname in option_names)}')
+                self.check_for_send_content(value)
+                await bg_task_queue.put(send_content_to_discord(self, vc=voice_clients))
+            else:
+                await self.embeds.send('img_send', f'{self.user_name} used "/{cmd_name}"', f'Options: {", ".join(optname for optname in option_names)}')
+        except Exception as e:
+            e_msg = f'An error occurred while processing "/{cmd_name}"'
+            log.error(f'{e_msg}: {e}')
+            await self.ictx.followup.send(f'{e_msg} \n> {e}', ephemeral=True)
+            raise
 
     #################################################################
     ######################### CONTINUE TASK #########################
@@ -3106,8 +3180,9 @@ class Tasks(TaskProcessing):
         except Exception as e:
             e_msg = 'An error occurred while processing "Continue"'
             log.error(f'{e_msg}: {e}')
-            await self.ictx.followup.send(e_msg, silent=True)
+            await self.ictx.followup.send(f'{e_msg} \n> {e}', silent=True)
             await self.embeds.delete('continue') # delete embed
+            raise
 
     #################################################################
     ####################### REGENERATE TASK #########################
@@ -3229,11 +3304,11 @@ class Tasks(TaskProcessing):
             await self.embeds.delete('regenerate')
             raise
         except Exception as e:
-            print(traceback.format_exc())
             e_msg = 'An error occurred while processing "Regenerate"'
             log.error(f'{e_msg}: {e}')
-            await self.ictx.followup.send(e_msg, silent=True)
+            await self.ictx.followup.send(f'{e_msg} \n> {e}', silent=True)
             await self.embeds.delete('regenerate')
+            raise
 
     #################################################################
     ################# HIDE OR REVEAL HISTORY TASK ###################
@@ -3822,6 +3897,8 @@ class Task(Tasks):
         '''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
         self.name: str = name
         self.ictx: CtxInteraction = ictx
+        self._semaphore:Optional[asyncio.Semaphore] = None
+        self._semaphore_released: bool = False
         # TaskQueue() will initialize the Task's values before it is processed
         self.channel: discord.TextChannel = kwargs.pop('channel', None)
         self.user: Union[discord.User, discord.Member] = kwargs.pop('user', None)
@@ -3951,6 +4028,11 @@ class Task(Tasks):
         self.vars.update(self.ictx)
         self.vars.prompt = self.prompt
         self.vars.neg_prompt = self.neg_prompt
+
+    def release_semaphore(self):
+        if self._semaphore and not self._semaphore_released:
+            self._semaphore_released = True
+            self._semaphore.release()
 
     def init_typing(self, start_time=None, end_time=None):
         '''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
@@ -4123,7 +4205,7 @@ class TaskManager:
         elif queue_name == 'normal_queue':
             await self.normal_queue.put(task)
         elif queue_name == 'gen_queue':
-            await self.history_queue.put(task)
+            await self.gen_queue.put(task)
 
         # Add to centralized scheduler
         await self.scheduler_queue.put((qt.enqueue_time, qt))
@@ -4161,32 +4243,47 @@ class TaskManager:
             try:
                 # Step 1: Get the first task from the scheduler
                 first_time, first_qt = await self.scheduler_queue.get()
-                first_task:Task = first_qt.task
+                first_task: Task = first_qt.task
                 first_queue = first_qt.queue_name
+                first_sem = self.queue_semaphores[first_queue]
                 first_channel_id = first_task.get_channel_id()
 
-                if self.can_run(first_queue, first_channel_id) and self.queue_semaphores[first_queue]._value > 0:
-                    await self._run_with_semaphore(first_qt)
-                    continue
+                can_run_first = self.can_run(first_queue, first_channel_id)
+                try:
+                    await asyncio.wait_for(first_sem.acquire(), timeout=0.01)
+                    first_sem.release()
+                    if can_run_first:
+                        await self._run_with_semaphore(first_qt)
+                        continue
+                except asyncio.TimeoutError:
+                    pass
 
                 # Step 2: Look ahead to one more task
                 try:
                     second_time, second_qt = await asyncio.wait_for(self.scheduler_queue.get(), timeout=0.1)
-                    second_task:Task = second_qt.task
+                    second_task: Task = second_qt.task
                     second_queue = second_qt.queue_name
+                    second_sem = self.queue_semaphores[second_queue]
                     second_channel_id = second_task.get_channel_id()
 
-                    if self.can_run(second_queue, second_channel_id) and self.queue_semaphores[second_queue]._value > 0:
-                        # Requeue the first task (can't run now)
-                        await self.scheduler_queue.put((first_time, first_qt))
-                        await self._run_with_semaphore(second_qt)
-                    else:
-                        # Neither task can run; requeue both
-                        await self.scheduler_queue.put((first_time, first_qt))
-                        await self.scheduler_queue.put((second_time, second_qt))
-                        await asyncio.sleep(0.25)
+                    can_run_second = self.can_run(second_queue, second_channel_id)
+                    try:
+                        await asyncio.wait_for(second_sem.acquire(), timeout=0.01)
+                        second_sem.release()
+                        if can_run_second:
+                            await self.scheduler_queue.put((first_time, first_qt))
+                            await self._run_with_semaphore(second_qt)
+                            continue
+                    except asyncio.TimeoutError:
+                        pass
+
+                    # Neither task can run; requeue both
+                    await self.scheduler_queue.put((first_time, first_qt))
+                    await self.scheduler_queue.put((second_time, second_qt))
+                    await asyncio.sleep(0.25)
+
                 except asyncio.TimeoutError:
-                    # No second task available; just requeue the first and pause
+                    # No second task; requeue the first
                     await self.scheduler_queue.put((first_time, first_qt))
                     await asyncio.sleep(0.25)
 
@@ -4198,7 +4295,9 @@ class TaskManager:
 
     async def run_and_cleanup(self, qt: QueuedTask, sem: asyncio.Semaphore, channel_id: Optional[int] = None):
         task = qt.task
+        task._semaphore = sem
         queue_name = qt.queue_name
+        sem_released = False
 
         try:
             task.init_self_values()
@@ -4207,7 +4306,9 @@ class TaskManager:
             if 'message' in task.name or task.name in ['flows', 'regenerate', 'msg_image_cmd', 'speak', 'continue']:
                 task.init_typing()
 
+            log.info(f"Running task '{task.name}' from queue '{queue_name}'")
             await self.run_task(task)
+            sem_released = getattr(task, '_semaphore_released', False)
 
             if task.message is not None and getattr(task.message, 'send_time', None):
                 await message_manager.queue_delayed_message(task)
@@ -4222,10 +4323,11 @@ class TaskManager:
             logging.error(f"Error running task {task.name}: {e}")
             traceback.print_exc()
         finally:
-            self.active_queues.discard(queue_name)
-            sem.release()
-            if channel_id is not None:
-                self.locked_channels.discard(channel_id)
+            if not sem_released:
+                self.active_queues.discard(queue_name)
+                sem.release()
+                if channel_id is not None:
+                    self.locked_channels.discard(channel_id)
             task_event.clear()
 
     async def run_task(self, task: 'Task'):
@@ -4839,6 +4941,153 @@ if imggen_enabled:
         except Exception as e:
             log.error(f"An error occurred in image(): {e}")
             traceback.print_exc()
+
+#################################################################
+#################### DYNAMIC USER COMMANDS ######################
+#################################################################
+async def load_custom_commands():
+    registered_cmd_names = []
+
+    # Map from string type to actual type annotation
+    type_map = {"string": str,
+                "user": discord.User,
+                "int": int,
+                "bool": bool,
+                "float": float,
+                "channel": discord.abc.GuildChannel,
+                "role": discord.Role,
+                "mentionable": Union[discord.User, discord.Role],
+                "attachment": discord.Attachment}
+
+    commands_file_data = load_file(shared_path.custom_commands)
+    command_data:list = commands_file_data.get('commands', [])
+    for cmd in command_data:
+        try:
+            name = cmd["command_name"]
+            description = cmd.get("description", "No description")
+            options = cmd.get("options", [])
+            main_steps = cmd.get("steps", [])
+            queue_to = cmd.get("queue_to") or "gen_queue"
+            # Do not allow put to Message queue
+            if queue_to == "message_queue":
+                queue_to = "gen_queue"
+
+            # Signature parameter list (start with interaction)
+            parameters = [
+                inspect.Parameter("interaction",
+                                inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                                annotation=discord.Interaction)
+            ]
+
+            # Store choice metadata for later injection
+            option_metadata = []
+
+            for opt in options:
+                opt_name = opt["name"]
+                opt_type_str = opt["type"]
+                opt_type = type_map[opt_type_str]
+                required = opt.get("required", True)
+                choices_raw = opt.get("choices")
+                steps: Optional[list] = opt.get("steps")
+                opt_description = opt.get("description")
+                if opt_description and opt_type_str == "attachment":
+                    opt_description += " (size limits apply)"
+
+                if choices_raw:
+                    if isinstance(choices_raw[0], dict):
+                        # Dict-based: {"name": ..., "value": ...}
+                        annotation = app_commands.Choice[str]
+                        choices = [app_commands.Choice(name=c["name"], value=c["value"]) for c in choices_raw]
+                    else:
+                        # Primitive list (e.g. [0.1, 0.2, 0.3])
+                        value_type = type(choices_raw[0])
+                        annotation = app_commands.Choice[value_type]
+                        choices = [app_commands.Choice(name=str(c), value=c) for c in choices_raw]
+                else:
+                    annotation = opt_type
+                    choices = None
+
+                param = inspect.Parameter(name=opt_name,
+                                        kind=inspect.Parameter.KEYWORD_ONLY,
+                                        default=inspect.Parameter.empty if required else None,
+                                        annotation=annotation)
+                parameters.append(param)
+                option_metadata.append({"name": opt_name,
+                                        "description": opt_description,
+                                        "choices": choices,
+                                        "steps": steps})
+
+            # Create function signature
+            sig = inspect.Signature(parameters)
+
+            def make_callback(command_name:str, option_metadata:dict, queue:str, main_steps:list):
+                async def callback_template(*args, **kwargs):
+                    interaction = kwargs.pop("interaction", args[0] if args else None)
+
+                    await ireply(interaction, f'/{command_name}') # send a response msg to the user
+
+                    # Convert Choices to their actual value (but not None)
+                    raw_kwargs = {k: (v.value if isinstance(v, app_commands.Choice) else v)
+                                  for k, v in kwargs.items()
+                                  if v is not None}
+                    # Create a Task and queue it
+                    custom_command_task = Task('custom_command', interaction)
+                    custom_cmd_config = {'custom_cmd_name': command_name,
+                                         'custom_cmd_selections': raw_kwargs,
+                                         'custom_cmd_option_meta': option_metadata,
+                                         'custom_cmd_steps': main_steps}
+                    setattr(custom_command_task, 'custom_cmd_config', custom_cmd_config)
+                    await task_manager.queue_task(custom_command_task, queue_name=queue)
+                    user_name = interaction.user.display_name if hasattr(interaction, "user") else interaction.author.display_name
+                    log.info(f'{user_name} used user defined command "/{command_name}"')
+
+                return callback_template
+
+            callback_template = make_callback(name, option_metadata, queue_to, main_steps)
+            dynamic_callback = types.FunctionType(
+                callback_template.__code__,
+                globals(),
+                name,
+                argdefs=(),
+                closure=callback_template.__closure__,
+            )
+            dynamic_callback.__annotations__ = {p.name: p.annotation for p in parameters}
+            dynamic_callback.__signature__ = sig
+
+            command = app_commands.Command(
+                name=name,
+                description=description,
+                callback=dynamic_callback
+            )
+
+            # Inject choices (private API workaround)
+            for meta in option_metadata:
+                param_name = meta["name"]
+                if param_name in command._params:
+                    param = command._params[param_name]
+                    if meta.get("choices"):
+                        param.choices = meta["choices"]
+                    if hasattr(param, "description"):
+                        param.description = meta["description"]
+                    else:
+                        setattr(param, "description", meta["description"])
+                else:
+                    print(f"⚠ Warning: Parameter '{param_name}' not found in command._params")
+
+            client.tree.add_command(command)
+            registered_cmd_names.append(name)
+        except Exception as e:
+            log.error(f'[Custom Commands] An error occured while initializing "/{name}": {e}')
+    if registered_cmd_names:
+        formatted_names = ', '.join(f"'{f'/{name}'}'" for name in registered_cmd_names)
+        log.info(f"[Custom Commands] Registered: {formatted_names}")
+
+async def setup_hook():
+    try:
+        await load_custom_commands()
+    except Exception as e:
+        log.error(f'[Custom Commands] An error occured while initializing: {e}')
+asyncio.run(setup_hook())
 
 #################################################################
 ######################### MISC COMMANDS #########################
@@ -6522,17 +6771,7 @@ class ImgModel(SettingsBase):
         if not api.imggen.post_upload:
             return base64.b64encode(image).decode('utf-8')
         else:
-            # Detect MIME type
-            mime_type = guess_format_from_data(image, default='application/octet-stream')
-            mime_category = mime_type.split('/')[0]
-            # Use file_category as default if file_type is not provided
-            resolved_file_type = file_type or mime_category
-            # Prepare a file-like object
-            file_obj = io.BytesIO(image)
-            file_obj.name = filename
-            file = {"file": file_obj, "filename": filename, "content_type": mime_type}
-
-            await api.imggen.post_upload.upload_file(file=file, file_type=resolved_file_type)
+            await api.imggen.post_upload.upload_files(input_data=image, file_name=filename, file_obj_key=file_type)
             return filename
 
     async def handle_image_input(self, source: Union[discord.Attachment, bytes], file_type: Optional[str] = None, filename: Optional[str] = None) -> str:
