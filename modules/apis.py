@@ -1375,7 +1375,10 @@ class ImgGenClient(APIClient):
     async def fetch_imgmodels(self):
         return await self.get_imgmodels.call()
     
-    def decode_and_save_for_index(self, i: int, data: str | bytes | list, pnginfo=None) -> Image.Image:
+    def decode_and_save_for_index(self,
+                                  i: int,
+                                  data: str|bytes|list,
+                                  pnginfo = None) -> FILE_INPUT:
         if isinstance(data, str):
             try:
                 decoded = base64.b64decode(data)
@@ -1390,9 +1393,22 @@ class ImgGenClient(APIClient):
             decoded = data
         else:
             raise TypeError(f"Expected str, bytes, or list of ints, got {type(data)}")
+
+        # Decode and open the image
         image = Image.open(io.BytesIO(decoded))
-        image.save(f"{shared_path.dir_temp_images}/temp_img_{i}.png", pnginfo=pnginfo)
-        return image
+
+        # Save with metadata to BytesIO
+        output_bytes = io.BytesIO()
+        image.save(output_bytes, format="PNG", pnginfo=pnginfo)
+        output_bytes.seek(0)
+        output_bytes.name = f"image_{i}.png"
+        file_size = output_bytes.getbuffer().nbytes
+
+        return {"file_obj": output_bytes,
+                "filename": output_bytes.name,
+                "mime_type": "image/png",
+                "file_size": file_size,
+                "should_close": False}
 
     async def _post_image_for_pnginfo_data(self, image_data:str):
         # Build payload
@@ -1472,8 +1488,8 @@ class ImgGenClient(APIClient):
                 pass
         return images_results
 
-    async def _main_imggen(self, task) -> Tuple[list[Image.Image], Optional[PngImagePlugin.PngInfo]]:
-        img_obj_list = []
+    async def _main_imggen(self, task) -> Tuple[FILE_LIST, Optional[PngImagePlugin.PngInfo]]:
+        img_file_list = []
         pnginfo = None
         try:
             img_payload:dict = task.payload
@@ -1487,14 +1503,14 @@ class ImgGenClient(APIClient):
                 data = await self.resolve_image_data(item, i)
                 if i == 0:
                     pnginfo = await self.extract_pnginfo(data, images_list)
-                img_obj = self.decode_and_save_for_index(i, data, pnginfo)
-                img_obj_list.append(img_obj)
+                img_file:FILE_INPUT = self.decode_and_save_for_index(i, data, pnginfo)
+                img_file_list.append(img_file)
         except Exception as e:
             e_prefix = f'[{self.name}] Error processing images'
             log.error(f'{e_prefix}: {e}')
             restart_msg = f'\nIf {self.name} remains unresponsive, consider trying "/restart_sd_client" command.' if self.post_server_restart else ''
             await task.embeds.edit_or_send('img_send', e_prefix, f'{e}{restart_msg}')
-        return img_obj_list, pnginfo
+        return img_file_list, pnginfo
 
     def is_comfy(self) -> bool:
         return isinstance(self, ImgGenClient_Comfy)

@@ -140,7 +140,6 @@ class SharedPath:
     dir_user_payloads = init_shared_paths(dir_user, 'payloads', "Payloads to be used for API calls.")
     # User Images
     dir_user_images = init_shared_paths(dir_user, 'images', "Images to be used for various bot functions.")
-    dir_temp_images = init_shared_paths(dir_user_images, '__temp', "")
     old_user_images = os.path.join(dir_root, 'user_images')
     if os.path.exists(old_user_images):
         log.warning(f'Please migrate your existing "/user_images" contents to: "{dir_user_images}".')

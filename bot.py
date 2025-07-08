@@ -2150,49 +2150,91 @@ class TaskProcessing(TaskAttributes):
 
 ####################### MOSTLY IMAGE GEN PROCESSING #########################
 
-    async def layerdiffuse_hack(self:Union["Task","Tasks"], images, pnginfo):
+    async def layerdiffuse_hack(self: Union["Task", "Tasks"], images: FILE_LIST, pnginfo) -> FILE_LIST:
         try:
             ld_output = None
-            # Find the first image with alpha channel
-            for i, image in enumerate(images):
-                if image.mode == 'RGBA':
+            ld_index = None
+
+            # Find the first image with an alpha channel (RGBA)
+            for i, image_dict in enumerate(images):
+                file_obj = image_dict["file_obj"]
+                file_obj.seek(0)
+                img = Image.open(file_obj)
+
+                if img.mode == 'RGBA':
                     if i == 0:
-                        return images # First image already has alpha
-                    ld_output = images.pop(i)
+                        return images  # First image already has alpha
+                    ld_output = img.copy()  # Store the RGBA image
+                    ld_index = i
                     break
+
             if ld_output is None:
                 log.warning("Failed to find layerdiffuse output image")
                 return images
-            temp_dir = shared_path.dir_temp_images
-            # Workaround for layerdiffuse PNG infoReActor + layerdiffuse combination
+
+            # Load and prepare the base image (img0)
             reactor_args = self.payload['alwayson_scripts'].get('reactor', {}).get('args', [])
-            if len(reactor_args) > 1 and reactor_args[1]: # if ReActor was enabled:
-                _, _, _, alpha = ld_output.split()      # Extract alpha channel from layerdiffuse output
-                img0 = Image.open(f'{temp_dir}/temp_img_0.png') # Open first image (with ReActor output)
-                img0 = img0.convert('RGBA')             # Convert it to RGBA
-                img0.putalpha(alpha)                    # apply alpha from layerdiffuse output
-            else:                           # if ReActor was not enabled:
-                img0 = ld_output            # Just replace first image with layerdiffuse output
-            img0.save(f'{temp_dir}/temp_img_0.png', pnginfo=pnginfo) # Save the local image with correct pnginfo
-            images[0] = img0 # Update images list
+            if len(reactor_args) > 1 and reactor_args[1]:  # ReActor enabled
+                # Use first image as base, apply alpha from ld_output
+                base_file = images[0]["file_obj"]
+                base_file.seek(0)
+                img0 = Image.open(base_file).convert("RGBA")
+                _, _, _, alpha = ld_output.split()
+                img0.putalpha(alpha)
+            else:
+                img0 = ld_output  # Use layerdiffuse output directly
+
+            # Replace the BytesIO in the first image dict with updated image
+            output_bytes = io.BytesIO()
+            img0.save(output_bytes, format="PNG", pnginfo=pnginfo)
+            output_bytes.seek(0)
+            output_bytes.name = images[0]["filename"]  # Reuse filename or set new one
+
+            images[0]["file_obj"] = output_bytes
+            images[0]["file_size"] = output_bytes.getbuffer().nbytes
+            images[0]["mime_type"] = "image/png"
+            images[0]["should_close"] = False
+
+            # Remove the original layerdiffuse image from the list
+            if ld_index is not None:
+                images.pop(ld_index)
+
         except Exception as e:
             log.error(f'Error processing layerdiffuse images: {e}')
+
         return images
 
-    async def apply_reactor_mask(self:Union["Task","Tasks"], images: list[Image.Image], pnginfo, reactor_mask):
+    async def apply_reactor_mask(self: Union["Task", "Tasks"], images: FILE_LIST, pnginfo, reactor_mask_b64: str) -> FILE_LIST:
         try:
-            reactor_mask = Image.open(io.BytesIO(base64.b64decode(reactor_mask))).convert('L')
-            orig_image = images[0]                           # Open original image
-            face_image = images.pop(1)                       # Open image with faceswap applied
-            face_image.putalpha(reactor_mask)                # Apply reactor mask as alpha to faceswap image
-            orig_image.paste(face_image, (0, 0), face_image) # Paste the masked faceswap image onto the original
-            orig_image.save(f'{shared_path.dir_temp_images}/temp_img_0.png', pnginfo=pnginfo)  # Save the image with correct pnginfo
-            images[0] = orig_image                           # Replace first image in images list
+            # Load reactor mask from base64, convert to L mode for alpha mask
+            reactor_mask = Image.open(io.BytesIO(base64.b64decode(reactor_mask_b64))).convert('L')
+
+            # Open original and face-swapped image from their respective file_obj streams
+            orig_image_dict = images[0]
+            face_image_dict = images[1]
+            orig_image = Image.open(orig_image_dict["file_obj"]).convert("RGBA")
+            face_image = Image.open(face_image_dict["file_obj"]).convert("RGBA")
+
+            face_image.putalpha(reactor_mask)                # Apply the mask as alpha channel to face image
+            orig_image.paste(face_image, (0, 0), face_image) # Paste the face image (with mask) onto the original
+
+            # Save the modified image back into orig_image_dict's BytesIO buffer
+            new_buf = io.BytesIO()
+            orig_image.save(new_buf, format="PNG", pnginfo=pnginfo)
+            new_buf.seek(0)
+            new_buf.name = orig_image_dict["filename"]
+
+            # Update original dict in place
+            orig_image_dict["file_obj"] = new_buf
+            orig_image_dict["file_size"] = new_buf.getbuffer().nbytes
+
+            # Replace modified dict in the list
+            images[0] = orig_image_dict
         except Exception as e:
             log.error(f'Error masking ReActor output images: {e}')
         return images
 
-    async def img_gen(self:Union["Task","Tasks"]):
+    async def img_gen(self:Union["Task","Tasks"]) -> FILE_LIST:
         reactor_args = self.payload.get('alwayson_scripts', {}).get('reactor', {}).get('args', [])
         last_item = reactor_args[-1] if reactor_args else None
         reactor_mask = reactor_args.pop() if isinstance(last_item, dict) else None
@@ -2210,7 +2252,6 @@ class TaskProcessing(TaskAttributes):
     def resolve_img_output_dir(self:Union["Task","Tasks"]):
         output_dir = shared_path.output_dir
         try:
-            base_dir = os.path.abspath(shared_path.dir_root)
             # Accept value whether it is relative or absolute
             if os.path.isabs(self.params.sd_output_dir):
                 output_dir = self.params.sd_output_dir
@@ -2224,29 +2265,32 @@ class TaskProcessing(TaskAttributes):
             os.makedirs(output_dir, exist_ok=True)
         except Exception as e:
             log.error(f"An error occurred preparing the imggen output dir: {e}")
+            return shared_path.output_dir
         return output_dir
 
-    async def process_image_gen(self:Union["Task","Tasks"]):
+    async def process_image_gen(self: Union["Task", "Tasks"]):
         output_dir = self.resolve_img_output_dir()
         try:
-            # Generate images while saving locally
-            images = await self.img_gen()
+            # Generate images and get file dicts
+            images: FILE_LIST = await self.img_gen()
             if not images:
                 return
-            # Prepare images for discord
-            # If the censor mode is 1 (blur), prefix the image file with "SPOILER_"
-            file_prefix = 'temp_img_' if self.params.img_censoring != 1 else 'SPOILER_temp_img_'
-            temp_dir = shared_path.dir_temp_images
-            image_files = [discord.File(f'{temp_dir}/temp_img_{idx}.png', filename=f'{file_prefix}{idx}.png') for idx in range(len(images))]
-            # Send images to discord
-            if self.params.should_send_image:
-                img_ref_message = getattr(self, 'img_ref_message', None)
-                await self.channel.send(files=image_files, reference=img_ref_message)
-            # Rename and move the image at index 0 to the output dir
+            
+            # Save images locally
+            save_all = config.imggen.get('save_all_outputs', False)
             timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-            main_image = f'{output_dir}/{timestamp}.png'
-            output_path = f'{temp_dir}/temp_img_0.png'
-            copyfile(output_path, main_image)
+            for i, image in enumerate(images):
+                img_idx = f'_{i}' if save_all else ''
+                image_path = os.path.join(output_dir, f"{timestamp}{img_idx}.png")
+                with open(image_path, "wb") as f:
+                    f.write(image["file_obj"].getbuffer())
+                if not save_all:
+                    break
+
+            # Send images to Discord
+            if self.params.should_send_image:
+                await send_content_to_discord(task=self, files=images, normalize=False)
+
         except Exception as e:
             log.error(f"An error occurred when processing image generation: {e}")
 

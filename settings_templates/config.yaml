@@ -89,6 +89,7 @@ ttsgen:
 # Imggen settings. If enabled, check API configuration in 'dict_api_settings.yaml'
 imggen:
   enabled: true                 # Controls whether SD WebUI is part of the bot (does not register relavent commands for discord, etc)
+  save_all_outputs: true        # If main image processing returns multiple images, whether to save them all or not
   # The following are only applicable for A1111 / Forge / ReForge (the bot will detect this via API)
   extensions:                   # Only set extensions as True if they are installed AND active in your A1111.
     controlnet_enabled: false   # Requires: sd-webui-controlnet (https://github.com/Mikubill/sd-webui-controlnet) AND configuring 'dict_cmdoptions.yaml'

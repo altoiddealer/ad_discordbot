@@ -412,9 +412,13 @@ async def send_content_to_discord(task = None,
     ictx = task.ictx if task else ictx
     if not ictx:
         raise RuntimeError('A discord interaction is required for send_context_to_discord()')
-    text = task.extra_text if task else text
-    audio = task.extra_audio if task else audio
-    files = task.extra_files if task else files
+    if text is None and task:
+        text = task.extra_text
+    if audio is None and task:
+        audio = task.extra_audio
+    if files is None and task:
+        files = task.extra_files
+
     try:
         if text:
             # header = "**__Extra text__**:\n"
