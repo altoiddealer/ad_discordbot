@@ -642,17 +642,21 @@ class StepExecutor:
         - file_format: Explicit format (e.g. 'json', 'jpg').
         - file_name: Optional file name (without extension).
         - file_path: Relative directory inside output_dir.
-        - returns: dict containing:
-                "file_path" (str) - full path to file
-                "file_format" (str) - file format without leading period
-                "file_name" (str) - filename including extension
-                "file_data" - original or decoded data as applicable
+        - use_timestamp: Adds a timestamp to the file.
+        - overwrite: Whether to overwrite an existing file.
+
+        returns: dict containing:
+        - "file_path" (str) - full path to file
+        - "file_format" (str) - file format without leading period
+        - "file_name" (str) - filename including extension
+        - "file_data" - original or decoded data as applicable
         """
         return await processing.save_any_file(data=data,
                                               file_format=config.get('file_format'),
                                               file_name=config.get('file_name'),
                                               file_path=config.get('file_path', ''),
                                               use_timestamp=config.get('timestamp', True),
+                                              overwrite=config.get('overwrite', False)
                                               response=self.response,
                                               msg_prefix='[StepExecutor] ')
 
