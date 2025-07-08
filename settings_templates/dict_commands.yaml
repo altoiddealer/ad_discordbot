@@ -6,6 +6,33 @@ commands: [] # (delete brackets when using the '-' list item notation)
 
 # These have no effect unless moved up into 'commands'
 examples:
+  - command_name: remove_bg
+    description: Remove the background from an image, with optional threshold value
+    options:
+      - name: rembg_image
+        description: The image to remove the background from
+        type: attachment
+        required: true
+        steps:
+          - save:
+              file_path: comfy-input # This should be a symlink from comfyUI input directory, to your output directory.
+              timestamp: false       # Override default timestamp (which could make duplicate inputs in the input dir)
+            returns: file_name       # Extract filename from save result dict
+      - name: threshold
+        description: Adjusts the strength of the edge detection
+        type: string
+        required: false
+        choices: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
+        steps:
+          - type: float
+    # All selection data will be initialzed into context (can be used to resolve payload fields, etc)
+    steps:
+      - load_data_file: comfy_workflows/comfy_remove_bg.json
+      - call_comfy:
+          client: ComfyUI
+          message: Removing background from image
+          file_path: comfy
+
   - command_name: wan_iv2v
     description: Generate a video from prompt, starting image, and driving video
     options:
@@ -41,7 +68,7 @@ examples:
           input_data: null
           context: "{context}"
 
-  - command_name: send_file
+  - command_name: echo_file
     description: Send an attachment
     options:
       - name: file

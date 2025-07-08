@@ -30,7 +30,8 @@ async def save_any_file(data: Any,
                         file_path:str='',
                         use_timestamp:bool=True,
                         response = None,
-                        msg_prefix:str = ''):
+                        msg_prefix:str = '',
+                        overwrite:bool = False):
     """
     Save input data to a file and returns dict.
 
@@ -78,6 +79,13 @@ async def save_any_file(data: Any,
 
     full_path = output_path / f"{file_name}.{file_format}"
     file_name = f"{file_name}.{file_format}"
+
+    if not overwrite and full_path.exists():
+        log.warning(f"{msg_prefix}File already exists (skipped): ...{full_path.parent.name}/{full_path.name}")
+        return {"file_path": str(full_path),
+                "file_format": file_format,
+                "file_name": file_name,
+                "file_data": data}
 
     binary_formats = {"jpg", "jpeg", "png", "webp", "gif", "bmp", "tiff", "mp3", "wav", "ogg", "flac",
                       "mp4", "webm", "avi", "mov", "mkv", "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx",
