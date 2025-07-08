@@ -10,7 +10,7 @@ from PIL import Image, PngImagePlugin
 import io
 import base64
 import copy
-from modules.typing import CtxInteraction
+from modules.typing import CtxInteraction, FILE_INPUT, FILE_LIST
 from typing import get_type_hints, get_type_hints, get_origin, get_args, Any, Tuple, Optional, Union, Callable, AsyncGenerator
 from modules.utils_shared import shared_path, bot_database, load_file
 from modules.utils_misc import progress_bar, extract_key, deep_merge, split_at_first_comma, detect_audio_format, remove_meta_keys
@@ -1178,14 +1178,14 @@ class APIClient:
                              duration: int = -1,
                              num_yields: int = -1,
                              progress_key: str = "progress",
-                             max_key: Optional[str] = None,
-                             eta_key: Optional[str] = None,
+                             max_key: str|None = None,
+                             eta_key: str|None = None,
                              message: str = 'Generating',
-                             ictx=None,
-                             task=None,
+                             ictx: CtxInteraction|None = None,
+                             task = None,
                              type_filter: list[str] = ["progress", "executed"], # websocket
-                             data_filter: Optional[dict] = None, # websocket
-                             completion_condition: Optional[Callable[[dict], bool]] = None,
+                             data_filter: dict|None = None, # websocket
+                             completion_condition: Callable[[dict], bool]|None = None,
                              **kwargs) -> list[dict]:
         """
         Polls an endpoint while sending a progress Embed to discord.
@@ -1494,7 +1494,7 @@ class ImgGenClient(APIClient):
             log.error(f'{e_prefix}: {e}')
             restart_msg = f'\nIf {self.name} remains unresponsive, consider trying "/restart_sd_client" command.' if self.post_server_restart else ''
             await task.embeds.edit_or_send('img_send', e_prefix, f'{e}{restart_msg}')
-        return img_obj_list, pnginfo   
+        return img_obj_list, pnginfo
 
     def is_comfy(self) -> bool:
         return isinstance(self, ImgGenClient_Comfy)
@@ -1730,12 +1730,12 @@ class ImgGenClient_Comfy(ImgGenClient):
 
     async def _post_prompt(self,
                            img_payload:dict,
-                           mode:str="txt2img",
-                           task=None,
-                           ictx=None,
-                           message:str="Generating image",
-                           endpoint:Union["Endpoint", None]=None,
-                           completed_node_id:int|None=None) -> str:
+                           mode:str = "txt2img",
+                           task = None,
+                           ictx:CtxInteraction|None = None,
+                           message:str = "Generating image",
+                           endpoint:Union["Endpoint", None] = None,
+                           completed_node_id:int|None = None) -> str:
         # Ensure meta keys removed
         img_payload = remove_meta_keys(img_payload)
         # Resolve malformatted payload
@@ -1772,15 +1772,15 @@ class ImgGenClient_Comfy(ImgGenClient):
 
     async def _execute_prompt(self,
                               payload:dict,
-                              endpoint:Union["Endpoint", None]=None,
-                              ictx=None,
-                              task=None,
-                              message:str="Generating",
-                              outputs:list[str]=['images'],
-                              output_node_ids:list[int]=[],
-                              completed_node_id:int|None=None,
-                              file_path:str='',
-                              returns:str='file_path'):
+                              endpoint:Union["Endpoint", None] = None,
+                              ictx:CtxInteraction|None = None,
+                              task = None,
+                              message:str = "Generating",
+                              outputs:list[str] = ['images'],
+                              output_node_ids:list[int] = [],
+                              completed_node_id:int|None = None,
+                              file_path:str = '',
+                              returns:str = 'file_path'):
         # Queue prompt > track progress
         prompt_id = await self._post_prompt(payload, mode=None, task=task, ictx=ictx, message=message, endpoint=endpoint, completed_node_id=completed_node_id)
         # Fetch results (list of bytes)
@@ -2153,12 +2153,12 @@ class Endpoint:
         return json_payload, data_payload, params_payload, files_payload
 
     async def call(self,
-                   input_data: dict = None,
-                   payload_map: dict = None,
-                   sanitize:bool=False,
-                   main:bool=False,
-                   task=None,
-                   ictx=None,
+                   input_data: dict|None = None,
+                   payload_map: dict|None = None,
+                   sanitize: bool = False,
+                   main: bool = False,
+                   task = None,
+                   ictx: CtxInteraction|None = None,
                    **kwargs
                    ) -> Any:
         if self.client is None:
@@ -2236,13 +2236,13 @@ class Endpoint:
         return results
 
     async def upload_files(self, 
-                        input_data=None,
-                        file_name='file.bin',
-                        file_obj_key='file',
-                        normalized_inputs: list = None,
-                        **kwargs):
+                           input_data: Any = None,
+                           file_name:str = 'file.bin',
+                           file_obj_key:str = 'file',
+                           normalized_inputs: FILE_LIST|None = None,
+                           **kwargs) -> list:
 
-        normalized_files = normalized_inputs or processing.normalize_file_inputs(input_data, file_name)
+        normalized_files:FILE_LIST = normalized_inputs or processing.normalize_file_inputs(input_data, file_name)
         results_list = []
 
         for file in normalized_files:

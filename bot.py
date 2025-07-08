@@ -3,7 +3,7 @@ import logging as _logging
 from datetime import datetime, timedelta
 from dataclasses import dataclass, field
 from dataclasses_json import dataclass_json
-from typing import Any, Optional, Tuple
+from typing import Any, Optional, Tuple, Union, Literal
 from pathlib import Path
 import asyncio
 import random
@@ -30,9 +30,8 @@ import copy
 from shutil import copyfile
 import sys
 import traceback
-from modules.typing import ChannelID, UserID, MessageID, CtxInteraction  # noqa: F401
+from modules.typing import ChannelID, UserID, MessageID, CtxInteraction, FILE_INPUT, FILE_LIST  # noqa: F401
 import signal
-from typing import Union, Literal
 from functools import partial
 import inspect
 import types
@@ -751,11 +750,11 @@ class VoiceClients:
                 return
 
             # Make a normalized file dict
-            file_info = {"file_obj": buffer,
-                         "filename": mp3_filename,
-                         "mime_type": "audio/mpeg",
-                         "file_size": len(buffer.getbuffer()),
-                         "should_close": False}
+            file_info:FILE_INPUT = {"file_obj": buffer,
+                                    "filename": mp3_filename,
+                                    "mime_type": "audio/mpeg",
+                                    "file_size": len(buffer.getbuffer()),
+                                    "should_close": False}
 
             await send_content_to_discord(ictx=ictx, text=None, files=[file_info], vc=None, normalize=False)
 
@@ -4162,7 +4161,7 @@ class TaskManager:
         elif queue_name == 'normal_queue':
             await self.normal_queue.put(task)
         elif queue_name == 'gen_queue':
-            await self.history_queue.put(task)
+            await self.gen_queue.put(task)
 
         # Add to centralized scheduler
         await self.scheduler_queue.put((qt.enqueue_time, qt))
@@ -4200,32 +4199,47 @@ class TaskManager:
             try:
                 # Step 1: Get the first task from the scheduler
                 first_time, first_qt = await self.scheduler_queue.get()
-                first_task:Task = first_qt.task
+                first_task: Task = first_qt.task
                 first_queue = first_qt.queue_name
+                first_sem = self.queue_semaphores[first_queue]
                 first_channel_id = first_task.get_channel_id()
 
-                if self.can_run(first_queue, first_channel_id) and self.queue_semaphores[first_queue]._value > 0:
-                    await self._run_with_semaphore(first_qt)
-                    continue
+                can_run_first = self.can_run(first_queue, first_channel_id)
+                try:
+                    await asyncio.wait_for(first_sem.acquire(), timeout=0.01)
+                    first_sem.release()
+                    if can_run_first:
+                        await self._run_with_semaphore(first_qt)
+                        continue
+                except asyncio.TimeoutError:
+                    pass
 
                 # Step 2: Look ahead to one more task
                 try:
                     second_time, second_qt = await asyncio.wait_for(self.scheduler_queue.get(), timeout=0.1)
-                    second_task:Task = second_qt.task
+                    second_task: Task = second_qt.task
                     second_queue = second_qt.queue_name
+                    second_sem = self.queue_semaphores[second_queue]
                     second_channel_id = second_task.get_channel_id()
 
-                    if self.can_run(second_queue, second_channel_id) and self.queue_semaphores[second_queue]._value > 0:
-                        # Requeue the first task (can't run now)
-                        await self.scheduler_queue.put((first_time, first_qt))
-                        await self._run_with_semaphore(second_qt)
-                    else:
-                        # Neither task can run; requeue both
-                        await self.scheduler_queue.put((first_time, first_qt))
-                        await self.scheduler_queue.put((second_time, second_qt))
-                        await asyncio.sleep(0.25)
+                    can_run_second = self.can_run(second_queue, second_channel_id)
+                    try:
+                        await asyncio.wait_for(second_sem.acquire(), timeout=0.01)
+                        second_sem.release()
+                        if can_run_second:
+                            await self.scheduler_queue.put((first_time, first_qt))
+                            await self._run_with_semaphore(second_qt)
+                            continue
+                    except asyncio.TimeoutError:
+                        pass
+
+                    # Neither task can run; requeue both
+                    await self.scheduler_queue.put((first_time, first_qt))
+                    await self.scheduler_queue.put((second_time, second_qt))
+                    await asyncio.sleep(0.25)
+
                 except asyncio.TimeoutError:
-                    # No second task available; just requeue the first and pause
+                    # No second task; requeue the first
                     await self.scheduler_queue.put((first_time, first_qt))
                     await asyncio.sleep(0.25)
 
@@ -4239,6 +4253,7 @@ class TaskManager:
         task = qt.task
         task._semaphore = sem
         queue_name = qt.queue_name
+        sem_released = False
 
         try:
             task.init_self_values()
@@ -4247,7 +4262,9 @@ class TaskManager:
             if 'message' in task.name or task.name in ['flows', 'regenerate', 'msg_image_cmd', 'speak', 'continue']:
                 task.init_typing()
 
+            log.info(f"Running task '{task.name}' from queue '{queue_name}'")
             await self.run_task(task)
+            sem_released = getattr(task, '_semaphore_released', False)
 
             if task.message is not None and getattr(task.message, 'send_time', None):
                 await message_manager.queue_delayed_message(task)
@@ -4262,7 +4279,7 @@ class TaskManager:
             logging.error(f"Error running task {task.name}: {e}")
             traceback.print_exc()
         finally:
-            if not task._semaphore_released:
+            if not sem_released:
                 self.active_queues.discard(queue_name)
                 sem.release()
                 if channel_id is not None:

@@ -13,12 +13,13 @@ from pathlib import Path
 from pydub import AudioSegment
 import io
 import mimetypes
-from typing import Any, Optional, Callable
+from typing import Any, Union, Optional, Callable
 from modules.utils_misc import extract_key, normalize_mime_type, guess_format_from_headers, guess_format_from_data, is_base64
 from modules.utils_shared import config, shared_path, get_api
 from modules.utils_discord import send_long_message
 from modules.apis import API, Endpoint, apisettings
 from discord import File
+from modules.typing import CtxInteraction, FILE_INPUT, FILE_LIST
 
 from modules.logs import import_track, get_logger; import_track(__file__, fp=True); log = get_logger(__name__)  # noqa: E702
 logging = log
@@ -278,7 +279,8 @@ def build_completion_condition(condition_config: dict, context_vars: dict = None
 
     return condition_func
 
-def split_files_by_size(normalized_files, max_discord_size=10 * 1024 * 1024):
+def split_files_by_size(normalized_files: FILE_LIST,
+                        max_discord_size=10 * 1024 * 1024) -> tuple[list, list]:
     small_files = []
     large_files = []
 
@@ -290,7 +292,8 @@ def split_files_by_size(normalized_files, max_discord_size=10 * 1024 * 1024):
 
     return small_files, large_files
 
-def normalize_file_inputs(input_data, filename:str='file.bin') -> list[dict]:
+def normalize_file_inputs(input_data:Union[dict, bytes, str],
+                          filename:str='file.bin') -> FILE_LIST:
     input_list = input_data if isinstance(input_data, list) else [input_data]
     normalized = []
 
@@ -337,13 +340,11 @@ def normalize_file_inputs(input_data, filename:str='file.bin') -> list[dict]:
         else:
             raise TypeError(f"Unsupported input type: {type(item)}")
 
-        normalized.append({
-            "file_obj": file_obj,
-            "filename": filename,
-            "mime_type": mime_type,
-            "file_size": file_size,
-            "should_close": should_close,
-        })
+        normalized.append({"file_obj": file_obj,
+                           "filename": filename,
+                           "mime_type": mime_type,
+                           "file_size": file_size,
+                           "should_close": should_close})
 
     return normalized
 
@@ -401,7 +402,13 @@ def collect_content_to_send(all_content) -> dict:
 
     return resolved_content
 
-async def send_content_to_discord(task=None, ictx=None, text=None, audio=None, files=None, vc=None, normalize=True):
+async def send_content_to_discord(task = None,
+                                  ictx: CtxInteraction|None = None,
+                                  text: dict|None = None,
+                                  audio: dict|None = None,
+                                  files: Any|FILE_INPUT|FILE_LIST|None = None,
+                                  vc = None,
+                                  normalize: bool = True):
     ictx = task.ictx if task else ictx
     if not ictx:
         raise RuntimeError('A discord interaction is required for send_context_to_discord()')
@@ -425,8 +432,10 @@ async def send_content_to_discord(task=None, ictx=None, text=None, audio=None, f
 
         if files:
             if normalize:
-                # NOTE: bytes + BytesIO objects will fail unless provided in a dict including file_name
+                # NOTE: bytes + BytesIO objects **WILL FAIL unless provided in a dict including "file_name"**
                 files = normalize_file_inputs(files)
+
+            files: FILE_LIST
             small, large = files, None
             upload_large_files_ep = None
 
