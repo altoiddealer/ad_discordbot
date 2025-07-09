@@ -246,6 +246,10 @@ class TGWUI():
                         log.error(f'Setup failed for extension {name}:', e)
                 extensions_module.state[name] = [True, i, extension]
             except Exception:
+                if name == self.tts.extension:
+                    self.tts.enabled = False
+                    self.tts.extension = None
+                shared.args.extensions.remove(name)
                 log.error(f'Failed to load the extension "{name}".')
                 traceback.print_exc()
 
