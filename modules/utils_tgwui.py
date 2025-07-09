@@ -227,7 +227,7 @@ class TGWUI():
                         extension = importlib.import_module(f"extensions.{name}.script")
                 except ModuleNotFoundError:
                     extension_location = Path('user_data/extensions') / name if user_script_path.exists() else Path('extensions') / name
-                    log.error(f"[Text Generation WebUI Extension Error for '{name}']"
+                    log.error(f"[Text Generation WebUI Extension Error for '{name}']\n\n"
                               f"Could not import the requirements for '{name}'. Make sure to install the requirements for the extension.\n\n"
                               f"* To install requirements for all available extensions, launch the\n  update_wizard script for your OS and choose the B option.\n\n"
                               f"* To install the requirements for this extension alone, launch the\n  cmd script for your OS and paste the following command in the\n  terminal window that appears:\n\n"
@@ -252,6 +252,13 @@ class TGWUI():
     def init_extensions(self):
         shared.args.extensions = []
         extensions_module.available_extensions = utils.get_available_extensions()
+
+        # Initialize shared args extensions
+        if shared.settings.get('default_extensions'):
+            for extension in shared.settings['default_extensions']:
+                shared.args.extensions = shared.args.extensions or []
+                if extension not in shared.args.extensions:
+                    shared.args.extensions.append(extension)
 
     def init_tts_extensions(self):
         # If any TTS extension defined in config.yaml, set tts bot vars and add extension to shared.args.extensions
@@ -293,7 +300,7 @@ class TGWUI():
                     shared.args.extensions.pop(extension)
 
     def activate_extensions(self):
-        if shared.args.extensions and len(shared.args.extensions) > 0:
+        if shared.args.extensions is not None and len(shared.args.extensions) > 0:
             extensions_module.load_extensions(extensions_module.available_extensions)
 
     def init_llmmodels(self):
