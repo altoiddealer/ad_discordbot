@@ -1,0 +1,42 @@
+  {
+    "__overrides__": {
+        "rembg_image": "example.png",
+        "threshold": 0.5
+  },
+
+  "1": {
+    "inputs": {
+      "image": "{rembg_image}"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "Load Image"
+    }
+  },
+  "14": {
+    "inputs": {
+      "images": [
+        "19",
+        0
+      ]
+    },
+    "class_type": "PreviewImage",
+    "_meta": {
+      "title": "Preview Image"
+    }
+  },
+  "19": {
+    "inputs": {
+      "threshold": "{threshold}",
+      "torchscript_jit": "default",
+      "image": [
+        "1",
+        0
+      ]
+    },
+    "class_type": "InspyrenetRembgAdvanced",
+    "_meta": {
+      "title": "Inspyrenet Rembg Advanced"
+    }
+  }
+}
