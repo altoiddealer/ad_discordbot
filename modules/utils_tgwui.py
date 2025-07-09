@@ -8,6 +8,7 @@ import sys
 import yaml
 import aiohttp
 import importlib
+import traceback
 from pathlib import Path
 from threading import Lock
 from typing import Optional, Tuple
@@ -205,48 +206,52 @@ class TGWUI():
         shared.model_config.move_to_end('.*', last=False)  # Move to the beginning
 
     # legacy version of load_extensions() which allows extension params to be updated during runtime
-    def load_extensions(self, extensions, available_extensions):
+    def load_extensions(self, available_extensions):
         extensions_module.state = {}
-        for index, name in enumerate(shared.args.extensions):
-            if name in available_extensions:
-                if name.endswith('_tts') and self.tts.extension is None:
-                    log.warning(f'A TTS extension "{name}" attempted to load which was not set in config.yaml TTS Settings. Errors are likely to occur.')
-                if name != 'api':
-                    if not bot_database.was_warned(name):
-                        bot_database.update_was_warned(name)
-                        log.info(f'Loading {"your configured TTS extension" if name == self.tts.extension else "the extension"} "{name}"')
+        for i, name in enumerate(shared.args.extensions):
+            if name not in available_extensions:
+                continue
+            if name.endswith('_tts') and self.tts.extension is None:
+                log.warning(f'A TTS extension "{name}" attempted to load which was not set in config.yaml TTS Settings. Errors are likely to occur.')
+            if name != 'api':
+                if not bot_database.was_warned(name):
+                    bot_database.update_was_warned(name)
+                    log.info(f'Loading {"your configured TTS extension" if name == self.tts.extension else "the extension"} "{name}"')
+            try:
                 try:
-                    try:
+                    # Prefer user extension, fall back to system extension
+                    user_script_path = Path(f'user_data/extensions/{name}/script.py')
+                    if user_script_path.exists():
+                        extension = importlib.import_module(f"user_data.extensions.{name}.script")
+                    else:
                         extension = importlib.import_module(f"extensions.{name}.script")
-                    except ModuleNotFoundError:
-                        log.error(f"Could not import the requirements for '{name}'. Make sure to install the requirements for the extension.\n\n \
-                                  Linux / Mac:\n\npip install -r extensions/{name}/requirements.txt --upgrade\n\nWindows:\n\npip install -r extensions\\{name}\\requirements.txt --upgrade\n\n \
-                                  If you used the one-click installer, paste the command above in the terminal window opened after launching the cmd script for your OS.")
-                        raise
+                except ModuleNotFoundError:
+                    extension_location = Path('user_data/extensions') / name if user_script_path.exists() else Path('extensions') / name
+                    log.error(f"[Text Generation WebUI Extension Error for '{name}']"
+                              f"Could not import the requirements for '{name}'. Make sure to install the requirements for the extension.\n\n"
+                              f"* To install requirements for all available extensions, launch the\n  update_wizard script for your OS and choose the B option.\n\n"
+                              f"* To install the requirements for this extension alone, launch the\n  cmd script for your OS and paste the following command in the\n  terminal window that appears:\n\n"
+                              f"Linux / Mac:\n\npip install -r {extension_location}/requirements.txt --upgrade\n\n"
+                              f"Windows:\n\npip install -r {extension_location}\\requirements.txt --upgrade\n")
+                    raise
 
-                    extensions_module.apply_settings(extension, name)
-                    setup_name = f"{name}_setup"
-                    if hasattr(extension, "setup") and not bot_database.was_warned(setup_name):
-                        bot_database.update_was_warned(setup_name)
-                        log.warning(f'Extension "{name}" has "setup" attribute. Trying to load...')
-                        try:
-                            extension.setup()
-                        except Exception as e:
-                            log.error(f'Setup failed for extension {name}:', e)
-                    extensions_module.state[name] = [True, index]
-                except Exception:
-                    log.error(f'Failed to load the extension "{name}".')
+                extensions_module.apply_settings(extension, name)
+                setup_name = f"{name}_setup"
+                if hasattr(extension, "setup") and not bot_database.was_warned(setup_name):
+                    bot_database.update_was_warned(setup_name)
+                    log.warning(f'Extension "{name}" has "setup" attribute. Trying to load...')
+                    try:
+                        extension.setup()
+                    except Exception as e:
+                        log.error(f'Setup failed for extension {name}:', e)
+                extensions_module.state[name] = [True, i, extension]
+            except Exception:
+                log.error(f'Failed to load the extension "{name}".')
+                traceback.print_exc()
 
     def init_extensions(self):
         shared.args.extensions = []
         extensions_module.available_extensions = utils.get_available_extensions()
-
-        # Initialize shared args extensions
-        if shared.settings.get('default_extensions'):
-            for extension in shared.settings['default_extensions']:
-                shared.args.extensions = shared.args.extensions or []
-                if extension not in shared.args.extensions:
-                    shared.args.extensions.append(extension)
 
     def init_tts_extensions(self):
         # If any TTS extension defined in config.yaml, set tts bot vars and add extension to shared.args.extensions
@@ -289,7 +294,7 @@ class TGWUI():
 
     def activate_extensions(self):
         if shared.args.extensions and len(shared.args.extensions) > 0:
-            extensions_module.load_extensions(extensions_module.extensions, extensions_module.available_extensions)
+            extensions_module.load_extensions(extensions_module.available_extensions)
 
     def init_llmmodels(self):
         all_llmmodels = utils.get_available_models()
@@ -375,7 +380,7 @@ class TGWUI():
                     shared.settings.update({'{}-{}'.format(param, key): value for key, value in listed_param.items()})
             else:
                 log.warning('** No extension params for this character. Reloading extensions with initial values. **')
-            extensions_module.load_extensions(extensions_module.extensions, extensions_module.available_extensions)  # Load Extensions (again)
+            extensions_module.load_extensions(extensions_module.available_extensions)  # Load Extensions (again)
         except Exception as e:
             log.error(f"An error occurred while updating character extension settings: {e}")
 

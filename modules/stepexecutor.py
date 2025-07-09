@@ -656,7 +656,7 @@ class StepExecutor:
                                               file_name=config.get('file_name'),
                                               file_path=config.get('file_path', ''),
                                               use_timestamp=config.get('timestamp', True),
-                                              overwrite=config.get('overwrite', False)
+                                              overwrite=config.get('overwrite', False),
                                               response=self.response,
                                               msg_prefix='[StepExecutor] ')
 
