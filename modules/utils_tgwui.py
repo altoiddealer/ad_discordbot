@@ -86,7 +86,7 @@ class TTS:
                 extensions[self.extension]['activate'] = True
                 await tgwui.update_extensions(extensions)
         except Exception as e:
-            log.error(f'[TTS] An error occurred while toggling the TTS on/off: {e}')
+            log.error(f'[{self.tts.extension}] An error occurred while toggling the TTS on/off: {e}')
         return False
     
     async def apply_toggle_tts(self, settings) -> str:
@@ -269,7 +269,7 @@ class TGWUI():
         if self.tts.extension:
             self.tts.enabled = True
             if 'alltalk' in self.tts.extension:
-                log.warning('[TTS] If using AllTalk v2, extension params may fail to apply (changing voices, etc). Full support is coming soon.')
+                log.warning(f'[{self.tts.extension}] If using AllTalk v2, extension params may fail to apply (changing voices, etc).')
                 self.tts.voice_key = 'voice'
                 self.tts.lang_key = 'language'
                 # All TTS extensions with "alltalk" in the name are supported
@@ -288,18 +288,18 @@ class TGWUI():
             if self.tts.extension not in shared.args.extensions:
                 shared.args.extensions.append(self.tts.extension)
             if self.tts.extension not in self.tts.supported_extensions:
-                log.warning(f'[TTS] The "/speak" command will not be registered for "{self.tts.extension}".')
-                log.warning(f'[TTS] List of supported tts_clients: {self.tts.supported_extensions}')
+                log.warning(f'[{self.tts.extension}] The "/speak" command will not be registered.')
+                log.warning(f'[{self.tts.extension}] Supported TTS extensions: {self.tts.supported_extensions}')
 
             # Ensure only one TTS extension is running
             excess_tts_clients = []
             for extension in shared.args.extensions:
                 extension:str
                 if extension.endswith('_tts') and extension != self.tts.extension:
-                    log.warning(f'[TTS] Your configured TTS client is "{self.tts.extension}", but another TTS extension "{extension}" attempted to load. Skipping "{extension}".')
+                    log.warning(f'[{self.tts.extension}] An undefined TTS extension "{extension}" attempted to load. Skipping...')
                     excess_tts_clients.append(extension)
             if excess_tts_clients:
-                log.warning(f'[TTS] Skipping: {excess_tts_clients}')
+                log.warning(f'[{self.tts.extension}] Skipping: {excess_tts_clients}')
                 for extension in excess_tts_clients:
                     shared.args.extensions.pop(extension)
 
