@@ -1199,7 +1199,7 @@ class APIClient:
             self.cancel_callback = cancel_callback
             self.author = user
 
-        @discord.ui.button(label="Cancel Generation", style=discord.ButtonStyle.danger, custom_id="cancel_button")
+        @discord.ui.button(label="Cancel Generation", style=discord.ButtonStyle.secondary, custom_id="cancel_button")
         async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
             if interaction.user.id != self.author.id and not client.is_owner(interaction.user):
                 await interaction.response.send_message("Only the initial user may cancel this task!",
