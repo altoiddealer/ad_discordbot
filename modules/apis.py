@@ -10,12 +10,14 @@ from PIL import Image, PngImagePlugin
 import io
 import base64
 import copy
-from modules.typing import CtxInteraction, FILE_INPUT, FILE_LIST
+from modules.typing import CtxInteraction, FILE_INPUT, APIRequestCancelled
 from typing import get_type_hints, get_type_hints, get_origin, get_args, Any, Tuple, Optional, Union, Callable, AsyncGenerator
-from modules.utils_shared import shared_path, bot_database, load_file
+from modules.utils_shared import client, shared_path, bot_database, load_file
 from modules.utils_misc import progress_bar, extract_key, deep_merge, split_at_first_comma, detect_audio_format, remove_meta_keys
 import modules.utils_processing as processing
-from modules.utils_discord import Embeds
+from discord.ui import View, Button
+import discord
+from modules.utils_discord import Embeds, get_user_ctx_inter
 
 from modules.logs import import_track, get_logger; import_track(__file__, fp=True); log = get_logger(__name__)  # noqa: E702
 logging = log
@@ -516,6 +518,7 @@ class APIClient:
         self.endpoints: dict[str, Endpoint] = {}
         self.openapi_schema = None
         self.fetching_progress = False
+        self.cancel_event = asyncio.Event()
         self._endpoint_fetch_payloads = []
         # WebSocket connection
         self.ws = None
@@ -1079,6 +1082,7 @@ class APIClient:
         yield_count = 0
         last_yield_time = 0.0
         buffered_result = None
+        MIN_RECEIVE_TIMEOUT = 1.0
 
         while True:
             now = time.monotonic()
@@ -1103,11 +1107,27 @@ class APIClient:
                 if not self.ws or self.ws.closed:
                     await self.connect_websocket()
 
-                try:
-                    MIN_RECEIVE_TIMEOUT = 1.0
-                    msg = await self.ws.receive(timeout=(interval if interval >= MIN_RECEIVE_TIMEOUT else timeout))
-                except asyncio.TimeoutError:
-                    # Flush buffered result if yield interval has passed
+                # Wait for message OR cancel event OR timeout
+                receive_task = asyncio.create_task(self.ws.receive())
+                wait_tasks = [receive_task]
+                cancel_task = asyncio.create_task(self.cancel_event.wait())
+                wait_tasks.append(cancel_task)
+
+                done, pending = await asyncio.wait(
+                    wait_tasks,
+                    timeout=(interval if interval >= MIN_RECEIVE_TIMEOUT else timeout),
+                    return_when=asyncio.FIRST_COMPLETED
+                )
+
+                if cancel_task in done:
+                    receive_task.cancel()
+                    raise APIRequestCancelled
+
+                if receive_task in done:
+                    msg = receive_task.result()
+                else:
+                    receive_task.cancel()
+                    # Timeout occurred
                     if buffered_result and (interval == 0.0 or (time.monotonic() - last_yield_time) >= interval):
                         yield buffered_result
                         yield_count += 1
@@ -1168,8 +1188,27 @@ class APIClient:
                     log.info(f"[{self.name}] WebSocket polling stopped after num_yields {num_yields}")
                     break
 
+            except APIRequestCancelled:
+                raise
             except Exception as e:
                 log.exception(f"[{self.name}] WebSocket polling failed: {e}")
+
+    class CancelView(View):
+        def __init__(self, cancel_callback: callable, user: discord.User, timeout: float = 300):
+            super().__init__(timeout=timeout)
+            self.cancel_callback = cancel_callback
+            self.author = user
+
+        @discord.ui.button(label="Cancel Generation", style=discord.ButtonStyle.danger, custom_id="cancel_button")
+        async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
+            if interaction.user.id != self.author.id and not client.is_owner(interaction.user):
+                await interaction.response.send_message("Only the initial user may cancel this task!",
+                                                        ephemeral=True)
+                return
+
+            await interaction.response.defer()
+            await self.cancel_callback()
+            self.stop()
 
     async def track_progress(self,
                              endpoint: Optional["Endpoint"] = None,
@@ -1193,8 +1232,8 @@ class APIClient:
         If `max` is specified, progress is interpreted as a step count and normalized as (progress / max).
         Otherwise, progress is assumed to be a float between 0.0 and 1.0.
         """
-        from modules.utils_discord import Embeds
         embeds = task.embeds if task else Embeds(ictx)
+        ictx = task.ictx if task else ictx
 
         # Resolve endpoint / websocket
         if not endpoint and not use_ws:
@@ -1202,6 +1241,11 @@ class APIClient:
             if not endpoint:
                 log.warning(f'[{self.name}] "track_progress" has no configured endpoint. Defaulting to assume websocket method.')
                 use_ws = True
+
+        cancel_ep = getattr(self, "post_cancel", None)
+        async def cancel_callback():
+            await cancel_ep.call()
+            self.cancel_event.set()
 
         # Resolve progress_values
         return_values:dict = kwargs.pop("return_values", {})
@@ -1230,7 +1274,12 @@ class APIClient:
             title = f'Waiting for {self.name} ...'
             description = f'{progress_bar(0)}'
             eta_message = ''
-            await embeds.send('img_gen', title, description)
+            embed_msg = await embeds.send('img_gen', title, description)
+            # Attach button if cancel endpoint exists
+            if cancel_ep and embed_msg and ictx:
+                ictx_user = get_user_ctx_inter(ictx)
+                view = self.CancelView(cancel_callback, user=ictx_user)
+                await embed_msg.edit(view=view)
 
             poller = self.poll_ws(return_values=progress_values,
                                   interval=interval,
@@ -1249,6 +1298,8 @@ class APIClient:
 
             async for update in poller:
                 try:
+                    if self.cancel_event.is_set():
+                        raise APIRequestCancelled()
                     # Collect updates
                     updates.append(update)
 
@@ -1294,10 +1345,16 @@ class APIClient:
                     await embeds.edit_or_send('img_gen', f'[{self.name}] An error occurred while {message}', e)
                     break
 
+        except APIRequestCancelled:
+            log.info(f"[{self.name}] Generation was cancelled by user.")
+            await embed_msg.edit(view=View())
+            await embeds.edit_or_send('img_gen', f"[{self.name}] Generation was cancelled.", " ")
+            raise
         finally:
-            await embeds.delete('img_gen')
             self.fetching_progress = False
+            self.cancel_event.clear()
 
+        await embeds.delete('img_gen')
         return updates
 
 # Dummy main objects to allow graceful evaluation
@@ -1336,6 +1393,7 @@ class DummyClient:
 class ImgGenClient(APIClient):
     post_txt2img: Optional["ImgGenEndpoint_PostTxt2Img"] = None
     post_img2img: Optional["ImgGenEndpoint_PostImg2Img"] = None
+    post_cancel: Optional["ImgGenEndpoint_PostCancel"] = None
     get_progress: Optional["ImgGenEndpoint_GetProgress"] = None
     post_pnginfo: Optional["ImgGenEndpoint_PostPNGInfo"] = None
     post_options: Optional["ImgGenEndpoint_PostOptions"] = None
@@ -1358,6 +1416,7 @@ class ImgGenClient(APIClient):
     def get_endpoint_class_map(self) -> dict[str, type]:
         return {"post_txt2img": ImgGenEndpoint_PostTxt2Img,
                 "post_img2img": ImgGenEndpoint_PostImg2Img,
+                "post_cancel": ImgGenEndpoint_PostCancel,
                 "get_progress": ImgGenEndpoint_GetProgress,
                 "post_pnginfo": ImgGenEndpoint_PostPNGInfo,
                 "post_options": ImgGenEndpoint_PostOptions,
@@ -1488,7 +1547,7 @@ class ImgGenClient(APIClient):
                 pass
         return images_results
 
-    async def _main_imggen(self, task) -> Tuple[FILE_LIST, Optional[PngImagePlugin.PngInfo]]:
+    async def _main_imggen(self, task) -> Tuple[list[FILE_INPUT], Optional[PngImagePlugin.PngInfo]]:
         img_file_list = []
         pnginfo = None
         try:
@@ -1892,7 +1951,6 @@ class Endpoint:
         self.stream = stream
         self.timeout = timeout
         self.retry = retry
-        self.queued = 0
         self._semaphore = asyncio.Semaphore(concurrency_limit) if concurrency_limit else None
         if payload_config:
             self.init_payload(payload_config)
@@ -2255,10 +2313,10 @@ class Endpoint:
                            input_data: Any = None,
                            file_name:str = 'file.bin',
                            file_obj_key:str = 'file',
-                           normalized_inputs: FILE_LIST|None = None,
+                           normalized_inputs: list[FILE_INPUT] | None = None,
                            **kwargs) -> list:
 
-        normalized_files:FILE_LIST = normalized_inputs or processing.normalize_file_inputs(input_data, file_name)
+        normalized_files:list[FILE_INPUT] = normalized_inputs or processing.normalize_file_inputs(input_data, file_name)
         results_list = []
 
         for file in normalized_files:
@@ -2503,6 +2561,10 @@ class ImgGenEndpoint_PostImg2Img(ImgGenEndpoint):
         if isinstance(self.client, ImgGenClient_Comfy):
             return None, None
         return self.prompt_key, self.neg_prompt_key
+
+class ImgGenEndpoint_PostCancel(ImgGenEndpoint):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
 
 class ImgGenEndpoint_GetProgress(ImgGenEndpoint):
     def __init__(self, *args, **kwargs):

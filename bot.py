@@ -30,7 +30,7 @@ import copy
 from shutil import copyfile
 import sys
 import traceback
-from modules.typing import ChannelID, UserID, MessageID, CtxInteraction, FILE_INPUT, FILE_LIST  # noqa: F401
+from modules.typing import ChannelID, UserID, MessageID, CtxInteraction, FILE_INPUT, APIRequestCancelled  # noqa: F401
 import signal
 from functools import partial
 import inspect
@@ -2150,7 +2150,7 @@ class TaskProcessing(TaskAttributes):
 
 ####################### MOSTLY IMAGE GEN PROCESSING #########################
 
-    async def layerdiffuse_hack(self: Union["Task", "Tasks"], images: FILE_LIST, pnginfo) -> FILE_LIST:
+    async def layerdiffuse_hack(self: Union["Task", "Tasks"], images: list[FILE_INPUT], pnginfo) -> list[FILE_INPUT]:
         try:
             ld_output = None
             ld_index = None
@@ -2204,7 +2204,7 @@ class TaskProcessing(TaskAttributes):
 
         return images
 
-    async def apply_reactor_mask(self: Union["Task", "Tasks"], images: FILE_LIST, pnginfo, reactor_mask_b64: str) -> FILE_LIST:
+    async def apply_reactor_mask(self: Union["Task", "Tasks"], images: list[FILE_INPUT], pnginfo, reactor_mask_b64: str) -> list[FILE_INPUT]:
         try:
             # Load reactor mask from base64, convert to L mode for alpha mask
             reactor_mask = Image.open(io.BytesIO(base64.b64decode(reactor_mask_b64))).convert('L')
@@ -2234,7 +2234,7 @@ class TaskProcessing(TaskAttributes):
             log.error(f'Error masking ReActor output images: {e}')
         return images
 
-    async def img_gen(self:Union["Task","Tasks"]) -> FILE_LIST:
+    async def img_gen(self:Union["Task","Tasks"]) -> list[FILE_INPUT]:
         reactor_args = self.payload.get('alwayson_scripts', {}).get('reactor', {}).get('args', [])
         last_item = reactor_args[-1] if reactor_args else None
         reactor_mask = reactor_args.pop() if isinstance(last_item, dict) else None
@@ -2272,7 +2272,7 @@ class TaskProcessing(TaskAttributes):
         output_dir = self.resolve_img_output_dir()
         try:
             # Generate images and get file dicts
-            images: FILE_LIST = await self.img_gen()
+            images: list[FILE_INPUT] = await self.img_gen()
             if not images:
                 return
             
@@ -4318,6 +4318,8 @@ class TaskManager:
                 await bot_status.schedule_go_idle()
 
         except TaskCensored:
+            pass
+        except APIRequestCancelled:
             pass
         except Exception as e:
             logging.error(f"Error running task {task.name}: {e}")

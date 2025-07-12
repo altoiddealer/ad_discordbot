@@ -31,10 +31,12 @@ class FileInput(TypedDict):
     should_close: bool
 
 FILE_INPUT = FileInput
-FILE_LIST = list[FILE_INPUT]
 
 Message = Union[CtxInteraction, str, dict|None, dict|None]
 
 
 class AlertUserError(DiscordException):
+    pass
+
+class APIRequestCancelled(BaseException):
     pass
