@@ -1,6 +1,7 @@
 from discord.ext import commands
 import discord
 from typing import Union, Any, IO, TypedDict
+import asyncio
 from discord.errors import DiscordException
 
 ChannelID = str
@@ -39,4 +40,6 @@ class AlertUserError(DiscordException):
     pass
 
 class APIRequestCancelled(BaseException):
-    pass
+    def __init__(self, message: str = "", cancel_event: asyncio.Event = None):
+        super().__init__(message)
+        self.cancel_event = cancel_event

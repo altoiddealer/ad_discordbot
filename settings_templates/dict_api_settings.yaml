@@ -28,6 +28,7 @@ bot_api_functions:
       seed_key: seed                  # ex: payload = {'seed': 12345, ...}
       images_result_key: images       # ex: response = {'images': <list of images in base64 format>, ...}
     post_img2img: {endpoint_name: Post img2img, prompt_key: prompt, neg_prompt_key: negative_prompt, seed_key: seed, images_result_key: images}
+    post_cancel: {endpoint_name: Cancel}
     get_progress:
       endpoint_name: Get Progress
       progress_key: progress          # ex: response = {'progress': 0.2, ...}
@@ -103,6 +104,7 @@ all_apis:
       - name: Post img2img
         path: /sdapi/v1/img2img
         preset: sd-txt2img-img2img-endpoints # See 'presets' further down
+      - {name: Cancel, path: /sdapi/v1/interrupt, method: POST}
       - {name: Get Progress, path: /sdapi/v1/progress, method: GET}
       - {name: Post PNG Info, path: /sdapi/v1/png-info, method: POST}
       - {name: Get Checkpoints, path: /sdapi/v1/sd-models, method: GET}
@@ -122,6 +124,7 @@ all_apis:
       - {name: Post txt2img, path: /API/GenerateText2ImageWS, method: POST, payload_base: swarm.yaml, payload_type: json}
       - {name: Post img2img, path: /API/GenerateText2ImageWS, method: POST, payload_base: swarm.yaml, payload_type: json}
       - {name: Post Options, path: /API/SelectModel, method: POST}
+      - {name: Cancel, path: /API/InterruptAll, method: POST}
 
   - name: ComfyUI
     url: http://127.0.0.1:8188
@@ -151,7 +154,7 @@ all_apis:
       - {name: History, path: "/history/{}", method: GET} # ex: prompt_id is formatted into {}
       - {name: View, path: /view, method: GET, payload_type: query, response_type: bytes}
       - {name: Upload, path: "/upload/{}", method: POST, headers: {Content-Type: multipart/form-data}, payload_type: multipart, payload: upload_files.yaml} # ex: "image" is formatted into {}
-      - {name: Cancel, path: /interrupt, method: POST}
+      - {name: Cancel, path: /interrupt, method: POST, response_type: text}
       # Placeholder. The bot will automatically fetch model values for CheckpointLoaderSimple, UnetLoaderGGUF and UNETLoader. Create an Github issue if you feel more should be included.
       - {name: Get Checkpoints, path: "/object_info/CheckpointLoaderSimple", method: GET}
       # 'method: null' will skip API call, and simply return the payload as the result. In this case, user needs to manually configure a '/user/payload/cnet_data.yaml'

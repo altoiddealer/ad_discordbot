@@ -4,7 +4,7 @@ from PIL import Image, PngImagePlugin
 import io
 import base64
 import filetype
-from modules.typing import CtxInteraction
+from modules.typing import CtxInteraction, APIRequestCancelled
 from typing import Any, Optional, Union
 from modules.utils_shared import client, shared_path, load_file, get_api
 from modules.utils_misc import valueparser, set_key, extract_key
@@ -90,6 +90,12 @@ class StepExecutor:
 
                 result = self._process_step_result(meta, result, step_result, step_name)
 
+            except APIRequestCancelled as e:
+                if e.cancel_event:
+                    e.cancel_event.clear()
+                log.info(e)
+                if self.task:
+                    await self.task.embeds.edit_or_send('img_gen', str(e), " ")
             except Exception as e:
                 on_error = meta.get("on_error", "raise")
                 if on_error == "skip":

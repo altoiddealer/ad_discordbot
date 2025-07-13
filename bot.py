@@ -4319,8 +4319,11 @@ class TaskManager:
 
         except TaskCensored:
             pass
-        except APIRequestCancelled:
-            pass
+        except APIRequestCancelled as e:
+            if e.cancel_event:
+                e.cancel_event.clear()
+            log.info(e)
+            await task.embeds.edit_or_send('img_gen', str(e), " ")
         except Exception as e:
             logging.error(f"Error running task {task.name}: {e}")
             traceback.print_exc()

@@ -1121,7 +1121,7 @@ class APIClient:
 
                 if cancel_task in done:
                     receive_task.cancel()
-                    raise APIRequestCancelled
+                    raise APIRequestCancelled(f"[{self.name}] Generation was cancelled by user.", cancel_event=self.cancel_event)
 
                 if receive_task in done:
                     msg = receive_task.result()
@@ -1188,8 +1188,6 @@ class APIClient:
                     log.info(f"[{self.name}] WebSocket polling stopped after num_yields {num_yields}")
                     break
 
-            except APIRequestCancelled:
-                raise
             except Exception as e:
                 log.exception(f"[{self.name}] WebSocket polling failed: {e}")
 
@@ -1244,7 +1242,8 @@ class APIClient:
 
         cancel_ep = getattr(self, "post_cancel", None)
         async def cancel_callback():
-            await cancel_ep.call()
+            payload = cancel_ep.get_payload()
+            await cancel_ep.call(input_data=payload)
             self.cancel_event.set()
 
         # Resolve progress_values
@@ -1299,7 +1298,7 @@ class APIClient:
             async for update in poller:
                 try:
                     if self.cancel_event.is_set():
-                        raise APIRequestCancelled()
+                        raise APIRequestCancelled(f"[{self.name}] Generation was cancelled by user.", cancel_event=self.cancel_event)
                     # Collect updates
                     updates.append(update)
 
@@ -1345,16 +1344,12 @@ class APIClient:
                     await embeds.edit_or_send('img_gen', f'[{self.name}] An error occurred while {message}', e)
                     break
 
-        except APIRequestCancelled:
-            log.info(f"[{self.name}] Generation was cancelled by user.")
-            await embed_msg.edit(view=View())
-            await embeds.edit_or_send('img_gen', f"[{self.name}] Generation was cancelled.", " ")
-            raise
         finally:
             self.fetching_progress = False
-            self.cancel_event.clear()
-
-        await embeds.delete('img_gen')
+            if self.cancel_event.is_set():
+                await embed_msg.edit(view=View())
+            else:
+                await embeds.delete('img_gen')
         return updates
 
 # Dummy main objects to allow graceful evaluation
@@ -1525,8 +1520,6 @@ class ImgGenClient(APIClient):
                 await self.call_track_progress(task)
         except Exception as e:
             log.error(f'Error tracking {self.name} image generation progress: {e}')
-        finally:
-            await task.embeds.delete('img_gen')
 
     async def call_imggen_endpoint(self, img_payload:dict, mode:str="txt2img"):
         ep_for_mode:Union[ImgGenEndpoint_PostTxt2Img, ImgGenEndpoint_PostImg2Img] = getattr(self, f'post_{mode}')
@@ -1555,6 +1548,8 @@ class ImgGenClient(APIClient):
             mode:str = task.params.mode
             # Get the results
             images_results = await self.post_for_images(task, img_payload, mode)
+            if self.cancel_event.is_set():
+                raise APIRequestCancelled(f"[{self.name}] Generation was cancelled by user.", cancel_event=self.cancel_event)
             # Ensure the results are a list of base64 or bytes
             images_list = await self.unpack_image_results(images_results)
             # Optionally add png info to first result > save > returns PIL images and pnginfo
@@ -1564,6 +1559,8 @@ class ImgGenClient(APIClient):
                     pnginfo = await self.extract_pnginfo(data, images_list)
                 img_file:FILE_INPUT = self.decode_and_save_for_index(i, data, pnginfo)
                 img_file_list.append(img_file)
+            # Delete embed on success
+            await task.embeds.delete('img_gen')
         except Exception as e:
             e_prefix = f'[{self.name}] Error processing images'
             log.error(f'{e_prefix}: {e}')
@@ -2369,6 +2366,8 @@ class Endpoint:
         start_time = time.monotonic()
 
         while True:
+            if self.client.cancel_event.is_set():
+                raise APIRequestCancelled(f"[{self.client.name}] Generation was cancelled by user.", cancel_event=self.client.cancel_event)
             # Check stop conditions
             if duration > 0:
                 elapsed = time.monotonic() - start_time
@@ -2383,8 +2382,12 @@ class Endpoint:
                 raise
 
             if not response_data:
-                await asyncio.sleep(interval)
-                continue
+                try:
+                    await asyncio.wait_for(self.client.cancel_event.wait(), timeout=interval)
+                    # Generation was cancelled
+                    raise APIRequestCancelled(f"[{self.client.name}] Generation was cancelled by user.", cancel_event=self.client.cancel_event)
+                except asyncio.TimeoutError:
+                    continue # normal timeout happened
 
             # Check for completion condition
             if completion_condition and completion_condition(response_data):
