@@ -673,7 +673,7 @@ class StepExecutor:
 
         api:API = await get_api()
         client_name, endpoint_name, _ = self.resolve_api_names(config, 'call_comfy')
-        comfy_client:APIClient = api.get_client(client_name=client_name, strict=True)
+        comfy_client:ImgGenClient_Comfy = api.get_client(client_name=client_name, strict=True)
         if not isinstance(comfy_client, ImgGenClient_Comfy):
             raise RuntimeError(f'[StepExecutor] API Client "{client_name}" is not ComfyUI. Cannot run step "call_comfy".')
 
@@ -686,6 +686,20 @@ class StepExecutor:
         
         return await comfy_client._execute_prompt(payload, endpoint, self.ictx, self.task, **config)
 
+    async def _step_free_comfy_memory(self, data: Any, config: dict):
+        unload_models = config.get('unload_models', True)
+        free_memory = config.get('free_memory', True)
+        if not unload_models or free_memory:
+            log.warning(f"[StepExecutor] step 'free_comfy_memory' expected either 'unload_models' or 'free_memory'.")
+            return data
+        api:API = await get_api()
+        client_name, _, _ = self.resolve_api_names(config, 'call_comfy')
+        comfy_client:ImgGenClient_Comfy = api.get_client(client_name=client_name, strict=True)
+        if not isinstance(comfy_client, ImgGenClient_Comfy):
+            raise RuntimeError(f'[StepExecutor] API Client "{client_name}" is not ComfyUI. Cannot run step "free_comfy_memory".')
+        
+        return await comfy_client._free_memory(unload_models,
+                                               free_memory)
 
 # async def _process_file_input(self, path: str, input_type: str):
 #     if input_type == "text":
