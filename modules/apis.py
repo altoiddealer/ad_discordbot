@@ -317,7 +317,7 @@ class API:
 
         elif not api_client.enabled:
             if strict:
-                raise RuntimeError(f'{msg_prefix} is currently disabled.')
+                raise RuntimeError(f"{msg_prefix} is currently disabled. Use '/toggle_api' to enable the client when available.")
             else:
                 log.warning(f'{msg_prefix} is currently disabled.')
             return None
@@ -1744,6 +1744,10 @@ class ImgGenClient_Comfy(ImgGenClient):
         except Exception as e:
             log.error(f"Error: {e}")
             pass
+
+    async def _free_memory(self, unload_models:bool = True, free_memory:bool = True):
+        payload = {'unload_models': unload_models, 'free_memory': free_memory}
+        await self.request(endpoint='/free', method='POST', json=payload)
 
     async def extract_pnginfo(self, data, images_list) -> None:
         return None

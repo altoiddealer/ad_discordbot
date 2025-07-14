@@ -3056,12 +3056,12 @@ class Tasks(TaskProcessing):
                 option_names.append(name)
                 steps = meta.get("steps")
                 if steps:
-                    value = await call_stepexecutor(steps=steps, input_data=value, task=self, prefix=f'Pre-processing results of cmd option "{name}" with ')
+                    value = await call_stepexecutor(steps=steps, input_data=value, context=processed_params, task=self, prefix=f'Pre-processing results of cmd option "{name}" with ')
                 processed_params[name] = value
 
             # Run the command's main steps if defined
             if main_steps:
-                value = await call_stepexecutor(steps=main_steps, task=self, context=processed_params, prefix=f'Processing command "{cmd_name}" with ')
+                value = await call_stepexecutor(steps=main_steps, task=self, input_data=processed_params, context=processed_params, prefix=f'Processing command "{cmd_name}" with ')
                 await self.embeds.send('img_send', f'{self.user_name} used "/{cmd_name}"', f'Options: {", ".join(optname for optname in option_names)}')
                 self.check_for_send_content(value)
                 await bg_task_queue.put(send_content_to_discord(self, vc=voice_clients))
