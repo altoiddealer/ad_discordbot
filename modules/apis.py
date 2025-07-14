@@ -317,7 +317,7 @@ class API:
 
         elif not api_client.enabled:
             if strict:
-                raise RuntimeError(f'{msg_prefix} is currently disabled.')
+                raise RuntimeError(f"{msg_prefix} is currently disabled. Use '/toggle_api' to enable the client when available.")
             else:
                 log.warning(f'{msg_prefix} is currently disabled.')
             return None
