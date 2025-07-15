@@ -2310,14 +2310,17 @@ class Endpoint:
 
         return results
 
-    async def upload_files(self, 
+    async def upload_files(self,
                            input_data: Any = None,
                            file_name:str = 'file.bin',
                            file_obj_key:str = 'file',
                            normalized_inputs: list[FILE_INPUT] | None = None,
+                           data_payload: dict | None = None,
+                           path_vars: Union[str, tuple, list, dict, None] = None,
                            **kwargs) -> list:
 
         normalized_files:list[FILE_INPUT] = normalized_inputs or processing.normalize_file_inputs(input_data, file_name)
+        data_payload = data_payload or {}
         results_list = []
 
         for file in normalized_files:
@@ -2334,9 +2337,14 @@ class Endpoint:
             field_name = getattr(self, '_file_key', None) or file_obj_key or mime_category
 
             payload = self.get_payload()
+            extra_data = payload.get('data', {})
+            if data_payload and extra_data:
+                file_data_payload = copy.deepcopy(data_payload)
+                extra_data = deep_merge(extra_data, file_data_payload)
+            payload['data'] = extra_data
             payload['files'] = {field_name: file_dict}
 
-            path_vars = mime_category if '{}' in self.path else None
+            path_vars = path_vars or (mime_category if '{}' in self.path else None)
             result = await self.call(payload_map=payload, path_vars=path_vars, **kwargs)
 
             if isinstance(result, APIResponse):
