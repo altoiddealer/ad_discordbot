@@ -2320,6 +2320,7 @@ class Endpoint:
                            **kwargs) -> list:
 
         normalized_files:list[FILE_INPUT] = normalized_inputs or processing.normalize_file_inputs(input_data, file_name)
+        data_payload = data_payload or {}
         results_list = []
 
         for file in normalized_files:
@@ -2336,7 +2337,8 @@ class Endpoint:
             field_name = getattr(self, '_file_key', None) or file_obj_key or mime_category
 
             payload = self.get_payload()
-            payload['data'] = data_payload or payload.get('data', {})
+            file_data_payload = copy.deepcopy(data_payload)
+            payload['data'] = deep_merge(payload.get('data', {}), file_data_payload)
             payload['files'] = {field_name: file_dict}
 
             path_vars = path_vars or (mime_category if '{}' in self.path else None)

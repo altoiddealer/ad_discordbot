@@ -4666,7 +4666,7 @@ if imggen_enabled:
                 log_msg += f"\nNegative Prompt: {neg_prompt}"
             if img2img:
                 async def process_image_img2img(img2img, img2img_dict, mode, log_msg):
-                    i2i_image = await imgmodel_settings._handle_image_input(img2img, file_type='image', task=image_cmd_task)
+                    i2i_image = await imgmodel_settings._handle_image_input(img2img, file_type='img2img', task=image_cmd_task)
                     img2img_dict['image'] = i2i_image
                     # Ask user to select a Denoise Strength
                     denoise_options = []
@@ -4694,20 +4694,20 @@ if imggen_enabled:
                     log.error(f"An error occurred while configuring Img2Img for /image command: {e}")
             if img2img_mask:
                 if img2img:
-                    img2img_mask_img = await imgmodel_settings._handle_image_input(img2img_mask, file_type='mask', task=image_cmd_task)
+                    img2img_mask_img = await imgmodel_settings._handle_image_input(img2img_mask, file_type='img2img_mask', task=image_cmd_task)
                     img2img_dict['mask'] = img2img_mask_img
                     log_msg += "\nInpainting Mask Provided"
                 else:
                     await ctx.send("Inpainting requires im2img. Not applying img2img_mask mask...", ephemeral=True)
             if face_swap:
-                faceswapimg = await imgmodel_settings._handle_image_input(face_swap, file_type='image', task=image_cmd_task)
+                faceswapimg = await imgmodel_settings._handle_image_input(face_swap, file_type='face_swap', task=image_cmd_task)
                 log_msg += "\nFace Swap Image Provided"
             if cnet:
                 # Get filtered ControlNet data
                 cnet_data = await get_cnet_data()
                 async def process_image_controlnet(cnet, cnet_dict, log_msg):
                     try:
-                        cnet_dict['image'] = await imgmodel_settings._handle_image_input(cnet, file_type='image', task=image_cmd_task)
+                        cnet_dict['image'] = await imgmodel_settings._handle_image_input(cnet, file_type='controlnet', task=image_cmd_task)
                     except Exception as e:
                         log.error(f"Error decoding ControlNet input image for '/image' command: {e}")
                     try:
@@ -7235,16 +7235,20 @@ class ImgModel_Comfy(ImgModel):
                                  task: Optional["Task"] = None) -> str:     
         data_payload = {'type': 'input', 'overwrite': True}
         path_vars = "image"
+        prefix = None
         if file_type.endswith("_mask"):
             path_vars = "mask"
             prefix = getattr(task, f'_{file_type[:-5]}', None)
             if not prefix:
                 log.warning("Received mask input with unmatched image input.")
                 return filename
-            data_payload['original_ref'] = prefix
+            original_ref = json.dumps({"filename": prefix,
+                                       "subfolder": "",
+                                       "type": "input"})
+            data_payload['original_ref'] = original_ref
         else:
             setattr(task, f'_{file_type}', filename)
-
+        file_type = 'image'
         await api.imggen.post_upload.upload_files(input_data=image,
                                                   file_name=filename,
                                                   file_obj_key=file_type,
