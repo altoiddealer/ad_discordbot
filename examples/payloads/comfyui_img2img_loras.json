@@ -196,7 +196,7 @@
       "width": "{width}",
       "height": "{height}",
       "interpolation": "nearest",
-      "method": "stretch",
+      "method": "fill / crop",
       "condition": "always",
       "multiple_of": 0,
       "image": [

@@ -1,5 +1,6 @@
 import aiohttp
 from json import loads as json_loads
+from json import dumps as json_dumps
 import asyncio
 import os
 import jsonschema
@@ -1429,7 +1430,7 @@ class ImgGenClient(APIClient):
     async def fetch_imgmodels(self):
         return await self.get_imgmodels.call()
     
-    def decode_and_save_for_index(self,
+    def _decode_and_save_for_index(self,
                                   i: int,
                                   data: str|bytes|list,
                                   pnginfo = None) -> FILE_INPUT:
@@ -1473,7 +1474,7 @@ class ImgGenClient(APIClient):
         # post for image gen data
         return await self.post_pnginfo.call(input_data=pnginfo_payload, main=True)
 
-    async def extract_pnginfo(self, data: str|bytes|list, images_list:list) -> PngImagePlugin.PngInfo | None:
+    async def build_pnginfo(self, data: str|bytes|list, images_list:list, img_payload:dict) -> PngImagePlugin.PngInfo | None:
         if not self.post_pnginfo:
             return None
         if isinstance(data, str):
@@ -1556,8 +1557,8 @@ class ImgGenClient(APIClient):
             for i, item in enumerate(images_list):
                 data = await self.resolve_image_data(item, i)
                 if i == 0:
-                    pnginfo = await self.extract_pnginfo(data, images_list)
-                img_file:FILE_INPUT = self.decode_and_save_for_index(i, data, pnginfo)
+                    pnginfo = await self.build_pnginfo(data, images_list, img_payload)
+                img_file:FILE_INPUT = self._decode_and_save_for_index(i, data, pnginfo)
                 img_file_list.append(img_file)
             # Delete embed on success
             await task.embeds.delete('img_gen')
@@ -1631,7 +1632,7 @@ class ImgGenClient_Swarm(ImgGenClient):
             self.ws = None
             raise
     
-    async def extract_pnginfo(self, data, images_list) -> None:
+    async def build_pnginfo(self, data: str|bytes|list, images_list:list, img_payload:dict) -> PngImagePlugin.PngInfo | None:
         return None
 
     async def resolve_image_data(self, item:dict, index: int) -> bytes:
@@ -1749,8 +1750,11 @@ class ImgGenClient_Comfy(ImgGenClient):
         payload = {'unload_models': unload_models, 'free_memory': free_memory}
         await self.request(endpoint='/free', method='POST', json=payload)
 
-    async def extract_pnginfo(self, data, images_list) -> None:
-        return None
+    async def build_pnginfo(self, data: str|bytes|list, images_list:list, img_payload:dict) -> PngImagePlugin.PngInfo:
+        pnginfo = PngImagePlugin.PngInfo()
+        info_data = str(img_payload)
+        pnginfo = pnginfo.add_text("prompt", info_data)
+        return pnginfo
 
     async def _resolve_output_data(self, item:dict) -> bytes:
         if self.get_view:
