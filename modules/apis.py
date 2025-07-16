@@ -1430,6 +1430,9 @@ class ImgGenClient(APIClient):
     async def fetch_imgmodels(self):
         return await self.get_imgmodels.call()
     
+    def image_contains_metainfo(self, image:Image.Image) -> bool:
+        return False
+
     def _decode_and_save_for_index(self,
                                   i: int,
                                   data: str|bytes|list,
@@ -1454,7 +1457,10 @@ class ImgGenClient(APIClient):
 
         # Save with metadata to BytesIO
         output_bytes = io.BytesIO()
-        image.save(output_bytes, format="PNG", pnginfo=pnginfo)
+        if self.image_contains_metainfo(image):
+            image.save(output_bytes, format="PNG")
+        else:
+            image.save(output_bytes, format="PNG", pnginfo=pnginfo)
         output_bytes.seek(0)
         output_bytes.name = f"image_{i}.png"
         file_size = output_bytes.getbuffer().nbytes
@@ -1631,7 +1637,10 @@ class ImgGenClient_Swarm(ImgGenClient):
             log.error(f"[{self.name}] failed to connect to WebSocket: {e}")
             self.ws = None
             raise
-    
+
+    def image_contains_metainfo(self, image:Image.Image) -> bool:
+        return False # 'parameters' in image.info
+
     async def build_pnginfo(self, data: str|bytes|list, images_list:list, img_payload:dict) -> PngImagePlugin.PngInfo | None:
         return None
 
@@ -1750,11 +1759,11 @@ class ImgGenClient_Comfy(ImgGenClient):
         payload = {'unload_models': unload_models, 'free_memory': free_memory}
         await self.request(endpoint='/free', method='POST', json=payload)
 
-    async def build_pnginfo(self, data: str|bytes|list, images_list:list, img_payload:dict) -> PngImagePlugin.PngInfo:
-        pnginfo = PngImagePlugin.PngInfo()
-        info_data = str(img_payload)
-        pnginfo = pnginfo.add_text("prompt", info_data)
-        return pnginfo
+    def image_contains_metainfo(self, image:Image.Image) -> bool:
+        return 'prompt' in image.info
+
+    async def build_pnginfo(self, data: str|bytes|list, images_list:list, img_payload:dict) -> None:
+        return None
 
     async def _resolve_output_data(self, item:dict) -> bytes:
         if self.get_view:
@@ -1764,7 +1773,9 @@ class ImgGenClient_Comfy(ImgGenClient):
             return response.body
     
     async def resolve_image_data(self, item:dict, index:int) -> bytes:
-        return await self._resolve_output_data(item)
+        bytes = await self._resolve_output_data(item)
+        await processing.save_any_file(bytes)
+        return bytes
     
     async def _fetch_prompt_results(self, prompt_id:str, returns:list[str]=['images'], node_ids:list[int]=[]) -> list[dict]:
         if self.get_history:
