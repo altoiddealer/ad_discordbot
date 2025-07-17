@@ -334,6 +334,8 @@ def split_at_first_comma(data: str, return_before: bool = False) -> str:
     return data
 
 def is_base64(s: str) -> bool:
+    if not isinstance(s, str):
+        return False
     try:
         return base64.b64encode(base64.b64decode(s)) == s.encode()
     except Exception:

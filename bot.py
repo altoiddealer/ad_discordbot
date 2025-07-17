@@ -40,7 +40,7 @@ from modules.utils_files import load_file, merge_base, save_yaml_file  # noqa: F
 from modules.utils_shared import client, TOKEN, is_tgwui_integrated, shared_path, bg_task_queue, task_event, flows_queue, flows_event, patterns, bot_emojis, config, bot_database, get_api
 from modules.database import StarBoard, Statistics, BaseFileMemory
 from modules.utils_misc import check_probability, fix_dict, set_key, deep_merge, update_dict, sum_update_dict, random_value_from_range, convert_lists_to_tuples, \
-    consolidate_prompt_strings, get_time, format_time, format_time_difference, get_normalized_weights, get_pnginfo_from_image, valueparser  # noqa: F401
+    consolidate_prompt_strings, get_time, format_time, format_time_difference, get_normalized_weights, get_pnginfo_from_image, is_base64, valueparser  # noqa: F401
 from modules.utils_processing import resolve_placeholders, collect_content_to_send, send_content_to_discord
 from modules.utils_discord import Embeds, guild_only, guild_or_owner_only, configurable_for_dm_if, is_direct_message, ireply, sleep_delete_message, send_long_message, \
     EditMessageModal, SelectedListItem, SelectOptionsView, get_user_ctx_inter, get_message_ctx_inter, apply_reactions_to_messages, replace_msg_in_history_and_discord, MAX_MESSAGE_LENGTH, muffled_send  # noqa: F401
@@ -2150,76 +2150,18 @@ class TaskProcessing(TaskAttributes):
 
 ####################### MOSTLY IMAGE GEN PROCESSING #########################
 
-    async def layerdiffuse_hack(self: Union["Task", "Tasks"], images: list[FILE_INPUT], pnginfo) -> list[FILE_INPUT]:
-        try:
-            ld_output = None
-            ld_index = None
-
-            pnginfo = None
-
-            # Find the first image with an alpha channel (RGBA)
-            for i, image_dict in enumerate(images):
-                file_obj = image_dict["file_obj"]
-                file_obj.seek(0)
-                img = Image.open(file_obj)
-                if i == 0:
-                    pnginfo = get_pnginfo_from_image(img)
-
-                if img.mode == 'RGBA':
-                    if i == 0:
-                        return images  # First image already has alpha
-                    ld_output = img.copy()  # Store the RGBA image
-                    ld_index = i
-                    break
-
-            if ld_output is None:
-                log.warning("Failed to find layerdiffuse output image")
-                return images
-
-            # Load and prepare the base image (img0)
-            reactor_args = self.payload['alwayson_scripts'].get('reactor', {}).get('args', [])
-            if len(reactor_args) > 1 and reactor_args[1]:  # ReActor enabled
-                # Use first image as base, apply alpha from ld_output
-                base_file = images[0]["file_obj"]
-                base_file.seek(0)
-                img0 = Image.open(base_file).convert("RGBA")
-                _, _, _, alpha = ld_output.split()
-                img0.putalpha(alpha)
-            else:
-                img0 = ld_output  # Use layerdiffuse output directly
-
-            # Replace the BytesIO in the first image dict with updated image
-            output_bytes = io.BytesIO()
-            img0.save(output_bytes, format="PNG", pnginfo=pnginfo)
-            output_bytes.seek(0)
-            output_bytes.name = images[0]["filename"]  # Reuse filename or set new one
-
-            images[0]["file_obj"] = output_bytes
-            images[0]["file_size"] = output_bytes.getbuffer().nbytes
-            images[0]["mime_type"] = "image/png"
-            images[0]["should_close"] = False
-
-            # Remove the original layerdiffuse image from the list
-            if ld_index is not None:
-                images.pop(ld_index)
-
-        except Exception as e:
-            log.error(f'Error processing layerdiffuse images: {e}')
-
-        return images
-
-    async def apply_reactor_mask(self: Union["Task", "Tasks"], images: list[FILE_INPUT], pnginfo, reactor_mask_b64: str) -> list[FILE_INPUT]:
+    async def apply_reactor_mask(self: Union["Task", "Tasks"], images: list[FILE_INPUT], reactor_mask_b64: str) -> list[FILE_INPUT]:
         try:
             # Load reactor mask from base64, convert to L mode for alpha mask
             reactor_mask = Image.open(io.BytesIO(base64.b64decode(reactor_mask_b64))).convert('L')
 
             # Open original and face-swapped image from their respective file_obj streams
             orig_image_dict = images[0]
-            face_image_dict = images[1]
-            orig_image = Image.open(orig_image_dict["file_obj"]).convert("RGBA")
+            face_image_dict = images.pop(1)
+            orig_image = Image.open(orig_image_dict["file_obj"])
             pnginfo = get_pnginfo_from_image(orig_image)
-            face_image = Image.open(face_image_dict["file_obj"]).convert("RGBA")
 
+            face_image = Image.open(face_image_dict["file_obj"])
             face_image.putalpha(reactor_mask)                # Apply the mask as alpha channel to face image
             orig_image.paste(face_image, (0, 0), face_image) # Paste the face image (with mask) onto the original
 
@@ -2242,16 +2184,12 @@ class TaskProcessing(TaskAttributes):
     async def img_gen(self:Union["Task","Tasks"]) -> list[FILE_INPUT]:
         reactor_args = self.payload.get('alwayson_scripts', {}).get('reactor', {}).get('args', [])
         last_item = reactor_args[-1] if reactor_args else None
-        reactor_mask = reactor_args.pop() if isinstance(last_item, dict) else None
+        reactor_mask = reactor_args.pop() if is_base64(last_item) else None
         images = await api.imggen._main_imggen(self)
         # Apply ReActor mask
         reactor = self.payload.get('alwayson_scripts', {}).get('reactor', {})
         if len(images) > 1 and reactor and reactor_mask:
-            images = await self.apply_reactor_mask(images, reactor_mask['mask'])
-        # Workaround for layerdiffuse output
-        layerdiffuse = self.payload.get('alwayson_scripts', {}).get('layerdiffuse', {})
-        if len(images) > 1 and layerdiffuse and layerdiffuse['args'][0]:
-            images = await self.layerdiffuse_hack(images)
+            images = await self.apply_reactor_mask(images, reactor_mask)
         return images
     
     def resolve_img_output_dir(self:Union["Task","Tasks"]):
@@ -4633,7 +4571,9 @@ if imggen_enabled:
             await ctx.reply("Stable Diffusion is not online.", ephemeral=True, delete_after=5)
             return
         # User inputs from /image command
-        pos_prompt = selections.get('prompt', '')
+        pos_prompt:str = selections['prompt']
+        if pos_prompt.startswith('-# '):
+            pos_prompt = pos_prompt[3:]
         use_llm = selections.get('use_llm', None) if tgwui_enabled else None
         size = selections.get('size', None)
         style = selections.get('style', {})
