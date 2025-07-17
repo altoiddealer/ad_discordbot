@@ -34,10 +34,6 @@ bot_api_functions:
       progress_key: progress          # ex: response = {'progress': 0.2, ...}
       eta_key: eta_relative           # ex: response = {'eta_relative': 163.53, ...}
       max_key: max                    # ex: response = {'max': 20, ...}
-    post_pnginfo:
-      endpoint_name: Post PNG Info
-      pnginfo_image_key: image        # ex: payload = {'image': '<the image data>', ...}
-      pnginfo_result_key: info        # ex: response = {'info': "<the image generation params string>", ...}
     post_options:
       endpoint_name: Post Options
       imgmodel_input_key: sd_model_checkpoint
@@ -106,7 +102,6 @@ all_apis:
         preset: sd-txt2img-img2img-endpoints # See 'presets' further down
       - {name: Cancel, path: /sdapi/v1/interrupt, method: POST}
       - {name: Get Progress, path: /sdapi/v1/progress, method: GET}
-      - {name: Post PNG Info, path: /sdapi/v1/png-info, method: POST}
       - {name: Get Checkpoints, path: /sdapi/v1/sd-models, method: GET}
       - {name: Get Options, path: /sdapi/v1/options, method: GET}
       - {name: Post Options, path: /sdapi/v1/options, method: POST, payload_type: json}

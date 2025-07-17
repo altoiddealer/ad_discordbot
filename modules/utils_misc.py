@@ -9,6 +9,7 @@ import base64
 import filetype
 import mimetypes
 import re
+from PIL import Image, PngImagePlugin
 from typing import Union, Optional, Any
 
 def progress_bar(value, length=15):
@@ -399,6 +400,14 @@ def remove_meta_keys(payload):
     if isinstance(payload, dict):
         payload = remove_keys(payload, keys_to_remove={"__overrides__", "_comment"})
     return payload
+
+def get_pnginfo_from_image(image: Image.Image) -> Optional[PngImagePlugin.PngInfo]:
+    if not image.info:
+        return None
+    pnginfo = PngImagePlugin.PngInfo()
+    for key, value in image.info.items():
+        pnginfo.add_text(key, value)
+    return pnginfo
 
 class ValueParser:
     """

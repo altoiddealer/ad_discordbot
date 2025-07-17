@@ -40,7 +40,7 @@ from modules.utils_files import load_file, merge_base, save_yaml_file  # noqa: F
 from modules.utils_shared import client, TOKEN, is_tgwui_integrated, shared_path, bg_task_queue, task_event, flows_queue, flows_event, patterns, bot_emojis, config, bot_database, get_api
 from modules.database import StarBoard, Statistics, BaseFileMemory
 from modules.utils_misc import check_probability, fix_dict, set_key, deep_merge, update_dict, sum_update_dict, random_value_from_range, convert_lists_to_tuples, \
-    consolidate_prompt_strings, get_time, format_time, format_time_difference, get_normalized_weights, guess_format_from_data, valueparser  # noqa: F401
+    consolidate_prompt_strings, get_time, format_time, format_time_difference, get_normalized_weights, get_pnginfo_from_image, valueparser  # noqa: F401
 from modules.utils_processing import resolve_placeholders, collect_content_to_send, send_content_to_discord
 from modules.utils_discord import Embeds, guild_only, guild_or_owner_only, configurable_for_dm_if, is_direct_message, ireply, sleep_delete_message, send_long_message, \
     EditMessageModal, SelectedListItem, SelectOptionsView, get_user_ctx_inter, get_message_ctx_inter, apply_reactions_to_messages, replace_msg_in_history_and_discord, MAX_MESSAGE_LENGTH, muffled_send  # noqa: F401
@@ -2155,11 +2155,15 @@ class TaskProcessing(TaskAttributes):
             ld_output = None
             ld_index = None
 
+            pnginfo = None
+
             # Find the first image with an alpha channel (RGBA)
             for i, image_dict in enumerate(images):
                 file_obj = image_dict["file_obj"]
                 file_obj.seek(0)
                 img = Image.open(file_obj)
+                if i == 0:
+                    pnginfo = get_pnginfo_from_image(img)
 
                 if img.mode == 'RGBA':
                     if i == 0:
@@ -2213,6 +2217,7 @@ class TaskProcessing(TaskAttributes):
             orig_image_dict = images[0]
             face_image_dict = images[1]
             orig_image = Image.open(orig_image_dict["file_obj"]).convert("RGBA")
+            pnginfo = get_pnginfo_from_image(orig_image)
             face_image = Image.open(face_image_dict["file_obj"]).convert("RGBA")
 
             face_image.putalpha(reactor_mask)                # Apply the mask as alpha channel to face image
@@ -2238,15 +2243,15 @@ class TaskProcessing(TaskAttributes):
         reactor_args = self.payload.get('alwayson_scripts', {}).get('reactor', {}).get('args', [])
         last_item = reactor_args[-1] if reactor_args else None
         reactor_mask = reactor_args.pop() if isinstance(last_item, dict) else None
-        images, pnginfo = await api.imggen._main_imggen(self)
+        images = await api.imggen._main_imggen(self)
         # Apply ReActor mask
         reactor = self.payload.get('alwayson_scripts', {}).get('reactor', {})
         if len(images) > 1 and reactor and reactor_mask:
-            images = await self.apply_reactor_mask(images, pnginfo, reactor_mask['mask'])
+            images = await self.apply_reactor_mask(images, reactor_mask['mask'])
         # Workaround for layerdiffuse output
         layerdiffuse = self.payload.get('alwayson_scripts', {}).get('layerdiffuse', {})
         if len(images) > 1 and layerdiffuse and layerdiffuse['args'][0]:
-            images = await self.layerdiffuse_hack(images, pnginfo)
+            images = await self.layerdiffuse_hack(images)
         return images
     
     def resolve_img_output_dir(self:Union["Task","Tasks"]):

@@ -7,14 +7,14 @@ import jsonschema
 import jsonref
 import time
 import re
-from PIL import Image, PngImagePlugin
+from PIL import Image
 import io
 import base64
 import copy
 from modules.typing import CtxInteraction, FILE_INPUT, APIRequestCancelled
 from typing import get_type_hints, get_type_hints, get_origin, get_args, Any, Tuple, Optional, Union, Callable, AsyncGenerator
 from modules.utils_shared import client, shared_path, bot_database, load_file
-from modules.utils_misc import progress_bar, extract_key, deep_merge, split_at_first_comma, detect_audio_format, remove_meta_keys
+from modules.utils_misc import progress_bar, extract_key, deep_merge, split_at_first_comma, detect_audio_format, remove_meta_keys, get_pnginfo_from_image
 import modules.utils_processing as processing
 from discord.ui import View, Button
 import discord
@@ -1391,7 +1391,6 @@ class ImgGenClient(APIClient):
     post_img2img: Optional["ImgGenEndpoint_PostImg2Img"] = None
     post_cancel: Optional["ImgGenEndpoint_PostCancel"] = None
     get_progress: Optional["ImgGenEndpoint_GetProgress"] = None
-    post_pnginfo: Optional["ImgGenEndpoint_PostPNGInfo"] = None
     post_options: Optional["ImgGenEndpoint_PostOptions"] = None
     get_imgmodels: Optional["ImgGenEndpoint_GetImgModels"] = None
     get_controlnet_models: Optional["ImgGenEndpoint_GetControlNetModels"] = None
@@ -1414,7 +1413,6 @@ class ImgGenClient(APIClient):
                 "post_img2img": ImgGenEndpoint_PostImg2Img,
                 "post_cancel": ImgGenEndpoint_PostCancel,
                 "get_progress": ImgGenEndpoint_GetProgress,
-                "post_pnginfo": ImgGenEndpoint_PostPNGInfo,
                 "post_options": ImgGenEndpoint_PostOptions,
                 "get_imgmodels": ImgGenEndpoint_GetImgModels,
                 "get_controlnet_models": ImgGenEndpoint_GetControlNetModels,
@@ -1429,38 +1427,29 @@ class ImgGenClient(APIClient):
     
     async def fetch_imgmodels(self):
         return await self.get_imgmodels.call()
-    
-    def image_contains_metainfo(self, image:Image.Image) -> bool:
-        return False
 
-    def _decode_and_save_for_index(self,
-                                  i: int,
-                                  data: str|bytes|list,
-                                  pnginfo = None) -> FILE_INPUT:
+    async def _decode_and_save_for_index(self, i: int, data: str|bytes|list) -> FILE_INPUT:
+        # Decode data
         if isinstance(data, str):
-            try:
-                decoded = base64.b64decode(data)
-            except Exception as e:
-                raise ValueError(f"Failed to decode base64 string: {e}")
+            decoded = base64.b64decode(data)
         elif isinstance(data, list):
-            try:
-                decoded = bytes(data)
-            except Exception as e:
-                raise ValueError(f"Failed to convert list of ints to bytes: {e}")
+            decoded = bytes(data)
         elif isinstance(data, bytes):
             decoded = data
         else:
             raise TypeError(f"Expected str, bytes, or list of ints, got {type(data)}")
 
-        # Decode and open the image
+        # Open image and collect pnginfo
         image = Image.open(io.BytesIO(decoded))
+        pnginfo = get_pnginfo_from_image(image)
 
-        # Save with metadata to BytesIO
+        # Save image to memory
         output_bytes = io.BytesIO()
-        if self.image_contains_metainfo(image):
+        if pnginfo is None:
             image.save(output_bytes, format="PNG")
         else:
             image.save(output_bytes, format="PNG", pnginfo=pnginfo)
+
         output_bytes.seek(0)
         output_bytes.name = f"image_{i}.png"
         file_size = output_bytes.getbuffer().nbytes
@@ -1470,32 +1459,6 @@ class ImgGenClient(APIClient):
                 "mime_type": "image/png",
                 "file_size": file_size,
                 "should_close": False}
-
-    async def _post_image_for_pnginfo_data(self, image_data:str):
-        # Build payload
-        pnginfo_payload = self.post_pnginfo.get_payload()
-        info_key = self.post_pnginfo.pnginfo_image_key
-        if info_key:
-            pnginfo_payload[info_key] = image_data
-        # post for image gen data
-        return await self.post_pnginfo.call(input_data=pnginfo_payload, main=True)
-
-    async def build_pnginfo(self, data: str|bytes|list, images_list:list, img_payload:dict) -> PngImagePlugin.PngInfo | None:
-        if not self.post_pnginfo:
-            return None
-        if isinstance(data, str):
-            pnginfo_data = await self._post_image_for_pnginfo_data(data)
-        elif isinstance(data, bytes):
-            b64str = base64.b64encode(data).decode()
-            pnginfo_data = await self._post_image_for_pnginfo_data(b64str)
-        else:
-            log.warning(f"Unsupported data type for pnginfo: {type(data)}")
-            pnginfo_data = None
-        if pnginfo_data:
-            pnginfo = PngImagePlugin.PngInfo()
-            pnginfo.add_text("parameters", pnginfo_data)
-            return pnginfo
-        return None
 
     async def resolve_image_data(self, item, index: int) -> str|bytes|list:
         if isinstance(item, str):
@@ -1547,9 +1510,8 @@ class ImgGenClient(APIClient):
                 pass
         return images_results
 
-    async def _main_imggen(self, task) -> Tuple[list[FILE_INPUT], Optional[PngImagePlugin.PngInfo]]:
+    async def _main_imggen(self, task) -> Tuple[list[FILE_INPUT]]:
         img_file_list = []
-        pnginfo = None
         try:
             img_payload:dict = task.payload
             mode:str = task.params.mode
@@ -1562,9 +1524,7 @@ class ImgGenClient(APIClient):
             # Optionally add png info to first result > save > returns PIL images and pnginfo
             for i, item in enumerate(images_list):
                 data = await self.resolve_image_data(item, i)
-                if i == 0:
-                    pnginfo = await self.build_pnginfo(data, images_list, img_payload)
-                img_file:FILE_INPUT = self._decode_and_save_for_index(i, data, pnginfo)
+                img_file = await self._decode_and_save_for_index(i, data)
                 img_file_list.append(img_file)
             # Delete embed on success
             await task.embeds.delete('img_gen')
@@ -1573,7 +1533,7 @@ class ImgGenClient(APIClient):
             log.error(f'{e_prefix}: {e}')
             restart_msg = f'\nIf {self.name} remains unresponsive, consider trying "/restart_sd_client" command.' if self.post_server_restart else ''
             await task.embeds.edit_or_send('img_send', e_prefix, f'{e}{restart_msg}')
-        return img_file_list, pnginfo
+        return img_file_list
 
     def is_comfy(self) -> bool:
         return isinstance(self, ImgGenClient_Comfy)
@@ -1638,12 +1598,6 @@ class ImgGenClient_Swarm(ImgGenClient):
             self.ws = None
             raise
 
-    def image_contains_metainfo(self, image:Image.Image) -> bool:
-        return False # 'parameters' in image.info
-
-    async def build_pnginfo(self, data: str|bytes|list, images_list:list, img_payload:dict) -> PngImagePlugin.PngInfo | None:
-        return None
-
     async def resolve_image_data(self, item:dict, index: int) -> bytes:
         image:str = item['image']
         if image.startswith('View/'):
@@ -1652,8 +1606,7 @@ class ImgGenClient_Swarm(ImgGenClient):
             return response.body
         else:
             # Is base64 string
-            data = split_at_first_comma(image)
-            return base64.b64decode(data)
+            return split_at_first_comma(image)
 
     async def unpack_image_results(self, results:list) -> list[dict]:
         # Return the last dict value returned by poll_ws()
@@ -1759,12 +1712,6 @@ class ImgGenClient_Comfy(ImgGenClient):
         payload = {'unload_models': unload_models, 'free_memory': free_memory}
         await self.request(endpoint='/free', method='POST', json=payload)
 
-    def image_contains_metainfo(self, image:Image.Image) -> bool:
-        return 'prompt' in image.info
-
-    async def build_pnginfo(self, data: str|bytes|list, images_list:list, img_payload:dict) -> None:
-        return None
-
     async def _resolve_output_data(self, item:dict) -> bytes:
         if self.get_view:
             return await self.get_view.call(input_data=item)
@@ -1773,9 +1720,7 @@ class ImgGenClient_Comfy(ImgGenClient):
             return response.body
     
     async def resolve_image_data(self, item:dict, index:int) -> bytes:
-        bytes = await self._resolve_output_data(item)
-        await processing.save_any_file(bytes)
-        return bytes
+        return await self._resolve_output_data(item)
     
     async def _fetch_prompt_results(self, prompt_id:str, returns:list[str]=['images'], node_ids:list[int]=[]) -> list[dict]:
         if self.get_history:
@@ -2602,15 +2547,6 @@ class ImgGenEndpoint_GetProgress(ImgGenEndpoint):
         self.progress_key: Optional[str] = None
         self.eta_key: Optional[str] = None
         self.max_key: Optional[str] = None
-
-class ImgGenEndpoint_PostPNGInfo(ImgGenEndpoint):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.pnginfo_image_key: Optional[str] = None
-        self.pnginfo_result_key: Optional[str] = None
-
-    def get_extract_keys(self) -> str|None:
-        return self.pnginfo_result_key
 
 class ImgGenEndpoint_PostOptions(ImgGenEndpoint):
     def __init__(self, *args, **kwargs):
