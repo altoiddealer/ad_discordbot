@@ -1195,6 +1195,7 @@ class APIClient:
 
             except Exception as e:
                 log.exception(f"[{self.name}] WebSocket polling failed: {e}")
+                raise
 
     class CancelView(View):
         def __init__(self, cancel_callback: callable, user: discord.User, timeout: float = 300):
