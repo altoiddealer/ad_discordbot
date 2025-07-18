@@ -1711,6 +1711,8 @@ class ImgGenClient_Comfy(ImgGenClient):
             pass
 
     async def _free_memory(self, unload_models:bool = True, free_memory:bool = True):
+        if unload_models == False and free_memory == False:
+            return
         payload = {'unload_models': unload_models, 'free_memory': free_memory}
         await self.request(endpoint='/free', method='POST', json=payload)
 
@@ -1818,7 +1820,11 @@ class ImgGenClient_Comfy(ImgGenClient):
                               output_node_ids:list[int] = [],
                               completed_node_id:int|None = None,
                               file_path:str = '',
-                              returns:str = 'file_path'):
+                              returns:str = 'file_path',
+                              unload_models:str|None = None,
+                              free_memory:str|None = None):
+
+        await self._free_memory(free_memory in ['before', 'both'], unload_models in ['before', 'both'])
         # Queue prompt > track progress
         prompt_id = await self._post_prompt(payload, mode=None, task=task, ictx=ictx, message=message, endpoint=endpoint, completed_node_id=completed_node_id)
         # Fetch results (list of bytes)
@@ -1829,6 +1835,7 @@ class ImgGenClient_Comfy(ImgGenClient):
             bytes = await self._resolve_output_data(item)
             save_dict = await processing.save_any_file(bytes, file_path=file_path, msg_prefix='[StepExecutor] ')            
             save_file_results.append(save_dict[returns] if returns else save_dict)
+        await self._free_memory(free_memory in ['after', 'both'], unload_models in ['after', 'both'])
         return save_file_results
 
 
