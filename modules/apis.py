@@ -290,6 +290,7 @@ class API:
                 log.warning(f"Failed to create API client '{name}': {e}")
 
         await asyncio.gather(*check_clients_online)
+        self.check_main_functions()
 
     async def setup_all_clients(self):
         if not self.setup_tasks:
@@ -299,7 +300,31 @@ class API:
             self.setup_tasks = []  # Clear after use
         except Exception as e:
             pass
-    
+
+    def select_fallback_main_client(self, main_cls: type["APIClient"]) -> Optional["APIClient"]:
+        """ Automatically select a fallback client for a main function (e.g. imggen, textgen, ttsgen). """
+        # Filter all clients of the correct type and enabled
+        eligible_clients = {name: client for name, client in self.clients.items()
+                            if isinstance(client, main_cls) and client.enabled}
+
+        if not eligible_clients:
+            return None  # No fallback possible
+
+        # Select first available alternative
+        fallback_client = next(iter(eligible_clients.values()))
+        return fallback_client
+
+    def check_main_functions(self):
+        main_fallback_specs:dict = apisettings.get_client_type_map()
+        for func_name, main_cls in main_fallback_specs.items():
+            current_client = getattr(self, func_name, None)
+            if current_client and current_client.enabled:
+                continue
+            fallback_client = self.select_fallback_main_client(main_cls)
+            if fallback_client:
+                setattr(self, func_name, fallback_client)
+                log.info(f"Auto-selected fallback client for main function '{func_name}': {fallback_client.name}")
+
     def get_client(self, client_type:str|None=None, client_name:str|None=None, strict=False):
         api_client = None
         main_client = getattr(self, client_type) if client_type else None
