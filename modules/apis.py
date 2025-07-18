@@ -1064,7 +1064,7 @@ class APIClient:
         interval: float = 1.0,
         duration: int = -1,
         num_yields: int = -1,
-        timeout: int = 60,
+        timeout: Optional[int] = None,
         type_filter: Optional[list[str]] = None,
         data_filter: Optional[dict] = None,
         completion_condition: Optional[Callable[[dict], bool]] = None,
@@ -1084,6 +1084,9 @@ class APIClient:
         yield_count = 0
         last_yield_time = 0.0
         buffered_result = None
+        if timeout is None and (getattr(self, 'post_cancel', None) == None):
+            log.info(f"[{self.name}] Defaulting progress tracking timeout to 60 seconds.")
+            timeout = 60
         MIN_RECEIVE_TIMEOUT = 1.0
 
         while True:
@@ -1099,7 +1102,7 @@ class APIClient:
                 break
 
             # Stop polling after timeout of no yields
-            if timeout > 0 and time_since_last_yield >= timeout:
+            if (timeout is not None) and (timeout > 0) and (time_since_last_yield >= timeout):
                 if buffered_result:
                     yield buffered_result
                 log.info(f"[{self.name}] WebSocket polling stopped after inactivity timeout {timeout}s")
