@@ -96,7 +96,7 @@ presets:
       #     - t5xxl_fp8_e4m3fn.safetensors
     tags:
       - tag_preset_name: Flux Payload
-    comfy_delete_nodes: [DualCLIPLoaderGGUF, LoadFluxModelGGUF]
+    comfy_delete_nodes: [Load Checkpoint, DualCLIPLoaderGGUF, LoadFluxModelGGUF]
 
   - filter: [gguf, flux]
     exclude: [xl, turbo, sd15]
@@ -109,4 +109,4 @@ presets:
       # clip2_gguf: t5xxl_fp8_e4m3fn.safetensors    # maps to "{clip2_gguf}"
     tags:
       - tag_preset_name: Flux Payload
-    comfy_delete_nodes: [DualCLIPLoader, LoadFluxModel]
+    comfy_delete_nodes: [Load Checkpoint, DualCLIPLoader, LoadFluxModel]
