@@ -408,7 +408,10 @@ def get_pnginfo_from_image(image: Image.Image) -> Optional[PngImagePlugin.PngInf
         return None
     pnginfo = PngImagePlugin.PngInfo()
     for key, value in image.info.items():
-        pnginfo.add_text(key, value)
+        if isinstance(value, str):
+            pnginfo.add_text(key, value)
+        else:
+            log.debug(f"[get_pnginfo_from_image] Skipping key '{key}' because value is {type(value)}")
     return pnginfo
 
 class ValueParser:

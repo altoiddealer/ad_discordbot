@@ -11,6 +11,7 @@ from PIL import Image
 import io
 import base64
 import copy
+import traceback
 from modules.typing import CtxInteraction, FILE_INPUT, APIRequestCancelled
 from typing import get_type_hints, get_type_hints, get_origin, get_args, Any, Tuple, Optional, Union, Callable, AsyncGenerator
 from modules.utils_shared import client, shared_path, bot_database, load_file
@@ -1533,6 +1534,7 @@ class ImgGenClient(APIClient):
             log.error(f'{e_prefix}: {e}')
             restart_msg = f'\nIf {self.name} remains unresponsive, consider trying "/restart_sd_client" command.' if self.post_server_restart else ''
             await task.embeds.edit_or_send('img_send', e_prefix, f'{e}{restart_msg}')
+            print(traceback.format_exc())
         return img_file_list
 
     def is_comfy(self) -> bool:
