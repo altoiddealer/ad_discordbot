@@ -5793,12 +5793,13 @@ if tgwui_enabled:
         all_llmmodels = utils.get_available_models()
         if all_llmmodels:
             items_for_llm_model = [i for i in all_llmmodels]
-            unload_llmmodel = items_for_llm_model.pop(0)
+            if 'None' in items_for_llm_model:
+                items_for_llm_model.remove('None')
             warned_too_many_llm_model = False # TODO use the warned_once feature?
             llmmodels_view = SelectOptionsView(items_for_llm_model,
                                             custom_id_prefix='llmmodels',
                                             placeholder_prefix='LLMModels: ',
-                                            unload_item=unload_llmmodel,
+                                            unload_item='None',
                                             warned=warned_too_many_llm_model)
             view_message = await ctx.send('### Select an LLM Model.', view=llmmodels_view, ephemeral=True)
             await llmmodels_view.wait()
