@@ -554,3 +554,95 @@ def save_audio_bytes(
 
 def extract_filepath(response_json, key):
     return response_json.get(key)  # for APIs that return file path directly
+
+def _replace_or_remove_references(payload: dict, target_node_id: str, replacement: list | None):
+    """
+    Scans all node inputs in the payload and replaces or removes references to target_node_id.
+
+    Args:
+        payload (dict): The ComfyUI workflow payload.
+        target_node_id (str): Node ID to replace or remove.
+        replacement (list | None): If provided, replaces [target_node_id, port].
+                                   If None, removes references.
+    """
+    for node in payload.values():
+        inputs = node.get("inputs", {})
+        keys_to_delete = []
+
+        for key, value in inputs.items():
+            if isinstance(value, list):
+                # Case 1: Single connection [node_id, port]
+                if len(value) == 2 and str(value[0]) == target_node_id:
+                    if replacement:
+                        inputs[key] = replacement
+                    else:
+                        keys_to_delete.append(key)
+
+                # Case 2: List of connections (e.g., in switches)
+                else:
+                    new_list = []
+                    for item in value:
+                        if isinstance(item, list) and len(item) == 2 and str(item[0]) == target_node_id:
+                            if replacement:
+                                new_list.append(replacement)
+                        else:
+                            new_list.append(item)
+                    if new_list:
+                        inputs[key] = new_list
+                    else:
+                        keys_to_delete.append(key)
+
+            elif isinstance(value, (str, int)):
+                # Case 3: Scalar reference by node ID (rare but handled)
+                if str(value) == target_node_id:
+                    keys_to_delete.append(key)
+
+        # Remove keys pointing to deleted nodes if no replacement was given
+        for key in keys_to_delete:
+            inputs.pop(key, None)
+
+def comfy_delete_and_reroute_nodes(payload: dict, delete_nodes: list[str]):
+    """
+    Deletes specified nodes from a ComfyUI graph payload and cleans up the references.
+    If an 'Any Switch (rgthree)' node is left with a single valid input after deletions,
+    it is collapsed and rerouted directly.
+
+    Args:
+        payload (dict): The ComfyUI workflow JSON as a dictionary.
+        delete_nodes (list[str]): List of _meta["title"] strings to delete.
+    """
+    switches_to_delete = []
+
+    # Identify node IDs to delete based on _meta["title"]
+    node_ids_to_delete = {node_id for node_id, node in payload.items()
+                          if node.get("_meta", {}).get('title') in delete_nodes}
+
+    # Delete nodes and clean up all references to them
+    for node_id in node_ids_to_delete:
+        del payload[node_id]
+        _replace_or_remove_references(payload, node_id, replacement=None)
+
+    # After deletions, check for collapsible "Any Switch (rgthree)" nodes
+    for node_id, node in payload.items():
+        if node.get("class_type") == "Any Switch (rgthree)":
+            inputs = node.get("inputs", {})
+
+            # Identify valid inputs: list of [node_id, port_index]
+            valid_inputs = {k: v for k, v in inputs.items()
+                            if isinstance(v, list) and len(v) == 2 and isinstance(v[0], str)}
+
+            if len(valid_inputs) == 1:
+                # Only one input remains, collapse the switch
+                input_key, input_value = next(iter(valid_inputs.items()))
+                src_node_id, src_output_idx = input_value
+
+                # Reroute references to the switch to point directly to the single input
+                _replace_or_remove_references(payload, node_id, replacement=[src_node_id, src_output_idx])
+
+                # Mark the switch for deletion
+                switches_to_delete.append(node_id)
+
+    # Delete the collapsed switches
+    for node_id in switches_to_delete:
+        del payload[node_id]
+

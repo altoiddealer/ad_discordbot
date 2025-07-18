@@ -40,8 +40,8 @@ from modules.utils_files import load_file, merge_base, save_yaml_file  # noqa: F
 from modules.utils_shared import client, TOKEN, is_tgwui_integrated, shared_path, bg_task_queue, task_event, flows_queue, flows_event, patterns, bot_emojis, config, bot_database, get_api
 from modules.database import StarBoard, Statistics, BaseFileMemory
 from modules.utils_misc import check_probability, fix_dict, set_key, deep_merge, update_dict, sum_update_dict, random_value_from_range, convert_lists_to_tuples, \
-    consolidate_prompt_strings, get_time, format_time, format_time_difference, get_normalized_weights, get_pnginfo_from_image, is_base64, valueparser  # noqa: F401
-from modules.utils_processing import resolve_placeholders, collect_content_to_send, send_content_to_discord
+    consolidate_prompt_strings, get_time, format_time, format_time_difference, get_normalized_weights, get_pnginfo_from_image, is_base64, valueparser # noqa: F401
+from modules.utils_processing import resolve_placeholders, collect_content_to_send, send_content_to_discord, comfy_delete_and_reroute_nodes
 from modules.utils_discord import Embeds, guild_only, guild_or_owner_only, configurable_for_dm_if, is_direct_message, ireply, sleep_delete_message, send_long_message, \
     EditMessageModal, SelectedListItem, SelectOptionsView, get_user_ctx_inter, get_message_ctx_inter, apply_reactions_to_messages, replace_msg_in_history_and_discord, MAX_MESSAGE_LENGTH, muffled_send  # noqa: F401
 from modules.utils_aspect_ratios import ar_parts_from_dims, dims_from_ar, avg_from_dims, get_aspect_ratio_parts, calculate_aspect_ratio_sizes  # noqa: F401
@@ -7133,36 +7133,9 @@ class ImgModel_Comfy(ImgModel):
 
         self.delete_nodes:list[str] = []
 
-    def delete_conflicting_nodes_for_model_type(self, payload: dict):
-        node_ids_to_delete = {node_id for node_id, node in payload.items()
-                              if node.get("_meta", {}).get('title') in self.delete_nodes}
-        # Remove matched nodes
-        for node_id in node_ids_to_delete:
-            del payload[node_id]
-
-        for node in payload.values():
-            inputs:dict = node.get("inputs", {})
-            keys_to_delete = []
-
-            for key, value in inputs.items():
-                if isinstance(value, list):
-                    # Remove any [node_id, port_index] references
-                    filtered_list = [v for v in value
-                                     if not (isinstance(v, list) and str(v[0]) in node_ids_to_delete)]
-                    # Also remove if it's a single [node_id, port_index]
-                    if isinstance(value[0], (list, str)) and str(value[0]) in node_ids_to_delete:
-                        keys_to_delete.append(key)
-                    else:
-                        inputs[key] = filtered_list or None
-                elif isinstance(value, (str, int)):
-                    if str(value) in node_ids_to_delete:
-                        keys_to_delete.append(key)
-
-            for key in keys_to_delete:
-                inputs.pop(key, None)
-
     def clean_payload(self, payload: dict):
-        self.delete_conflicting_nodes_for_model_type(payload)
+        if self.delete_nodes:
+            comfy_delete_and_reroute_nodes(payload, self.delete_nodes)
 
     async def post_options(self, options_payload:dict):
         pass
