@@ -108,9 +108,9 @@ def check_env():
         print("Conda is not installed. Exiting...")
         sys.exit(1)
 
-    conda_prefix = os.environ.get("CONDA_PREFIX")
-    if conda_prefix is None:
-        print("Conda environment not detected. Please activate an environment. Exiting...")
+    # Ensure this is a new environment and not the base environment
+    if os.environ.get("CONDA_DEFAULT_ENV", "") == "base":
+        print("Create an environment for this project and activate it. Exiting...")
         sys.exit(1)
 
 
