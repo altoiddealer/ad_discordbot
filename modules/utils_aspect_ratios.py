@@ -17,14 +17,16 @@ def res_to_model_fit(avg, w, h, prec):
     h = int(round_to_precision(h * scale, prec))
     return w, h
 
-def dims_from_ar(avg, n, d, prec=64):
+def dims_from_ar(avg, n, d):
+    from modules.utils_shared import config
+    ROUNDING_PRECISION = config.imggen.get('rounding_precision', 64)
     doubleavg = avg * 2
     ar_sum = n+d
     # calculate width and height by factoring average with aspect ratio
     w = round((n / ar_sum) * doubleavg)
     h = round((d / ar_sum) * doubleavg)
     # Round to correct megapixel precision
-    w, h = res_to_model_fit(avg, w, h, prec)
+    w, h = res_to_model_fit(avg, w, h, ROUNDING_PRECISION)
     return w, h
 
 def avg_from_dims(w, h):

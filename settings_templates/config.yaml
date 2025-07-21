@@ -90,6 +90,7 @@ ttsgen:
 imggen:
   enabled: true                 # Controls whether SD WebUI is part of the bot (does not register relavent commands for discord, etc)
   save_all_outputs: true        # If main image processing returns multiple images, whether to save them all or not
+  rounding_precision: 64        # Rounds dimensions for '/image' command and 'aspect_ratio' tag, to the nearest multiple of this value
   # The following are only applicable for A1111 / Forge / ReForge (the bot will detect this via API)
   extensions:                   # Only set extensions as True if they are installed AND active in your A1111.
     controlnet_enabled: false   # Requires: sd-webui-controlnet (https://github.com/Mikubill/sd-webui-controlnet) AND configuring 'dict_cmdoptions.yaml'
