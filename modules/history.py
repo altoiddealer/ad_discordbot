@@ -406,7 +406,7 @@ class HistoryPairForTGWUI:
         user_text = self.user.text if self.user else ''
         user_text_visible = (self.user.text_visible or self.user.text) if self.user else ''
         replied_to_user = self.assistant.reply_to
-        if replied_to_user is not None:
+        if isinstance(replied_to_user, HMessage):
             user_text = replied_to_user.text or user_text
             user_text_visible = replied_to_user.text_visible or replied_to_user.text or user_text_visible
 

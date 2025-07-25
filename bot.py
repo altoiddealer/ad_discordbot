@@ -3079,7 +3079,8 @@ class Tasks(TaskProcessing):
 
             # Return if nothing new generated
             if not continued_text.strip():
-                await self.ictx.followup.send(':warning: Generation was continued, but nothing new was added.')
+                no_gen_msg = await self.ictx.followup.send(':warning: Generation was continued, but nothing new was added.')
+                await bg_task_queue.put(sleep_delete_message(no_gen_msg))
                 return
 
             # Log message exchange
