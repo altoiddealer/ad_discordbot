@@ -488,16 +488,25 @@ class StepExecutor:
         await processing.send_content_to_discord(ictx=self.ictx, **resolved_content)
         return None
 
+    def _step_set_context(self, data: Any, config: dict[str, Any]) -> Any:
+        """ Sets key values in Context dict """
+        for key, value in config.items():
+            self.context[key] = value
+        return data
+
     def _step_set_key(self, data: dict|list, config: Union[str, dict]) -> Any:
+        """ Sets a value in the input dict or list, using dot bracket notation """
         path = config.get('path')
         value = config.get('value')
         return set_key(data, path, value)
 
     def _step_extract_key(self, data: dict|list, config: Union[str, dict]) -> Any:
+        """ Gets a value in the input dict or list, using dot bracket notation """
         extracted = extract_key(data, config)
         return extracted
 
     def _step_extract_values(self, data: Any, config: dict[str, Union[str, dict]]) -> dict[str, Any]:
+        """ Gets key values from Context dict using dot bracket notation. Returns dict. """
         result = {}
         for key, path_config in config.items():
             result[key] = extract_key(data, path_config)
