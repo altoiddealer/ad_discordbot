@@ -1490,7 +1490,7 @@ class ImgGenClient(APIClient):
                 "file_size": file_size,
                 "should_close": False}
 
-    async def resolve_image_data(self, item, index: int) -> str|bytes|list:
+    async def resolve_image_data(self, item) -> str|bytes|list:
         if isinstance(item, str):
             return split_at_first_comma(item)
         return item
@@ -1498,37 +1498,38 @@ class ImgGenClient(APIClient):
     async def unpack_image_results(self, images:Any) -> str|bytes|list:
         return images
 
-    async def call_track_progress(self, task):
+    async def call_track_progress(self, task, message):
         await self.track_progress(endpoint=self.get_progress,
                                   progress_key=self.get_progress.progress_key,
                                   eta_key=self.get_progress.eta_key,
                                   max_key=self.get_progress.max_key,
-                                  message="Generating image",
+                                  message=message,
                                   task=task)
 
-    async def _track_t2i_i2i_progress(self, task):
+    async def _track_t2i_i2i_progress(self, task, message=None):
+        message = message or f'Generating an image with {self.name} ...'
         try:
-            if not self.get_progress:
-                await task.embeds.send('img_gen', f'Generating an image with {self.name} ...', '')
+            if self.get_progress:
+                await self.call_track_progress(task, message)
+            else:
+                await task.embeds.send('img_gen', message, '')
                 if self.ws:
                     if not bot_database.was_warned("imggen_websocket_progress"):
                         log.warning(f"[{self.name}] If websocket supports tracking progress, and you want to use it for 'main txt2img/img2img', "
                                     "you'll have to omit/null the 'images_result_key' and instead use the 'response_handling' (advanced). "
                                     "Refer to the wiki for more info (https://github.com/altoiddealer/ad_discordbot/wiki).")
                         bot_database.update_was_warned("imggen_websocket_progress")
-            else:
-                await self.call_track_progress(task)
+                
         except Exception as e:
             log.error(f'Error tracking {self.name} image generation progress: {e}')
 
-    async def call_imggen_endpoint(self, img_payload:dict, mode:str="txt2img"):
-        ep_for_mode:Union[ImgGenEndpoint_PostTxt2Img, ImgGenEndpoint_PostImg2Img] = getattr(self, f'post_{mode}')
-        return await ep_for_mode.call(input_data=img_payload, main=True)
+    async def _call_imggen_endpoint(self, img_payload:dict, endpoint:"ImgGenEndpoint"):
+        return await endpoint.call(input_data=img_payload, main=True)
 
-    async def post_for_images(self, task, img_payload:dict, mode:str="txt2img") -> list[str]:
+    async def post_for_images(self, task, img_payload:dict, message:str, endpoint:"ImgGenEndpoint") -> list[str]:
         # Start progress task and generation task concurrently
-        images_task = asyncio.create_task(self.call_imggen_endpoint(img_payload, mode))
-        progress_task = asyncio.create_task(self._track_t2i_i2i_progress(task))
+        images_task = asyncio.create_task(self._call_imggen_endpoint(img_payload, endpoint))
+        progress_task = asyncio.create_task(self._track_t2i_i2i_progress(task, message))
         # Wait for images_task to complete
         images_results = await images_task
         # Once images_task is done, cancel progress_task
@@ -1540,20 +1541,27 @@ class ImgGenClient(APIClient):
                 pass
         return images_results
 
-    async def _main_imggen(self, task) -> Tuple[list[FILE_INPUT]]:
+    async def _main_imggen(self,
+                           task,
+                           payload=None,
+                           endpoint=None,
+                           message=None,
+                           file_path=None) -> Tuple[list[FILE_INPUT]]:
         img_file_list = []
         try:
-            img_payload:dict = task.payload
-            mode:str = task.params.mode
+            img_payload:dict = payload or task.payload
+            if endpoint is None:
+                mode:str = mode or (task.params.mode if hasattr(task, "params") else "txt2img")
+                endpoint:Union[ImgGenEndpoint_PostTxt2Img, ImgGenEndpoint_PostImg2Img] = getattr(self, f'post_{mode}')
             # Get the results
-            images_results = await self.post_for_images(task, img_payload, mode)
+            images_results = await self.post_for_images(task, img_payload, message, endpoint)
             if self.cancel_event.is_set():
                 raise APIRequestCancelled(f"[{self.name}] Generation was cancelled by user.", cancel_event=self.cancel_event)
             # Ensure the results are a list of base64 or bytes
             images_list = await self.unpack_image_results(images_results)
             # Optionally add png info to first result > save > returns PIL images and pnginfo
             for i, item in enumerate(images_list):
-                data = await self.resolve_image_data(item, i)
+                data = await self.resolve_image_data(item)
                 img_file = await self._decode_and_save_for_index(i, data)
                 img_file_list.append(img_file)
             # Delete embed on success
@@ -1591,25 +1599,40 @@ class ImgGenClient_SDWebUI(ImgGenClient):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
-    async def call_track_progress(self, task):
+    async def call_track_progress(self, task, message):
         await self.track_progress(endpoint=self.get_progress,
                                   progress_key='progress',
                                   eta_key='eta_relative',
                                   max_key=None,
-                                  message="Generating image",
+                                  message=message,
                                   task=task)
+    
+    async def _execute_prompt(self,
+                              task,
+                              payload=None,
+                              endpoint=None,
+                              message:str = "Generating",
+                              file_path:str = ''):
+        images: list[FILE_INPUT] = await self._main_imggen(task, payload, endpoint)
+        # Collect results
+        save_file_results = []
+        for item in images:
+            save_dict = await processing.save_any_file(bytes, file_path=file_path, msg_prefix='[StepExecutor] ')            
+            save_file_results.append(save_dict[returns] if returns else save_dict)
+        await self._free_memory(free_memory in ['after', 'both'], unload_models in ['after', 'both'])
+        return save_file_results
 
 class ImgGenClient_Swarm(ImgGenClient):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.session_id = None
 
-    async def call_track_progress(self, task) -> list[dict]:
+    async def call_track_progress(self, task, message) -> list[dict]:
         completion_condition = processing.build_completion_condition({'image': "*"})
         return await self.track_progress(endpoint=None,
                                          use_ws=True,
                                          task=task,
-                                         message="Generating image",
+                                         message=message,
                                          type_filter=None,
                                          data_filter=None,
                                          progress_key='gen_progress.overall_percent',
@@ -1629,7 +1652,7 @@ class ImgGenClient_Swarm(ImgGenClient):
             self.ws = None
             raise
 
-    async def resolve_image_data(self, item:dict, index: int) -> bytes:
+    async def resolve_image_data(self, item:dict) -> bytes:
         image:str = item['image']
         if image.startswith('View/'):
             # Is a path that needs to get bytes from server
@@ -1644,13 +1667,13 @@ class ImgGenClient_Swarm(ImgGenClient):
         last_dict:dict = results.pop()
         return [last_dict]
 
-    async def post_for_images(self, task, img_payload:dict, mode:str="txt2img") -> list[str]:
+    async def post_for_images(self, task, img_payload:dict, message:str, endpoint=None) -> list[str]:
         if not self.ws or self.ws.closed:
             await self.connect_websocket()
         try:
             self.add_required_values_to_payload(img_payload)
             await self.ws.send_json(img_payload)
-            return await self.call_track_progress(task)
+            return await self.call_track_progress(task, message)
         finally:
             await self.ws.close()
 
@@ -1744,16 +1767,13 @@ class ImgGenClient_Comfy(ImgGenClient):
             return
         payload = {'unload_models': unload_models, 'free_memory': free_memory}
         await self.request(endpoint='/free', method='POST', json=payload)
-
-    async def _resolve_output_data(self, item:dict) -> bytes:
+    
+    async def resolve_image_data(self, item:dict) -> bytes:
         if self.get_view:
             return await self.get_view.call(input_data=item)
         else:
             response:APIResponse = await self.request(endpoint=f'/view', params=item, method='GET', response_type='bytes')
             return response.body
-    
-    async def resolve_image_data(self, item:dict, index:int) -> bytes:
-        return await self._resolve_output_data(item)
     
     async def _fetch_prompt_results(self, prompt_id:str, returns:list[str]=['images'], node_ids:list[int]=[]) -> list[dict]:
         if self.get_history:
@@ -1799,7 +1819,6 @@ class ImgGenClient_Comfy(ImgGenClient):
 
     async def _post_prompt(self,
                            img_payload:dict,
-                           mode:str = "txt2img",
                            task = None,
                            ictx:CtxInteraction|None = None,
                            message:str = "Generating image",
@@ -1812,9 +1831,7 @@ class ImgGenClient_Comfy(ImgGenClient):
         # Add Client ID to payload
         img_payload['client_id'] = self.ws_config.client_id
         # Resolve calling method
-        if mode or endpoint:
-            if mode:
-                endpoint: ImgGenEndpoint = getattr(self, f'post_{mode}')
+        if endpoint:
             queued = await endpoint.call(input_data=img_payload, task=task)
         else:
             response:APIResponse = await self.request(endpoint=f'/prompt', json=img_payload, method='POST')
@@ -1835,8 +1852,8 @@ class ImgGenClient_Comfy(ImgGenClient):
         # Return the prompt ID to fetch results
         return prompt_id
 
-    async def post_for_images(self, task, img_payload:dict, mode:str="txt2img") -> list[str]:
-        prompt_id = await self._post_prompt(img_payload, mode, task)
+    async def post_for_images(self, task, img_payload:dict, message:str, endpoint=None) -> list[str]:
+        prompt_id = await self._post_prompt(img_payload, task, message=message, endpoint=endpoint)
         return [{"prompt_id": prompt_id}]
 
     async def _execute_prompt(self,
@@ -1855,13 +1872,13 @@ class ImgGenClient_Comfy(ImgGenClient):
 
         await self._free_memory(free_memory in ['before', 'both'], unload_models in ['before', 'both'])
         # Queue prompt > track progress
-        prompt_id = await self._post_prompt(payload, mode=None, task=task, ictx=ictx, message=message, endpoint=endpoint, completed_node_id=completed_node_id)
+        prompt_id = await self._post_prompt(payload, task=task, ictx=ictx, message=message, endpoint=endpoint, completed_node_id=completed_node_id)
         # Fetch results (list of bytes)
         results_list = await self._fetch_prompt_results(prompt_id, returns=outputs, node_ids=output_node_ids)
         # Collect results
         save_file_results = []
         for item in results_list:
-            bytes = await self._resolve_output_data(item)
+            bytes = await self.resolve_image_data(item)
             save_dict = await processing.save_any_file(bytes, file_path=file_path, msg_prefix='[StepExecutor] ')            
             save_file_results.append(save_dict[returns] if returns else save_dict)
         await self._free_memory(free_memory in ['after', 'both'], unload_models in ['after', 'both'])

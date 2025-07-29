@@ -9,7 +9,7 @@ from typing import Any, Optional, Union
 from modules.utils_shared import client, shared_path, load_file, get_api
 from modules.utils_misc import valueparser, set_key, extract_key
 import modules.utils_processing as processing
-from modules.apis import apisettings, APIResponse, Endpoint, API, APIClient, ImgGenClient_Comfy
+from modules.apis import apisettings, APIResponse, Endpoint, API, APIClient, ImgGenClient_Comfy, ImgGenClient_SDWebUI
 
 from modules.logs import import_track, get_logger; import_track(__file__, fp=True); log = get_logger(__name__)  # noqa: E702
 logging = log
@@ -667,6 +667,18 @@ class StepExecutor:
                                               response=self.response,
                                               msg_prefix='[StepExecutor] ')
 
+    async def _step_call_sdwebui(self, data: Any, config: dict):
+        if config.get("payload"):
+            config["input_data"] = config.pop("payload")
+
+        client, endpoint, _ = await self.get_api_client_and_endpoint(config, 'call_sdwebui')
+        self.endpoint = endpoint
+
+        if not isinstance(client, ImgGenClient_SDWebUI):
+            raise RuntimeError(f'[StepExecutor] API Client is not SD WebUI (A1111/Forge/ReForge). Cannot run step "call_sdwebui".')
+
+        payload = self.resolve_api_input(data, config, step_name='call_sdwebui', default=data, endpoint=endpoint)
+        return await client._main_imggen(self.task, payload, endpoint)
 
     async def _step_call_comfy(self, data: Any, config: dict):
         config['use_ws'] = True
