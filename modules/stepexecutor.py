@@ -9,7 +9,7 @@ from typing import Any, Optional, Union
 from modules.utils_shared import client, shared_path, load_file, get_api
 from modules.utils_misc import valueparser, set_key, extract_key
 import modules.utils_processing as processing
-from modules.apis import apisettings, APIResponse, Endpoint, API, APIClient, ImgGenClient_Comfy, ImgGenClient_SDWebUI
+from modules.apis import apisettings, APIResponse, Endpoint, API, APIClient, ImgGenClient_Comfy, ImgGenClient
 
 from modules.logs import import_track, get_logger; import_track(__file__, fp=True); log = get_logger(__name__)  # noqa: E702
 logging = log
@@ -504,6 +504,9 @@ class StepExecutor:
             result[key] = extract_key(data, path_config)
         return result
 
+    def _step_encode_base64(self, data, config):
+        return base64.b64encode(data).decode('utf-8')
+
     def _step_decode_base64(self, data, config):
         if isinstance(data, str):
             if "," in data:
@@ -576,6 +579,14 @@ class StepExecutor:
 
         else:
             raise ValueError(f"[StepExecutor] Unknown transform type: {transform_type}")
+
+    def _step_list(self, data, config: list):
+        if not isinstance(config, list):
+            raise ValueError("[StepExecutor] 'list' step required to be formatted as a list.")
+        result = []
+        for item in config:
+            result.append(item)
+        return result
 
     def _step_regex(self, data, pattern):
         match = re.search(pattern, data)
@@ -667,18 +678,18 @@ class StepExecutor:
                                               response=self.response,
                                               msg_prefix='[StepExecutor] ')
 
-    async def _step_call_sdwebui(self, data: Any, config: dict):
+    async def _step_call_imggen(self, data: Any, config: dict):
         if config.get("payload"):
             config["input_data"] = config.pop("payload")
 
-        client, endpoint, _ = await self.get_api_client_and_endpoint(config, 'call_sdwebui')
+        client, endpoint, _ = await self.get_api_client_and_endpoint(config, 'call_imggen')
         self.endpoint = endpoint
 
-        if not isinstance(client, ImgGenClient_SDWebUI):
-            raise RuntimeError(f'[StepExecutor] API Client is not SD WebUI (A1111/Forge/ReForge). Cannot run step "call_sdwebui".')
+        if not isinstance(client, ImgGenClient):
+            raise RuntimeError(f'[StepExecutor] API Client is not an ImgGen client. Cannot run step "call_imggen".')
 
-        payload = self.resolve_api_input(data, config, step_name='call_sdwebui', default=data, endpoint=endpoint)
-        return await client._main_imggen(self.task, payload, endpoint)
+        payload = self.resolve_api_input(data, config, step_name='call_imggen', default=data, endpoint=endpoint)
+        return await client._main_imggen(self.task, payload, endpoint, **config)
 
     async def _step_call_comfy(self, data: Any, config: dict):
         config['use_ws'] = True

@@ -7,7 +7,7 @@ import jsonschema
 import jsonref
 import time
 import re
-from PIL import Image
+from PIL import Image, UnidentifiedImageError
 import io
 import base64
 import copy
@@ -1458,7 +1458,7 @@ class ImgGenClient(APIClient):
     async def fetch_imgmodels(self):
         return await self.get_imgmodels.call()
 
-    async def _decode_and_save_for_index(self, i: int, data: str|bytes|list) -> FILE_INPUT:
+    async def _decode_and_save_for_index(self, i: int, data: str|bytes|list, file_path=None) -> FILE_INPUT:
         # Decode data
         if isinstance(data, str):
             decoded = base64.b64decode(data)
@@ -1470,25 +1470,39 @@ class ImgGenClient(APIClient):
             raise TypeError(f"Expected str, bytes, or list of ints, got {type(data)}")
 
         # Open image and collect pnginfo
-        image = Image.open(io.BytesIO(decoded))
-        pnginfo = get_pnginfo_from_image(image)
+        is_image = True
+        pnginfo = None
+        try:
+            image = Image.open(io.BytesIO(decoded))
+            pnginfo = get_pnginfo_from_image(image)
+        except UnidentifiedImageError:
+            is_image = False
 
-        # Save image to memory
-        output_bytes = io.BytesIO()
-        if pnginfo is None:
-            image.save(output_bytes, format="PNG")
+        # Not an image file
+        if not is_image:
+            return await processing.save_any_file(bytes, file_path=file_path, msg_prefix='[StepExecutor] ')
+
+        # Is image file to save now
+        elif file_path:
+            return await processing.save_any_file(decoded, file_path=file_path, msg_prefix='[StepExecutor] ', image=image, pnginfo=pnginfo)
+
+        # Is image file to save later (called from main imggen)
         else:
-            image.save(output_bytes, format="PNG", pnginfo=pnginfo)
+            output_bytes = io.BytesIO() # Save image to memory
+            if pnginfo is None:
+                image.save(output_bytes, format="PNG")
+            else:
+                image.save(output_bytes, format="PNG", pnginfo=pnginfo)
 
-        output_bytes.seek(0)
-        output_bytes.name = f"image_{i}.png"
-        file_size = output_bytes.getbuffer().nbytes
+            output_bytes.seek(0)
+            output_bytes.name = f"image_{i}.png"
+            file_size = output_bytes.getbuffer().nbytes
 
-        return {"file_obj": output_bytes,
-                "filename": output_bytes.name,
-                "mime_type": "image/png",
-                "file_size": file_size,
-                "should_close": False}
+            return {"file_obj": output_bytes,
+                    "filename": output_bytes.name,
+                    "mime_type": "image/png",
+                    "file_size": file_size,
+                    "should_close": False}
 
     async def resolve_image_data(self, item) -> str|bytes|list:
         if isinstance(item, str):
@@ -1506,8 +1520,7 @@ class ImgGenClient(APIClient):
                                   message=message,
                                   task=task)
 
-    async def _track_t2i_i2i_progress(self, task, message=None):
-        message = message or f'Generating an image with {self.name} ...'
+    async def _track_t2i_i2i_progress(self, task, message:str):
         try:
             if self.get_progress:
                 await self.call_track_progress(task, message)
@@ -1547,11 +1560,12 @@ class ImgGenClient(APIClient):
                            endpoint=None,
                            message=None,
                            file_path=None) -> Tuple[list[FILE_INPUT]]:
+        message = message or f'Generating with {self.name} ...'
         img_file_list = []
         try:
             img_payload:dict = payload or task.payload
             if endpoint is None:
-                mode:str = mode or (task.params.mode if hasattr(task, "params") else "txt2img")
+                mode:str = task.params.mode if hasattr(task, "params") else "txt2img"
                 endpoint:Union[ImgGenEndpoint_PostTxt2Img, ImgGenEndpoint_PostImg2Img] = getattr(self, f'post_{mode}')
             # Get the results
             images_results = await self.post_for_images(task, img_payload, message, endpoint)
@@ -1562,7 +1576,7 @@ class ImgGenClient(APIClient):
             # Optionally add png info to first result > save > returns PIL images and pnginfo
             for i, item in enumerate(images_list):
                 data = await self.resolve_image_data(item)
-                img_file = await self._decode_and_save_for_index(i, data)
+                img_file = await self._decode_and_save_for_index(i, data, file_path)
                 img_file_list.append(img_file)
             # Delete embed on success
             await task.embeds.delete('img_gen')
@@ -1606,21 +1620,6 @@ class ImgGenClient_SDWebUI(ImgGenClient):
                                   max_key=None,
                                   message=message,
                                   task=task)
-    
-    async def _execute_prompt(self,
-                              task,
-                              payload=None,
-                              endpoint=None,
-                              message:str = "Generating",
-                              file_path:str = ''):
-        images: list[FILE_INPUT] = await self._main_imggen(task, payload, endpoint)
-        # Collect results
-        save_file_results = []
-        for item in images:
-            save_dict = await processing.save_any_file(bytes, file_path=file_path, msg_prefix='[StepExecutor] ')            
-            save_file_results.append(save_dict[returns] if returns else save_dict)
-        await self._free_memory(free_memory in ['after', 'both'], unload_models in ['after', 'both'])
-        return save_file_results
 
 class ImgGenClient_Swarm(ImgGenClient):
     def __init__(self, *args, **kwargs):
@@ -1861,7 +1860,7 @@ class ImgGenClient_Comfy(ImgGenClient):
                               endpoint:Union["Endpoint", None] = None,
                               ictx:CtxInteraction|None = None,
                               task = None,
-                              message:str = "Generating",
+                              message:str = None,
                               outputs:list[str] = ['images'],
                               output_node_ids:list[int] = [],
                               completed_node_id:int|None = None,
@@ -1869,7 +1868,7 @@ class ImgGenClient_Comfy(ImgGenClient):
                               returns:str = 'file_path',
                               unload_models:str|None = None,
                               free_memory:str|None = None):
-
+        message = message or f'Generating with {self.name} ...'
         await self._free_memory(free_memory in ['before', 'both'], unload_models in ['before', 'both'])
         # Queue prompt > track progress
         prompt_id = await self._post_prompt(payload, task=task, ictx=ictx, message=message, endpoint=endpoint, completed_node_id=completed_node_id)
@@ -1879,7 +1878,7 @@ class ImgGenClient_Comfy(ImgGenClient):
         save_file_results = []
         for item in results_list:
             bytes = await self.resolve_image_data(item)
-            save_dict = await processing.save_any_file(bytes, file_path=file_path, msg_prefix='[StepExecutor] ')            
+            save_dict = await processing.save_any_file(bytes, file_path=file_path, msg_prefix='[StepExecutor] ')
             save_file_results.append(save_dict[returns] if returns else save_dict)
         await self._free_memory(free_memory in ['after', 'both'], unload_models in ['after', 'both'])
         return save_file_results

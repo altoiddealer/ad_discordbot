@@ -31,7 +31,9 @@ async def save_any_file(data: Any,
                         use_timestamp:bool=True,
                         response = None,
                         msg_prefix:str = '',
-                        overwrite:bool = False):
+                        overwrite:bool = False,
+                        image = None,
+                        pnginfo = None):
     """
     Save input data to a file and returns dict.
 
@@ -105,48 +107,44 @@ async def save_any_file(data: Any,
 
     # 5. Save logic
     try:
-        # 5a. Special case: Handle PIL images with optional PngInfo
-        if isinstance(data, Image.Image) and file_format.lower() in {"png", "jpeg", "jpg", "webp"}:
-            pnginfo = data.info.get("pnginfo") if file_format.lower() == "png" else None
-            format_map = {"jpg": "JPEG", "jpeg": "JPEG", "png": "PNG", "webp": "WEBP"}
-            data.save(full_path, format=format_map.get(file_format.lower(), file_format.upper()), pnginfo=pnginfo)
-            log.info(f"{msg_prefix}Saved image using PIL to {full_path}")
-            return {"file_path": str(full_path),
-                    "file_format": file_format,
-                    "file_name": file_name,
-                    "file_data": data}
-
-        # 5b. Proceed with async file saving for everything else
-        async with aiofiles.open(full_path, mode) as f:
-            if file_format == "json":
-                if isinstance(data, (dict, list)):
-                    await f.write(json.dumps(data, indent=2))
-                else:
-                    raise TypeError(f"{msg_prefix}JSON format requires dict or list.")
-            elif file_format == "yaml":
-                if isinstance(data, (dict, list)):
-                    await f.write(yaml.dump(data))
-                else:
-                    raise TypeError(f"{msg_prefix}YAML format requires dict or list.")
-            elif file_format == "csv":
-                if isinstance(data, list) and all(isinstance(row, (list, tuple)) for row in data):
-                    csv_content = "\n".join([",".join(map(str, row)) for row in data])
-                    await f.write(csv_content)
-                else:
-                    raise TypeError(f"{msg_prefix}CSV format requires list of lists/tuples.")
-            elif mode == "w":
-                if not isinstance(data, (str, int, float)):
-                    raise TypeError(f"{msg_prefix}Text format requires str/number, got {type(data).__name__}")
-                await f.write(str(data))
-            elif mode == "wb":
-                if isinstance(data, bytes):
-                    await f.write(data)
-                elif isinstance(data, str):
-                    await f.write(data.encode())
-                elif hasattr(data, "read"):  # e.g., BytesIO or file-like
-                    await f.write(data.read())
-                else:
-                    raise TypeError(f"{msg_prefix}Binary format requires bytes or str, got {type(data).__name__}")
+        # PIL images
+        if image and isinstance(image, Image.Image) and file_format.lower() in {"png", "jpeg", "jpg", "webp"}:
+            if pnginfo is None:
+                image.save(full_path, format="PNG")
+            else:
+                image.save(full_path, format="PNG", pnginfo=pnginfo)
+        else:
+            # Async file saving for everything else
+            async with aiofiles.open(full_path, mode) as f:
+                if file_format == "json":
+                    if isinstance(data, (dict, list)):
+                        await f.write(json.dumps(data, indent=2))
+                    else:
+                        raise TypeError(f"{msg_prefix}JSON format requires dict or list.")
+                elif file_format == "yaml":
+                    if isinstance(data, (dict, list)):
+                        await f.write(yaml.dump(data))
+                    else:
+                        raise TypeError(f"{msg_prefix}YAML format requires dict or list.")
+                elif file_format == "csv":
+                    if isinstance(data, list) and all(isinstance(row, (list, tuple)) for row in data):
+                        csv_content = "\n".join([",".join(map(str, row)) for row in data])
+                        await f.write(csv_content)
+                    else:
+                        raise TypeError(f"{msg_prefix}CSV format requires list of lists/tuples.")
+                elif mode == "w":
+                    if not isinstance(data, (str, int, float)):
+                        raise TypeError(f"{msg_prefix}Text format requires str/number, got {type(data).__name__}")
+                    await f.write(str(data))
+                elif mode == "wb":
+                    if isinstance(data, bytes):
+                        await f.write(data)
+                    elif isinstance(data, str):
+                        await f.write(data.encode())
+                    elif hasattr(data, "read"):  # e.g., BytesIO or file-like
+                        await f.write(data.read())
+                    else:
+                        raise TypeError(f"{msg_prefix}Binary format requires bytes or str, got {type(data).__name__}")
 
     except Exception as e:
         log.error(f"{msg_prefix}Failed to save data as {file_format}: {e}")
