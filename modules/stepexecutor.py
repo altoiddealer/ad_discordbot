@@ -9,7 +9,7 @@ from typing import Any, Optional, Union
 from modules.utils_shared import client, shared_path, load_file, get_api
 from modules.utils_misc import valueparser, set_key, extract_key
 import modules.utils_processing as processing
-from modules.apis import apisettings, APIResponse, Endpoint, API, APIClient, ImgGenClient_Comfy
+from modules.apis import apisettings, APIResponse, Endpoint, API, APIClient, ImgGenClient_Comfy, ImgGenClient
 
 from modules.logs import import_track, get_logger; import_track(__file__, fp=True); log = get_logger(__name__)  # noqa: E702
 logging = log
@@ -280,109 +280,106 @@ class StepExecutor:
             payload = self.task.override_payload(payload)
         return payload
 
-    def resolve_api_input(self, data:Any, config:dict, step_name:str, default:Any|None=None, endpoint:Endpoint|None=None):
-        input_data = config.pop('input_data', default)
-        init_payload = config.pop('init_payload', False)
-        if not endpoint: # Websocket
+    def resolve_api_input(self, data: Any, config: dict, step_name: str, default: Any = None, endpoint: Endpoint | None = None):
+        input_data = config.pop("input_data", default)
+        init_payload = config.pop("init_payload", False)
+
+        if not endpoint:
             input_data = default
-        # init_payload overrides input_data
-        if init_payload:
-            log.info(f'[StepExecutor] Step "{step_name}": Fetching payload for "{endpoint.name}" and trying to update placeholders with internal variables.')
+
+        if init_payload and endpoint:
+            log.info(f'[StepExecutor] Step "{step_name}": Using init_payload from endpoint "{endpoint.name}"')
             input_data = endpoint.get_payload()
+
         return self.resolve_api_payload(data, input_data)
-    
-    def resolve_api_names(self, config:dict, step_name:str):
+
+    def resolve_api_config(self, config: dict, step_name: str, use_ws_default=False):
         client_name = config.pop("client_name", None) or config.pop("client", None)
         if not client_name:
-            raise ValueError(f'[StepExecutor] API "client_name" was not included in "{step_name}" response handling step')
-        use_ws = config.pop("use_ws", False)
+            raise ValueError(f'[StepExecutor] API "client_name" was not included in "{step_name}" step')
+
+        use_ws = config.pop("use_ws", use_ws_default)
+
         endpoint_name = config.pop("endpoint_name", None) or config.pop("endpoint", None)
         if not endpoint_name and not use_ws:
-            raise ValueError(f'[StepExecutor] API "endpoint_name" was not included in "{step_name}" response handling step')
+            raise ValueError(f'[StepExecutor] API "endpoint_name" was not included in "{step_name}" step')
+
         return client_name, endpoint_name, use_ws
+
+    async def get_api_client_and_endpoint(self, config: dict, step_name: str, allow_ws_only=False):
+        api = await get_api()
+        client_name, endpoint_name, use_ws = self.resolve_api_config(config, step_name)
+
+        client = api.get_client(client_name=client_name, strict=True)
+
+        endpoint = None
+        if endpoint_name:
+            endpoint = client.get_endpoint(endpoint_name=endpoint_name, strict=True)
+        elif not use_ws and not allow_ws_only:
+            raise ValueError(f'[StepExecutor] Endpoint not specified for "{step_name}" step')
+
+        return client, endpoint, use_ws
 
     async def _step_get_api_ws_config(self, data: Any, config: Union[str, dict]) -> Any:
         config['use_ws'] = True
-        api:API = await get_api()
-        client_name, _, _ = self.resolve_api_names(config, 'get_api_ws_config')
-        api_client:APIClient = api.get_client(client_name=client_name, strict=True)
-        if api_client.ws_config is None:
-            raise RuntimeError(f'[StepExecutor] API client "{client_name}" does not have a websocket config to get.')
-        return api_client.ws_config.get_context()
+        client, _, _ = await self.get_api_client_and_endpoint(config, 'get_api_ws_config', allow_ws_only=True)
+
+        if not hasattr(client, 'ws_config') or client.ws_config is None:
+            raise RuntimeError(f'[StepExecutor] API client does not have a websocket config to get.')
+
+        return client.ws_config.get_context()
 
     async def _step_get_api_payload(self, data: Any, config: Union[str, dict]) -> Any:
-        api:API = await get_api()
-        client_name, endpoint_name, use_ws = self.resolve_api_names(config, 'get_api_payload')
-        api_client:APIClient = api.get_client(client_name=client_name, strict=True)
-        endpoint:Endpoint = api_client.get_endpoint(endpoint_name=endpoint_name, strict=True)
+        client, endpoint, _ = await self.get_api_client_and_endpoint(config, 'get_api_payload')
         payload = endpoint.get_payload()
-        # Resolves context data more cleanly for Task variables
         return self.resolve_api_payload(data, payload)
 
     async def _step_call_api(self, data: Any, config: Union[str, dict]) -> Any:
-        api:API = await get_api()
-        client_name, endpoint_name, use_ws = self.resolve_api_names(config, 'call_api')
-        api_client:APIClient = api.get_client(client_name=client_name, strict=True)
-        endpoint:Endpoint = api_client.get_endpoint(endpoint_name=endpoint_name, strict=True)
-        self.endpoint = endpoint # Helps to resolve API related context
+        client, endpoint, _ = await self.get_api_client_and_endpoint(config, 'call_api')
+        self.endpoint = endpoint
 
         input_data = self.resolve_api_input(data, config, step_name='call_api', default=data, endpoint=endpoint)
-
         response = await endpoint.call(input_data=input_data, **config)
-        if not isinstance(response, APIResponse):
-            return response
-        return response.body
+
+        return response.body if isinstance(response, APIResponse) else response
 
     async def _step_track_progress(self, data: Any, config: dict) -> list[dict]:
-        """
-        Polls an endpoint while sending a progress Embed to discord.
-        """
-        ictx = self.ictx # to send discord Embed to channel
-        api:API = await get_api()
-        client_name, endpoint_name, use_ws = self.resolve_api_names(config, 'track_progress')
-        api_client:APIClient = api.get_client(client_name=client_name, strict=True)
+        """ Polls an endpoint while sending a progress Embed to discord. """
+        client, endpoint, use_ws = await self.get_api_client_and_endpoint(config, 'track_progress', allow_ws_only=True)
 
         completion_config = config.pop("completion_condition", None)
         completion_condition = None
         if completion_config:
             completion_condition = processing.build_completion_condition(completion_config, self.context)
 
-        # Resolve polling method
-        endpoint:Optional[Endpoint] = None
-        if not use_ws:
-            endpoint = api_client.get_endpoint(endpoint_name=endpoint_name, strict=True)
+        config["input_data"] = self.resolve_api_input(data, config, step_name='track_progress', default=None, endpoint=endpoint)
 
-        config['input_data'] = self.resolve_api_input(data, config, step_name='track_progress', default=None, endpoint=endpoint)
-
-        return await api_client.track_progress(endpoint=endpoint,
-                                               use_ws=use_ws,
-                                               ictx=ictx,
-                                               completion_condition=completion_condition,
-                                               **config)
+        return await client.track_progress(
+            endpoint=endpoint,
+            use_ws=use_ws,
+            ictx=self.ictx,
+            completion_condition=completion_condition,
+            **config
+        )
 
     async def _step_poll_api(self, data: Any, config: dict) -> list[dict]:
-        """
-        Polls an endpoint.
-        """
-        api:API = await get_api()
-        client_name, endpoint_name, use_ws = self.resolve_api_names(config, 'poll_api')
-        api_client:APIClient = api.get_client(client_name=client_name, strict=True)
-        endpoint:Endpoint = api_client.get_endpoint(endpoint_name=endpoint_name, strict=True)
+        """ Polls an endpoint. """
+        client, endpoint, _ = await self.get_api_client_and_endpoint(config, 'poll_api')
 
         return_values = config.pop("return_values", {})
         interval = config.pop("interval", 1.0)
         duration = config.pop("duration", -1)
         num_yields = config.pop("num_yields", -1)
 
-        config['input_data'] = self.resolve_api_input(data, config, step_name='poll_api', default=data, endpoint=endpoint)
+        config["input_data"] = self.resolve_api_input(data, config, step_name='poll_api', default=data, endpoint=endpoint)
 
         results = []
         try:
             async for result in endpoint.poll(return_values=return_values,
-                                            interval=interval,
-                                            duration=duration,
-                                            num_yields=num_yields,
-                                            **config):
+                                              interval=interval,
+                                              duration=duration,
+                                              num_yields=num_yields,
+                                              **config):
                 results.append(result)
         except Exception as e:
             log.error(f"[StepExecutor] Error in 'poll_api' step: {e}")
@@ -396,14 +393,9 @@ class StepExecutor:
         Returns the response body (one file) or list of response bodies (multiple files)
 
         """
-        api:API = await get_api()
-        client_name, endpoint_name, use_ws = self.resolve_api_names(config, 'upload_files')
-        api_client:APIClient = api.get_client(client_name=client_name, strict=True)
-        endpoint:Endpoint = api_client.get_endpoint(endpoint_name=endpoint_name, strict=True)
-        self.endpoint = endpoint # Helps to resolve API related context
-
-        input_data = config.pop('input_data', data)
-
+        client, endpoint, _ = await self.get_api_client_and_endpoint(config, 'upload_files')
+        self.endpoint = endpoint
+        input_data = config.pop("input_data", data)
         return await endpoint.upload_files(input_data, **config)
 
     async def _step_run_workflow(self, data, config):
@@ -415,37 +407,81 @@ class StepExecutor:
         """
         Prompts the user for input via Discord interaction.
 
-        "prompt": "Please upload an image or reply with text",
-        "type": "text" | "file",
-        "timeout": 60
+        "prompt": "Please make a selection",
+        "type": "text" | "file" | "select",
+        "timeout": 60,
+        "select_options": ["Option A", "Option B", "Option C"]
         """
         ictx = self.ictx
         if not ictx:
             raise RuntimeError("[StepExecutor] Cannot prompt user: 'ictx' (interaction context) is not set")
-        
-        from discord import Message, Attachment
-        ictx:Message
 
         prompt_text = config.get("prompt", "Please respond.")
         expected_type = config.get("type", "text")
         timeout = config.get("timeout", 60)
 
-        # Open DM channel
-        dm_channel = await ictx.author.create_dm()
+        from discord import Message, Attachment, Interaction
+        from modules.utils_discord import SelectOptionsView, get_user_ctx_inter
+        user = get_user_ctx_inter(ictx)
 
-        # Send the prompt via DM
-        await dm_channel.send(prompt_text)
+        is_interaction = isinstance(ictx, Interaction)
+
+        if is_interaction:
+            channel = ictx.channel
+        else:
+            channel = await user.create_dm()
+
+        # Handle select menu
+        if expected_type == "select":
+            options_raw = config.get("select_options")
+            if not options_raw or not isinstance(options_raw, (list, dict)):
+                raise ValueError("[StepExecutor] 'select_options' must be a list or dict for select menu step.")
+
+            if isinstance(options_raw, dict):
+                # Dict: {label: value}
+                display_names = list(options_raw.keys())
+                value_lookup = options_raw
+            else:
+                # List of values (int, float, str, etc.)
+                display_names = [str(opt) for opt in options_raw]
+                value_lookup = {str(opt): opt for opt in options_raw}
+
+            view = SelectOptionsView(all_items=display_names,
+                                     custom_id_prefix='step_select',
+                                     placeholder_prefix='Choices: ',
+                                     unload_item=None,
+                                     warned=False)
+            
+            if is_interaction:
+                msg = await ictx.followup.send(content=prompt_text, view=view, ephemeral=True)
+            else:
+                msg = await channel.send(content=prompt_text, view=view)
+
+            try:
+                await asyncio.wait_for(view.wait(), timeout=timeout)
+            except asyncio.TimeoutError:
+                await msg.edit(content="[StepExecutor] Timed out waiting for your selection.", view=None)
+                raise TimeoutError("[StepExecutor] User did not respond in time.")
+
+            selected_item = view.get_selected()
+            await msg.delete()
+
+            return value_lookup.get(selected_item)
+
+        # Send basic text or file prompt
+        await channel.send(prompt_text)
 
         def check(msg: Message):
-            return msg.author.id == ictx.author.id and msg.channel.id == dm_channel.id
+            return msg.author.id == user.id and msg.channel.id == channel.id
 
         # Wait for the response
         try:
-            client.waiting_for[ictx.author.id] = True
+            client.waiting_for[user.id] = True
             msg: Message = await client.wait_for("message", check=check, timeout=timeout)
 
             if expected_type == "text":
                 return msg.content.strip()
+
             elif expected_type == "file":
                 if msg.attachments:
                     attachment: Attachment = msg.attachments[0]
@@ -455,13 +491,21 @@ class StepExecutor:
                     kind = filetype.guess(file_bytes)
                     mime_type = kind.mime if kind else 'application/octet-stream'
                     mime_category = mime_type.strip().lower().split('/')[0]
-                    # Prepare a file-like object
                     file_obj = io.BytesIO(file_bytes)
                     file_obj.name = filename
 
-                    file = {mime_category: {"file": file_obj, "filename": filename, "content_type": mime_type}}
+                    file = {
+                        mime_category: {
+                            "file": file_obj,
+                            "filename": filename,
+                            "content_type": mime_type
+                        }
+                    }
 
-                    return {"file": file, "bytes": file_bytes, "file_format": mime_type, "filename": filename}
+                    return {"file": file,
+                            "bytes": file_bytes,
+                            "file_format": mime_type,
+                            "filename": filename}
                 else:
                     raise ValueError("[StepExecutor] Expected file attachment but none provided.")
             else:
@@ -470,7 +514,8 @@ class StepExecutor:
         except asyncio.TimeoutError:
             raise TimeoutError("[StepExecutor] User did not respond in time.")
         finally:
-            client.waiting_for.pop(ictx.author.id, None)
+            client.waiting_for.pop(user.id, None)
+
 
     async def _step_send_content(self, data: Any, config: str):
         """
@@ -511,6 +556,9 @@ class StepExecutor:
         for key, path_config in config.items():
             result[key] = extract_key(data, path_config)
         return result
+
+    def _step_encode_base64(self, data, config):
+        return base64.b64encode(data).decode('utf-8')
 
     def _step_decode_base64(self, data, config):
         if isinstance(data, str):
@@ -584,6 +632,14 @@ class StepExecutor:
 
         else:
             raise ValueError(f"[StepExecutor] Unknown transform type: {transform_type}")
+
+    def _step_list(self, data, config: list):
+        if not isinstance(config, list):
+            raise ValueError("[StepExecutor] 'list' step required to be formatted as a list.")
+        result = []
+        for item in config:
+            result.append(item)
+        return result
 
     def _step_regex(self, data, pattern):
         match = re.search(pattern, data)
@@ -675,42 +731,48 @@ class StepExecutor:
                                               response=self.response,
                                               msg_prefix='[StepExecutor] ')
 
+    async def _step_call_imggen(self, data: Any, config: dict):
+        if config.get("payload"):
+            config["input_data"] = config.pop("payload")
+
+        client, endpoint, _ = await self.get_api_client_and_endpoint(config, 'call_imggen')
+        self.endpoint = endpoint
+
+        if not isinstance(client, ImgGenClient):
+            raise RuntimeError(f'[StepExecutor] API Client is not an ImgGen client. Cannot run step "call_imggen".')
+
+        payload = self.resolve_api_input(data, config, step_name='call_imggen', default=data, endpoint=endpoint)
+        return await client._main_imggen(self.task, payload, endpoint, **config)
+
     async def _step_call_comfy(self, data: Any, config: dict):
         config['use_ws'] = True
-        if config.get('payload'):
-            config['input_data'] = config.pop('payload')
+        if config.get("payload"):
+            config["input_data"] = config.pop("payload")
 
-        api:API = await get_api()
-        client_name, endpoint_name, _ = self.resolve_api_names(config, 'call_comfy')
-        comfy_client:ImgGenClient_Comfy = api.get_client(client_name=client_name, strict=True)
-        if not isinstance(comfy_client, ImgGenClient_Comfy):
-            raise RuntimeError(f'[StepExecutor] API Client "{client_name}" is not ComfyUI. Cannot run step "call_comfy".')
+        client, endpoint, _ = await self.get_api_client_and_endpoint(config, 'call_comfy', allow_ws_only=True)
+        self.endpoint = endpoint
 
-        endpoint:Optional[Endpoint] = None
-        if endpoint_name:
-            endpoint = comfy_client.get_endpoint(endpoint_name=endpoint_name, strict=True)
-        self.endpoint = endpoint # Helps to resolve API related context
+        if not isinstance(client, ImgGenClient_Comfy):
+            raise RuntimeError(f'[StepExecutor] API Client is not ComfyUI. Cannot run step "call_comfy".')
 
-        payload:dict = self.resolve_api_input(data, config, step_name='call_api', default=data, endpoint=endpoint)
-        
-        return await comfy_client._execute_prompt(payload, endpoint, self.ictx, self.task, **config)
+        payload = self.resolve_api_input(data, config, step_name='call_comfy', default=data, endpoint=endpoint)
+        return await client._execute_prompt(payload, endpoint, self.ictx, self.task, **config)
 
     async def _step_free_comfy_memory(self, data: Any, config: dict):
-        config['use_ws'] = True
-        api:API = await get_api()
-        client_name, _, _ = self.resolve_api_names(config, 'free_comfy_memory')
-        comfy_client:ImgGenClient_Comfy = api.get_client(client_name=client_name, strict=True)
-        if not isinstance(comfy_client, ImgGenClient_Comfy):
-            raise RuntimeError(f'[StepExecutor] API Client "{client_name}" is not ComfyUI. Cannot run step "free_comfy_memory".')
+        config["use_ws"] = True
+        client, _, _ = await self.get_api_client_and_endpoint(config, 'free_comfy_memory', allow_ws_only=True)
 
-        unload_models = config.get('unload_models', True)
-        free_memory = config.get('free_memory', True)
+        if not isinstance(client, ImgGenClient_Comfy):
+            raise RuntimeError(f'[StepExecutor] API Client is not ComfyUI. Cannot run step "free_comfy_memory".')
+
+        unload_models = config.get("unload_models", True)
+        free_memory = config.get("free_memory", True)
+
         if not unload_models or free_memory:
-            log.warning(f"[StepExecutor] step 'free_comfy_memory' expected either 'unload_models' or 'free_memory'.")
+            log.warning("[StepExecutor] step 'free_comfy_memory' expected either 'unload_models' or 'free_memory'.")
             return data
 
-        return await comfy_client._free_memory(unload_models,
-                                               free_memory)
+        return await client._free_memory(unload_models, free_memory)
 
 # async def _process_file_input(self, path: str, input_type: str):
 #     if input_type == "text":

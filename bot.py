@@ -2996,6 +2996,12 @@ class Tasks(TaskProcessing):
                 value = selections.get(name)
                 if value is None:
                     continue  # Skip optional inputs not provided
+                # Decode Attachments and retain filename for if needed.
+                if isinstance(value, discord.Attachment):
+                    file_name = Path(value.filename).stem
+                    fn_key = f"{name}_file_name"
+                    processed_params[fn_key] = file_name
+                    value = await value.read()
                 option_names.append(name)
                 steps = meta.get("steps")
                 if steps:
