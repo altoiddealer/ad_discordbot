@@ -336,6 +336,51 @@ class EditMessageModal(discord.ui.Modal, title="Edit Message in History"):
         else:
             await inter.response.send_message("Message history has been edited successfully.", ephemeral=True, delete_after=5)
 
+
+class DynamicModal(discord.ui.Modal):
+    """
+    A flexible, reusable Discord Modal for multiple text inputs.
+    """
+
+    def __init__(self, title: str, fields: list[dict], timeout: float = 300):
+        """
+        :param title: Title of the modal window (max 45 characters).
+        :param fields: List of dicts, each defining a text input field.
+        Each dict may contain:
+            - label (str): Label shown above the input.
+            - custom_id (str): Optional unique identifier.
+            - style (discord.TextStyle): discord.TextStyle.short or .paragraph
+            - placeholder (str): Optional placeholder text.
+            - default (str): Optional pre-filled value.
+            - required (bool): Whether the field must be filled.
+            - max_length (int): Max character limit.
+            - min_length (int): Min character limit.
+        :param timeout: Timeout in seconds.
+        """
+        super().__init__(title=title[:45], timeout=timeout)
+        self.responses = {}
+
+        for field in fields:
+            text_input = discord.ui.TextInput(
+                label=field.get("label", "Input"),
+                custom_id=field.get("custom_id", field.get("label", "field").lower().replace(" ", "_")),
+                style=field.get("style", discord.TextStyle.short),
+                placeholder=field.get("placeholder"),
+                default=field.get("default"),
+                required=field.get("required", True),
+                max_length=field.get("max_length"),
+                min_length=field.get("min_length")
+            )
+            self.add_item(text_input)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        # Store all inputs keyed by their custom_id
+        for child in self.children:
+            if isinstance(child, discord.ui.TextInput):
+                self.responses[child.custom_id] = child.value
+        await interaction.response.defer()
+        self.stop()
+
 class SelectedListItem(discord.ui.Select):
     def __init__(self, options, placeholder, custom_id):
         super().__init__(placeholder=placeholder, min_values=0, max_values=1, options=options, custom_id=custom_id)

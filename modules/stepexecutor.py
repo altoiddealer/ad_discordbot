@@ -407,10 +407,14 @@ class StepExecutor:
         """
         Prompts the user for input via Discord interaction.
 
-        "prompt": "Please make a selection",
-        "type": "text" | "file" | "select",
-        "timeout": 60,
-        "select_options": ["Option A", "Option B", "Option C"]
+        Config Parameters:
+        - "prompt" (str): Message to show the user.
+        - "type" (str): One of "text", "file", or "select".
+        - "timeout" (int): Time in seconds to wait for user input (default: 60).
+        - "options" (required for "select" type):
+            - List of primitive values: [1, 2, 3.5, "Label"]
+            - Dict of label-value pairs: {"Production": "prod", "Dev": "dev"}
+            - List of objects: [{"label": "Production", "value": "prod"}, ...]
         """
         ictx = self.ictx
         if not ictx:
@@ -420,31 +424,36 @@ class StepExecutor:
         expected_type = config.get("type", "text")
         timeout = config.get("timeout", 60)
 
-        from discord import Message, Attachment, Interaction
-        from modules.utils_discord import SelectOptionsView, get_user_ctx_inter
+        from discord import Message, Attachment, Interaction, TextStyle
+        from modules.utils_discord import SelectOptionsView, DynamicModal, get_user_ctx_inter
+
         user = get_user_ctx_inter(ictx)
-
         is_interaction = isinstance(ictx, Interaction)
-
-        if is_interaction:
-            channel = ictx.channel
-        else:
-            channel = await user.create_dm()
 
         # Handle select menu
         if expected_type == "select":
-            options_raw = config.get("select_options")
+            options_raw = config.get("options")
             if not options_raw or not isinstance(options_raw, (list, dict)):
-                raise ValueError("[StepExecutor] 'select_options' must be a list or dict for select menu step.")
+                raise ValueError("[StepExecutor] 'select_options' must be a list or dict for 'prompt_user' step, when type is 'select'.")
 
+            # Case: dict {label: value}
             if isinstance(options_raw, dict):
-                # Dict: {label: value}
                 display_names = list(options_raw.keys())
                 value_lookup = options_raw
+
+            # Case: list of dicts or primitives
+            elif isinstance(options_raw, list):
+                if all(isinstance(opt, dict) and "label" in opt and "value" in opt for opt in options_raw):
+                    # List of dicts: [{label: ..., value: ...}]
+                    display_names = [opt["label"] for opt in options_raw]
+                    value_lookup = {opt["label"]: opt["value"] for opt in options_raw}
+                else:
+                    # List of primitives: [int, str, float, ...]
+                    display_names = [str(opt) for opt in options_raw]
+                    value_lookup = {str(opt): opt for opt in options_raw}
+
             else:
-                # List of values (int, float, str, etc.)
-                display_names = [str(opt) for opt in options_raw]
-                value_lookup = {str(opt): opt for opt in options_raw}
+                raise ValueError("[StepExecutor] Unrecognized structure for 'select_options'.")
 
             view = SelectOptionsView(all_items=display_names,
                                      custom_id_prefix='step_select',
@@ -455,6 +464,7 @@ class StepExecutor:
             if is_interaction:
                 msg = await ictx.followup.send(content=prompt_text, view=view, ephemeral=True)
             else:
+                channel = await user.create_dm()
                 msg = await channel.send(content=prompt_text, view=view)
 
             try:
@@ -467,6 +477,60 @@ class StepExecutor:
             await msg.delete()
 
             return value_lookup.get(selected_item)
+        
+        ### CAN'T SEND MODAL AFTER DELAY - KEEPING FOR FUTURE REFERENCE
+        # if expected_type == "text":
+        #     if is_interaction:
+        #         modal_fields_config = config.get("modal_fields")
+
+        #         modal_fields = []
+        #         key_mapping = {}  # Maps custom_id => user-defined key (or fallback)
+
+        #         if modal_fields_config and isinstance(modal_fields_config, list):
+        #             for i, field in enumerate(modal_fields_config):
+        #                 key = field.get("key") or f"field_{i}"
+        #                 custom_id = f"modal_input_{key}"
+        #                 key_mapping[custom_id] = key
+
+        #                 modal_fields.append({
+        #                     "label": field.get("label", f"Field {i + 1}"),
+        #                     "placeholder": field.get("placeholder", ""),
+        #                     "style": field.get("style", TextStyle.short),
+        #                     "required": field.get("required", True),
+        #                     "max_length": field.get("max_length", 2000),
+        #                     "custom_id": custom_id,
+        #                 })
+        #         else:
+        #             # Fallback to a single field
+        #             custom_id = "modal_input_default"
+        #             key_mapping[custom_id] = "response"
+        #             modal_fields = [{
+        #                 "label": prompt_text,
+        #                 "placeholder": "Type your answer...",
+        #                 "style": TextStyle.paragraph,
+        #                 "required": True,
+        #                 "max_length": 2000,
+        #                 "custom_id": custom_id,
+        #             }]
+
+        #         modal = DynamicModal(title="Your Response", fields=modal_fields)
+        #         await ictx.response.send_modal(modal)
+
+        #         try:
+        #             await asyncio.wait_for(modal.wait(), timeout=timeout)
+
+        #             responses = {key_mapping[child.custom_id]: modal.responses.get(child.custom_id, "")
+        #                          for child in modal.children}
+
+        #             return next(iter(responses.values())) if len(responses) == 1 else responses
+
+        #         except asyncio.TimeoutError:
+        #             raise TimeoutError("[StepExecutor] User did not respond in time for 'prompt_user' step.")
+        #         except Exception as e:
+        #             raise RuntimeError(f"[StepExecutor] Modal processing failed unexpectedly: {e}")
+
+        # Handle all other scenarios via DM
+        channel = await user.create_dm()
 
         # Send basic text or file prompt
         await channel.send(prompt_text)

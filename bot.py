@@ -4951,15 +4951,23 @@ async def load_custom_commands():
                     opt_description += " (size limits apply)"
 
                 if choices_raw:
-                    if isinstance(choices_raw[0], dict):
-                        # Dict-based: {"name": ..., "value": ...}
+                    # Case: dict {label: value}
+                    if isinstance(choices_raw, dict):
                         annotation = app_commands.Choice[str]
-                        choices = [app_commands.Choice(name=c["name"], value=c["value"]) for c in choices_raw]
-                    else:
-                        # Primitive list (e.g. [0.1, 0.2, 0.3])
-                        value_type = type(choices_raw[0])
-                        annotation = app_commands.Choice[value_type]
-                        choices = [app_commands.Choice(name=str(c), value=c) for c in choices_raw]
+                        choices = [app_commands.Choice(name=label, value=value)
+                            for label, value in choices_raw.items()]
+
+                    # Case: list (dicts or primitives)
+                    elif isinstance(choices_raw, list):
+                        if all(isinstance(c, dict) and "name" in c and "value" in c for c in choices_raw):
+                            annotation = app_commands.Choice[str]
+                            choices = [app_commands.Choice(name=c["name"], value=c["value"])
+                                for c in choices_raw]
+                        else:
+                            value_type = type(choices_raw[0])
+                            annotation = app_commands.Choice[value_type]
+                            choices = [app_commands.Choice(name=str(c), value=c)
+                                for c in choices_raw]
                 else:
                     annotation = opt_type
                     choices = None
@@ -4981,7 +4989,7 @@ async def load_custom_commands():
                 async def callback_template(*args, **kwargs):
                     interaction = kwargs.pop("interaction", args[0] if args else None)
 
-                    await ireply(interaction, f'/{command_name}') # send a response msg to the user
+                    await ireply(interaction, f'/{command_name}', defer=True) # send a response msg to the user
 
                     # Convert Choices to their actual value (but not None)
                     raw_kwargs = {k: (v.value if isinstance(v, app_commands.Choice) else v)
