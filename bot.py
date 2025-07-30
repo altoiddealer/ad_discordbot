@@ -4989,7 +4989,7 @@ async def load_custom_commands():
                 async def callback_template(*args, **kwargs):
                     interaction = kwargs.pop("interaction", args[0] if args else None)
 
-                    await ireply(interaction, f'/{command_name}', defer=True) # send a response msg to the user
+                    await ireply(interaction, f'/{command_name}') # send a response msg to the user
 
                     # Convert Choices to their actual value (but not None)
                     raw_kwargs = {k: (v.value if isinstance(v, app_commands.Choice) else v)

@@ -697,13 +697,15 @@ class StepExecutor:
         else:
             raise ValueError(f"[StepExecutor] Unknown transform type: {transform_type}")
 
+    def _step_dict(self, data, config: dict):
+        if not isinstance(config, dict):
+            raise ValueError("[StepExecutor] 'dict' step required to be formatted as a dict.")
+        return config
+
     def _step_list(self, data, config: list):
         if not isinstance(config, list):
             raise ValueError("[StepExecutor] 'list' step required to be formatted as a list.")
-        result = []
-        for item in config:
-            result.append(item)
-        return result
+        return config
 
     def _step_regex(self, data, pattern):
         match = re.search(pattern, data)
