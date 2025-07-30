@@ -407,37 +407,81 @@ class StepExecutor:
         """
         Prompts the user for input via Discord interaction.
 
-        "prompt": "Please upload an image or reply with text",
-        "type": "text" | "file",
-        "timeout": 60
+        "prompt": "Please make a selection",
+        "type": "text" | "file" | "select",
+        "timeout": 60,
+        "select_options": ["Option A", "Option B", "Option C"]
         """
         ictx = self.ictx
         if not ictx:
             raise RuntimeError("[StepExecutor] Cannot prompt user: 'ictx' (interaction context) is not set")
-        
-        from discord import Message, Attachment
-        ictx:Message
 
         prompt_text = config.get("prompt", "Please respond.")
         expected_type = config.get("type", "text")
         timeout = config.get("timeout", 60)
 
-        # Open DM channel
-        dm_channel = await ictx.author.create_dm()
+        from discord import Message, Attachment, Interaction
+        from modules.utils_discord import SelectOptionsView, get_user_ctx_inter
+        user = get_user_ctx_inter(ictx)
 
-        # Send the prompt via DM
-        await dm_channel.send(prompt_text)
+        is_interaction = isinstance(ictx, Interaction)
+
+        if is_interaction:
+            channel = ictx.channel
+        else:
+            channel = await user.create_dm()
+
+        # Handle select menu
+        if expected_type == "select":
+            options_raw = config.get("select_options")
+            if not options_raw or not isinstance(options_raw, (list, dict)):
+                raise ValueError("[StepExecutor] 'select_options' must be a list or dict for select menu step.")
+
+            if isinstance(options_raw, dict):
+                # Dict: {label: value}
+                display_names = list(options_raw.keys())
+                value_lookup = options_raw
+            else:
+                # List of values (int, float, str, etc.)
+                display_names = [str(opt) for opt in options_raw]
+                value_lookup = {str(opt): opt for opt in options_raw}
+
+            view = SelectOptionsView(all_items=display_names,
+                                     custom_id_prefix='step_select',
+                                     placeholder_prefix='Choices: ',
+                                     unload_item=None,
+                                     warned=False)
+            
+            if is_interaction:
+                msg = await ictx.followup.send(content=prompt_text, view=view, ephemeral=True)
+            else:
+                msg = await channel.send(content=prompt_text, view=view)
+
+            try:
+                await asyncio.wait_for(view.wait(), timeout=timeout)
+            except asyncio.TimeoutError:
+                await msg.edit(content="[StepExecutor] Timed out waiting for your selection.", view=None)
+                raise TimeoutError("[StepExecutor] User did not respond in time.")
+
+            selected_item = view.get_selected()
+            await msg.delete()
+
+            return value_lookup.get(selected_item)
+
+        # Send basic text or file prompt
+        await channel.send(prompt_text)
 
         def check(msg: Message):
-            return msg.author.id == ictx.author.id and msg.channel.id == dm_channel.id
+            return msg.author.id == user.id and msg.channel.id == channel.id
 
         # Wait for the response
         try:
-            client.waiting_for[ictx.author.id] = True
+            client.waiting_for[user.id] = True
             msg: Message = await client.wait_for("message", check=check, timeout=timeout)
 
             if expected_type == "text":
                 return msg.content.strip()
+
             elif expected_type == "file":
                 if msg.attachments:
                     attachment: Attachment = msg.attachments[0]
@@ -447,13 +491,21 @@ class StepExecutor:
                     kind = filetype.guess(file_bytes)
                     mime_type = kind.mime if kind else 'application/octet-stream'
                     mime_category = mime_type.strip().lower().split('/')[0]
-                    # Prepare a file-like object
                     file_obj = io.BytesIO(file_bytes)
                     file_obj.name = filename
 
-                    file = {mime_category: {"file": file_obj, "filename": filename, "content_type": mime_type}}
+                    file = {
+                        mime_category: {
+                            "file": file_obj,
+                            "filename": filename,
+                            "content_type": mime_type
+                        }
+                    }
 
-                    return {"file": file, "bytes": file_bytes, "file_format": mime_type, "filename": filename}
+                    return {"file": file,
+                            "bytes": file_bytes,
+                            "file_format": mime_type,
+                            "filename": filename}
                 else:
                     raise ValueError("[StepExecutor] Expected file attachment but none provided.")
             else:
@@ -462,7 +514,8 @@ class StepExecutor:
         except asyncio.TimeoutError:
             raise TimeoutError("[StepExecutor] User did not respond in time.")
         finally:
-            client.waiting_for.pop(ictx.author.id, None)
+            client.waiting_for.pop(user.id, None)
+
 
     async def _step_send_content(self, data: Any, config: str):
         """
