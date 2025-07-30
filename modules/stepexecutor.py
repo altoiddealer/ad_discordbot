@@ -834,7 +834,7 @@ class StepExecutor:
         unload_models = config.get("unload_models", True)
         free_memory = config.get("free_memory", True)
 
-        if not unload_models or free_memory:
+        if not unload_models and not free_memory:
             log.warning("[StepExecutor] step 'free_comfy_memory' expected either 'unload_models' or 'free_memory'.")
             return data
 

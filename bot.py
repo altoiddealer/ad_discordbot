@@ -4972,10 +4972,12 @@ async def load_custom_commands():
                     annotation = opt_type
                     choices = None
 
+                default_value = opt.get("default", inspect.Parameter.empty if required else None)
                 param = inspect.Parameter(name=opt_name,
                                         kind=inspect.Parameter.KEYWORD_ONLY,
-                                        default=inspect.Parameter.empty if required else None,
+                                        default=default_value,
                                         annotation=annotation)
+
                 parameters.append(param)
                 option_metadata.append({"name": opt_name,
                                         "description": opt_description,
