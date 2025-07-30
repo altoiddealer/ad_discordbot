@@ -839,6 +839,18 @@ class StepExecutor:
             return data
 
         return await client._free_memory(unload_models, free_memory)
+    
+    async def _step_comfy_delete_nodes(self, data: Any, config: dict):
+        if not config.get("input_data"):
+            config["input_data"] = config.pop("payload", data)
+
+        payload = config['input_data']
+        delete_nodes = config['delete_nodes']
+
+        processing.comfy_delete_and_reroute_nodes(payload, delete_nodes)
+
+        return payload
+
 
 # async def _process_file_input(self, path: str, input_type: str):
 #     if input_type == "text":
