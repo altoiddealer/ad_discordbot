@@ -1035,6 +1035,10 @@ class BotVars():
         setattr(self, f"strength_{index_str}", strength)
         self._loras_index += 1
 
+    def get_vars(self, return_copy=False):
+        attrs = {k: v for k, v in vars(self).items() if not k.startswith('_')}
+        return copy.deepcopy(attrs) if return_copy else attrs
+
 bot_vars = BotVars()
 
 #################################################################
@@ -1441,6 +1445,7 @@ class TaskProcessing(TaskAttributes):
     
     async def apply_generic_tag_matches(self:Union["Task","Tasks"], phase='llm'):
         prevent_multiple = []
+        postponed_processing = []
         try:
             for tag in self.tags.matches:
                 tag_dict:TAG = self.tags.untuple(tag)
@@ -1467,6 +1472,30 @@ class TaskProcessing(TaskAttributes):
                     user_image = discord.File(user_image_args)
                     self.extra_files.append(user_image)
                     log.info(f'[TAGS] Sending user image for matched {tag_print}')
+                if 'persist' in tag_dict:
+                    if not tag_name:
+                        log.warning(f"[TAGS] A persistent {tag_print} was matched, but it is missing a required 'name' parameter. Cannot make tag persistent.")
+                    else:
+                        persist = int(tag_dict.pop('persist'))
+                        log.info(f'[TAGS] A persistent {tag_print} was matched, which will be auto-applied for the next ({persist}) tag matching phases (pre-{phase.upper()} gen).')
+                        persistent_tags.append_tag_name_to(phase, self.channel.id, persist, tag_name)
+                # Postponed handling
+                if 'call_api' in tag_dict:
+                    postponed_processing.append( {'call_api': tag_dict.pop('call_api')} )
+                if 'run_workflow' in tag_dict:
+                    postponed_processing.append( {'run_workflow': tag_dict.pop('run_workflow')} )
+        except TaskCensored:
+            raise
+        except Exception as e:
+            log.error(f"Error processing generic tag matches: {e}")
+        # Save postponed tag processing for later
+        setattr(self, 'postponed_tags', postponed_processing)
+
+    async def process_postponed_tags(self:Union["Task","Tasks"]):
+        postponed:list[dict] = getattr(self, 'postponed_tags', None)
+        if postponed:
+            base_context = self.vars.get_vars(return_copy=True)
+            for tag_dict in postponed:
                 if 'call_api' in tag_dict:
                     api_config = tag_dict.pop('call_api')
                     if not isinstance(api_config, dict):
@@ -1492,6 +1521,9 @@ class TaskProcessing(TaskAttributes):
                         log.error('[TAGS] A "run_workflow" tag was triggered, but it must be in a dict format.')
                     else:
                         queue_to = workflow_config.pop('queue_to', 'gen_queue')
+                        # Inject task context to the workflow
+                        wf_context = workflow_config.pop('context', {})
+                        workflow_config['context'] = deep_merge(base_context, wf_context)
                         if queue_to:
                             queue_to = 'gen_queue' if queue_to == 'message_queue' else queue_to # Do not allow to go to Message queue
                             log.info('A Workflow task was triggered, created and queued.')
@@ -1501,18 +1533,6 @@ class TaskProcessing(TaskAttributes):
                             await task_manager.queue_task(workflow_task, queue_to)
                         else:
                             await self.run_workflow_task(workflow_config)
-                if 'persist' in tag_dict:
-                    if not tag_name:
-                        log.warning(f"[TAGS] A persistent {tag_print} was matched, but it is missing a required 'name' parameter. Cannot make tag persistent.")
-                    else:
-                        persist = int(tag_dict.pop('persist'))
-                        log.info(f'[TAGS] A persistent {tag_print} was matched, which will be auto-applied for the next ({persist}) tag matching phases (pre-{phase.upper()} gen).')
-                        persistent_tags.append_tag_name_to(phase, self.channel.id, persist, tag_name)
-
-        except TaskCensored:
-            raise
-        except Exception as e:
-            log.error(f"Error processing generic tag matches: {e}")
 
     def apply_begin_reply_with(self:Union["Task","Tasks"]):
         # Continue from value of 'begin_reply_with'
@@ -3010,6 +3030,7 @@ class Tasks(TaskProcessing):
 
             # Run the command's main steps if defined
             if main_steps:
+                print("FINAL PAYLOAD:", processed_params.get('payload'))
                 value = await call_stepexecutor(steps=main_steps, task=self, input_data=processed_params, context=processed_params, prefix=f'Processing command "{cmd_name}" with ')
                 await self.embeds.send('img_send', f'{self.user_name} used "/{cmd_name}"', f'Options: {", ".join(optname for optname in option_names)}')
                 self.check_for_send_content(value)
@@ -4025,6 +4046,9 @@ class Task(Tasks):
                 current_attributes[key] = copy.deepcopy(value)
             elif isinstance(value, IsTyping):
                 current_attributes[key] = self._clone_istyping(value) if keep_typing else IsTyping(self.channel)
+            elif key == "postponed_tags":
+                current_attributes[key] = value
+                setattr(self, 'postponed_tags', None)
             # shallow copy remaining items
             else:
                 current_attributes[key] = value
@@ -4287,6 +4311,8 @@ class TaskManager:
 
     async def run_task(self, task: 'Task'):
         await task.run_task()
+        if getattr(task, 'postponed_tags', None):
+            await task.process_postponed_tags()
         if flows_queue.qsize() > 0:
             await flows.run_flow_if_any(task.text, task.ictx)
 
