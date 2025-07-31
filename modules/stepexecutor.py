@@ -40,7 +40,7 @@ class StepExecutor:
         without affecting the main result passed to the next step.
         """
         self.steps = steps
-        self.context: dict[str, Any] = context if context else {}
+        self.context: dict[str, Any] = context if context is not None else {}
         self.original_input_data = input_data
         self.response:Optional[APIResponse] = input_data if isinstance(input_data, APIResponse) else response
         self.endpoint:Optional[Endpoint] = endpoint
