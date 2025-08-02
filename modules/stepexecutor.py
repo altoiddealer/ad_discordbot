@@ -245,7 +245,7 @@ class StepExecutor:
         async def run_subgroup(steps: list[dict], index: int):
             subgroup_context = copy.deepcopy(self.context)
             sub_executor = StepExecutor(steps,
-                                        response=self.response
+                                        response=self.response,
                                         task=self.task,
                                         ictx=self.ictx,
                                         endpoint=self.endpoint,
