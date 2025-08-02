@@ -4,6 +4,7 @@ from PIL import Image, PngImagePlugin
 import io
 import base64
 import filetype
+import copy
 from modules.typing import CtxInteraction, APIRequestCancelled
 from typing import Any, Optional, Union
 from modules.utils_shared import client, shared_path, load_file, get_api
@@ -203,25 +204,28 @@ class StepExecutor:
             raise TypeError(f"[StepExecutor] 'for_each' expected list or dict but got {type(items).__name__}")
 
         results = []
+        root_context = copy.deepcopy(self.context)
 
         for index, item in iterable:
-            # Inject iteration variables into root context
-            iter_vars = get_context(index, item)
-            self.context.update(iter_vars)
+            # Add iteration variables to context
+            item_context = {**root_context,
+                            **get_context(index, item)}
 
             sub_executor = StepExecutor(steps,
                                         response=self.response,
                                         task=self.task,
                                         ictx=self.ictx,
                                         endpoint=self.endpoint,
-                                        context=self.context)
+                                        context=item_context)
 
             result = await sub_executor.run(get_value(item))
             results.append(result)
 
             # Remove iteration variables
             for key in iter_keys:
-                self.context.pop(key, None)
+                item_context.pop(key, None)
+
+            self.context = deep_merge(self.context, item_context)
 
         return results
 
