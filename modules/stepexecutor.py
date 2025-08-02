@@ -7,7 +7,7 @@ import filetype
 from modules.typing import CtxInteraction, APIRequestCancelled
 from typing import Any, Optional, Union
 from modules.utils_shared import client, shared_path, load_file, get_api
-from modules.utils_misc import valueparser, set_key, extract_key
+from modules.utils_misc import valueparser, set_key, extract_key, deep_merge
 import modules.utils_processing as processing
 from modules.apis import apisettings, APIResponse, Endpoint, API, APIClient, ImgGenClient_Comfy, ImgGenClient
 
@@ -173,8 +173,8 @@ class StepExecutor:
         """
         Runs a sub-StepExecutor for each item in a list or each key-value pair in a dict.
 
-        Returns:
-            list: A list of results, one per item processed.
+        Context updates from each iteration will merge into the root context.
+        Returns a list of results, one per item processed.
         """
         source = config.get("in")
         alias = config.get("as", "item")
@@ -188,33 +188,40 @@ class StepExecutor:
 
         if isinstance(items, list):
             iterable = enumerate(items)
-            get_context = lambda idx, val: {
-                alias: val,
-                f"{alias}_index": idx,
-            }
+            get_context = lambda idx, val: {alias: val,
+                                            f"{alias}_index": idx}
+            iter_keys = [alias, f"{alias}_index"]
+            get_value = lambda item: item
         elif isinstance(items, dict):
             iterable = enumerate(items.items())
-            get_context = lambda idx, pair: {
-                f"{alias}_key": pair[0],
-                f"{alias}_value": pair[1],
-                f"{alias}_index": idx,
-            }
+            get_context = lambda idx, pair: {f"{alias}_key": pair[0],
+                                             f"{alias}_value": pair[1],
+                                             f"{alias}_index": idx}
+            iter_keys = [f"{alias}_key", f"{alias}_value", f"{alias}_index"]
+            get_value = lambda item: item[1]
         else:
             raise TypeError(f"[StepExecutor] 'for_each' expected list or dict but got {type(items).__name__}")
 
         results = []
 
         for index, item in iterable:
-            sub_executor = StepExecutor(steps, task=self.task, ictx=self.ictx, endpoint=self.endpoint, response=self.response)
+            # Inject iteration variables into root context
+            iter_vars = get_context(index, item)
+            self.context.update(iter_vars)
 
-            sub_executor.context = {
-                **self.context,
-                **get_context(index, item),
-            }
+            sub_executor = StepExecutor(steps,
+                                        response=self.response,
+                                        task=self.task,
+                                        ictx=self.ictx,
+                                        endpoint=self.endpoint,
+                                        context=self.context)
 
-            value = item if isinstance(items, list) else item[1]
-            result = await sub_executor.run(value)
+            result = await sub_executor.run(get_value(item))
             results.append(result)
+
+            # Remove iteration variables
+            for key in iter_keys:
+                self.context.pop(key, None)
 
         return results
 
