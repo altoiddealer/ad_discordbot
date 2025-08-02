@@ -243,13 +243,31 @@ class StepExecutor:
             raise ValueError("step_group config must be a list of lists of steps")
 
         async def run_subgroup(steps: list[dict], index: int):
-            sub_executor = StepExecutor(steps, task=self.task, ictx=self.ictx, endpoint=self.endpoint)
-            sub_executor.response = self.response
-            sub_executor.context = self.context.copy()
-            return await sub_executor.run(data)
+            subgroup_context = copy.deepcopy(self.context)
+            sub_executor = StepExecutor(steps,
+                                        response=self.response
+                                        task=self.task,
+                                        ictx=self.ictx,
+                                        endpoint=self.endpoint,
+                                        context=subgroup_context)
+            result = await sub_executor.run(data)
+            context_updates = deep_merge(context_updates, subgroup_context)
+            return result, subgroup_context
 
         tasks = [run_subgroup(steps, idx) for idx, steps in enumerate(config)]
-        results = await asyncio.gather(*tasks)
+        results_with_contexts = await asyncio.gather(*tasks)
+
+        # Separate results and contexts
+        results = []
+        all_contexts = []
+        for result, subgroup_context in results_with_contexts:
+            results.append(result)
+            all_contexts.append(subgroup_context)
+
+        # Merge all subgroup contexts into the root context
+        for subgroup_context in all_contexts:
+            self.context = deep_merge(self.context, subgroup_context)
+
         return results
 
     def _step_offload(self, data: Any, config: Any):
