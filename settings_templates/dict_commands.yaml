@@ -23,8 +23,6 @@ examples:
         type: string
         required: false
         choices: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
-        steps:
-          - type: float
     # All selection data will be initialzed into context (can be used to resolve payload fields, etc)
     steps:
       - load_data_file: comfy_workflows/comfy_remove_bg.json

@@ -3030,7 +3030,6 @@ class Tasks(TaskProcessing):
 
             # Run the command's main steps if defined
             if main_steps:
-                print("FINAL PAYLOAD:", processed_params.get('payload'))
                 value = await call_stepexecutor(steps=main_steps, task=self, input_data=processed_params, context=processed_params, prefix=f'Processing command "{cmd_name}" with ')
                 await self.embeds.send('img_send', f'{self.user_name} used "/{cmd_name}"', f'Options: {", ".join(optname for optname in option_names)}')
                 self.check_for_send_content(value)

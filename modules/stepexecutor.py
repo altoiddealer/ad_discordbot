@@ -167,7 +167,113 @@ class StepExecutor:
             ws_context = self.endpoint.client.ws_config.get_context()
             config = processing.resolve_placeholders(config, ws_context, log_prefix='[StepExecutor]', log_suffix=f'from "{self.endpoint.client.name}" Websocket context')
         return config
-    
+
+
+    async def _step_if(self, data: Any, config: dict):
+        """
+        Execute the steps in this 'if' block if the condition evaluates True.
+
+        Config format:
+            value1: status
+            operator: ==
+            value2: active
+            steps:
+            - send_content: "**Status**: Active"
+        """
+        if not isinstance(config, dict):
+            raise ValueError("[StepExecutor] 'if' step requires a dict config")
+
+        steps = config.pop("steps", None)
+        if not steps or not isinstance(steps, list):
+            raise ValueError("[StepExecutor] 'if' step requires a 'steps' list")
+        
+        config['context'] = self.context
+        if processing.evaluate_condition(**config):
+            sub_executor = StepExecutor(steps,
+                                        response=self.response,
+                                        task=self.task,
+                                        ictx=self.ictx,
+                                        endpoint=self.endpoint,
+                                        context=copy.deepcopy(self.context))
+            branch_result = await sub_executor.run(data)
+
+            self.context = deep_merge(self.context, sub_executor.context)
+
+            return branch_result
+
+        return data
+
+
+    async def _step_if_group(self, data: Any, config: list[dict]):
+        """
+        Execute a chain of if/elif/else steps encapsulated in one step.
+
+        Each item in config is a dict with one key: "if", "elif", or "else".
+        Example:
+            - if:
+                value1: status
+                operator: ==
+                value2: active
+                steps:
+                - send_content: "**Status**: Active"
+            - elif:
+                value1: status
+                operator: ==
+                value2: pending
+                steps:
+                - send_content: "**Status**: Pending"
+            - else:
+                steps:
+                - send_content: "**Status**: Unknown"
+        """
+        if not isinstance(config, list):
+            raise ValueError("[StepExecutor] 'if_group' config must be a list of dicts")
+
+        branch_executed = False
+        result = data
+
+        for branch in config:
+            if not isinstance(branch, dict) or len(branch) != 1:
+                raise ValueError(f"[StepExecutor] Invalid if_group branch: {branch}")
+
+            branch_type, branch_cfg = next(iter(branch.items()))
+            branch_type = branch_type.lower()
+
+            if branch_type not in ("if", "elif", "else"):
+                raise ValueError(f"[StepExecutor] Unsupported branch in if_group: {branch_type}")
+
+            # Determine if branch should execute
+            execute_branch = False
+            if branch_type in ("if", "elif"):
+                if branch_type == "if" or not branch_executed:
+                    value1 = branch_cfg.get('value1')
+                    operator = branch_cfg.get('operator')
+                    value2 = branch_cfg.get('value2')
+                    execute_branch = processing.evaluate_condition(value1, operator, value2, self.context)
+            elif branch_type == "else":
+                execute_branch = not branch_executed
+
+            if execute_branch:
+                branch_executed = True
+                if isinstance(branch_cfg, dict):
+                    branch_steps = branch_cfg.get("steps", [])
+                elif isinstance(branch_cfg, list):
+                    branch_steps = branch_cfg
+                else:
+                    raise ValueError(f"[StepExecutor] '{branch_type}' steps must be a list in 'if_group' step.")
+
+                sub_executor = StepExecutor(branch_steps,
+                                            response=self.response,
+                                            task=self.task,
+                                            ictx=self.ictx,
+                                            endpoint=self.endpoint,
+                                            context=copy.deepcopy(self.context))
+                result = await sub_executor.run(result)
+
+                self.context = deep_merge(self.context, sub_executor.context)
+                break  # Exit after first branch executes
+
+        return result
 
     ### Steps execution
     async def _step_for_each(self, data: Any, config: dict) -> list:

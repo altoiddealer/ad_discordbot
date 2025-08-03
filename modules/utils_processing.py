@@ -644,3 +644,76 @@ def comfy_delete_and_reroute_nodes(payload: dict, delete_nodes: list[str]):
     for node_id in switches_to_delete:
         del payload[node_id]
 
+def evaluate_condition(value1: Any, operator: str, value2: Any = None, context: dict | None = None) -> bool:
+    """
+    Evaluates a simple condition, optionally using a context dictionary.
+    value1 and value2 may be literals or context keys (strings).
+    """
+
+    # Resolve context variables if strings match keys
+    if isinstance(context, dict):
+        if isinstance(value1, str) and value1 in context:
+            value1 = context[value1]
+        if isinstance(value2, str) and value2 in context:
+            value2 = context[value2]
+
+    # Equality and inequality
+    if operator in ("=", "=="):
+        return value1 == value2
+    elif operator == "!=":
+        return value1 != value2
+
+    # Comparisons
+    elif operator == ">":
+        return (value1 is not None and value2 is not None and value1 > value2)
+    elif operator == "<":
+        return (value1 is not None and value2 is not None and value1 < value2)
+    elif operator == ">=":
+        return (value1 is not None and value2 is not None and value1 >= value2)
+    elif operator == "<=":
+        return (value1 is not None and value2 is not None and value1 <= value2)
+
+    # String / collection checks
+    elif operator == "beginswith":
+        return isinstance(value1, str) and isinstance(value2, str) and value1.startswith(value2)
+    elif operator == "endswith":
+        return isinstance(value1, str) and isinstance(value2, str) and value1.endswith(value2)
+    elif operator == "contains":
+        return hasattr(value1, "__contains__") and value2 in value1
+
+    # Type checking
+    elif operator in ("type", "isinstance"):
+        type_map = {"str": str, "string": str,
+                    "int": int, "integer": int,
+                    "float": float,
+                    "bool": bool, "boolean": bool,
+                    "list": list, "array": list,
+                    "dict": dict, "map": dict,
+                    "bytes": bytes,
+                    "none": type(None)}
+        type_str = str(value2).lower()
+        expected_type = type_map.get(type_str)
+        return expected_type is not None and isinstance(value1, expected_type)
+
+    # Length comparison
+    elif operator in ("len", "length"):
+        try:
+            return len(value1) == int(value2)
+        except Exception:
+            return False
+
+    # None checks
+    elif operator == "isnone":
+        return value1 is None
+    elif operator == "isnotnone":
+        return value1 is not None
+
+    # Existence checks in context
+    elif operator == "exists":
+        return isinstance(value1, str) and context is not None and value1 in context
+    elif operator == "notexists":
+        return isinstance(value1, str) and (context is None or value1 not in context)
+
+    else:
+        raise ValueError(f"Unsupported operator: {operator}")
+
