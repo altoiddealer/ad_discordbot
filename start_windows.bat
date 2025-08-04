@@ -14,9 +14,10 @@ echo "%CD%"| findstr /R /C:"[!#\$%&()\*+,;<=>?@\[\]\^`{|}~]" >nul && (
 )
 set SPCHARMESSAGE=
 
-@rem fix failed install when installing to a separate drive
-set TMP=%cd%\installer_files
-set TEMP=%cd%\installer_files
+@rem --- Fix TMP/TEMP and ensure installer_files exists ---
+set "TMP=%cd%\installer_files"
+set "TEMP=%cd%\installer_files"
+if not exist "%TMP%" mkdir "%TMP%" >nul 2>nul
 
 @rem deactivate existing conda envs as needed to avoid conflicts
 (call conda deactivate && call conda deactivate && call conda deactivate) 2>nul
@@ -155,24 +156,42 @@ echo Conda environment created!
 
 goto activate_conda
 
-
 @rem Function to activate conda and run script
 :activate_conda
-echo Trying to activate Conda from: "%CONDA_ROOT_PREFIX%\condabin\conda.bat"
-if not exist "%CONDA_ROOT_PREFIX%\condabin\conda.bat" (
-    echo Conda activation script not found! Please check your environment and try running the script again.
-    del "%ENV_FLAG%"
+echo.
+echo ==== Conda Activation Stage ====
+echo CONDA ROOT: "%CONDA_ROOT_PREFIX%"
+echo TARGET ENV: "%INSTALL_ENV_DIR%"
+echo.
+
+rem --- Determine the best activation script (Miniforge vs Miniconda) ---
+set "CONDA_ACTIVATE_BAT=%CONDA_ROOT_PREFIX%\condabin\conda.bat"
+if exist "%CONDA_ROOT_PREFIX%\Scripts\activate.bat" (
+    set "CONDA_ACTIVATE_BAT=%CONDA_ROOT_PREFIX%\Scripts\activate.bat"
+)
+
+if not exist "%CONDA_ACTIVATE_BAT%" (
+    echo ERROR: Could not find conda activation script at "%CONDA_ACTIVATE_BAT%"
+    echo Make sure Miniconda/Miniforge is installed correctly.
+    del "%ENV_FLAG%" 2>nul
     goto end
 )
 
-call "%CONDA_ROOT_PREFIX%\condabin\conda.bat" activate "%INSTALL_ENV_DIR%"
+echo Trying to activate Conda from: "%CONDA_ACTIVATE_BAT%"
+
+rem --- Activate the environment ---
+call "%CONDA_ACTIVATE_BAT%" "%INSTALL_ENV_DIR%"
 if %errorlevel% neq 0 (
-    echo Failed to activate the conda environment. Exiting...
+    echo.
+    echo ERROR: Failed to activate the conda environment.
+    echo This is often due to TMP/TEMP pointing to a non‑existent folder or missing permissions.
+    echo.
     exit /b
 )
 
 echo Conda activated successfully.
 
+rem --- Run the Python script with inherited environment ---
 call python "%HOME_DIR%\one_click.py" --conda-env-path "%INSTALL_ENV_DIR%" %*
 
 
