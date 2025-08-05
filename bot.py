@@ -2247,6 +2247,8 @@ class TaskProcessing(TaskAttributes):
                 image_path = os.path.join(output_dir, f"{timestamp}{img_idx}.png")
                 with open(image_path, "wb") as f:
                     f.write(image["file_obj"].getbuffer())
+                if i == 0 and self.bot_hmessage:
+                    self.bot_hmessage.sent_image = os.path.relpath(image_path, shared_path.output_dir)
                 if not save_all:
                     break
 
