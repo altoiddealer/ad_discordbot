@@ -2247,6 +2247,8 @@ class TaskProcessing(TaskAttributes):
                 image_path = os.path.join(output_dir, f"{timestamp}{img_idx}.png")
                 with open(image_path, "wb") as f:
                     f.write(image["file_obj"].getbuffer())
+                if i == 0 and self.bot_hmessage:
+                    self.bot_hmessage.sent_image = os.path.relpath(image_path, shared_path.output_dir)
                 if not save_all:
                     break
 
@@ -7613,6 +7615,7 @@ class LLMState(SettingsBase):
             'penalty_alpha': 0,
             'presence_penalty': 0,
             'prompt_lookup_num_tokens': 0,
+            'reasoning_effort': 'medium',
             'repetition_penalty': 1.18,
             'repetition_penalty_range': 1024,
             'sampler_priority': [],

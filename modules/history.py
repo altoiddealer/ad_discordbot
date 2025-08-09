@@ -141,6 +141,7 @@ class HMessage:
     
     typing: bool                        = field(default=False,  metadata=cnf(False))
     spoken: bool                        = field(default=False,  metadata=cnf(False))
+    sent_image: Optional[str]           = field(default=None,   metadata=cnf())
     is_continued: bool                  = field(default=False,  metadata=cnf(False))
     hidden: bool                        = field(default=False,  metadata=cnf(False))
     unsavable: bool                     = field(default=False,  metadata=cnf(dont_save=True))
