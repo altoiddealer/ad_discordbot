@@ -7615,6 +7615,7 @@ class LLMState(SettingsBase):
             'penalty_alpha': 0,
             'presence_penalty': 0,
             'prompt_lookup_num_tokens': 0,
+            'reasoning_effort': 'medium',
             'repetition_penalty': 1.18,
             'repetition_penalty_range': 1024,
             'sampler_priority': [],
