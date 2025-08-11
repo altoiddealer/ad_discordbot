@@ -4,8 +4,7 @@ import os
 from pathlib import Path
 from PIL import Image, ImageOps
 from modules.utils_shared import shared_path, load_file, is_tgwui_integrated
-if is_tgwui_integrated:
-    from modules.utils_tgwui import load_character
+from modules.utils_tgwui import get_tgwui_functions
 
 from modules.logs import import_track, get_logger; import_track(__file__, fp=True); log = get_logger(__name__)  # noqa: E702
 logging = log
@@ -136,7 +135,8 @@ def custom_load_character(char, n1, n2, try_tgwui=False):
     # Try native TGWUI function after local
     if not name2 and try_tgwui:
         try:
-            name1, name2, picture, greeting, context = load_character(char, n1, n2)
+            load_character_func = get_tgwui_functions('load_character')
+            name1, name2, picture, greeting, context = load_character_func(char, n1, n2)
         except ValueError:
             return None, None, None, None, None
         except Exception as e:

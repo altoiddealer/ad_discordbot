@@ -99,8 +99,8 @@ if is_tgwui_integrated:
     log.info('The bot is installed with text-generation-webui integration. Loading applicable modules and features.')
     sys.path.append(shared_path.dir_tgwui)
 
-    from modules.utils_tgwui import tgwui, shared, utils, extensions_module, \
-        custom_chatbot_wrapper, chatbot_wrapper, save_history, unload_model, count_tokens
+    from modules.utils_tgwui import tgwui, tgwui_shared_module, tgwui_utils_module, tgwui_extensions_module, get_tgwui_functions, custom_chatbot_wrapper
+    
 else:
     log.warning('The bot is NOT installed with text-generation-webui integration.')
     log.warning('Features related to text generation and TTS will not be available.')
@@ -1353,13 +1353,13 @@ class TaskProcessing(TaskAttributes):
                 # LLM model handling
                 model_change = change_llmmodel or swap_llmmodel or None # 'llmmodel_change' will trump 'llmmodel_swap'
                 if model_change:
-                    if model_change == shared.model_name:
-                        log.info(f'[TAGS] LLM model was triggered to change, but it is the same as current ("{shared.model_name}").')
+                    if model_change == tgwui_shared_module.model_name:
+                        log.info(f'[TAGS] LLM model was triggered to change, but it is the same as current ("{tgwui_shared_module.model_name}").')
                     else:
                         mode = 'change' if model_change == change_llmmodel else 'swap'
                         verb = 'Changing' if mode == 'change' else 'Swapping'
                         # Error handling
-                        all_llmmodels = utils.get_available_models()
+                        all_llmmodels = tgwui_utils_module.get_available_models()
                         if not any(model_change == model for model in all_llmmodels):
                             log.error(f'LLM model not found: {model_change}')
                         else:
@@ -1609,7 +1609,7 @@ class TaskProcessing(TaskAttributes):
 
     async def message_llm_gen(self:Union["Task","Tasks"]):
         # if no LLM model is loaded, notify that no text will be generated
-        if shared.model_name == 'None':
+        if tgwui_shared_module.model_name == 'None':
             if not bot_database.was_warned('no_llmmodel'):
                 bot_database.update_was_warned('no_llmmodel')
                 await self.channel.send('(Cannot process text request: No LLM model is currently loaded. Use "/llmmodel" to load a model.)', delete_after=10)
@@ -1763,7 +1763,7 @@ class TaskProcessing(TaskAttributes):
 
     # Get responses from LLM Payload
     async def llm_gen(self:Union["Task","Tasks"]) -> tuple[str, str]:
-        if shared.model_name == 'None':
+        if tgwui_shared_module.model_name == 'None':
             return
 
         try:
@@ -1943,7 +1943,7 @@ class TaskProcessing(TaskAttributes):
                         self.tts_resps.append(audio_fp)
 
             def apply_extensions(resp_chunk:str, was_streamed=True):
-                vis_resp_chunk:str = extensions_module.apply_extensions('output', resp_chunk, state=self.payload['state'], is_chat=True)
+                vis_resp_chunk:str = tgwui_extensions_module.apply_extensions('output', resp_chunk, state=self.payload['state'], is_chat=True)
                 if vis_resp_chunk:
                     audio_format_match = patterns.audio_src.search(vis_resp_chunk)
                     if audio_format_match:
@@ -2120,7 +2120,8 @@ class TaskProcessing(TaskAttributes):
             total_gens += 1
             bot_statistics.llm['generations_total'] = total_gens
             # Update tokens statistics
-            last_tokens = int(count_tokens(self.llm_resp))
+            count_tokens_func = get_tgwui_functions('count_tokens')
+            last_tokens = int(count_tokens_func(self.llm_resp))
             bot_statistics.llm['num_tokens_last'] = last_tokens
             total_tokens = bot_statistics.llm.get('num_tokens_total', 0)
             total_tokens += last_tokens
@@ -3445,7 +3446,7 @@ class Tasks(TaskProcessing):
     async def speak_task(self:"Task"):
         try:
             api_tts_on, tgwui_tts_on = tts_is_enabled(and_online=True, for_mode='both')
-            if tgwui_tts_on and shared.model_name == 'None':
+            if tgwui_tts_on and tgwui_shared_module.model_name == 'None':
                 await self.channel.send('Cannot process "/speak" request: No LLM model is currently loaded. Use "/llmmodel" to load a model.)', delete_after=5)
                 log.warning(f'Bot tried to generate tts for {self.user_name}, but no LLM model was loaded')
                 return
@@ -3476,7 +3477,7 @@ class Tasks(TaskProcessing):
                     self.tts_resps.append(audio_file)
             elif tgwui_tts_on:
                 loop = asyncio.get_event_loop()
-                vis_resp_chunk:str = await loop.run_in_executor(None, extensions_module.apply_extensions, 'output', self.text, self.payload['state'], True)
+                vis_resp_chunk:str = await loop.run_in_executor(None, tgwui_extensions_module.apply_extensions, 'output', self.text, self.payload['state'], True)
                 audio_format_match = patterns.audio_src.search(vis_resp_chunk)
                 if audio_format_match:
                     self.tts_resps.append(audio_format_match.group(1))
@@ -3519,17 +3520,18 @@ class Tasks(TaskProcessing):
             mode = llmmodel_params.get('mode', 'change')
             verb = llmmodel_params.get('verb', 'Changing')
             # Load the new model if it is different from the current one
-            if shared.model_name != llmmodel_name:
+            if tgwui_shared_module.model_name != llmmodel_name:
                 await self.embeds.send('change', f'{verb} LLM model ... ', f"{verb} to {llmmodel_name}")
                 # Retain current model name to swap back to
                 if mode == 'swap':
-                    previous_llmmodel = shared.model_name
+                    previous_llmmodel = tgwui_shared_module.model_name
                 # If an LLM model is loaded, unload it
-                if shared.model_name != 'None':
-                    unload_model()
+                if tgwui_shared_module.model_name != 'None':
+                    unload_model_func = get_tgwui_functions('unload_model')
+                    unload_model_func()
                 try:
-                    shared.model_name = llmmodel_name   # set to new LLM model
-                    if shared.model_name != 'None':
+                    tgwui_shared_module.model_name = llmmodel_name   # set to new LLM model
+                    if tgwui_shared_module.model_name != 'None':
                         bot_database.update_was_warned('no_llmmodel') # Reset warning message
                         loader = tgwui.get_llm_model_loader(llmmodel_name)    # Try getting loader from user-config.yaml to prevent errors
                         await tgwui.load_llm_model(loader)                    # Load an LLM model if specified
@@ -3611,7 +3613,7 @@ class Tasks(TaskProcessing):
 
     async def reset_task(self:"Task"):
         if tgwui_enabled:
-            shared.stop_everything = True
+            tgwui_shared_module.stop_everything = True
         # Create a new instance of the history and set it to active
         history_char, history_mode = get_char_mode_for_history(self.ictx)
         bot_history.get_history_for(self.channel.id, history_char, history_mode).fresh().replace()
@@ -3778,7 +3780,8 @@ class Message:
         read_text_delay = self.read_text_delay if self.num_chunks == 0 else 0
         self.num_chunks += 1
         num = self.num + (self.num_chunks/1000)
-        last_tokens = int(count_tokens(chunk_str))
+        count_tokens_func = get_tgwui_functions('count_tokens')
+        last_tokens = int(count_tokens_func(chunk_str))
         chunk_message = Message(self.parent_settings, num, self.received_time, response_delay, read_text_delay, last_tokens=last_tokens)
         return chunk_message
 
@@ -5480,7 +5483,7 @@ if tgwui_enabled:
 
 def load_default_character(settings:"Settings", guild_id:int|None=None):
     try:
-        # Update stored database / shared.settings values for character
+        # Update stored database / tgwui_shared_module.settings values for character
         bot_settings.set_last_setting_for("last_character", 'default', guild_id=guild_id, save_now=True)
         # Fix any invalid settings while warning user
         settings.fix_settings()
@@ -5536,10 +5539,10 @@ async def character_loader(char_name, settings:"Settings", guild_id:int|None=Non
                     await voice_clients.voice_channel(vc_guild_id, use_voice_channels)
         # Merge llmcontext data and extra data
         char_llmcontext.update(textgen_data)
-        # Update stored database / shared.settings values for character
+        # Update stored database / tgwui_shared_module.settings values for character
         bot_settings.set_last_setting_for("last_character", char_name, guild_id=guild_id, save_now=True)
         if tgwui_enabled:
-            shared.settings['character'] = char_name
+            tgwui_shared_module.settings['character'] = char_name
 
         # Collect behavior data
         char_behavior = char_data.get('behavior', {})
@@ -5834,7 +5837,7 @@ if tgwui_enabled:
     @client.hybrid_command(description="Choose an LLM Model")
     @guild_or_owner_only()
     async def llmmodel(ctx: commands.Context):
-        all_llmmodels = utils.get_available_models()
+        all_llmmodels = tgwui_utils_module.get_available_models()
         if all_llmmodels:
             items_for_llm_model = [i for i in all_llmmodels]
             if 'None' in items_for_llm_model:
@@ -5909,8 +5912,8 @@ async def process_speak_args(ctx: commands.Context, selected_voice=None, lang=No
                         await ctx.send(f'Currently, non-English languages will use a default voice (not using "{selected_voice}")', ephemeral=True)
             elif tgwui.tts.extension in tgwui.last_extension_params and tgwui.tts.voice_key in tgwui.last_extension_params[tgwui.tts.extension]:
                 pass # Default to voice in last_extension_params
-            elif f'{tgwui.tts.extension}-{tgwui.tts.voice_key}' in shared.settings:
-                pass # Default to voice in shared.settings
+            elif f'{tgwui.tts.extension}-{tgwui.tts.voice_key}' in tgwui_shared_module.settings:
+                pass # Default to voice in tgwui_shared_module.settings
     except Exception as e:
         log.error(f"Error processing tts options: {e}")
         await ctx.send(f"Error processing tts options: {e}", ephemeral=True)
@@ -7894,7 +7897,8 @@ class CustomHistory(History):
             
     def _save_for_tgwui(self, status, force=False):
         if (status and self.manager.export_for_tgwui) or force:
-            save_history(self.render_to_tgwui(), f'{self.fp_unique_id}_{self.fp_internal_id}', self.fp_character, self.fp_mode)
+            save_history_func = get_tgwui_functions('save_history')
+            save_history_func(self.render_to_tgwui(), f'{self.fp_unique_id}_{self.fp_internal_id}', self.fp_character, self.fp_mode)
             if self._first_save_debug:
                 log.debug(f'''TGWUI chat history saved to "/logs/{self.fp_mode}/{self.fp_character}/{self.fp_unique_id}_{self.fp_internal_id}.json"''')
         
