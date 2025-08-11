@@ -11,51 +11,78 @@ import importlib
 import traceback
 from pathlib import Path
 from threading import Lock
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Callable
 from modules.typing import CtxInteraction
 from modules.utils_shared import shared_path, config, bot_database, patterns, is_tgwui_integrated
 from modules.utils_misc import check_probability
 
 sys.path.append(shared_path.dir_tgwui)
 
-import modules.extensions as extensions_module
-from modules import shared
-from modules import utils
+import modules.extensions as tgwui_extensions_module
+import modules.shared as tgwui_shared_module
+import modules.utils as tgwui_utils_module
 from modules.LoRA import add_lora_to_model
 from modules.models import load_model, unload_model
 from modules.models_settings import get_model_metadata, update_model_parameters, get_fallback_settings, infer_loader
-from modules.prompts import count_tokens
 
-# Import chat functions dynamically to avoid circular imports
-def get_chat_functions():
-    from modules.chat import chatbot_wrapper, load_character, save_history, get_stopping_strings, generate_chat_prompt
-    from modules.text_generation import generate_reply
-    return chatbot_wrapper, load_character, save_history, get_stopping_strings, generate_chat_prompt, generate_reply
+# Cache for already-loaded functions
+_tgwui_cache: dict[str, Callable] = {}
 
-def load_character(character, name1, name2):
-    """Wrapper function that dynamically imports load_character to avoid circular imports"""
-    chatbot_wrapper, load_character_func, save_history, get_stopping_strings, generate_chat_prompt, generate_reply = get_chat_functions()
-    return load_character_func(character, name1, name2)
+def get_tgwui_functions(name: str) -> Callable:
+    """
+    Lazily import and return a TGWUI function by name.
 
-def chatbot_wrapper(*args, **kwargs):
-    """Wrapper function that dynamically imports chatbot_wrapper to avoid circular imports"""
-    chatbot_wrapper_func, load_character, save_history, get_stopping_strings, generate_chat_prompt, generate_reply = get_chat_functions()
-    return chatbot_wrapper_func(*args, **kwargs)
+    Returns:
+        Callable: The requested function.
+    """
+    # If we already loaded it, just return it
+    if name in _tgwui_cache:
+        return _tgwui_cache[name]
 
-def save_history(*args, **kwargs):
-    """Wrapper function that dynamically imports save_history to avoid circular imports"""
-    chatbot_wrapper, load_character, save_history_func, get_stopping_strings, generate_chat_prompt, generate_reply = get_chat_functions()
-    return save_history_func(*args, **kwargs)
+    # Import and store only once
+    if name == "chat":
+        from modules.chat import get_stopping_strings, generate_chat_prompt, generate_search_query, add_message_attachment, add_web_search_attachments, update_message_metadata, get_current_timestamp, add_message_version
+        from modules.text_generation import generate_reply
+        funcs = {"get_stopping_strings": get_stopping_strings,
+                 "generate_chat_prompt": generate_chat_prompt,
+                 "generate_reply": generate_reply,
+                 "generate_search_query": generate_search_query,
+                 "add_message_attachment": add_message_attachment,
+                 "add_web_search_attachments": add_web_search_attachments,
+                 "update_message_metadata": update_message_metadata,
+                 "get_current_timestamp": get_current_timestamp,
+                 "add_message_version": add_message_version}
+        _tgwui_cache.update(funcs)
+        return funcs  # Returns dict if "chat" is requested
 
-def count_tokens(*args, **kwargs):
-    """Wrapper function that dynamically imports count_tokens to avoid circular imports"""
-    from modules.prompts import count_tokens as count_tokens_func
-    return count_tokens_func(*args, **kwargs)
+    elif name == "load_character":
+        from modules.chat import load_character
+        _tgwui_cache[name] = load_character
 
-def unload_model(*args, **kwargs):
-    """Wrapper function that dynamically imports unload_model to avoid circular imports"""
-    from modules.models import unload_model as unload_model_func
-    return unload_model_func(*args, **kwargs)
+    elif name == "chatbot_wrapper":
+        from modules.chat import chatbot_wrapper
+        _tgwui_cache[name] = chatbot_wrapper
+
+    elif name == "save_history":
+        from modules.chat import save_history
+        _tgwui_cache[name] = save_history
+
+    elif name == "count_tokens":
+        from modules.prompts import count_tokens
+        _tgwui_cache[name] = count_tokens
+
+    elif name == "load_model":
+        from modules.models import load_model
+        _tgwui_cache[name] = load_model
+
+    elif name == "unload_model":
+        from modules.models import unload_model
+        _tgwui_cache[name] = unload_model
+
+    else:
+        raise ValueError(f"Unknown TGWUI function name: {name}")
+
+    return _tgwui_cache[name]
 
 from modules.logs import import_track, get_logger; import_track(__file__, fp=True); log = get_logger(__name__)  # noqa: E702
 logging = log
@@ -158,7 +185,7 @@ class TGWUI():
             self.init_settings()
 
             # monkey patch load_extensions behavior from pre-commit b3fc2cd
-            extensions_module.load_extensions = self.load_extensions
+            tgwui_extensions_module.load_extensions = self.load_extensions
             self.init_extensions()     # build TGWUI extensions
             self.init_tts_extensions() # build TTS extensions
             self.activate_extensions() # Activate the extensions
@@ -166,10 +193,10 @@ class TGWUI():
             self.init_llmmodels() # Get model from cmd args, or present model list in cmd window
             asyncio.run(self.load_llm_model())
 
-            shared.generation_lock = Lock()
+            tgwui_shared_module.generation_lock = Lock()
 
     def init_settings(self):
-        shared.settings['character'] = bot_database.last_character
+        tgwui_shared_module.settings['character'] = bot_database.last_character
         # Loading custom settings
         settings_file = None
 
@@ -181,8 +208,8 @@ class TGWUI():
         tgwui_settings_yaml = os.path.join(shared_path.dir_tgwui, "settings.yaml")
 
         # Check if a settings file is provided and exists
-        if shared.args.settings is not None and Path(shared.args.settings).exists():
-            settings_file = Path(shared.args.settings)
+        if tgwui_shared_module.args.settings is not None and Path(tgwui_shared_module.args.settings).exists():
+            settings_file = Path(tgwui_shared_module.args.settings)
         # Check if settings exist in user_data directory
         elif Path(tgwui_user_data_settings_json).exists():
             settings_file = Path(tgwui_user_data_settings_json)
@@ -199,16 +226,16 @@ class TGWUI():
             log.info(f"Loading text-generation-webui settings from {settings_file}...")
             file_contents = open(settings_file, 'r', encoding='utf-8').read()
             new_settings = json.loads(file_contents) if settings_file.suffix == ".json" else yaml.safe_load(file_contents)
-            shared.settings.update(new_settings)
+            tgwui_shared_module.settings.update(new_settings)
 
         # Fallback settings for models
-        shared.model_config['.*'] = get_fallback_settings()
-        shared.model_config.move_to_end('.*', last=False)  # Move to the beginning
+        tgwui_shared_module.model_config['.*'] = get_fallback_settings()
+        tgwui_shared_module.model_config.move_to_end('.*', last=False)  # Move to the beginning
 
     # legacy version of load_extensions() which allows extension params to be updated during runtime
     def load_extensions(self, available_extensions):
-        extensions_module.state = {}
-        for i, name in enumerate(shared.args.extensions):
+        tgwui_extensions_module.state = {}
+        for i, name in enumerate(tgwui_shared_module.args.extensions):
             if name not in available_extensions:
                 continue
             if name.endswith('_tts') and self.tts.extension is None:
@@ -235,7 +262,7 @@ class TGWUI():
                               f"Windows:\n\npip install -r {extension_location}\\requirements.txt --upgrade\n")
                     raise
 
-                extensions_module.apply_settings(extension, name)
+                tgwui_extensions_module.apply_settings(extension, name)
                 setup_name = f"{name}_setup"
                 if hasattr(extension, "setup") and not bot_database.was_warned(setup_name):
                     bot_database.update_was_warned(setup_name)
@@ -244,28 +271,28 @@ class TGWUI():
                         extension.setup()
                     except Exception as e:
                         log.error(f'Setup failed for extension {name}:', e)
-                extensions_module.state[name] = [True, i, extension]
+                tgwui_extensions_module.state[name] = [True, i, extension]
             except Exception:
                 if name == self.tts.extension:
                     self.tts.enabled = False
                     self.tts.extension = None
-                shared.args.extensions.remove(name)
+                tgwui_shared_module.args.extensions.remove(name)
                 log.error(f'Failed to load the extension "{name}".')
                 traceback.print_exc()
 
     def init_extensions(self):
-        shared.args.extensions = []
-        extensions_module.available_extensions = utils.get_available_extensions()
+        tgwui_shared_module.args.extensions = []
+        tgwui_extensions_module.available_extensions = tgwui_utils_module.get_available_extensions()
 
         # Initialize shared args extensions
-        if shared.settings.get('default_extensions'):
-            for extension in shared.settings['default_extensions']:
-                shared.args.extensions = shared.args.extensions or []
-                if extension not in shared.args.extensions:
-                    shared.args.extensions.append(extension)
+        if tgwui_shared_module.settings.get('default_extensions'):
+            for extension in tgwui_shared_module.settings['default_extensions']:
+                tgwui_shared_module.args.extensions = tgwui_shared_module.args.extensions or []
+                if extension not in tgwui_shared_module.args.extensions:
+                    tgwui_shared_module.args.extensions.append(extension)
 
     def init_tts_extensions(self):
-        # If any TTS extension defined in config.yaml, set tts bot vars and add extension to shared.args.extensions
+        # If any TTS extension defined in config.yaml, set tts bot vars and add extension to tgwui_shared_module.args.extensions
         if self.tts.extension:
             self.tts.enabled = True
             if 'alltalk' in self.tts.extension:
@@ -285,15 +312,15 @@ class TGWUI():
                 self.tts.voice_key = 'speaker'
                 self.tts.lang_key = 'language'
 
-            if self.tts.extension not in shared.args.extensions:
-                shared.args.extensions.append(self.tts.extension)
+            if self.tts.extension not in tgwui_shared_module.args.extensions:
+                tgwui_shared_module.args.extensions.append(self.tts.extension)
             if self.tts.extension not in self.tts.supported_extensions:
                 log.warning(f'[{self.tts.extension}] The "/speak" command will not be registered.')
                 log.warning(f'[{self.tts.extension}] Supported TTS extensions: {self.tts.supported_extensions}')
 
             # Ensure only one TTS extension is running
             excess_tts_clients = []
-            for extension in shared.args.extensions:
+            for extension in tgwui_shared_module.args.extensions:
                 extension:str
                 if extension.endswith('_tts') and extension != self.tts.extension:
                     log.warning(f'[{self.tts.extension}] An undefined TTS extension "{extension}" attempted to load. Skipping...')
@@ -301,22 +328,22 @@ class TGWUI():
             if excess_tts_clients:
                 log.warning(f'[{self.tts.extension}] Skipping: {excess_tts_clients}')
                 for extension in excess_tts_clients:
-                    shared.args.extensions.pop(extension)
+                    tgwui_shared_module.args.extensions.pop(extension)
 
     def activate_extensions(self):
-        if shared.args.extensions is not None and len(shared.args.extensions) > 0:
-            extensions_module.load_extensions(extensions_module.available_extensions)
+        if tgwui_shared_module.args.extensions is not None and len(tgwui_shared_module.args.extensions) > 0:
+            tgwui_extensions_module.load_extensions(tgwui_extensions_module.available_extensions)
 
     def init_llmmodels(self):
-        all_llmmodels = utils.get_available_models()
+        all_llmmodels = tgwui_utils_module.get_available_models()
 
         # Model defined through --model
-        if shared.args.model is not None:
-            shared.model_name = shared.args.model
+        if tgwui_shared_module.args.model is not None:
+            tgwui_shared_module.model_name = tgwui_shared_module.args.model
 
         # Only one model is available
         elif len(all_llmmodels) == 1:
-            shared.model_name = all_llmmodels[0]
+            tgwui_shared_module.model_name = all_llmmodels[0]
 
         # Select the model from a command-line menu
         else:
@@ -332,14 +359,14 @@ class TGWUI():
                 i = int(input()) - 1
                 print()
 
-            shared.model_name = all_llmmodels[i]
-            print(f'Loading {shared.model_name}.\nTo skip model selection, use "--model" in "CMD_FLAGS.txt".')
+            tgwui_shared_module.model_name = all_llmmodels[i]
+            print(f'Loading {tgwui_shared_module.model_name}.\nTo skip model selection, use "--model" in "CMD_FLAGS.txt".')
 
     # Check user settings (models/config-user.yaml) to determine loader
     def get_llm_model_loader(self, model:str) -> str:
         loader = None
         user_model_settings = {}
-        settings = shared.user_config
+        settings = tgwui_shared_module.user_config
         for pat in settings:
             if re.match(pat.lower(), Path(model).name.lower()):
                 for k in settings[pat]:
@@ -354,13 +381,13 @@ class TGWUI():
     async def load_llm_model(self, loader=None):
         try:
             # If any model has been selected, load it
-            if shared.model_name != 'None':
-                p = Path(shared.model_name)
+            if tgwui_shared_module.model_name != 'None':
+                p = Path(tgwui_shared_module.model_name)
                 if p.exists():
                     model_name = p.parts[-1]
-                    shared.model_name = model_name
+                    tgwui_shared_module.model_name = model_name
                 else:
-                    model_name = shared.model_name
+                    model_name = tgwui_shared_module.model_name
 
                 model_settings = get_model_metadata(model_name)
 
@@ -369,10 +396,10 @@ class TGWUI():
                 update_model_parameters(model_settings, initial=True)  # hijack the command-line arguments
                 # Load the model
                 loop = asyncio.get_event_loop()
-                shared.model, shared.tokenizer = await loop.run_in_executor(None, load_model, model_name, loader)
+                tgwui_shared_module.model, tgwui_shared_module.tokenizer = await loop.run_in_executor(None, load_model, model_name, loader)
                 # Load any LORA
-                if shared.args.lora:
-                    add_lora_to_model(shared.args.lora)
+                if tgwui_shared_module.args.lora:
+                    add_lora_to_model(tgwui_shared_module.args.lora)
         except Exception as e:
             log.error(f"An error occurred while loading LLM Model: {e}")
 
@@ -385,26 +412,58 @@ class TGWUI():
             # Update extension settings
             if self.last_extension_params:
                 last_extensions = list(self.last_extension_params.keys())
-                # Update shared.settings
+                # Update tgwui_shared_module.settings
                 for param in last_extensions:
                     listed_param = self.last_extension_params[param]
-                    shared.settings.update({'{}-{}'.format(param, key): value for key, value in listed_param.items()})
+                    tgwui_shared_module.settings.update({'{}-{}'.format(param, key): value for key, value in listed_param.items()})
             else:
                 log.warning('** No extension params for this character. Reloading extensions with initial values. **')
-            extensions_module.load_extensions(extensions_module.available_extensions)  # Load Extensions (again)
+            tgwui_extensions_module.load_extensions(tgwui_extensions_module.available_extensions)  # Load Extensions (again)
         except Exception as e:
             log.error(f"An error occurred while updating character extension settings: {e}")
 
 tgwui = TGWUI()
 
 def custom_chatbot_wrapper(text, state, regenerate=False, _continue=False, loading_message=True, for_ui=False, stream_tts=False):
-    # 'stream_tts' CUSTOM FOR BOT
-    _, _, _, get_stopping_strings, generate_chat_prompt, generate_reply = get_chat_functions()
-    
+    """
+    Custom version of the native TGWUI chatbot_wrapper()
+
+    Enables streaming output from TTS extensions, instead of once at the end of generation.
+    """
+    # Lazy import native TGWUI funtions
+    chat_funcs = get_tgwui_functions("chat")
+    get_stopping_strings = chat_funcs['get_stopping_strings']
+    generate_chat_prompt = chat_funcs['generate_chat_prompt']
+    generate_reply = chat_funcs['generate_reply']
+    add_message_attachment = chat_funcs['add_message_attachment']
+    generate_search_query = chat_funcs['generate_search_query']
+    add_web_search_attachments = chat_funcs['add_web_search_attachments']
+    update_message_metadata = chat_funcs['update_message_metadata']
+    get_current_timestamp = chat_funcs['get_current_timestamp']
+    add_message_version = chat_funcs['add_message_version']
+
+    # Handle dict format with text and files
+    files = []
+    if isinstance(text, dict):
+        files = text.get('files', [])
+        text = text.get('text', '')
+
     history = state['history']
     output = copy.deepcopy(history)
-    output = extensions_module.apply_extensions('history', output)
-    state = extensions_module.apply_extensions('state', state)
+    output = tgwui_extensions_module.apply_extensions('history', output)
+    state = tgwui_extensions_module.apply_extensions('state', state)
+
+    # Handle GPT-OSS as a special case
+    if '<|channel|>final<|message|>' in state['instruction_template_str']:
+        state['skip_special_tokens'] = False
+
+    # Let the jinja2 template handle the BOS token
+    if state['mode'] in ['instruct', 'chat-instruct']:
+        state['add_bos_token'] = False
+
+    # Initialize metadata if not present
+    if 'metadata' not in output:
+        output['metadata'] = {}
 
     visible_text = None
     stopping_strings = get_stopping_strings(state)
@@ -415,71 +474,147 @@ def custom_chatbot_wrapper(text, state, regenerate=False, _continue=False, loadi
     if not (regenerate or _continue):
         visible_text = html.escape(text)
 
-        # Apply extensions
-        text, visible_text = extensions_module.apply_extensions('chat_input', text, visible_text, state)
-        text = extensions_module.apply_extensions('input', text, state, is_chat=True)
+        # Process file attachments and store in metadata
+        row_idx = len(output['internal'])
 
+        # Add attachments to metadata only, not modifying the message text
+        for file_path in files:
+            add_message_attachment(output, row_idx, file_path, is_user=True)
+
+        # Add web search results as attachments if enabled
+        if state.get('enable_web_search', False):
+            search_query = generate_search_query(text, state)
+            add_web_search_attachments(output, row_idx, text, search_query, state)
+
+        # Apply extensions
+        text, visible_text = tgwui_extensions_module.apply_extensions('chat_input', text, visible_text, state)
+        text = tgwui_extensions_module.apply_extensions('input', text, state, is_chat=True)
+
+        # Current row index
         output['internal'].append([text, ''])
         output['visible'].append([visible_text, ''])
+        # Add metadata with timestamp
+        update_message_metadata(output['metadata'], "user", row_idx, timestamp=get_current_timestamp())
 
         # *Is typing...*
         if loading_message:
             yield {
-                'visible': output['visible'][:-1] + [[output['visible'][-1][0], shared.processing_message]],
-                'internal': output['internal']
+                'visible': output['visible'][:-1] + [[output['visible'][-1][0], tgwui_shared_module.processing_message]],
+                'internal': output['internal'],
+                'metadata': output['metadata']
             }
     else:
         text, visible_text = output['internal'][-1][0], output['visible'][-1][0]
         if regenerate:
+            row_idx = len(output['internal']) - 1
+
+            # Store the old response as a version before regenerating
+            if not output['metadata'].get(f"assistant_{row_idx}", {}).get('versions'):
+                add_message_version(output, "assistant", row_idx, is_current=False)
+
+            # Add new empty version (will be filled during streaming)
+            key = f"assistant_{row_idx}"
+            output['metadata'][key]["versions"].append({
+                "content": "",
+                "visible_content": "",
+                "timestamp": get_current_timestamp()
+            })
+            output['metadata'][key]["current_version_index"] = len(output['metadata'][key]["versions"]) - 1
+
             if loading_message:
                 yield {
-                    'visible': output['visible'][:-1] + [[visible_text, shared.processing_message]],
-                    'internal': output['internal'][:-1] + [[text, '']]
+                    'visible': output['visible'][:-1] + [[visible_text, tgwui_shared_module.processing_message]],
+                    'internal': output['internal'][:-1] + [[text, '']],
+                    'metadata': output['metadata']
                 }
         elif _continue:
             last_reply = [output['internal'][-1][1], output['visible'][-1][1]]
             if loading_message:
                 yield {
                     'visible': output['visible'][:-1] + [[visible_text, last_reply[1] + '...']],
-                    'internal': output['internal']
+                    'internal': output['internal'],
+                    'metadata': output['metadata']
                 }
 
     # Generate the prompt
     kwargs = {
         '_continue': _continue,
-        'history': output if _continue else {k: v[:-1] for k, v in output.items()}
+        'history': output if _continue else {
+            k: (v[:-1] if k in ['internal', 'visible'] else v)
+            for k, v in output.items()
+        }
     }
-    prompt = extensions_module.apply_extensions('custom_generate_chat_prompt', text, state, **kwargs)
+
+    prompt = tgwui_extensions_module.apply_extensions('custom_generate_chat_prompt', text, state, **kwargs)
     if prompt is None:
         prompt = generate_chat_prompt(text, state, **kwargs)
+
+    # Add timestamp for assistant's response at the start of generation
+    row_idx = len(output['internal']) - 1
+    update_message_metadata(output['metadata'], "assistant", row_idx, timestamp=get_current_timestamp(), model_name=tgwui_shared_module.model_name)
 
     # Generate
     reply = None
     for j, reply in enumerate(generate_reply(prompt, state, stopping_strings=stopping_strings, is_chat=True, for_ui=for_ui)):
 
         # Extract the reply
-        visible_reply = reply
         if state['mode'] in ['chat', 'chat-instruct']:
             visible_reply = re.sub("(<USER>|<user>|{{user}})", state['name1'], reply)
+        else:
+            visible_reply = reply
 
         visible_reply = html.escape(visible_reply)
 
-        if shared.stop_everything:
-            output['visible'][-1][1] = extensions_module.apply_extensions('output', output['visible'][-1][1], state, is_chat=True)
+        if tgwui_shared_module.stop_everything:
+            # CUSTOM FOR BOT - Caller handles final apply_extensions
+            # output['visible'][-1][1] = tgwui_extensions_module.apply_extensions('output', output['visible'][-1][1], state, is_chat=True)
             yield output
             return
 
         if _continue:
             output['internal'][-1] = [text, last_reply[0] + reply]
             output['visible'][-1] = [visible_text, last_reply[1] + visible_reply]
-            if is_stream:
-                yield output
         elif not (j == 0 and visible_reply.strip() == ''):
             output['internal'][-1] = [text, reply.lstrip(' ')]
             output['visible'][-1] = [visible_text, visible_reply.lstrip(' ')]
-            if is_stream:
-                yield output
 
-    # CUSTOM FOR BOT
-    #output['visible'][-1][1] = extensions_module.apply_extensions('output', output['visible'][-1][1], state, is_chat=True)
+        # Keep version metadata in sync during streaming (for regeneration)
+        if regenerate:
+            row_idx = len(output['internal']) - 1
+            key = f"assistant_{row_idx}"
+            current_idx = output['metadata'][key]['current_version_index']
+            output['metadata'][key]['versions'][current_idx].update({
+                'content': output['internal'][row_idx][1],
+                'visible_content': output['visible'][row_idx][1]
+            })
+
+        if is_stream:
+            yield output
+
+    if _continue:
+        # Reprocess the entire internal text for extensions (like translation)
+        full_internal = output['internal'][-1][1]
+        if state['mode'] in ['chat', 'chat-instruct']:
+            full_visible = re.sub("(<USER>|<user>|{{user}})", state['name1'], full_internal)
+        else:
+            full_visible = full_internal
+
+        full_visible = html.escape(full_visible)
+        # CUSTOM FOR BOT
+        output['visible'][-1][1] = full_visible
+    #     output['visible'][-1][1] = tgwui_extensions_module.apply_extensions('output', full_visible, state, is_chat=True)
+    # else:
+    #     output['visible'][-1][1] = tgwui_extensions_module.apply_extensions('output', output['visible'][-1][1], state, is_chat=True)
+
+    # Final sync for version metadata (in case streaming was disabled)
+    if regenerate:
+        row_idx = len(output['internal']) - 1
+        key = f"assistant_{row_idx}"
+        current_idx = output['metadata'][key]['current_version_index']
+        output['metadata'][key]['versions'][current_idx].update({
+            'content': output['internal'][row_idx][1],
+            'visible_content': output['visible'][row_idx][1]
+        })
+
     yield output
+
