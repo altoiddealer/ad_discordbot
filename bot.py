@@ -1565,6 +1565,33 @@ class TaskProcessing(TaskAttributes):
                 self.params.should_gen_image = True
         self.apply_begin_reply_with()
 
+    async def add_images_to_llm_payload(self:Union["Task","Tasks"]):
+        if not self.ictx or not hasattr(self.ictx, 'attachments'):
+            return
+        IMAGE_EXTENSIONS = ('.png', '.jpg', '.jpeg', '.webp', '.bmp', '.gif')
+
+        image_urls = []
+
+        for attachment in message.attachments:
+            if attachment.filename.lower().endswith(IMAGE_EXTENSIONS) or (
+                attachment.content_type and attachment.content_type.startswith("image/")
+            ):
+                image_urls.append(attachment.url)
+        return image_urls
+
+        # pil_images = []
+
+        # for attachment in self.ictx.attachments:
+        #     if attachment.filename.lower().endswith(IMAGE_EXTENSIONS) or (attachment.content_type and attachment.content_type.startswith("image/")):
+        #         print("reading image")
+        #         try:
+        #             image_bytes = await attachment.read()
+        #             pil_image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+        #             pil_images.append(pil_image)
+        #         except Exception as e:
+        #             print(f"Error loading image {attachment.filename}: {e}")
+        # return pil_images
+
     async def init_llm_payload(self:Union["Task","Tasks"]):
         self.payload = copy.deepcopy(vars(self.settings.llmstate))
         self.payload['text'] = self.text
@@ -1575,6 +1602,9 @@ class TaskProcessing(TaskAttributes):
         self.payload['state']['character_menu'] = self.settings.name
         self.payload['state']['context'] = self.settings.llmcontext.context
         self.payload['state']['history'] = self.local_history.render_to_tgwui()
+        raw_images = await self.add_images_to_llm_payload()
+        if raw_images:
+            self.payload['state']['raw_images'] = raw_images
 
     async def message_img_gen(self:Union["Task","TaskProcessing"]):
         await self.tags.match_img_tags(self.prompt, self.settings.get_vars())
@@ -1963,9 +1993,15 @@ class TaskProcessing(TaskAttributes):
                 include_continued_text = getattr(self.params, "include_continued_text", False)
                 continue_condition = _continue and not include_continued_text
 
+                text = self.payload['text']
+                files = self.payload['state'].pop('raw_images', None)
+                if files:
+                    text = {'text': self.payload['text'],
+                            'files': files}
+
                 # Send payload and get responses
                 func = partial(custom_chatbot_wrapper,
-                               text = self.payload['text'],
+                               text = text,
                                state = self.payload['state'],
                                regenerate = regenerate,
                                _continue = _continue,

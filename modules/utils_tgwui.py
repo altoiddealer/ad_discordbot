@@ -178,6 +178,7 @@ class TGWUI():
         self.enabled:bool = config.textgen.get('enabled', True)
         self.instruction_template_str:str = None
         self.last_extension_params = {}
+        self.is_multimodal = True
 
         self.tts = TTS()
 
@@ -377,6 +378,9 @@ class TGWUI():
         else:
             loader = infer_loader(model, user_model_settings)
         return loader
+    
+    def check_if_multimodal(self, model):
+        pass
 
     async def load_llm_model(self, loader=None):
         try:
@@ -397,6 +401,7 @@ class TGWUI():
                 # Load the model
                 loop = asyncio.get_event_loop()
                 tgwui_shared_module.model, tgwui_shared_module.tokenizer = await loop.run_in_executor(None, load_model, model_name, loader)
+                self.check_if_multimodal(tgwui_shared_module.model)
                 # Load any LORA
                 if tgwui_shared_module.args.lora:
                     add_lora_to_model(tgwui_shared_module.args.lora)
