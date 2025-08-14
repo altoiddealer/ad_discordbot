@@ -1565,32 +1565,35 @@ class TaskProcessing(TaskAttributes):
                 self.params.should_gen_image = True
         self.apply_begin_reply_with()
 
-    async def add_images_to_llm_payload(self:Union["Task","Tasks"]):
+    async def collect_images_for_llm(self: Union["Task", "Tasks"]):
         if not self.ictx or not hasattr(self.ictx, 'attachments'):
             return
 
         IMAGE_EXTENSIONS = ('.png', '.jpg', '.jpeg', '.webp', '.bmp', '.gif')
-        image_urls = []
+        image_paths = []
 
-        for attachment in message.attachments:
-            if attachment.filename.lower().endswith(IMAGE_EXTENSIONS) or (
-                attachment.content_type and attachment.content_type.startswith("image/")
+        save_dir = shared_path.dir_internal_cache
+
+        for attachment in self.ictx.attachments:
+            if (
+                attachment.filename.lower().endswith(IMAGE_EXTENSIONS)
+                or (attachment.content_type and attachment.content_type.startswith("image/"))
             ):
-                image_urls.append(attachment.url)
-        return image_urls
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+                name, ext = os.path.splitext(attachment.filename)
+                unique_filename = f"{name}_{timestamp}{ext}"
+                file_path = os.path.join(save_dir, unique_filename)
 
-        # pil_images = []
+                if hasattr(attachment, "read"):
+                    data = await attachment.read()
+                    with open(file_path, "wb") as f:
+                        f.write(data)
+                elif hasattr(attachment, "save"):
+                    await attachment.save(file_path)
 
-        # for attachment in self.ictx.attachments:
-        #     if attachment.filename.lower().endswith(IMAGE_EXTENSIONS) or (attachment.content_type and attachment.content_type.startswith("image/")):
-        #         print("reading image")
-        #         try:
-        #             image_bytes = await attachment.read()
-        #             pil_image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
-        #             pil_images.append(pil_image)
-        #         except Exception as e:
-        #             print(f"Error loading image {attachment.filename}: {e}")
-        # return pil_images
+                image_paths.append(str(file_path))
+
+        return image_paths
 
     async def init_llm_payload(self:Union["Task","Tasks"]):
         self.payload = copy.deepcopy(vars(self.settings.llmstate))
@@ -1603,9 +1606,9 @@ class TaskProcessing(TaskAttributes):
         self.payload['state']['context'] = self.settings.llmcontext.context
         self.payload['state']['history'] = self.local_history.render_to_tgwui()
         if tgwui.is_multimodal:
-            raw_images = await self.add_images_to_llm_payload()
-            if raw_images:
-                self.payload['state']['raw_images'] = raw_images
+            image_paths = await self.collect_images_for_llm()
+            if image_paths:
+                self.payload['state']['image_paths'] = image_paths
 
     async def message_img_gen(self:Union["Task","TaskProcessing"]):
         await self.tags.match_img_tags(self.prompt, self.settings.get_vars())
@@ -1995,10 +1998,10 @@ class TaskProcessing(TaskAttributes):
                 continue_condition = _continue and not include_continued_text
 
                 text = self.payload['text']
-                files = self.payload['state'].pop('raw_images', None)
-                if files:
+                image_paths = self.payload['state'].pop('image_paths', None)
+                if image_paths:
                     text = {'text': self.payload['text'],
-                            'files': files}
+                            'files': image_paths}
 
                 # Send payload and get responses
                 func = partial(custom_chatbot_wrapper,
