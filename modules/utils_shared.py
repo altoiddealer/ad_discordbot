@@ -4,7 +4,7 @@ import os
 import re
 import sys
 from pathlib import Path
-from shutil import copyfile, move
+from shutil import copyfile, move, rmtree
 from modules.utils_files import load_file
 from modules.utils_misc import fix_dict
 import discord
@@ -104,6 +104,11 @@ class SharedPath:
 
     # Internal
     dir_internal = init_shared_paths(dir_root, 'internal', 'persistent settings not intended to be modified by users')
+    # Cache
+    dir_internal_cache = os.path.join(dir_internal, 'cache')
+    rmtree(dir_internal_cache, ignore_errors=True)
+    os.makedirs(dir_internal_cache, exist_ok=True)
+    # Settings / Database / Statistics
     dir_internal_settings = init_shared_paths(dir_internal, 'settings', 'more persistent settings not intended to be modified by users')
     active_settings = os.path.join(dir_internal_settings, 'activesettings.yaml')
     starboard = os.path.join(dir_internal, 'starboard_messages.yaml')
