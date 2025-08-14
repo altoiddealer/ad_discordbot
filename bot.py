@@ -1568,8 +1568,8 @@ class TaskProcessing(TaskAttributes):
     async def add_images_to_llm_payload(self:Union["Task","Tasks"]):
         if not self.ictx or not hasattr(self.ictx, 'attachments'):
             return
-        IMAGE_EXTENSIONS = ('.png', '.jpg', '.jpeg', '.webp', '.bmp', '.gif')
 
+        IMAGE_EXTENSIONS = ('.png', '.jpg', '.jpeg', '.webp', '.bmp', '.gif')
         image_urls = []
 
         for attachment in message.attachments:
@@ -1602,9 +1602,10 @@ class TaskProcessing(TaskAttributes):
         self.payload['state']['character_menu'] = self.settings.name
         self.payload['state']['context'] = self.settings.llmcontext.context
         self.payload['state']['history'] = self.local_history.render_to_tgwui()
-        raw_images = await self.add_images_to_llm_payload()
-        if raw_images:
-            self.payload['state']['raw_images'] = raw_images
+        if tgwui.is_multimodal:
+            raw_images = await self.add_images_to_llm_payload()
+            if raw_images:
+                self.payload['state']['raw_images'] = raw_images
 
     async def message_img_gen(self:Union["Task","TaskProcessing"]):
         await self.tags.match_img_tags(self.prompt, self.settings.get_vars())
