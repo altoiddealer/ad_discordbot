@@ -99,7 +99,7 @@ if is_tgwui_integrated:
     log.info('The bot is installed with text-generation-webui integration. Loading applicable modules and features.')
     sys.path.append(shared_path.dir_tgwui)
 
-    from modules.utils_tgwui import tgwui, tgwui_shared_module, tgwui_utils_module, tgwui_extensions_module, get_tgwui_functions, custom_chatbot_wrapper
+    from modules.utils_tgwui import tgwui, tgwui_shared_module, tgwui_utils_module, tgwui_extensions_module, get_tgwui_functions
     
 else:
     log.warning('The bot is NOT installed with text-generation-webui integration.')
@@ -1869,7 +1869,7 @@ class TaskProcessing(TaskAttributes):
                     self.stream_tts:bool         = config.tts_enabled() and self.can_chunk and config.ttsgen.get('tts_streaming', True) and task.params.should_tts
                     if self.stream_tts and tgwui_enabled and tgwui.tts.extension:
                         self.stream_tts = False
-                        if not bot_database.was_warned('tgwui_tts_streaming')
+                        if not bot_database.was_warned('tgwui_tts_streaming'):
                             log.error(f"TTS Streaming is only supported for API method - not TGWUI extension method")
                             bot_database.update_was_warned('tgwui_tts_streaming')
                     self.streamed_tts:bool       = False
@@ -2038,7 +2038,7 @@ class TaskProcessing(TaskAttributes):
             # Store time for statistics
             bot_statistics._llm_gen_time_start_last = time.time()
 
-            # Runs custom_chatbot_wrapper(), gets responses
+            # Runs chatbot_wrapper(), gets responses
             async for resp_chunk in process_responses():
                 await process_chunk(resp_chunk)
 
