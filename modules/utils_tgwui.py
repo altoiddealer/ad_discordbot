@@ -388,7 +388,7 @@ class TGWUI():
                 # Load the model
                 loop = asyncio.get_event_loop()
                 tgwui_shared_module.model, tgwui_shared_module.tokenizer = await loop.run_in_executor(None, load_model, model_name, loader)
-                # Check if modal is multimodal
+                # Check if model is multimodal
                 self.check_if_multimodal()
                 # Load any LORA
                 if tgwui_shared_module.args.lora:
