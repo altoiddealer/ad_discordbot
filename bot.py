@@ -99,7 +99,7 @@ if is_tgwui_integrated:
     log.info('The bot is installed with text-generation-webui integration. Loading applicable modules and features.')
     sys.path.append(shared_path.dir_tgwui)
 
-    from modules.utils_tgwui import tgwui, tgwui_shared_module, tgwui_utils_module, tgwui_extensions_module, get_tgwui_functions, custom_chatbot_wrapper
+    from modules.utils_tgwui import tgwui, tgwui_shared_module, tgwui_utils_module, tgwui_extensions_module, get_tgwui_functions
     
 else:
     log.warning('The bot is NOT installed with text-generation-webui integration.')
@@ -1565,6 +1565,36 @@ class TaskProcessing(TaskAttributes):
                 self.params.should_gen_image = True
         self.apply_begin_reply_with()
 
+    async def collect_images_for_llm(self: Union["Task", "Tasks"]):
+        if not self.ictx or not hasattr(self.ictx, 'attachments'):
+            return
+
+        IMAGE_EXTENSIONS = ('.png', '.jpg', '.jpeg', '.webp', '.bmp', '.gif')
+        image_paths = []
+
+        save_dir = shared_path.dir_internal_cache
+
+        for attachment in self.ictx.attachments:
+            if (
+                attachment.filename.lower().endswith(IMAGE_EXTENSIONS)
+                or (attachment.content_type and attachment.content_type.startswith("image/"))
+            ):
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+                name, ext = os.path.splitext(attachment.filename)
+                unique_filename = f"{name}_{timestamp}{ext}"
+                file_path = os.path.join(save_dir, unique_filename)
+
+                if hasattr(attachment, "read"):
+                    data = await attachment.read()
+                    with open(file_path, "wb") as f:
+                        f.write(data)
+                elif hasattr(attachment, "save"):
+                    await attachment.save(file_path)
+
+                image_paths.append(str(file_path))
+
+        return image_paths
+
     async def init_llm_payload(self:Union["Task","Tasks"]):
         self.payload = copy.deepcopy(vars(self.settings.llmstate))
         self.payload['text'] = self.text
@@ -1575,6 +1605,10 @@ class TaskProcessing(TaskAttributes):
         self.payload['state']['character_menu'] = self.settings.name
         self.payload['state']['context'] = self.settings.llmcontext.context
         self.payload['state']['history'] = self.local_history.render_to_tgwui()
+        if tgwui.is_multimodal:
+            image_paths = await self.collect_images_for_llm()
+            if image_paths:
+                self.payload['state']['image_paths'] = image_paths
 
     async def message_img_gen(self:Union["Task","TaskProcessing"]):
         await self.tags.match_img_tags(self.prompt, self.settings.get_vars())
@@ -1832,28 +1866,13 @@ class TaskProcessing(TaskAttributes):
                     # Prevents re-checking same string after it fails a random probability check
                     self.last_checked:str        = ''
                     # TTS streaming
-                    cant_stream_tts = ['edge_tts']
                     self.stream_tts:bool         = config.tts_enabled() and self.can_chunk and config.ttsgen.get('tts_streaming', True) and task.params.should_tts
-                    if self.stream_tts and tgwui_enabled and tgwui.tts.extension in cant_stream_tts:
+                    if self.stream_tts and tgwui_enabled and tgwui.tts.extension:
                         self.stream_tts = False
-                        log.error(f"TTS Streaming is confirmed non-functional for {tgwui.tts.extension} (for now), so this is being disabled.")
+                        if not bot_database.was_warned('tgwui_tts_streaming'):
+                            log.error(f"TTS Streaming is only supported for API method - not TGWUI extension method")
+                            bot_database.update_was_warned('tgwui_tts_streaming')
                     self.streamed_tts:bool       = False
-                    if tts_is_enabled(and_online=True) and self.stream_tts and not bot_database.was_warned('stream_tts'):
-                        char_name = bot_settings.get_last_setting_for("last_character", task.ictx)
-                        self.warn_stream_tts(char_name)
-                
-                # Only try streaming TTS if TTS enabled and responses can be chunked
-                def warn_stream_tts(self, char_name:str):
-                    log.info(f"The bot will try streaming TTS responses ('{char_name}' is configured to stream replies).")
-                    log.info(f"· If you experience issues, consider disabling TTSGen setting 'tts_streaming'")
-                    log.info(f"· Consider changing {char_name}'s 'chance_to_stream_reply' behavior to '0.0', or disable TTS.")
-                    log.info(f"· Report any Issues (https://github.com/altoiddealer/ad_discordbot/issues)")
-                    if tgwui_enabled:
-                        if 'alltalk' in tgwui.tts.extension:
-                            log.warning("**The application MAY hang/crash IF using 'alltalk_tts' in low VRAM mode**")
-                        log.info(f"· If you have issues, ensure your TTS client is updated ({tgwui.tts.extension})")
-                        log.info("· This MAY have unexpected side effects, particularly for other running TGWUI extensions (if any).")
-                    bot_database.update_was_warned('stream_tts')
 
                 async def try_chunking(self, resp:str):
                     # Strip previously sent string
@@ -1919,7 +1938,7 @@ class TaskProcessing(TaskAttributes):
                                 await check_censored(chunk)      # check for censored text
                                 self.last_checked = ''           # reset for next iteration
                                 self.already_chunked += chunk    # add chunk to already chunked
-                                await apply_tts_and_extensions(chunk) # trigger TTS response / possibly other extension behavior
+                                await apply_tts(chunk)           # generate TTS if configured
 
                                 return chunk
 
@@ -1928,10 +1947,7 @@ class TaskProcessing(TaskAttributes):
             # Easier to manage this as a class
             stream_replies = StreamReplies(self)
 
-            async def apply_tts_and_extensions(resp_chunk:str, was_streamed=True):
-                # If TTS API is online and available, TGWUI TTS extensions will be disabled
-                if tgwui_enabled:
-                    apply_extensions(resp_chunk, was_streamed=was_streamed)
+            async def apply_tts(resp_chunk:str, was_streamed=True):
                 if tts_is_enabled(and_online=True, for_mode='api') and api.ttsgen.post_generate:
                     ep = api.ttsgen.post_generate
                     tts_payload:dict = ep.get_payload()
@@ -1941,15 +1957,6 @@ class TaskProcessing(TaskAttributes):
                         stream_replies.streamed_tts = was_streamed
                         setattr(self.params, 'streamed_tts', was_streamed)
                         self.tts_resps.append(audio_fp)
-
-            def apply_extensions(resp_chunk:str, was_streamed=True):
-                vis_resp_chunk:str = tgwui_extensions_module.apply_extensions('output', resp_chunk, state=self.payload['state'], is_chat=True)
-                if vis_resp_chunk:
-                    audio_format_match = patterns.audio_src.search(vis_resp_chunk)
-                    if audio_format_match:
-                        stream_replies.streamed_tts = was_streamed
-                        setattr(self.params, 'streamed_tts', was_streamed)
-                        self.tts_resps.append(audio_format_match.group(1))
 
             # Sends LLM Payload and processes the generated text
             async def process_responses():
@@ -1963,15 +1970,22 @@ class TaskProcessing(TaskAttributes):
                 include_continued_text = getattr(self.params, "include_continued_text", False)
                 continue_condition = _continue and not include_continued_text
 
+                text = self.payload['text']
+                image_paths = self.payload['state'].pop('image_paths', None)
+                if image_paths:
+                    text = {'text': self.payload['text'],
+                            'files': image_paths}
+                    
+                chatbot_wrapper = get_tgwui_functions('chatbot_wrapper')
+
                 # Send payload and get responses
-                func = partial(custom_chatbot_wrapper,
-                               text = self.payload['text'],
+                func = partial(chatbot_wrapper,
+                               text = text,
                                state = self.payload['state'],
                                regenerate = regenerate,
                                _continue = _continue,
                                loading_message = True,
-                               for_ui = False,
-                               stream_tts = stream_replies.stream_tts)
+                               for_ui = False)
 
                 async for streaming_response in generate_in_executor(func):
                     # Capture response internally as it is generating
@@ -2000,8 +2014,8 @@ class TaskProcessing(TaskAttributes):
                     if resp_chunk:
                         # Check last reply chunk for censored text
                         await check_censored(resp_chunk)
-                        # trigger TTS response / possibly other extension behavior
-                        await apply_tts_and_extensions(resp_chunk)
+                        # generate TTS if configured
+                        await apply_tts(resp_chunk)
                         yield resp_chunk
                 # Check complete response for censored text
                 else:
@@ -2011,8 +2025,8 @@ class TaskProcessing(TaskAttributes):
 
                 # look for unprocessed tts response after all text generated
                 if not stream_replies.streamed_tts:
-                    # trigger TTS response / possibly other extension behavior
-                    await apply_tts_and_extensions(full_llm_resp, was_streamed=False)
+                    # generate TTS if configured
+                    await apply_tts(full_llm_resp, was_streamed=False)
 
                 # Save the complete response
                 self.llm_resp = full_llm_resp
@@ -2024,7 +2038,7 @@ class TaskProcessing(TaskAttributes):
             # Store time for statistics
             bot_statistics._llm_gen_time_start_last = time.time()
 
-            # Runs custom_chatbot_wrapper(), gets responses
+            # Runs chatbot_wrapper(), gets responses
             async for resp_chunk in process_responses():
                 await process_chunk(resp_chunk)
 

@@ -289,7 +289,11 @@ class API:
             except TypeError as e:
                 log.warning(f"Failed to create API client '{name}': {e}")
 
-        await asyncio.gather(*check_clients_online)
+        results = await asyncio.gather(*check_clients_online, return_exceptions=True)
+        for client, result in zip(self.clients.values(), results):
+            if isinstance(result, Exception):
+                log.warning(f"{client.name} failed online check: {result}")
+
         self.check_main_functions()
 
     async def setup_all_clients(self):
@@ -805,17 +809,17 @@ class APIClient:
 
     async def is_online(self) -> Tuple[bool, str]:
         if not self.enabled:
-            return False
+            return False, ''
         try:
             response = await self.request(endpoint='', method='GET', retry=0, timeout=5)
-            if response:
-                return True, ''
-            else:
-                return False, ''
-        except aiohttp.ClientError as e:
-            emsg = f"[{self.name}] is enabled but unresponsive at url {self.url}: {e}"
+            return (True, '') if response else (False, '')
+        except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+            emsg = f"[{self.name}] is enabled but unresponsive at {self.url}: {e}"
             await self.go_offline()
             return False, emsg
+        except Exception as e:
+            log.exception(f"Unexpected error while pinging {self.name}: {e}")
+            return False, str(e)
 
     async def _stream_response(self, response: aiohttp.ClientResponse, response_type: str, url: str):
         try:

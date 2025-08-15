@@ -80,6 +80,7 @@ ttsgen:
   mp3_bit_rate: 128             # If play_mode = 1 or 2, and the output (.wav) exceeds 8MB (discord limit), it will convert to .mp3 before uploading.
   save_mode: 1                  # 0 = save outputs / 1 = try deleting outputs. Note: Can't delete outputs uploaded to channel. (../extensions/coqui_tts/outputs)
   tts_greeting: true            # Whether to generate TTS for greeting when using '/character' or '/reset_conversation'
+  # NOTE: TTS Streaming feature only works for TTS via API - it does not work for TGWUI Extension method.
   tts_streaming: true           # Only valid if character behavior has `chance_to_stream_reply`. Set to "false" if you want text streaming and TTS, but not TTS streaming.
   # Extension method (non-API) only works with TGWUI integrated install.
   # Supported TTS extensions: 'alltalk_tts', 'coqui_tts', 'silero_tts', 'edge_tts' and 'elevenlabs_tts' have been tested. Additional tts extensions may work.
