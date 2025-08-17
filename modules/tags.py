@@ -252,6 +252,9 @@ class Tags():
 
             for pair in tag_pairs:
                 key, value = self._parse_key_value(pair)
+                if key in ('run_workflow', 'call_api', 'for_guild_ids_only', 'for_channel_ids_only'):
+                    log.warning(f'[TAGS] Ignored "tags from text" (AKA Instant Tags) for disallowed tag type: {key}')
+                    continue
                 if key is not None:
                     tag_dict[key] = value
 
