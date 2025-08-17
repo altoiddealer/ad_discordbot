@@ -1226,11 +1226,9 @@ class TaskProcessing(TaskAttributes):
             # Apply any reactions applicable to message
             if config.discord['history_reactions'].get('enabled', True):
                 await bg_task_queue.put(apply_reactions_to_messages(self.ictx, self.bot_hmessage, msg_ids_to_react))
-        # send any extra content
-        await bg_task_queue.put(send_content_to_discord(self, vc=voice_clients))
 
-    def check_for_send_content(self: Union["Task", "Tasks"], api_results):
-        processed_results = collect_content_to_send(api_results)
+    def collect_extra_content(self: Union["Task", "Tasks"], results):
+        processed_results = collect_content_to_send(results)
         self.extra_text.extend(processed_results['text'])
         self.extra_audio.extend(processed_results['audio'])
         self.extra_files.extend(processed_results['files'])
@@ -2269,7 +2267,7 @@ class TaskProcessing(TaskAttributes):
 
             # Send images to Discord
             if self.params.should_send_image:
-                await send_content_to_discord(task=self, files=images, normalize=False)
+                await send_content_to_discord(ictx=self.ictx, files=images, normalize=False)
 
         except Exception as e:
             log.error(f"An error occurred when processing image generation: {e}")
@@ -2968,8 +2966,7 @@ class Tasks(TaskProcessing):
         # Call and collect results
         api_results = await endpoint.call(ictx=self.ictx, **formatted_payload)
         if api_results:
-            self.check_for_send_content(api_results)
-            await bg_task_queue.put(send_content_to_discord(self, vc=voice_clients))
+            self.collect_extra_content(api_results)
 
     def format_api_payload(self: "Task", api_payload: dict):
         def recursive_format(value):
@@ -3006,8 +3003,7 @@ class Tasks(TaskProcessing):
         # Run workflow and collect results
         workflow_results = await call_stepexecutor(task=self, **formatted_payload)
         if workflow_results:
-            self.check_for_send_content(workflow_results)
-            await bg_task_queue.put(send_content_to_discord(self, vc=voice_clients))
+            self.collect_extra_content(workflow_results)
 
     async def workflow_task(self:"Task"):
         workflow_config = getattr(self, 'workflow_config')
@@ -3047,10 +3043,10 @@ class Tasks(TaskProcessing):
 
             # Run the command's main steps if defined
             if main_steps:
-                value = await call_stepexecutor(steps=main_steps, task=self, input_data=processed_params, context=processed_params, prefix=f'Processing command "{cmd_name}" with ')
+                cmd_results = await call_stepexecutor(steps=main_steps, task=self, input_data=processed_params, context=processed_params, prefix=f'Processing command "{cmd_name}" with ')
                 await self.embeds.send('img_send', f'{self.user_name} used "/{cmd_name}"', f'Options: {", ".join(optname for optname in option_names)}')
-                self.check_for_send_content(value)
-                await bg_task_queue.put(send_content_to_discord(self, vc=voice_clients))
+                if cmd_results:
+                    self.collect_extra_content(cmd_results)
             else:
                 await self.embeds.send('img_send', f'{self.user_name} used "/{cmd_name}"', f'Options: {", ".join(optname for optname in option_names)}')
         except Exception as e:
@@ -3690,9 +3686,6 @@ class Tasks(TaskProcessing):
                 else:
                     await self.channel.send(original_prompt)
 
-            # send any extra content
-            await bg_task_queue.put(send_content_to_discord(self, vc=voice_clients))
-
             # If switching back to original Img model
             if swap_imgmodel_params:
                 # RUN A CHANGE IMGMODEL SUBTASK
@@ -3917,7 +3910,7 @@ class Task(Tasks):
         # Dynamically assign custom keyword arguments as attributes
         for key, value in kwargs.items():
             setattr(self, key, value)
-
+    
     # Assigns defaults for attributes which are not already set
     def init_self_values(self):
         self.initialized = True # Flag that Task has been initialized (skip if using same Task object for subtasks, etc)
@@ -4017,6 +4010,21 @@ class Task(Tasks):
         self.vars.update(self.ictx)
         self.vars.prompt = self.prompt
         self.vars.neg_prompt = self.neg_prompt
+
+    def get_extra_content(self, keep=False) -> dict:
+        extra_content = {}
+        for key in ('text', 'audio', 'files'):
+            value = getattr(self, f'extra_{key}', None)
+            if value:
+                extra_content[key] = value
+                if not keep:
+                    setattr(self, f'extra_{key}', None)
+        return extra_content
+    
+    async def send_extra_content_if_any(self):
+        extra_content = self.get_extra_content()
+        if extra_content:
+            await bg_task_queue.put(send_content_to_discord(ictx=self.ictx, vc=voice_clients, **extra_content))
 
     def release_semaphore(self):
         if self._semaphore and not self._semaphore_released:
@@ -4306,6 +4314,7 @@ class TaskManager:
                 await message_manager.queue_delayed_message(task)
             else:
                 await task.stop_typing()
+                await task.send_extra_content_if_any()
                 del task
                 await bot_status.schedule_go_idle()
 

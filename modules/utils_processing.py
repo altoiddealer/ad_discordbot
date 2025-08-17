@@ -408,22 +408,15 @@ def collect_content_to_send(all_content) -> dict:
 
     return resolved_content
 
-async def send_content_to_discord(task = None,
-                                  ictx: CtxInteraction|None = None,
+async def send_content_to_discord(ictx: CtxInteraction|None = None,
                                   text: dict|None = None,
                                   audio: dict|None = None,
                                   files: Any | FILE_INPUT | list[FILE_INPUT] | None = None,
                                   vc = None,
                                   normalize: bool = True):
-    ictx = task.ictx if task else ictx
     if not ictx:
-        raise RuntimeError('A discord interaction is required for send_context_to_discord()')
-    if text is None and task:
-        text = task.extra_text
-    if audio is None and task:
-        audio = task.extra_audio
-    if files is None and task:
-        files = task.extra_files
+        log.error("Tried sending extra content to discord w/o interaction (required).")
+        return
 
     try:
         if text:
