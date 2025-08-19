@@ -102,8 +102,11 @@ class BaseTags(BaseFileMemory):
                             updated_tags.extend(preset.get('tags', []))
                             tag.pop('tag_preset_name', None)
                             break
-                if tag:
+                if isinstance(tag, dict):
                     updated_tags.append(tag)
+                else:
+                    log.warning(f"Skipping invalid tag: {tag} (expected dict)")
+
             # Add global tag keys to each tag item
             for tag in updated_tags:
                 for key, value in self._global_tag_keys.items():
