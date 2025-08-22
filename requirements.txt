@@ -11,5 +11,6 @@ jsonref
 aiofiles==23.2.1
 filetype
 discord-ext-voice-recv
+whisper
 
 pywin32; platform_system == "Windows"
