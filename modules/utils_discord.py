@@ -56,6 +56,21 @@ def configurable_for_dm_if(func):
     
     return commands.check(predicate)
 
+def custom_commands_check_dm(command_name: str, allow_dm: bool=False):
+    async def predicate(interaction: discord.Interaction):
+        # Case: DM
+        if interaction.guild is None:
+            # Always allow owners
+            if await interaction.client.is_owner(interaction.user):
+                return True
+            # Allow if allowed in user comfig
+            if allow_dm:
+                return True
+            raise discord.app_commands.CheckFailure(f"/{command_name} is not available in direct messages.")
+        # Case: in a guild -> always allowed
+        return True
+    return discord.app_commands.check(predicate)
+
 def is_direct_message(ictx:CtxInteraction):
     return ictx and getattr(ictx, 'guild') is None \
         and hasattr(ictx, 'channel') and isinstance(ictx.channel, discord.DMChannel)

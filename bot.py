@@ -42,7 +42,7 @@ from modules.database import StarBoard, Statistics, BaseFileMemory
 from modules.utils_misc import check_probability, fix_dict, set_key, deep_merge, update_dict, sum_update_dict, random_value_from_range, convert_lists_to_tuples, \
     consolidate_prompt_strings, get_time, format_time, format_time_difference, get_normalized_weights, get_pnginfo_from_image, is_base64, valueparser # noqa: F401
 from modules.utils_processing import resolve_placeholders, collect_content_to_send, send_content_to_discord, comfy_delete_and_reroute_nodes
-from modules.utils_discord import Embeds, guild_only, guild_or_owner_only, configurable_for_dm_if, is_direct_message, ireply, sleep_delete_message, send_long_message, \
+from modules.utils_discord import Embeds, guild_only, guild_or_owner_only, configurable_for_dm_if, custom_commands_check_dm, is_direct_message, ireply, sleep_delete_message, send_long_message, \
     EditMessageModal, SelectedListItem, SelectOptionsView, get_user_ctx_inter, get_message_ctx_inter, apply_reactions_to_messages, replace_msg_in_history_and_discord, MAX_MESSAGE_LENGTH, muffled_send  # noqa: F401
 from modules.utils_aspect_ratios import ar_parts_from_dims, dims_from_ar, avg_from_dims, get_aspect_ratio_parts, calculate_aspect_ratio_sizes  # noqa: F401
 from modules.utils_chat import custom_load_character, load_character_data
@@ -4977,6 +4977,7 @@ async def load_custom_commands():
             description = cmd.get("description", "No description")
             options = cmd.get("options", [])
             main_steps = cmd.get("steps", [])
+            allow_dm = cmd.get("allow_dm", False)
             queue_to = cmd.get("queue_to") or "gen_queue"
             # Do not allow put to Message queue
             if queue_to == "message_queue":
@@ -5074,11 +5075,11 @@ async def load_custom_commands():
             dynamic_callback.__annotations__ = {p.name: p.annotation for p in parameters}
             dynamic_callback.__signature__ = sig
 
-            command = app_commands.Command(
-                name=name,
-                description=description,
-                callback=dynamic_callback
-            )
+            checked_callback = custom_commands_check_dm(name, allow_dm)(dynamic_callback)
+
+            command = app_commands.Command(name=name,
+                                           description=description,
+                                           callback=checked_callback)
 
             # Inject choices (private API workaround)
             for meta in option_metadata:
