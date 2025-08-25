@@ -1,6 +1,7 @@
 import torch
 import os
 import config_stt as config
+import threading
 
 class ASRManager:
     _instance = None
@@ -16,42 +17,44 @@ class ASRManager:
             self.whisper_model = None
             self.omnisense_model = None
             self.faster_whisper_model = None  # Added Faster-Whisper support
+            self.lock = threading.Lock()
             self._initialized = True
 
     def initialize(self):
-        if config.ASR_ENGINE == "whisper" and not self.whisper_model:
-            import whisper
-            os.environ["CUDA_VISIBLE_DEVICES"] = config.WHISPER_CUDA_VISIBLE_DEVICES
-            self.whisper_model = whisper.load_model(
-                config.WHISPER_MODEL_NAME, 
-                device="cuda" if torch.cuda.is_available() else "cpu"
-            )
-        elif config.ASR_ENGINE == "omnisense" and not self.omnisense_model:
-            from omnisense.models.sensevoice import OmniSenseVoiceSmall
-            self.omnisense_model = OmniSenseVoiceSmall(
-                model_dir=config.OMNISENSE_MODEL_DIR,
-                device_id=config.OMNISENSE_DEVICE_ID,
-                quantize=config.OMNISENSE_QUANTIZE
-            )
-        elif config.ASR_ENGINE == "faster_whisper" and not self.faster_whisper_model:
-            from faster_whisper import WhisperModel
-            self.faster_whisper_model = WhisperModel(
-                config.FASTER_WHISPER_MODEL_SIZE,
-                device=config.FASTER_WHISPER_DEVICE,
-                compute_type=config.FASTER_WHISPER_COMPUTE_TYPE
-            )
+        with self.lock:
+            if config.ASR_ENGINE == "whisper" and not self.whisper_model:
+                import whisper
+                os.environ["CUDA_VISIBLE_DEVICES"] = config.WHISPER_CUDA_VISIBLE_DEVICES
+                self.whisper_model = whisper.load_model(
+                    config.WHISPER_MODEL_NAME, 
+                    device=config.WHISPER_DEVICE,
+                )
+            elif config.ASR_ENGINE == "omnisense" and not self.omnisense_model:
+                from omnisense.models.sensevoice import OmniSenseVoiceSmall
+                self.omnisense_model = OmniSenseVoiceSmall(
+                    model_dir=config.OMNISENSE_MODEL_DIR,
+                    device_id=config.OMNISENSE_DEVICE_ID,
+                    quantize=config.OMNISENSE_QUANTIZE
+                )
+            elif config.ASR_ENGINE == "faster_whisper" and not self.faster_whisper_model:
+                from faster_whisper import WhisperModel
+                self.faster_whisper_model = WhisperModel(
+                    config.FASTER_WHISPER_MODEL_SIZE,
+                    device=config.FASTER_WHISPER_DEVICE,
+                    compute_type=config.FASTER_WHISPER_COMPUTE_TYPE
+                )
 
     def transcribe(self, audio_file_path):
         self.initialize()  # Ensure models are loaded
-        
-        if config.ASR_ENGINE == "whisper":
-            return self._whisper_transcribe(audio_file_path)
-        elif config.ASR_ENGINE == "omnisense":
-            return self._omnisense_transcribe(audio_file_path)
-        elif config.ASR_ENGINE == "faster_whisper":
-            return self._faster_whisper_transcribe(audio_file_path)
-        else:
-            raise ValueError(f"Unsupported ASR engine: {config.ASR_ENGINE}")
+        with self.lock:
+            if config.ASR_ENGINE == "whisper":
+                return self._whisper_transcribe(audio_file_path)
+            elif config.ASR_ENGINE == "omnisense":
+                return self._omnisense_transcribe(audio_file_path)
+            elif config.ASR_ENGINE == "faster_whisper":
+                return self._faster_whisper_transcribe(audio_file_path)
+            else:
+                raise ValueError(f"Unsupported ASR engine: {config.ASR_ENGINE}")
 
     def _whisper_transcribe(self, audio_file_path):
         result = self.whisper_model.transcribe(audio_file_path)
@@ -80,3 +83,4 @@ class ASRManager:
 
 # Singleton instance
 asr_manager = ASRManager()
+

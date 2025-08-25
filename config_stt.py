@@ -7,7 +7,8 @@ WRAP_MESSAGES = False # Set to True to wrap messages, False for individual messa
 ASR_ENGINE = "whisper"  # "whisper", "omnisense" or "faster_whisper"
 
 # Whisper configuration
-WHISPER_MODEL_NAME = "base" # base, large, small,...
+WHISPER_MODEL_NAME = "small" # base, large, small,...
+WHISPER_DEVICE = "cpu"
 WHISPER_CUDA_VISIBLE_DEVICES = "0"  # GPU id to use
 
 # OmniSenseVoice configuration
@@ -34,4 +35,5 @@ class AudioConfig:
     # Volume normalization parameters, adjust if needed
     TARGET_RMS = 1400
     MAX_GAIN = 10
+
     MIN_RMS = 100
