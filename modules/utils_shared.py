@@ -20,8 +20,8 @@ flows_event = asyncio.Event()
 
 # Intercept custom bot arguments
 def parse_bot_args():
-    bot_arg_list = ["--is-tgwui-integrated", "--limit-history", "--token"]
-    flag_only_args = {"--is-tgwui-integrated"}
+    bot_arg_list = ["--is-tgwui-integrated", "--limit-history", "--token", "--lazy-load-llm"]
+    flag_only_args = {"--is-tgwui-integrated", "--lazy-load-llm"}
     
     bot_argv = []
     for arg in bot_arg_list:
@@ -40,6 +40,7 @@ def parse_bot_args():
     parser = argparse.ArgumentParser(formatter_class=lambda prog: argparse.HelpFormatter(prog, max_help_position=54))
     parser.add_argument("--token", type=str, help="Discord bot token to use their API.")
     parser.add_argument("--limit-history", type=int, help="When the history gets too large, performance issues can occur. Limit the history to improve performance.")
+    parser.add_argument("--lazy-load-llm", action="store_true", help="If true, loads LLM in response to first text gen request (not during script init).")
     parser.add_argument("--is-tgwui-integrated", action="store_true", help="Indicates integration with TGWUI.")
 
     # Parse the arguments
@@ -220,6 +221,9 @@ class Config(BaseFileMemory):
             if abs_path.is_relative_to(allowed_base):
                 return True
         return False
+    
+    def should_lazy_load_llm(self) -> bool:
+        return bot_args.lazy_load_llm or self.textgen.get('lazy_load_llm', False)
 
     def is_per_server(self) -> bool:
         return self.per_server_settings.get('enabled', False)

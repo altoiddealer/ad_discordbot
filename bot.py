@@ -1797,6 +1797,15 @@ class TaskProcessing(TaskAttributes):
     async def llm_gen(self:Union["Task","Tasks"]) -> tuple[str, str]:
         if tgwui_shared_module.model_name == 'None':
             return
+        if tgwui.lazy_load_llm:
+            try:
+                await self.embeds.send('change', 'Loading LLM model ... ', tgwui_shared_module.model_name)
+                await tgwui.load_llm_model()
+                await self.embeds.delete('change')
+            except Exception as e:
+                log.error(f"Error lazy-loading LLM Model: {e}")
+                await self.embeds.edit_or_send('change', "Error loading LLM Model", str(e))
+                return
 
         try:
 
