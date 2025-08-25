@@ -27,7 +27,7 @@ class ASRManager:
                 os.environ["CUDA_VISIBLE_DEVICES"] = config.WHISPER_CUDA_VISIBLE_DEVICES
                 self.whisper_model = whisper.load_model(
                     config.WHISPER_MODEL_NAME, 
-                    device="cuda" if torch.cuda.is_available() else "cpu"
+                    device=config.WHISPER_DEVICE,
                 )
             elif config.ASR_ENGINE == "omnisense" and not self.omnisense_model:
                 from omnisense.models.sensevoice import OmniSenseVoiceSmall
@@ -83,3 +83,4 @@ class ASRManager:
 
 # Singleton instance
 asr_manager = ASRManager()
+
