@@ -182,7 +182,7 @@ class TGWUI():
             if tgwui_shared_module.model_name != 'None':
                 if config.should_lazy_load_llm():
                     self.lazy_load_llm = True
-                    print(f'{tgwui_shared_module.model_name} will be loaded on first interaction.')
+                    log.info(f'Configured to lazy-load LLM. {tgwui_shared_module.model_name} will be loaded on first interaction.')
                 else:
                     asyncio.run(self.load_llm_model())
 
