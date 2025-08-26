@@ -29,9 +29,5 @@ class AudioConfig:
     SAMPLE_RATE = 48000 # Discord's default
     CHANNELS = 1 # Discord's default
     SAMPLE_WIDTH = 2  # Discord's default
-    
-    # Volume normalization parameters, adjust if needed
-    TARGET_RMS = 1400
-    MAX_GAIN = 10
-    MIN_RMS = 100
+
 
