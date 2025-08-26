@@ -4,7 +4,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-BLACKLIST_FILE = 'blacklist.json'
+BLACKLIST_FILE = 'ad_discordbot/user/settings/stt_blacklist.json'
 
 blacklist = []
 
@@ -33,5 +33,6 @@ def remove_from_blacklist(user_id):
     if user_id in blacklist:
         blacklist.remove(user_id)
         save_blacklist()
+
 
 load_blacklist()
