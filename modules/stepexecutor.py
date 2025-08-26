@@ -7,7 +7,7 @@ import filetype
 import copy
 from modules.typing import CtxInteraction, APIRequestCancelled
 from typing import Any, Optional, Union
-from modules.utils_shared import client, shared_path, load_file, get_api
+from modules.utils_shared import client, shared_path, is_tgwui_integrated, load_file, get_api
 from modules.utils_misc import valueparser, set_key, extract_key, deep_merge
 import modules.utils_processing as processing
 from modules.apis import apisettings, APIResponse, Endpoint, API, APIClient, ImgGenClient_Comfy, ImgGenClient
@@ -986,6 +986,44 @@ class StepExecutor:
 
         return payload
 
+    async def _step_load_llmmodel(self, data: Any, config: str|dict):
+        tgwui_enabled = False
+        if is_tgwui_integrated:
+            from modules.utils_tgwui import tgwui_shared_module, tgwui_utils_module, get_tgwui_functions, tgwui
+            tgwui_enabled = tgwui.enabled
+
+        if not tgwui_enabled:
+            log.warning("[StepExecutor] TGWUI currently disabled (step 'load_llmmodel').")
+            return data
+
+        new_llmmodel = config if isinstance(config, str) else config.get('name', 'None')
+        current_llmmodel = tgwui_shared_module.model_name
+
+        if new_llmmodel == 'None' and current_llmmodel == 'None':
+            log.warning("[StepExecutor] No LLM model currently loaded to unload.")
+            return data
+        
+        # Unload current LLM Model
+        if new_llmmodel == 'None':
+            unload_model_func = get_tgwui_functions('unload_model')
+            unload_model_func()
+            log.info(f"[StepExecutor] LLM model unloaded.")
+            # Reload the LLM on next LLM Gen request
+            tgwui.lazy_load_llm = True
+            tgwui_shared_module.model_name = current_llmmodel
+        # Load a new LLM Model
+        else:
+            all_llmmodels = tgwui_utils_module.get_available_models()
+            if new_llmmodel not in all_llmmodels:
+                raise ValueError(f"[StepExecutor] LLM Model '{new_llmmodel}' not in available models!")
+            tgwui_shared_module.model_name = new_llmmodel
+            from modules.utils_shared import bot_database
+            bot_database.update_was_warned('no_llmmodel')         # Reset warning message
+            loader = tgwui.get_llm_model_loader(new_llmmodel)     # Try getting loader from user-config.yaml to prevent errors
+            await tgwui.load_llm_model(loader)                    # Load an LLM model if specified
+            log.info(f"[StepExecutor] LLM model loaded: {new_llmmodel}.")
+
+        return data
 
 # async def _process_file_input(self, path: str, input_type: str):
 #     if input_type == "text":

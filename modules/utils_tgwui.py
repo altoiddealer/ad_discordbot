@@ -164,6 +164,7 @@ class TGWUI():
         self.instruction_template_str:str = None
         self.last_extension_params = {}
         self.is_multimodal = False
+        self.lazy_load_llm = False
 
         self.tts = TTS()
 
@@ -177,7 +178,13 @@ class TGWUI():
             self.activate_extensions() # Activate the extensions
 
             self.init_llmmodels() # Get model from cmd args, or present model list in cmd window
-            asyncio.run(self.load_llm_model())
+
+            if tgwui_shared_module.model_name != 'None':
+                if config.should_lazy_load_llm():
+                    self.lazy_load_llm = True
+                    log.info(f'Configured to lazy-load LLM. {tgwui_shared_module.model_name} will be loaded on first interaction.')
+                else:
+                    asyncio.run(self.load_llm_model())
 
             tgwui_shared_module.generation_lock = Lock()
 
@@ -346,7 +353,8 @@ class TGWUI():
                 print()
 
             tgwui_shared_module.model_name = all_llmmodels[i]
-            print(f'Loading {tgwui_shared_module.model_name}.\nTo skip model selection, use "--model" in "CMD_FLAGS.txt".')
+            if not config.should_lazy_load_llm():
+                print(f'Loading {tgwui_shared_module.model_name}.\nTo skip model selection, use "--model" in "CMD_FLAGS.txt".')
 
     # Check user settings (models/config-user.yaml) to determine loader
     def get_llm_model_loader(self, model:str) -> str:
@@ -393,6 +401,8 @@ class TGWUI():
                 # Load any LORA
                 if tgwui_shared_module.args.lora:
                     add_lora_to_model(tgwui_shared_module.args.lora)
+                # Reset flag which controls delayed LLM loading
+                self.lazy_load_llm = False
         except Exception as e:
             log.error(f"An error occurred while loading LLM Model: {e}")
 

@@ -8,6 +8,7 @@ commands: [] # (delete brackets when using the '-' list item notation)
 examples:
   - command_name: remove_bg
     description: Remove the background from an image, with optional threshold value
+    allow_dm: true # optional - defaults to 'false' if not included. Allows the cmd to be used via DM.
     options:
       - name: rembg_image
         description: The image to remove the background from

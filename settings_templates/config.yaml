@@ -63,6 +63,7 @@ dynamic_prompting_enabled: true
 # Note: Many native textgen-webui settings are honored: 'CMD_FLAGS.txt' (extensions) / 'user_data/settings.yaml' / 'user_data/models/config-user.yaml' (LLM model settings)
 textgen:
   enabled: true                     # Controls whether the script initializes with text generation features
+  lazy_load_llm: false              # If true, loads LLM in response to first text gen request (not during script init)
   # History handling settings.
   chat_history:
     limit_history: true             # Limits the stored history to roughly the current 'truncation_length' (more than enough retained). You may have performance issues if set to false.
