@@ -989,7 +989,7 @@ class StepExecutor:
     async def _step_load_llmmodel(self, data: Any, config: str|dict):
         tgwui_enabled = False
         if is_tgwui_integrated:
-            from modules.utils_tgwui import tgwui_shared_module, get_tgwui_functions, tgwui
+            from modules.utils_tgwui import tgwui_shared_module, tgwui_utils_module, get_tgwui_functions, tgwui
             tgwui_enabled = tgwui.enabled
 
         if not tgwui_enabled:
@@ -1013,6 +1013,9 @@ class StepExecutor:
             tgwui_shared_module.model_name = current_llmmodel
         # Load a new LLM Model
         else:
+            all_llmmodels = tgwui_utils_module.get_available_models()
+            if new_llmmodel not in all_llmmodels:
+                raise ValueError(f"[StepExecutor] LLM Model '{new_llmmodel}' not in available models!")
             tgwui_shared_module.model_name = new_llmmodel
             from modules.utils_shared import bot_database
             bot_database.update_was_warned('no_llmmodel')         # Reset warning message
