@@ -36,11 +36,6 @@ class TranscriberSink(voice_recv.AudioSink):
         self.CHANNELS = AudioConfig.CHANNELS
         self.SAMPLE_WIDTH = AudioConfig.SAMPLE_WIDTH
 
-        # Volume normalization parameters
-        self.TARGET_RMS = AudioConfig.TARGET_RMS
-        self.MAX_GAIN = AudioConfig.MAX_GAIN
-        self.MIN_RMS = AudioConfig.MIN_RMS
-
         # Minimum audio duration
         self.MIN_AUDIO_DURATION = min_audio_duration
 
@@ -67,6 +62,7 @@ class TranscriberSink(voice_recv.AudioSink):
 
     def cleanup(self):
         """Clean up resources."""
+        self.silence_check_task.cancel()
         for user_id in self.user_states:
             for chunk in glob.glob(f"{self.guild_id}_{user_id}_chunk*.wav"):
                 try:
@@ -150,51 +146,15 @@ class TranscriberSink(voice_recv.AudioSink):
                 return
 
             file_start = self.sink._current_time()
-            raw_filename = f"{self.sink.guild_id}_{self.user_id}_chunk{self.chunk_counter}_{int(current_time * 1000)}_raw.wav"
-            norm_filename = f"{self.sink.guild_id}_{self.user_id}_chunk{self.chunk_counter}_{int(current_time * 1000)}.wav"
+            filename = f"{self.sink.guild_id}_{self.user_id}_chunk{self.chunk_counter}_{int(current_time * 1000)}.wav"
             self.chunk_counter += 1
 
             # Save raw audio to temporary file
-            with wave.open(raw_filename, 'wb') as wf:
+            with wave.open(filename, 'wb') as wf:
                 wf.setnchannels(self.sink.CHANNELS)
                 wf.setsampwidth(self.sink.SAMPLE_WIDTH)
                 wf.setframerate(self.sink.SAMPLE_RATE)
                 wf.writeframes(self.audio_buffer)
-
-            # Read raw audio and normalize
-            with wave.open(raw_filename, 'rb') as wf:
-                audio_data = np.frombuffer(wf.readframes(wf.getnframes()), dtype=np.int16).reshape(-1, self.sink.CHANNELS)
-
-            # Calculate average RMS
-            with np.errstate(divide='ignore', invalid='ignore'):
-                rms_left = np.sqrt(np.mean(np.square(audio_data[:, 0].astype(np.float32))))
-                rms_right = np.sqrt(np.mean(np.square(audio_data[:, 1].astype(np.float32))))
-            avg_rms = max(rms_left, rms_right)
-
-            # Apply normalization
-            if avg_rms > self.sink.MIN_RMS:
-                gain = self.sink.TARGET_RMS / avg_rms
-                gain = min(gain, self.sink.MAX_GAIN)  # Cap gain to avoid distortion
-                if gain < 1.0:  # Reduce volume if RMS is above target
-                    gain = max(gain, 1.0 / self.sink.MAX_GAIN)  # Cap reduction to avoid excessive lowering
-
-                normalized_left = audio_data[:, 0].astype(np.float32) * gain
-                normalized_right = audio_data[:, 1].astype(np.float32) * gain
-
-                normalized_left = np.clip(normalized_left, -32768, 32767)
-                normalized_right = np.clip(normalized_right, -32768, 32767)
-
-                normalized_samples = np.column_stack((normalized_left, normalized_right))
-                normalized_audio_data = normalized_samples.astype(np.int16).tobytes()
-            else:
-                normalized_audio_data = self.audio_buffer  # Use raw data if below MIN_RMS
-
-            # Save normalized audio
-            with wave.open(norm_filename, 'wb') as wf:
-                wf.setnchannels(self.sink.CHANNELS)
-                wf.setsampwidth(self.sink.SAMPLE_WIDTH)
-                wf.setframerate(self.sink.SAMPLE_RATE)
-                wf.writeframes(normalized_audio_data)
 
             self.audio_buffer.clear()
             self.speaking = False
@@ -207,11 +167,11 @@ class TranscriberSink(voice_recv.AudioSink):
 
             async def transcribe_task():
                 task_start = self.sink._current_time()
-                log.info(f"⏳ START Transcription for user {self.user_id} | File: {norm_filename}")
+                log.info(f"⏳ START Transcription for user {self.user_id} | File: {filename}")
 
                 try:
                     process_start = self.sink._current_time()
-                    transcription = await asyncio.to_thread(asr_manager.transcribe, norm_filename)
+                    transcription = await asyncio.to_thread(asr_manager.transcribe, filename)
                     process_time = self.sink._current_time() - process_start
                     rtf = duration / process_time if duration > 0 else 0
 
@@ -237,8 +197,7 @@ class TranscriberSink(voice_recv.AudioSink):
                     log.error(f"❌ FAILED for user {self.user_id} | Error: {str(e)}")
                 finally:
                     try:
-                        os.remove(raw_filename)
-                        os.remove(norm_filename)
+                        os.remove(filename)
                     except Exception as e:
                         log.error(f"🧹 Cleanup failed for user {self.user_id}: {str(e)}")
 
@@ -311,7 +270,6 @@ class TranscriberSink(voice_recv.AudioSink):
 
         self.combined_text_buffer.clear()
         self.combined_pending_transcriptions.clear()
-
 
     async def silence_monitor(self):
         """Monitor silence and process audio chunks for all users."""
