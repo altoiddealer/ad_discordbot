@@ -13,7 +13,7 @@ import glob
 import os
 import warnings
 import discord
-from discord.ext import commands
+from discord.ext import commands, voice_recv
 from discord import app_commands, File, abc
 import typing
 import io
@@ -45,6 +45,7 @@ from modules.utils_processing import resolve_placeholders, collect_content_to_se
 from modules.utils_discord import Embeds, guild_only, guild_or_owner_only, configurable_for_dm_if, custom_commands_check_dm, is_direct_message, ireply, sleep_delete_message, send_long_message, \
     EditMessageModal, SelectedListItem, SelectOptionsView, get_user_ctx_inter, get_message_ctx_inter, apply_reactions_to_messages, replace_msg_in_history_and_discord, MAX_MESSAGE_LENGTH, muffled_send  # noqa: F401
 from modules.stt import TranscriberSink
+import utils.black_list as black_list
 from modules.utils_aspect_ratios import ar_parts_from_dims, dims_from_ar, avg_from_dims, get_aspect_ratio_parts, calculate_aspect_ratio_sizes  # noqa: F401
 from modules.utils_chat import custom_load_character, load_character_data
 from modules.history import HistoryManager, History, HMessage, cnf
@@ -851,6 +852,17 @@ async def start_transcription(ctx: commands.Context, min_audio_duration: float =
 
     await ctx.send(f"Transcription started with min audio duration {min_audio_duration}s!", ephemeral=True)
     log.info(f'[Transcription] Started for guild {guild_id} with min audio duration {min_audio_duration}s')
+
+@client.hybrid_command(name="STT_blacklist", description="Manage the STT blacklist")
+@app_commands.describe(action="Action to perform", user="User to add or remove from blacklist")
+@app_commands.choices(action=[app_commands.Choice(name="add", value="add"), app_commands.Choice(name="remove", value="remove")])
+async def blacklist_cmd(ctx: commands.Context, action: str, user: discord.User):
+    if action == "add":
+        black_list.add_to_blacklist(user.id)
+        await ctx.send(f"Added {user.display_name} to the blacklist.", ephemeral=True)
+    elif action == "remove":
+        black_list.remove_from_blacklist(user.id)
+        await ctx.send(f"Removed {user.display_name} from the blacklist.", ephemeral=True)
 
 #################################################################
 ###################### DYNAMIC PROMPTING ########################
@@ -8135,4 +8147,5 @@ discord.utils.setup_logging(
             root=False,
         )
 asyncio.run(runner())
+
 
