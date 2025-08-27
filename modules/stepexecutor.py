@@ -849,9 +849,9 @@ class StepExecutor:
             return data
         return match.group(1) if match.lastindex else match.group(0)
 
-    def _step_eval(self, data, expression):
-        # TODO: Expand eval step
-        return eval(expression, {"data": data})
+    # def _step_eval(self, data, expression):
+    #     # TODO: Expand eval step
+    #     return eval(expression, {"data": data})
 
     def _step_add_pnginfo(self, data: Any, config: dict) -> Image.Image:
         """
