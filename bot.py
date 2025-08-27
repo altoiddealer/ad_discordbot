@@ -432,7 +432,7 @@ async def post_active_settings(guild:discord.Guild, key_str_list:Optional[list[s
 
     # Collect current settings
     settings:"Settings" = guild_settings.get(guild.id, bot_settings)
-    settings_copy = copy.deepcopy(settings.get_vars())
+    settings_copy = copy.deepcopy(settings.get_vars(public_only=True))
     # Extract tags for Tags message
     char_tags = settings_copy['llmcontext'].pop('tags', [])
     imgmodel_tags = settings_copy['imgmodel'].pop('tags', [])
