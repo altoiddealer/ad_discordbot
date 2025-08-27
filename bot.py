@@ -806,7 +806,7 @@ if tts_is_enabled():
 @client.tree.context_menu(name="Bot Join VC")
 @guild_or_owner_only()
 async def bot_join_voice_channel(inter: discord.Interaction, user: discord.User):
-    if user != client.user or not client.is_owner(user):
+    if user != client.user or not await client.is_owner(inter.user):
         await inter.response.send_message(f"'Bot Join VC' is only for admins to manually join the Bot to VC.", ephemeral=True, delete_after=5)
         return
     try:
