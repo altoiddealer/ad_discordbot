@@ -4,16 +4,27 @@ import glob
 import os
 import wave
 import time
+import threading
 from discord.ext import voice_recv
-from config_stt import AudioConfig
-# from utils import black_list
-import config_stt
-
 from modules.utils_shared import client, config, stt_blacklist
 
 from modules.logs import import_track, get_logger; import_track(__file__, fp=True); log = get_logger(__name__)  # noqa: E702
 
-import threading
+
+class AudioConfig:
+    audio_config = config.stt.get('audio_config', {})
+    SPEECH_VOLUME_THRESHOLD = audio_config.get('speech_volume_threshold', 1)
+    CHUNK_SILENCE_THRESHOLD = audio_config.get('chunk_silence_threshold', 0.5)
+    FINAL_SILENCE_THRESHOLD = audio_config.get('final_silence_threshold', 0.8)
+    SAMPLE_RATE             = audio_config.get('sample_rate', 48000)
+    CHANNELS                = audio_config.get('channels', 2)
+    SAMPLE_WIDTH            = audio_config.get('sample_width', 2)
+
+    # Volume normalization parameters, adjust if needed
+    TARGET_RMS = audio_config.get('target_rms', 1400)
+    MAX_GAIN = audio_config.get('max_gain', 10)
+    MIN_RMS = audio_config.get('min_rms', 100)
+
 
 class ASRManager:
     _instance = None
@@ -26,19 +37,21 @@ class ASRManager:
     
     def __init__(self):
         if not self._initialized:
+            # config
+            whisper_config = config.stt.get('whisper_config', {})
+            self.model_name = whisper_config.get('model_name', 'small')
+            self.device = whisper_config.get('device', 'cpu')
+            self.cuda_visible_devices = whisper_config.get('cuda_visible_devices', '0')
             self.whisper_model = None
             self.lock = threading.Lock()
             self._initialized = True
 
     def initialize(self):
         with self.lock:
-            if config_stt.ASR_ENGINE == "whisper" and not self.whisper_model:
+            if not self.whisper_model:
                 import whisper
-                os.environ["CUDA_VISIBLE_DEVICES"] = config_stt.WHISPER_CUDA_VISIBLE_DEVICES
-                self.whisper_model = whisper.load_model(
-                    config_stt.WHISPER_MODEL_NAME, 
-                    device=config_stt.WHISPER_DEVICE,
-                )
+                os.environ["CUDA_VISIBLE_DEVICES"] = self.cuda_visible_devices
+                self.whisper_model = whisper.load_model(self.model_name, device=self.device)
 
     def transcribe(self, audio_file_path):
         self.initialize()  # Ensure models are loaded
@@ -56,7 +69,7 @@ class TranscriberSink(voice_recv.AudioSink):
         self.loop = loop
         self.guild_id = guild_id  # Store guild ID to tie sink to specific guild
         self.user_states = {}  # Dictionary to manage state for each user
-        self.wrap_messages = config_stt.WRAP_MESSAGES
+        self.wrap_messages = config.stt.get('wrap_messages', False)
 
         if self.wrap_messages: #  Initialize shared buffers if wrapping messages
             self.combined_text_buffer = []
