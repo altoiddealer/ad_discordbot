@@ -37,7 +37,7 @@ import inspect
 import types
 from modules.stt import TranscriberSink
 from modules.utils_files import load_file, merge_base, save_yaml_file  # noqa: F401
-from modules.utils_shared import client, TOKEN, is_tgwui_integrated, shared_path, bg_task_queue, task_event, flows_queue, flows_event, patterns, bot_emojis, config, bot_database, get_api
+from modules.utils_shared import client, TOKEN, is_tgwui_integrated, shared_path, bg_task_queue, task_event, flows_queue, flows_event, patterns, bot_emojis, config, bot_database, stt_blacklist, get_api
 from modules.database import StarBoard, Statistics, BaseFileMemory
 from modules.utils_misc import check_probability, fix_dict, set_key, deep_merge, update_dict, sum_update_dict, random_value_from_range, convert_lists_to_tuples, \
     consolidate_prompt_strings, get_time, format_time, format_time_difference, get_normalized_weights, get_pnginfo_from_image, is_base64, valueparser # noqa: F401
@@ -819,36 +819,42 @@ async def bot_join_voice_channel(inter: discord.Interaction, user: discord.User)
         log.error(f"[Bot Join VC] Error joining bot to VC: {e}")
 
 #################################################################
-######################## STT PROCESSING #########################
+######################### STT COMMANDS ##########################
 #################################################################
+if config.stt.get('enabled', False):
+    # Command to set voice channels
+    @client.hybrid_command(name="set_server_stt_channel", description="Assign a text channel for STT transcriptions to be sent for this server")
+    @app_commands.checks.has_permissions(manage_channels=True)
+    @guild_only()
+    async def set_server_stt_channel(ctx: commands.Context, channel: Optional[discord.TextChannel]=None):
+        channel = channel or ctx.channel
 
-@client.hybrid_command(name="start_transcription", description="Start transcribing in the current voice channel")
-@app_commands.describe(min_audio_duration="Minimum audio duration for a chunk (default 0.5s)")
-async def start_transcription(ctx: commands.Context, min_audio_duration: float = 0.5):
-    if min_audio_duration <= 0:
-        await ctx.send("Minimum audio duration must be positive.", ephemeral=True)
-        return
-    if not ctx.guild:
-        await ctx.send("This command can only be used in a guild.", ephemeral=True)
-        return
+        log.info(f'{ctx.author.display_name} used "/set_server_stt_channel".')
 
-    guild_id = ctx.guild.id
-    if guild_id not in voice_clients.guild_vcs or not voice_clients.guild_vcs[guild_id].is_connected():
-        await ctx.send("Bot is not in a voice channel. Use `/set_server_voice_channel` first.", ephemeral=True)
-        return
+        bot_database.update_stt_channels(ctx.guild.id, channel.id)
+        await ctx.send(f"STT transcription channel for **{ctx.guild}** set to **{channel.name}**.", delete_after=5)
 
-    vc = voice_clients.guild_vcs[guild_id]
+    @client.hybrid_command(name="toggle_stt", description="Toggles STT on/off")
+    @app_commands.describe(min_audio_duration="Minimum audio duration for a chunk (default 0.5s)")
+    @guild_only()
+    async def toggle_stt(ctx: commands.Context, min_audio_duration: float = 0.5):
+        await ireply(ctx, 'toggle STT') # send a response msg to the user
+        # offload to TaskManager() queue
+        log.info(f'{ctx.author.display_name} used "/toggle_stt"')
+        toggle_stt_task = Task('toggle_stt', ctx)
+        setattr(toggle_stt_task, "min_audio_duration", min_audio_duration)
+        await task_manager.queue_task(toggle_stt_task, 'normal_queue')
 
-    if guild_id in voice_clients.guild_transcription_sinks:
-        voice_clients.guild_transcription_sinks[guild_id].cleanup()
-        log.info(f'[Transcription] Previous transcription sink cleaned up for guild {guild_id}')
-
-    new_sink = TranscriberSink(loop=client.loop, guild_id=guild_id, min_audio_duration=min_audio_duration)
-    vc.listen(new_sink)
-    voice_clients.guild_transcription_sinks[guild_id] = new_sink
-
-    await ctx.send(f"Transcription started with min audio duration {min_audio_duration}s!", ephemeral=True)
-    log.info(f'[Transcription] Started for guild {guild_id} with min audio duration {min_audio_duration}s')
+    @client.hybrid_command(name="stt_blacklist", description="Manage the STT blacklist")
+    @app_commands.describe(action="Action to perform", user="User to add or remove from blacklist")
+    @app_commands.choices(action=[app_commands.Choice(name="add", value="add"), app_commands.Choice(name="remove", value="remove")])
+    async def blacklist_cmd(ctx: commands.Context, action: str, user: discord.User):
+        if action == "add":
+            stt_blacklist.add(user.id)
+            await ctx.send(f"Added {user.display_name} to the STT blacklist.", ephemeral=True)
+        elif action == "remove":
+            stt_blacklist.remove(user.id)
+            await ctx.send(f"Removed {user.display_name} from the STT blacklist.", ephemeral=True)
 
 #################################################################
 ###################### DYNAMIC PROMPTING ########################
@@ -3480,9 +3486,11 @@ class Tasks(TaskProcessing):
                 return
             toggle = 'api' if api_tts_on else 'tgwui'
             message = await toggle_any_tts(self.settings, toggle)
-            vc_guild_ids = [self.ictx.guild.id] if config.is_per_server() else [guild.id for guild in client.guilds]
-            for vc_guild_id in vc_guild_ids:
-                await voice_clients.toggle_voice_client(vc_guild_id, message)
+            # Ensure VC is connected (don't disconnect VC)
+            if message == 'enabled':
+                vc_guild_ids = [self.ictx.guild.id] if config.is_per_server() else [guild.id for guild in client.guilds]
+                for vc_guild_id in vc_guild_ids:
+                    await voice_clients.toggle_voice_client(vc_guild_id, message)
             if self.embeds.enabled('change'):
                 # Send change embed to interaction channel
                 await self.embeds.send('change', f"{self.user_name} {message} TTS.", 'Note: Does not load/unload the TTS model.', channel=self.channel)
@@ -3490,6 +3498,46 @@ class Tasks(TaskProcessing):
                     # Send embeds to announcement channels
                     await bg_task_queue.put(announce_changes(f'{message} TTS', ' ', self.ictx))
             log.info(f"TTS was {message}.")
+        except Exception as e:
+            log.error(f'Error when toggling TTS to "{message}": {e}')
+
+    #################################################################
+    ####################### TOGGLE STT TASK #########################
+    #################################################################
+    async def toggle_stt_task(self:"Task"):
+        min_audio_duration = max(getattr(self, "min_audio_duration", 0.5), 0.1)
+        try:
+            message = 'toggled'
+            active_sinks = voice_clients.guild_transcription_sinks
+
+            vc_guild_ids = [self.ictx.guild.id] if config.is_per_server() else [guild.id for guild in client.guilds]
+            for vc_guild_id in vc_guild_ids:
+                # Disable STT
+                if vc_guild_id in active_sinks:
+                    message = 'disabled'
+                    voice_clients.guild_transcription_sinks[vc_guild_id].cleanup()
+                    vc:discord.VoiceClient = voice_clients.guild_vcs[vc_guild_id]
+                    vc.stop_listening() # stop_listening() monkeypatched into discord.VoiceClient via discord-ext-voice-recv
+                    active_sinks.pop(vc_guild_id, None)
+                # Enable STT
+                else:
+                    if vc_guild_id not in bot_database.stt_channels:
+                        await self.ictx.send(f'⚠️ No Transcription channel set for {self.ictx.guild}. Use "/set_server_stt_channel".', ephemeral=True)
+                    # Ensure connected
+                    await voice_clients.toggle_voice_client(vc_guild_id, 'enabled') # ensure connected
+                    # Create sink and listen
+                    new_sink = TranscriberSink(loop=client.loop, guild_id=vc_guild_id, min_audio_duration=min_audio_duration)
+                    vc:discord.VoiceClient = voice_clients.guild_vcs[vc_guild_id]
+                    vc.listen(new_sink) # listen() monkeypatched into discord.VoiceClient via discord-ext-voice-recv
+                    voice_clients.guild_transcription_sinks[vc_guild_id] = new_sink
+
+            if self.embeds.enabled('change'):
+                # Send change embed to interaction channel
+                await self.embeds.send('change', f"{self.user_name} {message} STT.", f'Min audio duration {min_audio_duration}s', channel=self.channel)
+                if bot_database.announce_channels:
+                    # Send embeds to announcement channels
+                    await bg_task_queue.put(announce_changes(f'{message} STT', ' ', self.ictx))
+            log.info(f"STT was {message}.")
         except Exception as e:
             log.error(f'Error when toggling TTS to "{message}": {e}')
 

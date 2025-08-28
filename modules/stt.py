@@ -3,6 +3,7 @@ import asyncio
 import glob
 import os
 import wave
+import time
 from discord.ext import voice_recv
 from config_stt import AudioConfig
 # from utils import black_list
