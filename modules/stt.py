@@ -26,8 +26,6 @@ class ASRManager:
     def __init__(self):
         if not self._initialized:
             self.whisper_model = None
-            self.omnisense_model = None
-            self.faster_whisper_model = None  # Added Faster-Whisper support
             self.lock = threading.Lock()
             self._initialized = True
 
@@ -40,57 +38,12 @@ class ASRManager:
                     config_stt.WHISPER_MODEL_NAME, 
                     device=config_stt.WHISPER_DEVICE,
                 )
-            elif config_stt.ASR_ENGINE == "omnisense" and not self.omnisense_model:
-                from omnisense.models.sensevoice import OmniSenseVoiceSmall
-                self.omnisense_model = OmniSenseVoiceSmall(
-                    model_dir=config_stt.OMNISENSE_MODEL_DIR,
-                    device_id=config_stt.OMNISENSE_DEVICE_ID,
-                    quantize=config_stt.OMNISENSE_QUANTIZE
-                )
-            elif config_stt.ASR_ENGINE == "faster_whisper" and not self.faster_whisper_model:
-                from faster_whisper import WhisperModel
-                self.faster_whisper_model = WhisperModel(
-                    config_stt.FASTER_WHISPER_MODEL_SIZE,
-                    device=config_stt.FASTER_WHISPER_DEVICE,
-                    compute_type=config_stt.FASTER_WHISPER_COMPUTE_TYPE
-                )
 
     def transcribe(self, audio_file_path):
         self.initialize()  # Ensure models are loaded
         with self.lock:
-            if config_stt.ASR_ENGINE == "whisper":
-                return self._whisper_transcribe(audio_file_path)
-            elif config_stt.ASR_ENGINE == "omnisense":
-                return self._omnisense_transcribe(audio_file_path)
-            elif config_stt.ASR_ENGINE == "faster_whisper":
-                return self._faster_whisper_transcribe(audio_file_path)
-            else:
-                raise ValueError(f"Unsupported ASR engine: {config_stt.ASR_ENGINE}")
-
-    def _whisper_transcribe(self, audio_file_path):
-        result = self.whisper_model.transcribe(audio_file_path)
-        return result["text"]
-
-    def _omnisense_transcribe(self, audio_file_path):
-        try:
-            results = self.omnisense_model.transcribe(
-                audio_file_path,
-                language=config_stt.OMNISENSE_LANGUAGE,
-                textnorm=config_stt.OMNISENSE_TEXTNORM
-            )
-            return " ".join([result.text for result in results if result.text])
-        except Exception as e:
-            print(f"OmniSenseVoice Error: {str(e)}")
-            return ""
-
-    def _faster_whisper_transcribe(self, audio_file_path):
-        try:
-            segments, _ = self.faster_whisper_model.transcribe(audio_file_path)
-            transcription = " ".join([segment.text for segment in segments])
-            return transcription
-        except Exception as e:
-            print(f"Faster-Whisper Error: {str(e)}")
-            return ""
+            result = self.whisper_model.transcribe(audio_file_path)
+            return result["text"]
 
 # Singleton instance
 asr_manager = ASRManager()
