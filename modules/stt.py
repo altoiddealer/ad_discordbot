@@ -5,10 +5,10 @@ import os
 import wave
 from discord.ext import voice_recv
 from config_stt import AudioConfig
-from utils import black_list
+# from utils import black_list
 import config_stt
 
-from modules.utils_shared import client
+from modules.utils_shared import client, config, stt_blacklist
 
 from modules.logs import import_track, get_logger; import_track(__file__, fp=True); log = get_logger(__name__)  # noqa: E702
 
@@ -135,7 +135,7 @@ class TranscriberSink(voice_recv.AudioSink):
         return False
 
     def write(self, user, data):
-        if user.id in black_list.blacklist:  # Skip if user is blacklisted
+        if user.id in stt_blacklist.blacklisted_ids:  # Skip if user is blacklisted
             return
         user_id = user.id
         # Handle all users, not just one

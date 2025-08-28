@@ -113,6 +113,7 @@ class SharedPath:
     dir_internal_settings = init_shared_paths(dir_internal, 'settings', 'more persistent settings not intended to be modified by users')
     active_settings = os.path.join(dir_internal_settings, 'activesettings.yaml')
     starboard = os.path.join(dir_internal, 'starboard_messages.yaml')
+    stt_blacklist = os.path.join(dir_internal, 'stt_blacklist.yaml')
     database = os.path.join(dir_internal, 'database.yaml')
     statistics = os.path.join(dir_internal, 'statistics.yaml')
     
@@ -158,9 +159,10 @@ class SharedPath:
 shared_path = SharedPath()
 
 # SharedPath() must initialize before BaseFileMemory() and Database()
-from modules.database import BaseFileMemory, Database
+from modules.database import BaseFileMemory, Database, STTBlacklist
 
 bot_database = Database()
+stt_blacklist = STTBlacklist()
 
 class Config(BaseFileMemory):
     def __init__(self) -> None:
@@ -172,6 +174,7 @@ class Config(BaseFileMemory):
         self.textgen: dict
         self.ttsgen: dict
         self.imggen: dict
+        self.stt: dict
         super().__init__(shared_path.config, version=2, missing_okay=True)
         self._fix_config()
         self._sanitize_paths()
@@ -185,6 +188,7 @@ class Config(BaseFileMemory):
         self.textgen = data.pop('textgen', {})
         self.ttsgen = data.pop('ttsgen', {})
         self.imggen = data.pop('imggen', {})
+        self.stt = data.pop('stt', {})
 
     def _fix_config(self):
         config_dict = self.get_vars()
@@ -255,7 +259,6 @@ class Config(BaseFileMemory):
 
 config = Config()
 
-bot_database = Database()
 
 class BotToken(BaseFileMemory):
     def __init__(self) -> None:

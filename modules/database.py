@@ -160,6 +160,7 @@ class Database(BaseFileMemory):
         self.last_bot_msg:dict[str, float]
         self.announce_channels:list[int]
         self.main_channels:list[int]
+        self.stt_channels:dict[str, int]
         self.voice_channels:dict[str, int]
         self.settings_channels:dict[int, int]
         self.settings_sent:dict[dict[str, int]]
@@ -202,6 +203,7 @@ class Database(BaseFileMemory):
         self.last_bot_msg = data.pop('last_bot_msg', {})
         self.announce_channels = data.pop('announce_channels', [])
         self.main_channels = data.pop('main_channels', [])
+        self.stt_channels = data.pop('stt_channels', {})
         self.voice_channels = data.pop('voice_channels', {})
         self.settings_channels = data.pop('settings_channels', {})
         self.settings_sent = data.pop('settings_sent', {})
@@ -270,6 +272,12 @@ class Database(BaseFileMemory):
         if save_now:
             self.save()
     
+    # STT channels management
+    def update_stt_channels(self, guild_id, channel_id, save_now=True):
+        self.stt_channels[guild_id] = channel_id
+        if save_now:
+            self.save()
+
 
     # Settings channels management (channel where new/updated settings will be posted)
     def get_settings_channel_id_for(self, guild_id:int) -> int:
@@ -318,6 +326,25 @@ class StarBoard(BaseFileMemory):
         if state:
             data = load_file(self._fp, [])      # load old file as list
             self.load(data=dict(messages=data)) # convert list to dict
+
+
+class STTBlacklist(BaseFileMemory):
+    def __init__(self) -> None:
+        self.blacklisted_ids:list
+        super().__init__(shared_path.stt_blacklist, version=1, missing_okay=True)
+
+    def load_defaults(self, data: dict):
+        self.blacklisted_ids = data.pop('blacklisted_ids', [])
+
+    def add(self, user_id):
+        if user_id not in self.blacklisted_ids:
+            self.blacklisted_ids.append(user_id)
+            self.save()
+
+    def remove(self, user_id):
+        if user_id in  self.blacklisted_ids:
+            self.blacklisted_ids.remove(user_id)
+            self.save()
 
 
 class _Statistic:
