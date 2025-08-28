@@ -10,7 +10,6 @@ from modules.utils_shared import client, config, stt_blacklist
 
 from modules.logs import import_track, get_logger; import_track(__file__, fp=True); log = get_logger(__name__)  # noqa: E702
 
-
 class AudioConfig:
     audio_config = config.stt.get('audio_config', {})
     SPEECH_VOLUME_THRESHOLD = audio_config.get('speech_volume_threshold', 1)
@@ -64,10 +63,11 @@ asr_manager = ASRManager()
 
 
 class TranscriberSink(voice_recv.AudioSink):
-    def __init__(self, loop, guild_id,min_audio_duration=0.5):
+    def __init__(self, loop, guild_id, stt_channel, min_audio_duration=0.5):
         super().__init__()
         self.loop = loop
         self.guild_id = guild_id  # Store guild ID to tie sink to specific guild
+        self.stt_channel = stt_channel
         self.user_states = {}  # Dictionary to manage state for each user
         self.wrap_messages = config.stt.get('wrap_messages', False)
 
@@ -296,6 +296,32 @@ class TranscriberSink(voice_recv.AudioSink):
             else: # Append to user's own pending tasks if not wrapping
                 self.pending_transcriptions.append(task)
 
+        async def _log_transcription(self, member, transcription):
+            print(f"{member.display_name}: {transcription}") # console output
+            transcription_dir = "chatbot_transcriptions" # Directory to store transcription files
+            os.makedirs(transcription_dir, exist_ok=True) # Create directory if it doesn't exist
+            timestamp = int(time.time()) # Get current timestamp
+            filename = os.path.join(transcription_dir, f"transcription_{member.id}_{timestamp}.txt") # Unique filename
+            try:
+                with open(filename, "w") as file:
+                    file.write(f"{member.display_name}: {transcription}")
+                log.info(f"📝 Transcription saved to file: {filename}")
+            except Exception as e:
+                log.error(f"🔥 Error writing transcription to file {filename}: {e}")
+
+        async def _send_transcription(self, member, channel, transcription):
+            guild, channel, member = self._get_discord_objs()
+            message = f"{member.display_name}: {transcription}"
+            await channel.send(message)
+
+        async def _get_discord_objs(self):
+            guild, channel, member = None, None, None
+            guild = await client.fetch_guild(self.sink.guild_id)
+            if guild:
+                channel = await client.fetch_channel(self.sink.stt_channel)
+                member = guild.get_member(self.user_id)
+            return guild, channel, member
+
         async def _finalize_transcription(self):
             """Finalize and send the transcription."""
             self.finalizing = True
@@ -311,21 +337,12 @@ class TranscriberSink(voice_recv.AudioSink):
                     full_transcription = " ".join(self.text_buffer)
                     total_time = self.sink._current_time() - final_start
                     log.info(f"📨 Sending result for user {self.user_id} | Chunks: {len(self.text_buffer)} | Time: {total_time:.4f}s")
-                    guild = client.guilds[0] # Assuming bot is in at least one guild
-                    member = guild.get_member(self.user_id)
+                    guild, channel, member = self._get_discord_objs()
                     if member:
-                        print(f"{member.display_name}: {full_transcription}") # console output
-                        transcription_dir = "chatbot_transcriptions" # Directory to store transcription files
-                        os.makedirs(transcription_dir, exist_ok=True) # Create directory if it doesn't exist
-                        timestamp = int(time.time()) # Get current timestamp
-                        filename = os.path.join(transcription_dir, f"transcription_{member.id}_{timestamp}.txt") # Unique filename
-                        try:
-                            with open(filename, "w") as file:
-                                file.write(f"{member.display_name}: {full_transcription}")
-                            log.info(f"📝 Transcription saved to file: {filename}")
-                        except Exception as e:
-                            log.error(f"🔥 Error writing transcription to file {filename}: {e}")
-                        # --- File writing logic ends here ---
+                        #await self._log_transcription(member, full_transcription)
+                        if channel:
+                            await self._send_transcription(member, channel, full_transcription)
+
                     self.text_buffer.clear()
 
                 self.pending_transcriptions.clear()

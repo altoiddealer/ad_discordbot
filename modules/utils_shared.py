@@ -18,6 +18,38 @@ bg_task_queue = asyncio.Queue()
 flows_queue = asyncio.Queue()
 flows_event = asyncio.Event()
 
+_message_manager = None
+_task_manager = None
+_Task = None
+
+def set_message_manager(message_manager):
+    global _message_manager
+    _message_manager = message_manager
+def get_message_manager():
+    global _message_manager
+    if _message_manager is None:
+        log.warning("Tried getting MessageManager but is not initialized.")
+    return _message_manager
+
+def set_task_manager(task_manager):
+    global _task_manager
+    _task_manager = task_manager
+def get_task_manager():
+    global _task_manager
+    if _task_manager is None:
+        log.warning("Tried getting TaskManager but is not initialized.")
+    return _task_manager
+
+def set_task_class(task_cls):
+    global _Task
+    _Task = task_cls
+def get_task_class(task_cls):
+    global _Task
+    if _Task is None:
+        log.warning("Tried getting Task but is not initialized.")
+    return _Task
+
+
 # Intercept custom bot arguments
 def parse_bot_args():
     bot_arg_list = ["--is-tgwui-integrated", "--limit-history", "--token", "--lazy-load-llm"]

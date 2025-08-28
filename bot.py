@@ -37,7 +37,7 @@ import inspect
 import types
 from modules.stt import TranscriberSink
 from modules.utils_files import load_file, merge_base, save_yaml_file  # noqa: F401
-from modules.utils_shared import client, TOKEN, is_tgwui_integrated, shared_path, bg_task_queue, task_event, flows_queue, flows_event, patterns, bot_emojis, config, bot_database, stt_blacklist, get_api
+from modules.utils_shared import client, TOKEN, is_tgwui_integrated, shared_path, bg_task_queue, task_event, flows_queue, flows_event, patterns, bot_emojis, config, bot_database, stt_blacklist, get_api, set_task_class, set_message_manager, set_task_manager
 from modules.database import StarBoard, Statistics, BaseFileMemory
 from modules.utils_misc import check_probability, fix_dict, set_key, deep_merge, update_dict, sum_update_dict, random_value_from_range, convert_lists_to_tuples, \
     consolidate_prompt_strings, get_time, format_time, format_time_difference, get_normalized_weights, get_pnginfo_from_image, is_base64, valueparser # noqa: F401
@@ -620,7 +620,6 @@ class VoiceClients:
         self._internal_change: set[int] = set()  # Tracks guilds where the bot initiated a VC change
         self.queued_audio:list = []
         self.guild_transcription_sinks: dict[int, TranscriberSink] = {}
-        self.guild_transcription_channels: dict[int, discord.TextChannel] = {}
 
     def is_connected(self, guild_id):
         if self.guild_vcs.get(guild_id):
@@ -3523,10 +3522,15 @@ class Tasks(TaskProcessing):
                 else:
                     if vc_guild_id not in bot_database.stt_channels:
                         await self.ictx.send(f'⚠️ No Transcription channel set for {self.ictx.guild}. Use "/set_server_stt_channel".', ephemeral=True)
+                        return
+
                     # Ensure connected
                     await voice_clients.toggle_voice_client(vc_guild_id, 'enabled') # ensure connected
                     # Create sink and listen
-                    new_sink = TranscriberSink(loop=client.loop, guild_id=vc_guild_id, min_audio_duration=min_audio_duration)
+                    new_sink = TranscriberSink(loop=client.loop,
+                                               guild_id=vc_guild_id,
+                                               stt_channel=bot_database.stt_channels[vc_guild_id],
+                                               min_audio_duration=min_audio_duration)
                     vc:discord.VoiceClient = voice_clients.guild_vcs[vc_guild_id]
                     vc.listen(new_sink) # listen() monkeypatched into discord.VoiceClient via discord-ext-voice-recv
                     voice_clients.guild_transcription_sinks[vc_guild_id] = new_sink
@@ -4225,6 +4229,8 @@ class Task(Tasks):
         except TaskCensored:
             raise
 
+set_task_class(Task)
+
 #################################################################
 ######################## TASK MANAGEMENT ########################
 #################################################################
@@ -4435,6 +4441,7 @@ class TaskManager:
             await flows.run_flow_if_any(task.text, task.ictx)
 
 task_manager = TaskManager(max_workers=config.task_queues.get('maximum_concurrency', 3))
+set_task_manager(task_manager)
 
 #################################################################
 ########################## QUEUED FLOW ##########################
@@ -6512,6 +6519,7 @@ class MessageManager():
         await task_manager.queue_task(task, 'message_queue', num)
 
 message_manager = MessageManager()
+set_message_manager(message_manager)
 
 #################################################################
 #################### SPONTANEOUS MESSAGING ######################
