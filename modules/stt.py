@@ -42,16 +42,18 @@ class STTMessage:
     def __repr__(self):
         return f"<STTMessage author={self.author} content={self.content!r}>"
 
+
 class AudioConfig:
+    # Hardcoded
+    SAMPLE_RATE = 48000
+    CHANNELS = 2
+    SAMPLE_WIDTH = 2
+    # Text chunking params
     audio_config = config.stt.get('audio_config', {})
     SPEECH_VOLUME_THRESHOLD = audio_config.get('speech_volume_threshold', 1)
     CHUNK_SILENCE_THRESHOLD = audio_config.get('chunk_silence_threshold', 0.5)
     FINAL_SILENCE_THRESHOLD = audio_config.get('final_silence_threshold', 0.8)
-    SAMPLE_RATE             = audio_config.get('sample_rate', 48000)
-    CHANNELS                = audio_config.get('channels', 2)
-    SAMPLE_WIDTH            = audio_config.get('sample_width', 2)
-
-    # Volume normalization parameters, adjust if needed
+    # Volume normalization params
     TARGET_RMS = audio_config.get('target_rms', 1400)
     MAX_GAIN = audio_config.get('max_gain', 10)
     MIN_RMS = audio_config.get('min_rms', 100)

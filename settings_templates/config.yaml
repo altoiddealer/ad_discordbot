@@ -121,12 +121,10 @@ stt:
     device: cpu
     cuda_visible_devices: '0' # GPU id to use
   audio_config:
+    # Controls how messages are chunked
     speech_volume_threshold: 1   # Not recommended to change
     chunk_silence_threshold: 0.5 # Seconds to process a chunk
     final_silence_threshold: 0.8 # Seconds to finalize transcription
-    sample_rate: 48000           # Discord default
-    channels: 2                  # Discord default
-    sample_width: 2              # Discord default (16-bit PCM)
     # Volume normalization parameters, adjust if needed
     target_rms: 1400
     max_gain: 10
