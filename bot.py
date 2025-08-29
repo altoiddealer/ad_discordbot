@@ -35,7 +35,7 @@ import signal
 from functools import partial
 import inspect
 import types
-from modules.stt import TranscriberSink
+from modules.stt import TranscriberSink, STTMessage, stt_messages
 from modules.utils_files import load_file, merge_base, save_yaml_file  # noqa: F401
 from modules.utils_shared import client, TOKEN, is_tgwui_integrated, shared_path, bg_task_queue, task_event, flows_queue, flows_event, patterns, bot_emojis, config, bot_database, stt_blacklist, get_api, set_task_class, set_message_manager, set_task_manager
 from modules.database import StarBoard, Statistics, BaseFileMemory
@@ -332,6 +332,8 @@ async def on_message(message: discord.Message):
     last_character = bot_settings.get_last_setting_for("last_character", message)
     if not settings.behavior.bot_should_reply(message, text, last_character): 
         return # Check that bot should reply or not
+    if message.id in stt_messages.msgs:
+        message = STTMessage(message)
     # Store the current time. The value will save locally to database.yaml at another time
     bot_database.update_last_msg_for(message.channel.id, 'user', save_now=False)
     # if @ mentioning bot, remove the @ mention from user prompt
@@ -6770,22 +6772,27 @@ class Behavior(SettingsBase):
     # Checks if bot should reply to a message
     def bot_should_reply(self, message:discord.Message, text:str, last_character:str) -> bool:
         main_condition = is_direct_message(message) or (message.channel.id in bot_database.main_channels)
+        is_stt_msg = message.id in stt_messages.msgs # Message is STT transcription authored by the bot
 
+        # Another feature of the bot is expected to process this
         if client.waiting_for.get(message.author.id):
             return False
+        # Ignore DM if configured
         if is_direct_message(message) and not config.discord['direct_messages'].get('allow_chatting', True):
             return False
         # Don't reply to @everyone
         if message.mention_everyone:
             return False
-        # Only reply to itself if configured to
-        if message.author == client.user and not check_probability(self.reply_to_itself):
-            return False
-        # Whether to reply to other bots
-        if message.author.bot and re.search(rf'\b{re.escape(last_character.lower())}\b', text, re.IGNORECASE) and main_condition:
-            if 'bye' in text.lower(): # don't reply if another bot is saying goodbye
+        # Bot message related conditions
+        if not is_stt_msg:
+            # Only reply to itself if configured to
+            if (message.author == client.user) and (not check_probability(self.reply_to_itself)):
                 return False
-            return check_probability(self.reply_to_bots_when_addressed)
+            # Whether to reply to other bots
+            if message.author.bot and re.search(rf'\b{re.escape(last_character.lower())}\b', text, re.IGNORECASE) and main_condition:
+                if 'bye' in text.lower(): # don't reply if another bot is saying goodbye
+                    return False
+                return check_probability(self.reply_to_bots_when_addressed)
         # Whether to reply when text is nested in parentheses
         if self.ignore_parentheses and (message.content.startswith('(') and message.content.endswith(')')) or (message.content.startswith('<:') and message.content.endswith(':>')):
             return False
@@ -6795,12 +6802,16 @@ class Behavior(SettingsBase):
             return True
         reply = False
         # few more conditions
-        if message.author.bot and main_condition:
+        if not is_stt_msg and message.author.bot and main_condition:
             reply = check_probability(self.chance_to_reply_to_other_bots)
         if self.go_wild_in_channel and main_condition:
             reply = True
         if reply:
-            self.update_user_dict(message.author.id)
+            if is_stt_msg:
+                author_id = stt_messages.msgs[message.id]['spoken_by']
+            else:
+                author_id = message.author.id
+            self.update_user_dict(author_id)
         return reply
 
     def probability_to_reply(self, probability) -> bool:

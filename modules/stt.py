@@ -5,10 +5,42 @@ import os
 import wave
 import time
 import threading
+import re
 from discord.ext import voice_recv
 from modules.utils_shared import client, config, stt_blacklist
 
 from modules.logs import import_track, get_logger; import_track(__file__, fp=True); log = get_logger(__name__)  # noqa: E702
+
+class STTMessages:
+    def __init__(self):
+        self.msgs = {}
+stt_messages = STTMessages()
+
+class STTMessage:
+    def __init__(self, original):
+        self._msg = original
+
+        # Copy over all real attributes from the original message
+        for key, value in original.__dict__.items():
+            setattr(self, key, value)
+
+        self.author = stt_messages.msgs[original.id]['spoken_by']
+        # Strip the "[Username]" prefix from content if present
+        self.content = self._strip_username_prefix(original.content)
+
+    def _strip_username_prefix(self, content: str) -> str:
+        # Regex: [anything in brackets] followed by space, then rest of message
+        match = re.match(r"^\[[^\]]+\]\s*(.*)$", content)
+        if match:
+            return match.group(1).strip()
+        return content
+
+    def __getattr__(self, name):
+        # Fallback: delegate to original message for anything we missed
+        return getattr(self._msg, name)
+
+    def __repr__(self):
+        return f"<STTMessage author={self.author} content={self.content!r}>"
 
 class AudioConfig:
     audio_config = config.stt.get('audio_config', {})
@@ -311,8 +343,9 @@ class TranscriberSink(voice_recv.AudioSink):
 
         async def _send_transcription(self, member, channel, transcription):
             guild, channel, member = self._get_discord_objs()
-            message = f"{member.display_name}: {transcription}"
-            await channel.send(message)
+            content = f"[{member.display_name}] {transcription}"
+            msg = await channel.send(content)
+            stt_messages.msgs[msg.id] = {"spoken_by": member.id}
 
         async def _get_discord_objs(self):
             guild, channel, member = None, None, None
@@ -337,7 +370,7 @@ class TranscriberSink(voice_recv.AudioSink):
                     full_transcription = " ".join(self.text_buffer)
                     total_time = self.sink._current_time() - final_start
                     log.info(f"📨 Sending result for user {self.user_id} | Chunks: {len(self.text_buffer)} | Time: {total_time:.4f}s")
-                    guild, channel, member = self._get_discord_objs()
+                    _, channel, member = await self._get_discord_objs()
                     if member:
                         #await self._log_transcription(member, full_transcription)
                         if channel:
@@ -366,7 +399,6 @@ class TranscriberSink(voice_recv.AudioSink):
                 user_id, start_time, text_chunk = user_entry
                 if text_chunk:
                     guild = client.guilds[0] # Assuming bot is in at least one guild
-                    print("GUILD:", guild)
                     member = guild.get_member(user_id)
                     if member:
                         full_message += f"{member.display_name}: {text_chunk}\n" #Add each chunk on a new line
