@@ -6791,8 +6791,6 @@ class Behavior(SettingsBase):
         # Don't reply to @everyone
         if message.mention_everyone:
             return False
-        # Bot message related conditions
-        # if not is_stt_msg:
         # Only reply to itself if configured to
         if (message.author == client.user) and (not check_probability(self.reply_to_itself)):
             return False
@@ -6815,11 +6813,7 @@ class Behavior(SettingsBase):
         if self.go_wild_in_channel and main_condition:
             reply = True
         if reply:
-            # if is_stt_msg:
-            #     author_id = stt_messages.msgs[message.id]['user'].id
-            # else:
-            author_id = message.author.id
-            self.update_user_dict(author_id)
+            self.update_user_dict(message.author.id)
         return reply
 
     def probability_to_reply(self, probability) -> bool:

@@ -328,19 +328,6 @@ class TranscriberSink(voice_recv.AudioSink):
             else: # Append to user's own pending tasks if not wrapping
                 self.pending_transcriptions.append(task)
 
-        async def _log_transcription(self, member, transcription):
-            print(f"{member.display_name}: {transcription}") # console output
-            transcription_dir = "chatbot_transcriptions" # Directory to store transcription files
-            os.makedirs(transcription_dir, exist_ok=True) # Create directory if it doesn't exist
-            timestamp = int(time.time()) # Get current timestamp
-            filename = os.path.join(transcription_dir, f"transcription_{member.id}_{timestamp}.txt") # Unique filename
-            try:
-                with open(filename, "w") as file:
-                    file.write(f"{member.display_name}: {transcription}")
-                log.info(f"📝 Transcription saved to file: {filename}")
-            except Exception as e:
-                log.error(f"🔥 Error writing transcription to file {filename}: {e}")
-
         async def _send_transcription(self, member, channel, transcription):
             bot_embeds = get_bot_embeds()
             msg = await bot_embeds.send(description=transcription,
@@ -374,10 +361,8 @@ class TranscriberSink(voice_recv.AudioSink):
                     total_time = self.sink._current_time() - final_start
                     log.info(f"📨 Sending result for user {self.user_id} | Chunks: {len(self.text_buffer)} | Time: {total_time:.4f}s")
                     _, channel, member = await self._get_discord_objs()
-                    if member:
-                        #await self._log_transcription(member, full_transcription)
-                        if channel:
-                            await self._send_transcription(member, channel, full_transcription)
+                    if member and  channel:
+                        await self._send_transcription(member, channel, full_transcription)
 
                     self.text_buffer.clear()
 
