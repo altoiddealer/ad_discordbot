@@ -117,8 +117,8 @@ stt:
   enabled: false
   whisper_config:
     model_name: small
-    device: cpu
-    cuda_visible_devices: '0' # GPU id to use
+    device: cpu # cpu / cuda
+    cuda_visible_devices: '0' # GPU id to use for cuda device
   audio_config:
     # Controls how messages are chunked
     speech_volume_threshold: 1   # Not recommended to change

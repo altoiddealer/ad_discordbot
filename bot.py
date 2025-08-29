@@ -1813,6 +1813,9 @@ class TaskProcessing(TaskAttributes):
             message = get_message_ctx_inter(self.ictx)
             self.user_hmessage = self.local_history.new_message(self.payload['state']['name1'], self.payload['text'], 'user', self.user.id)
             self.user_hmessage.id = message.id if hasattr(message, 'id') else None
+            # Flag if from STT
+            if hasattr(self.ictx, 'is_stt'):
+                self.user_hmessage.from_stt = True
             # set history flag
             if self.params.save_to_history == False:
                 self.user_hmessage.update(hidden=True)

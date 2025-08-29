@@ -18,6 +18,7 @@ stt_messages = STTMessages()
 class STTMessage:
     def __init__(self, original, text: str):
         self._msg = original
+        self.is_stt = True
         
         meta = stt_messages.msgs.pop(original.id, None)
         if meta:
@@ -68,11 +69,17 @@ class ASRManager:
             # config
             whisper_config = config.stt.get('whisper_config', {})
             self.model_name = whisper_config.get('model_name', 'small')
-            self.device = whisper_config.get('device', 'cpu')
+            self.device = self._set_device(whisper_config)
             self.cuda_visible_devices = whisper_config.get('cuda_visible_devices', '0')
             self.whisper_model = None
             self.lock = threading.Lock()
             self._initialized = True
+
+    def _set_device(self, whisper_config):
+        self.device = whisper_config.get('device', 'cpu').lower()
+        if self.device == 'gpu':
+            log.warning('[STT] Invalid option "device: gpu" is being set to "cuda".')
+            self.device = 'cuda'
 
     def initialize(self):
         with self.lock:
