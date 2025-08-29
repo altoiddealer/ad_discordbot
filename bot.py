@@ -3521,8 +3521,11 @@ class Tasks(TaskProcessing):
                 # Enable STT
                 else:
                     if vc_guild_id not in bot_database.stt_channels:
-                        await self.ictx.send(f'⚠️ No Transcription channel set for {self.ictx.guild}. Use "/set_server_stt_channel".', ephemeral=True)
-                        return
+                        guild_print = f'Guild with ID: {vc_guild_id}'
+                        if vc_guild_id == self.ictx.guild.id:
+                            guild_print = self.ictx.guild
+                        await self.ictx.send(f'⚠️ No Transcription channel set for {guild_print}. Use "/set_server_stt_channel".', ephemeral=True)
+                        continue
 
                     # Ensure connected
                     await voice_clients.toggle_voice_client(vc_guild_id, 'enabled') # ensure connected
