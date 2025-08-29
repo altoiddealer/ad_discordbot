@@ -12,7 +12,17 @@ logging = log
 
 if TYPE_CHECKING:
     from modules.history import HistoryManager, History, HMessage  # noqa: F401
-    
+
+_bot_embeds = None
+
+def set_bot_embeds(bot_embeds):
+    global _bot_embeds
+    _bot_embeds = bot_embeds
+def get_bot_embeds():
+    global _bot_embeds
+    if _bot_embeds is None:
+        log.warning("Tried getting bot_embeds but is not initialized.")
+    return _bot_embeds
     
 MAX_MESSAGE_LENGTH = 1980
 # MAX_MESSAGE_LENGTH = 200 # testing
@@ -495,9 +505,9 @@ def get_user_ctx_inter(ictx: CtxInteraction) -> Union[discord.User, discord.Memb
 
 
 def get_message_ctx_inter(ictx: CtxInteraction) -> discord.Message:
-    if isinstance(ictx, discord.Message):
-        return ictx
-    return ictx.message
+    if hasattr(ictx, 'message'):
+        return ictx.message
+    return ictx
 
 
 class Embeds:
@@ -529,6 +539,8 @@ class Embeds:
             self.create("change", "Change Notification", " ", url=self.root_url, color=self.color)
         if self.enabled('flow'):
             self.create("flow", "Flow Notification", " ", url_suffix="/wiki/tags", color=self.color)
+        if self.enabled('stt'):
+            self.create("stt", " ", " ", url_suffix="/wiki/stt", color=self.color)
 
     def create(self, name:str, title:str=' ', description:str=' ', **kwargs) -> discord.Embed:
         color = kwargs.get('color', None)
@@ -557,12 +569,15 @@ class Embeds:
         if previously_sent_embed:
             await previously_sent_embed.delete()
 
-    def update(self, name:str, title:str|None=None, description:str|None=None, **kwargs) -> discord.Embed:
-        embed:discord.Embed = self.embeds.get(name)
+    def update(self, name:str|None=None, title:str|None=None, description:str|None=None, **kwargs) -> discord.Embed:
+        embed:discord.Embed = self.embeds.get(name) if name else discord.Embed()
         color = kwargs.get('color', None)
         url_suffix = kwargs.get('url_suffix', None)
         url = kwargs.get('url', None)
         footer = kwargs.get('footer', None)
+        author = kwargs.get('author', None)
+        author_url = kwargs.get('author_url', None)
+        author_icon_url = kwargs.get('author_icon_url', None)
 
         if title is not None:
             embed.title = title
@@ -578,6 +593,8 @@ class Embeds:
         # update url
         if url is not None or url_suffix is not None:
             embed.url = url if url else f'{self.root_url}{url_suffix}'
+        if author is not None:
+            embed = embed.set_author(name=author, url=author_url, icon_url=author_icon_url)
         return embed
     
     async def edit(self, name:str, title:str|None=None, description:str|None=None, **kwargs) -> None|discord.Message:
@@ -592,17 +609,21 @@ class Embeds:
             return self.sent_msg_embeds[name]
         return None
 
-    async def send(self, name:str, title:str|None=None, description:str|None=None, **kwargs) -> None|discord.Message:
+    async def send(self, name:str|None=None, title:str|None=None, description:str|None=None, **kwargs) -> None|discord.Message:
         send_channel = kwargs.get('channel') or self.channel or None
         delete_after = kwargs.get('delete_after', None)
         nonembed_text = kwargs.get('nonembed_text', None)
 
-        # Return if not configured
-        if not self.enabled(name) or send_channel is None:
+        if send_channel is None or (name and not self.enabled(name)):
             return
+
+        embed = self.update(name, title, description, **kwargs)
+
+        if not name:
+            return await send_channel.send(content=nonembed_text, embed=embed, delete_after=delete_after)
+
         # Retain the message while sending Embed
-        updated_embed = self.update(name, title, description, **kwargs)
-        self.sent_msg_embeds[name] = await send_channel.send(content=nonembed_text, embed=updated_embed, delete_after=delete_after)
+        self.sent_msg_embeds[name] = await send_channel.send(content=nonembed_text, embed=embed, delete_after=delete_after)
         return self.sent_msg_embeds[name]
 
     async def edit_or_send(self, name:str, title:str|None=None, description:str|None=None, **kwargs) -> None|discord.Embed|discord.Message:

@@ -13,7 +13,7 @@ import glob
 import os
 import warnings
 import discord
-from discord.ext import commands
+from discord.ext import commands, voice_recv
 from discord import app_commands, File, abc
 import typing
 import io
@@ -35,14 +35,15 @@ import signal
 from functools import partial
 import inspect
 import types
-
+from modules.stt import TranscriberSink, STTMessage, stt_messages
 from modules.utils_files import load_file, merge_base, save_yaml_file  # noqa: F401
-from modules.utils_shared import client, TOKEN, is_tgwui_integrated, shared_path, bg_task_queue, task_event, flows_queue, flows_event, patterns, bot_emojis, config, bot_database, get_api
+from modules.utils_shared import client, TOKEN, is_tgwui_integrated, shared_path, bg_task_queue, task_event, flows_queue, flows_event, patterns, bot_emojis, config, bot_database, stt_blacklist, \
+    get_api, set_task_class, set_message_manager, set_task_manager
 from modules.database import StarBoard, Statistics, BaseFileMemory
 from modules.utils_misc import check_probability, fix_dict, set_key, deep_merge, update_dict, sum_update_dict, random_value_from_range, convert_lists_to_tuples, \
     consolidate_prompt_strings, get_time, format_time, format_time_difference, get_normalized_weights, get_pnginfo_from_image, is_base64, valueparser # noqa: F401
 from modules.utils_processing import resolve_placeholders, collect_content_to_send, send_content_to_discord, comfy_delete_and_reroute_nodes
-from modules.utils_discord import Embeds, guild_only, guild_or_owner_only, configurable_for_dm_if, custom_commands_check_dm, is_direct_message, ireply, sleep_delete_message, send_long_message, \
+from modules.utils_discord import Embeds, set_bot_embeds, guild_only, guild_or_owner_only, configurable_for_dm_if, custom_commands_check_dm, is_direct_message, ireply, sleep_delete_message, send_long_message, \
     EditMessageModal, SelectedListItem, SelectOptionsView, get_user_ctx_inter, get_message_ctx_inter, apply_reactions_to_messages, replace_msg_in_history_and_discord, MAX_MESSAGE_LENGTH, muffled_send  # noqa: F401
 from modules.utils_aspect_ratios import ar_parts_from_dims, dims_from_ar, avg_from_dims, get_aspect_ratio_parts, calculate_aspect_ratio_sizes  # noqa: F401
 from modules.utils_chat import custom_load_character, load_character_data
@@ -71,6 +72,7 @@ bot_statistics = Statistics()
 #################### DISCORD / BOT STARTUP ######################
 #################################################################
 bot_embeds = Embeds()
+set_bot_embeds(bot_embeds)
 
 os.environ['GRADIO_ANALYTICS_ENABLED'] = 'False'
 os.environ["BITSANDBYTES_NOWELCOME"] = "1"
@@ -325,12 +327,20 @@ async def on_ready():
 #################################################################
 ################### DISCORD EVENTS/FEATURES #####################
 #################################################################
+def get_message_text(message: discord.Message) -> str:
+    if config.stt_enabled() and message.id in stt_messages.msgs and message.embeds:
+        return message.embeds[0].description or "", True
+    # clean_content primarily converts @mentions to member names
+    return message.clean_content, False
+
 @client.event
 async def on_message(message: discord.Message):
-    text = message.clean_content # primarily converts @mentions to actual user names
+    text, is_stt_msg = get_message_text(message)
+    if is_stt_msg:
+        message = STTMessage(message, text) # Replace original Message obj with a pseudo msg (author is user, not bot)
     settings:Settings = get_settings(message)
     last_character = bot_settings.get_last_setting_for("last_character", message)
-    if not settings.behavior.bot_should_reply(message, text, last_character): 
+    if not settings.behavior.bot_should_reply(message, text, last_character, is_stt_msg):
         return # Check that bot should reply or not
     # Store the current time. The value will save locally to database.yaml at another time
     bot_database.update_last_msg_for(message.channel.id, 'user', save_now=False)
@@ -619,6 +629,7 @@ class VoiceClients:
         self.expected_state:dict = {}
         self._internal_change: set[int] = set()  # Tracks guilds where the bot initiated a VC change
         self.queued_audio:list = []
+        self.guild_transcription_sinks: dict[int, TranscriberSink] = {}
 
     def is_connected(self, guild_id):
         if self.guild_vcs.get(guild_id):
@@ -642,7 +653,7 @@ class VoiceClients:
             try:
                 if should_be_connected and not self.is_connected(guild_id):
                     voice_channel = client.get_channel(bot_database.voice_channels[guild_id])
-                    self.guild_vcs[guild_id] = await voice_channel.connect()
+                    self.guild_vcs[guild_id] = await voice_channel.connect(cls=voice_recv.VoiceRecvClient)
                 elif not should_be_connected and self.is_connected(guild_id):
                     await self.guild_vcs[guild_id].disconnect()
             except Exception as e:
@@ -654,7 +665,7 @@ class VoiceClients:
             if toggle == 'enabled' and not self.is_connected(guild_id):
                 if bot_database.voice_channels.get(guild_id):
                     voice_channel = client.get_channel(bot_database.voice_channels[guild_id])
-                    vc = await voice_channel.connect()
+                    vc = await voice_channel.connect(cls=voice_recv.VoiceRecvClient)
                     self._update_state(guild_id, True, vc)
                 else:
                     log.warning('[Voice Clients] TTS Gen is enabled, but no VC is set.')
@@ -815,6 +826,44 @@ async def bot_join_voice_channel(inter: discord.Interaction, user: discord.User)
     except Exception as e:
         await inter.response.send_message(f"Failed to connect bot to VC: {e}", ephemeral=True, delete_after=5)
         log.error(f"[Bot Join VC] Error joining bot to VC: {e}")
+
+#################################################################
+######################### STT COMMANDS ##########################
+#################################################################
+if config.stt_enabled():
+    # Command to set voice channels
+    @client.hybrid_command(name="set_server_stt_channel", description="Assign a text channel for STT transcriptions to be sent for this server")
+    @app_commands.checks.has_permissions(manage_channels=True)
+    @guild_only()
+    async def set_server_stt_channel(ctx: commands.Context, channel: Optional[discord.TextChannel]=None):
+        channel = channel or ctx.channel
+
+        log.info(f'{ctx.author.display_name} used "/set_server_stt_channel".')
+
+        bot_database.update_stt_channels(ctx.guild.id, channel.id)
+        await ctx.send(f"STT transcription channel for **{ctx.guild}** set to **{channel.name}**.", delete_after=5)
+
+    @client.hybrid_command(name="toggle_stt", description="Toggles STT on/off")
+    @app_commands.describe(min_audio_duration="Minimum audio duration for a chunk (default 0.5s)")
+    @guild_only()
+    async def toggle_stt(ctx: commands.Context, min_audio_duration: float = 0.5):
+        await ireply(ctx, 'toggle STT') # send a response msg to the user
+        # offload to TaskManager() queue
+        log.info(f'{ctx.author.display_name} used "/toggle_stt"')
+        toggle_stt_task = Task('toggle_stt', ctx)
+        setattr(toggle_stt_task, "min_audio_duration", min_audio_duration)
+        await task_manager.queue_task(toggle_stt_task, 'normal_queue')
+
+    @client.hybrid_command(name="stt_blacklist", description="Manage the STT blacklist")
+    @app_commands.describe(action="Action to perform", user="User to add or remove from blacklist")
+    @app_commands.choices(action=[app_commands.Choice(name="add", value="add"), app_commands.Choice(name="remove", value="remove")])
+    async def blacklist_cmd(ctx: commands.Context, action: str, user: discord.User):
+        if action == "add":
+            stt_blacklist.add(user.id)
+            await ctx.send(f"Added {user.display_name} to the STT blacklist.", ephemeral=True)
+        elif action == "remove":
+            stt_blacklist.remove(user.id)
+            await ctx.send(f"Removed {user.display_name} from the STT blacklist.", ephemeral=True)
 
 #################################################################
 ###################### DYNAMIC PROMPTING ########################
@@ -1764,6 +1813,9 @@ class TaskProcessing(TaskAttributes):
             message = get_message_ctx_inter(self.ictx)
             self.user_hmessage = self.local_history.new_message(self.payload['state']['name1'], self.payload['text'], 'user', self.user.id)
             self.user_hmessage.id = message.id if hasattr(message, 'id') else None
+            # Flag if from STT
+            if hasattr(self.ictx, 'is_stt'):
+                self.user_hmessage.from_stt = True
             # set history flag
             if self.params.save_to_history == False:
                 self.user_hmessage.update(hidden=True)
@@ -3446,9 +3498,11 @@ class Tasks(TaskProcessing):
                 return
             toggle = 'api' if api_tts_on else 'tgwui'
             message = await toggle_any_tts(self.settings, toggle)
-            vc_guild_ids = [self.ictx.guild.id] if config.is_per_server() else [guild.id for guild in client.guilds]
-            for vc_guild_id in vc_guild_ids:
-                await voice_clients.toggle_voice_client(vc_guild_id, message)
+            # Ensure VC is connected (don't disconnect VC)
+            if message == 'enabled':
+                vc_guild_ids = [self.ictx.guild.id] if config.is_per_server() else [guild.id for guild in client.guilds]
+                for vc_guild_id in vc_guild_ids:
+                    await voice_clients.toggle_voice_client(vc_guild_id, message)
             if self.embeds.enabled('change'):
                 # Send change embed to interaction channel
                 await self.embeds.send('change', f"{self.user_name} {message} TTS.", 'Note: Does not load/unload the TTS model.', channel=self.channel)
@@ -3456,6 +3510,55 @@ class Tasks(TaskProcessing):
                     # Send embeds to announcement channels
                     await bg_task_queue.put(announce_changes(f'{message} TTS', ' ', self.ictx))
             log.info(f"TTS was {message}.")
+        except Exception as e:
+            log.error(f'Error when toggling TTS to "{message}": {e}')
+
+    #################################################################
+    ####################### TOGGLE STT TASK #########################
+    #################################################################
+    async def toggle_stt_task(self:"Task"):
+        min_audio_duration = max(getattr(self, "min_audio_duration", 0.5), 0.1)
+        try:
+            message = 'toggled'
+            active_sinks = voice_clients.guild_transcription_sinks
+
+            vc_guild_ids = [self.ictx.guild.id] if config.is_per_server() else [guild.id for guild in client.guilds]
+            for vc_guild_id in vc_guild_ids:
+                # Disable STT
+                if vc_guild_id in active_sinks:
+                    message = 'disabled'
+                    voice_clients.guild_transcription_sinks[vc_guild_id].cleanup()
+                    vc:discord.VoiceClient = voice_clients.guild_vcs[vc_guild_id]
+                    vc.stop_listening() # stop_listening() monkeypatched into discord.VoiceClient via discord-ext-voice-recv
+                    active_sinks.pop(vc_guild_id, None)
+                # Enable STT
+                else:
+                    message = 'enabled'
+                    if vc_guild_id not in bot_database.stt_channels:
+                        guild_print = f'Guild with ID: {vc_guild_id}'
+                        if vc_guild_id == self.ictx.guild.id:
+                            guild_print = self.ictx.guild
+                        await self.ictx.send(f'⚠️ No Transcription channel set for {guild_print}. Use "/set_server_stt_channel".', ephemeral=True)
+                        continue
+
+                    # Ensure connected
+                    await voice_clients.toggle_voice_client(vc_guild_id, 'enabled') # ensure connected
+                    # Create sink and listen
+                    new_sink = TranscriberSink(loop=client.loop,
+                                               guild_id=vc_guild_id,
+                                               stt_channel=bot_database.stt_channels[vc_guild_id],
+                                               min_audio_duration=min_audio_duration)
+                    vc:discord.VoiceClient = voice_clients.guild_vcs[vc_guild_id]
+                    vc.listen(new_sink) # listen() monkeypatched into discord.VoiceClient via discord-ext-voice-recv
+                    voice_clients.guild_transcription_sinks[vc_guild_id] = new_sink
+
+            if self.embeds.enabled('change'):
+                # Send change embed to interaction channel
+                await self.embeds.send('change', f"{self.user_name} {message} STT.", f'Min audio duration {min_audio_duration}s', channel=self.channel)
+                if bot_database.announce_channels:
+                    # Send embeds to announcement channels
+                    await bg_task_queue.put(announce_changes(f'{message} STT', ' ', self.ictx))
+            log.info(f"STT was {message}.")
         except Exception as e:
             log.error(f'Error when toggling TTS to "{message}": {e}')
 
@@ -4143,6 +4246,8 @@ class Task(Tasks):
         except TaskCensored:
             raise
 
+set_task_class(Task)
+
 #################################################################
 ######################## TASK MANAGEMENT ########################
 #################################################################
@@ -4353,6 +4458,7 @@ class TaskManager:
             await flows.run_flow_if_any(task.text, task.ictx)
 
 task_manager = TaskManager(max_workers=config.task_queues.get('maximum_concurrency', 3))
+set_task_manager(task_manager)
 
 #################################################################
 ########################## QUEUED FLOW ##########################
@@ -6430,6 +6536,7 @@ class MessageManager():
         await task_manager.queue_task(task, 'message_queue', num)
 
 message_manager = MessageManager()
+set_message_manager(message_manager)
 
 #################################################################
 #################### SPONTANEOUS MESSAGING ######################
@@ -6675,18 +6782,20 @@ class Behavior(SettingsBase):
 
 
     # Checks if bot should reply to a message
-    def bot_should_reply(self, message:discord.Message, text:str, last_character:str) -> bool:
+    def bot_should_reply(self, message:discord.Message, text:str, last_character:str, is_stt_msg:bool) -> bool:
         main_condition = is_direct_message(message) or (message.channel.id in bot_database.main_channels)
 
+        # Another feature of the bot is expected to process this
         if client.waiting_for.get(message.author.id):
             return False
+        # Ignore DM if configured
         if is_direct_message(message) and not config.discord['direct_messages'].get('allow_chatting', True):
             return False
         # Don't reply to @everyone
         if message.mention_everyone:
             return False
         # Only reply to itself if configured to
-        if message.author == client.user and not check_probability(self.reply_to_itself):
+        if (message.author == client.user) and (not check_probability(self.reply_to_itself)):
             return False
         # Whether to reply to other bots
         if message.author.bot and re.search(rf'\b{re.escape(last_character.lower())}\b', text, re.IGNORECASE) and main_condition:
@@ -6702,7 +6811,7 @@ class Behavior(SettingsBase):
             return True
         reply = False
         # few more conditions
-        if message.author.bot and main_condition:
+        if not is_stt_msg and message.author.bot and main_condition:
             reply = check_probability(self.chance_to_reply_to_other_bots)
         if self.go_wild_in_channel and main_condition:
             reply = True

@@ -111,3 +111,20 @@ imggen:
       # More scaling definitions can be added ex: 'lora_3_scaling' etc
       # Applies to LORAs when there are more in the prompt than defined above. ei: If 4 loras are found in prompt, but only defined up to lora_2_scaling, then the last 2 LORAs would be scaled by this definition.
       additional_loras_scaling: '0.4@0.0,0.8@0.5'
+
+
+stt:
+  enabled: false
+  whisper_config:
+    model_name: small
+    device: cpu # cpu / cuda
+    cuda_visible_devices: '0' # GPU id to use for cuda device
+  audio_config:
+    # Controls how messages are chunked
+    speech_volume_threshold: 1   # Not recommended to change
+    chunk_silence_threshold: 0.5 # Seconds to process a chunk
+    final_silence_threshold: 0.8 # Seconds to finalize transcription
+    # Volume normalization parameters, adjust if needed
+    target_rms: 1400
+    max_gain: 10
+    min_rms: 100

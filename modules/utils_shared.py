@@ -18,6 +18,38 @@ bg_task_queue = asyncio.Queue()
 flows_queue = asyncio.Queue()
 flows_event = asyncio.Event()
 
+_message_manager = None
+_task_manager = None
+_Task = None
+
+def set_message_manager(message_manager):
+    global _message_manager
+    _message_manager = message_manager
+def get_message_manager():
+    global _message_manager
+    if _message_manager is None:
+        log.warning("Tried getting MessageManager but is not initialized.")
+    return _message_manager
+
+def set_task_manager(task_manager):
+    global _task_manager
+    _task_manager = task_manager
+def get_task_manager():
+    global _task_manager
+    if _task_manager is None:
+        log.warning("Tried getting TaskManager but is not initialized.")
+    return _task_manager
+
+def set_task_class(task_cls):
+    global _Task
+    _Task = task_cls
+def get_task_class(task_cls):
+    global _Task
+    if _Task is None:
+        log.warning("Tried getting Task but is not initialized.")
+    return _Task
+
+
 # Intercept custom bot arguments
 def parse_bot_args():
     bot_arg_list = ["--is-tgwui-integrated", "--limit-history", "--token", "--lazy-load-llm"]
@@ -113,6 +145,7 @@ class SharedPath:
     dir_internal_settings = init_shared_paths(dir_internal, 'settings', 'more persistent settings not intended to be modified by users')
     active_settings = os.path.join(dir_internal_settings, 'activesettings.yaml')
     starboard = os.path.join(dir_internal, 'starboard_messages.yaml')
+    stt_blacklist = os.path.join(dir_internal, 'stt_blacklist.yaml')
     database = os.path.join(dir_internal, 'database.yaml')
     statistics = os.path.join(dir_internal, 'statistics.yaml')
     
@@ -158,9 +191,10 @@ class SharedPath:
 shared_path = SharedPath()
 
 # SharedPath() must initialize before BaseFileMemory() and Database()
-from modules.database import BaseFileMemory, Database
+from modules.database import BaseFileMemory, Database, STTBlacklist
 
 bot_database = Database()
+stt_blacklist = STTBlacklist()
 
 class Config(BaseFileMemory):
     def __init__(self) -> None:
@@ -172,6 +206,7 @@ class Config(BaseFileMemory):
         self.textgen: dict
         self.ttsgen: dict
         self.imggen: dict
+        self.stt: dict
         super().__init__(shared_path.config, version=2, missing_okay=True)
         self._fix_config()
         self._sanitize_paths()
@@ -185,6 +220,7 @@ class Config(BaseFileMemory):
         self.textgen = data.pop('textgen', {})
         self.ttsgen = data.pop('ttsgen', {})
         self.imggen = data.pop('imggen', {})
+        self.stt = data.pop('stt', {})
 
     def _fix_config(self):
         config_dict = self.get_vars()
@@ -240,8 +276,11 @@ class Config(BaseFileMemory):
         return self.get('discord', {}).get('direct_messages', {}).get(key, default)
     
     def tts_enabled(self) -> bool:
-        return self.get('ttsgen', {}).get('enabled')
+        return self.get('ttsgen', {}).get('enabled', False)
     
+    def stt_enabled(self) -> bool:
+        return self.get('stt', {}).get('enabled', False)
+
     def controlnet_enabled(self) -> bool:
         return self.imggen.get('extensions', {}).get('controlnet_enabled', False)
     def forgecouple_enabled(self) -> bool:
@@ -255,7 +294,6 @@ class Config(BaseFileMemory):
 
 config = Config()
 
-bot_database = Database()
 
 class BotToken(BaseFileMemory):
     def __init__(self) -> None:
