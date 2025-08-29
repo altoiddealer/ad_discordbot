@@ -10,5 +10,8 @@ jsonschema
 jsonref
 aiofiles==23.2.1
 filetype
+discord-ext-voice-recv
+openai-whisper
+numpy==2.2.*
 
 pywin32; platform_system == "Windows"
