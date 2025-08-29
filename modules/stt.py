@@ -8,6 +8,7 @@ import threading
 import re
 from discord.ext import voice_recv
 from modules.utils_shared import client, config, stt_blacklist
+from modules.utils_discord import get_bot_embeds
 
 from modules.logs import import_track, get_logger; import_track(__file__, fp=True); log = get_logger(__name__)  # noqa: E702
 
@@ -17,26 +18,22 @@ class STTMessages:
 stt_messages = STTMessages()
 
 class STTMessage:
-    def __init__(self, original):
+    def __init__(self, original, text: str):
         self._msg = original
+        
+        meta = stt_messages.msgs.pop(original.id, None)
+        if meta:
+            self.author = meta['member']
 
-        # Copy over all real attributes from the original message
-        for key, value in original.__dict__.items():
-            setattr(self, key, value)
+        # Normalized text (STT transcript)
+        self.content = text or original.clean_content
+        self.clean_content = self.content
 
-        self.author = stt_messages.msgs[original.id]['spoken_by']
-        # Strip the "[Username]" prefix from content if present
-        self.content = self._strip_username_prefix(original.content)
-
-    def _strip_username_prefix(self, content: str) -> str:
-        # Regex: [anything in brackets] followed by space, then rest of message
-        match = re.match(r"^\[[^\]]+\]\s*(.*)$", content)
-        if match:
-            return match.group(1).strip()
-        return content
+        # Mirror the message ID so lookups still work
+        self.id = original.id
 
     def __getattr__(self, name):
-        # Fallback: delegate to original message for anything we missed
+        # Fallback: delegate to original message
         return getattr(self._msg, name)
 
     def __repr__(self):
@@ -141,7 +138,7 @@ class TranscriberSink(voice_recv.AudioSink):
         user_id = user.id
         # Handle all users, not just one
         if user_id not in self.user_states:
-            self.user_states[user_id] = self.UserState(self, user_id)
+            self.user_states[user_id] = self.UserState(self, user)
         user_state = self.user_states[user_id]
         #log.info(f"[Guild {self.guild_id}] Received audio data for user {user_id}: length={len(data.pcm)}bytes")
         packet = data.pcm  # Use PCM data from VoiceData
@@ -157,9 +154,10 @@ class TranscriberSink(voice_recv.AudioSink):
                     log.error(f"🧹 Final cleanup failed: {str(e)}")
 
     class UserState:
-        def __init__(self, sink, user_id):
+        def __init__(self, sink, user):
             self.sink = sink
-            self.user_id = user_id
+            self.user = user
+            self.user_id = user.id
             self.audio_buffer = bytearray()
             self.lock = asyncio.Lock()
             self.text_buffer = []
@@ -344,17 +342,20 @@ class TranscriberSink(voice_recv.AudioSink):
                 log.error(f"🔥 Error writing transcription to file {filename}: {e}")
 
         async def _send_transcription(self, member, channel, transcription):
-            guild, channel, member = self._get_discord_objs()
-            content = f"[{member.display_name}] {transcription}"
-            msg = await channel.send(content)
-            stt_messages.msgs[msg.id] = {"spoken_by": member.id}
+            bot_embeds = get_bot_embeds()
+            msg = await bot_embeds.send(description=transcription,
+                                        channel=channel,
+                                        author=member.display_name,
+                                        author_icon_url=member.display_avatar.url)
+            stt_messages.msgs[msg.id] = {"user": self.user, "member": member}
+            await client.on_message(msg)
 
         async def _get_discord_objs(self):
             guild, channel, member = None, None, None
             guild = await client.fetch_guild(self.sink.guild_id)
             if guild:
                 channel = await client.fetch_channel(self.sink.stt_channel)
-                member = guild.get_member(self.user_id)
+                member = await guild.fetch_member(self.user_id)
             return guild, channel, member
 
         async def _finalize_transcription(self):

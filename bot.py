@@ -37,12 +37,13 @@ import inspect
 import types
 from modules.stt import TranscriberSink, STTMessage, stt_messages
 from modules.utils_files import load_file, merge_base, save_yaml_file  # noqa: F401
-from modules.utils_shared import client, TOKEN, is_tgwui_integrated, shared_path, bg_task_queue, task_event, flows_queue, flows_event, patterns, bot_emojis, config, bot_database, stt_blacklist, get_api, set_task_class, set_message_manager, set_task_manager
+from modules.utils_shared import client, TOKEN, is_tgwui_integrated, shared_path, bg_task_queue, task_event, flows_queue, flows_event, patterns, bot_emojis, config, bot_database, stt_blacklist, \
+    get_api, set_task_class, set_message_manager, set_task_manager
 from modules.database import StarBoard, Statistics, BaseFileMemory
 from modules.utils_misc import check_probability, fix_dict, set_key, deep_merge, update_dict, sum_update_dict, random_value_from_range, convert_lists_to_tuples, \
     consolidate_prompt_strings, get_time, format_time, format_time_difference, get_normalized_weights, get_pnginfo_from_image, is_base64, valueparser # noqa: F401
 from modules.utils_processing import resolve_placeholders, collect_content_to_send, send_content_to_discord, comfy_delete_and_reroute_nodes
-from modules.utils_discord import Embeds, guild_only, guild_or_owner_only, configurable_for_dm_if, custom_commands_check_dm, is_direct_message, ireply, sleep_delete_message, send_long_message, \
+from modules.utils_discord import Embeds, set_bot_embeds, guild_only, guild_or_owner_only, configurable_for_dm_if, custom_commands_check_dm, is_direct_message, ireply, sleep_delete_message, send_long_message, \
     EditMessageModal, SelectedListItem, SelectOptionsView, get_user_ctx_inter, get_message_ctx_inter, apply_reactions_to_messages, replace_msg_in_history_and_discord, MAX_MESSAGE_LENGTH, muffled_send  # noqa: F401
 from modules.utils_aspect_ratios import ar_parts_from_dims, dims_from_ar, avg_from_dims, get_aspect_ratio_parts, calculate_aspect_ratio_sizes  # noqa: F401
 from modules.utils_chat import custom_load_character, load_character_data
@@ -71,6 +72,7 @@ bot_statistics = Statistics()
 #################### DISCORD / BOT STARTUP ######################
 #################################################################
 bot_embeds = Embeds()
+set_bot_embeds(bot_embeds)
 
 os.environ['GRADIO_ANALYTICS_ENABLED'] = 'False'
 os.environ["BITSANDBYTES_NOWELCOME"] = "1"
@@ -325,15 +327,21 @@ async def on_ready():
 #################################################################
 ################### DISCORD EVENTS/FEATURES #####################
 #################################################################
+def get_message_text(message: discord.Message) -> str:
+    if config.stt_enabled() and message.id in stt_messages.msgs and message.embeds:
+        return message.embeds[0].description or "", True
+    # clean_content primarily converts @mentions to member names
+    return message.clean_content, False
+
 @client.event
 async def on_message(message: discord.Message):
-    text = message.clean_content # primarily converts @mentions to actual user names
+    text, is_stt_msg = get_message_text(message)
+    if is_stt_msg:
+        message = STTMessage(message, text) # Replace original Message obj with a pseudo msg (author is user, not bot)
     settings:Settings = get_settings(message)
     last_character = bot_settings.get_last_setting_for("last_character", message)
-    if not settings.behavior.bot_should_reply(message, text, last_character): 
+    if not settings.behavior.bot_should_reply(message, text, last_character, is_stt_msg):
         return # Check that bot should reply or not
-    if message.id in stt_messages.msgs:
-        message = STTMessage(message)
     # Store the current time. The value will save locally to database.yaml at another time
     bot_database.update_last_msg_for(message.channel.id, 'user', save_now=False)
     # if @ mentioning bot, remove the @ mention from user prompt
@@ -822,7 +830,7 @@ async def bot_join_voice_channel(inter: discord.Interaction, user: discord.User)
 #################################################################
 ######################### STT COMMANDS ##########################
 #################################################################
-if config.stt.get('enabled', False):
+if config.stt_enabled():
     # Command to set voice channels
     @client.hybrid_command(name="set_server_stt_channel", description="Assign a text channel for STT transcriptions to be sent for this server")
     @app_commands.checks.has_permissions(manage_channels=True)
@@ -3522,6 +3530,7 @@ class Tasks(TaskProcessing):
                     active_sinks.pop(vc_guild_id, None)
                 # Enable STT
                 else:
+                    message = 'enabled'
                     if vc_guild_id not in bot_database.stt_channels:
                         guild_print = f'Guild with ID: {vc_guild_id}'
                         if vc_guild_id == self.ictx.guild.id:
@@ -6770,9 +6779,8 @@ class Behavior(SettingsBase):
 
 
     # Checks if bot should reply to a message
-    def bot_should_reply(self, message:discord.Message, text:str, last_character:str) -> bool:
+    def bot_should_reply(self, message:discord.Message, text:str, last_character:str, is_stt_msg:bool) -> bool:
         main_condition = is_direct_message(message) or (message.channel.id in bot_database.main_channels)
-        is_stt_msg = message.id in stt_messages.msgs # Message is STT transcription authored by the bot
 
         # Another feature of the bot is expected to process this
         if client.waiting_for.get(message.author.id):
@@ -6784,15 +6792,15 @@ class Behavior(SettingsBase):
         if message.mention_everyone:
             return False
         # Bot message related conditions
-        if not is_stt_msg:
-            # Only reply to itself if configured to
-            if (message.author == client.user) and (not check_probability(self.reply_to_itself)):
+        # if not is_stt_msg:
+        # Only reply to itself if configured to
+        if (message.author == client.user) and (not check_probability(self.reply_to_itself)):
+            return False
+        # Whether to reply to other bots
+        if message.author.bot and re.search(rf'\b{re.escape(last_character.lower())}\b', text, re.IGNORECASE) and main_condition:
+            if 'bye' in text.lower(): # don't reply if another bot is saying goodbye
                 return False
-            # Whether to reply to other bots
-            if message.author.bot and re.search(rf'\b{re.escape(last_character.lower())}\b', text, re.IGNORECASE) and main_condition:
-                if 'bye' in text.lower(): # don't reply if another bot is saying goodbye
-                    return False
-                return check_probability(self.reply_to_bots_when_addressed)
+            return check_probability(self.reply_to_bots_when_addressed)
         # Whether to reply when text is nested in parentheses
         if self.ignore_parentheses and (message.content.startswith('(') and message.content.endswith(')')) or (message.content.startswith('<:') and message.content.endswith(':>')):
             return False
@@ -6807,10 +6815,10 @@ class Behavior(SettingsBase):
         if self.go_wild_in_channel and main_condition:
             reply = True
         if reply:
-            if is_stt_msg:
-                author_id = stt_messages.msgs[message.id]['spoken_by']
-            else:
-                author_id = message.author.id
+            # if is_stt_msg:
+            #     author_id = stt_messages.msgs[message.id]['user'].id
+            # else:
+            author_id = message.author.id
             self.update_user_dict(author_id)
         return reply
 

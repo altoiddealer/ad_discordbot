@@ -276,8 +276,11 @@ class Config(BaseFileMemory):
         return self.get('discord', {}).get('direct_messages', {}).get(key, default)
     
     def tts_enabled(self) -> bool:
-        return self.get('ttsgen', {}).get('enabled')
+        return self.get('ttsgen', {}).get('enabled', False)
     
+    def stt_enabled(self) -> bool:
+        return self.get('stt', {}).get('enabled', False)
+
     def controlnet_enabled(self) -> bool:
         return self.imggen.get('extensions', {}).get('controlnet_enabled', False)
     def forgecouple_enabled(self) -> bool:
