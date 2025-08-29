@@ -115,7 +115,6 @@ imggen:
 
 stt:
   enabled: false
-  wrap_messages: false # true = wrap messages / false = individual messages
   whisper_config:
     model_name: small
     device: cpu

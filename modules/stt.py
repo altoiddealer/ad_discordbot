@@ -3,9 +3,7 @@ import asyncio
 import glob
 import os
 import wave
-import time
 import threading
-import re
 from discord.ext import voice_recv
 from modules.utils_shared import client, config, stt_blacklist
 from modules.utils_discord import get_bot_embeds
@@ -100,7 +98,9 @@ class TranscriberSink(voice_recv.AudioSink):
         self.guild_id = guild_id  # Store guild ID to tie sink to specific guild
         self.stt_channel = stt_channel
         self.user_states = {}  # Dictionary to manage state for each user
-        self.wrap_messages = config.stt.get('wrap_messages', False)
+        # Hardcoded False for now
+        self.wrap_messages = False
+        #self.wrap_messages = config.stt.get('wrap_messages', False)
 
         if self.wrap_messages: #  Initialize shared buffers if wrapping messages
             self.combined_text_buffer = []
@@ -150,8 +150,10 @@ class TranscriberSink(voice_recv.AudioSink):
             for chunk in glob.glob(f"{self.guild_id}_{user_id}_chunk*.wav"):
                 try:
                     os.remove(chunk)
+                except FileNotFoundError:
+                    pass  # already deleted
                 except Exception as e:
-                    log.error(f"🧹 Final cleanup failed: {str(e)}")
+                    log.error(f"[STT] Final cleanup failed: {str(e)}")
 
     class UserState:
         def __init__(self, sink, user):
@@ -201,12 +203,12 @@ class TranscriberSink(voice_recv.AudioSink):
 
                 current_time = self.sink._current_time()
                 process_time = current_time - process_start
-                log.debug(f"[Guild {self.sink.guild_id}]📦 Packet processed for user {self.user_id} in {process_time:.4f}s | RMS: {max_rms:.1f}")
+                log.debug(f"[Guild {self.sink.guild_id}] Packet processed for user {self.user_id} in {process_time:.4f}s | RMS: {max_rms:.1f}")
 
                 if max_rms > self.sink.SPEECH_VOLUME_THRESHOLD:
                     if not self.speaking:
                         self.speaking = True
-                        log.info(f"[Guild {self.sink.guild_id}]🎤 Speech START for user {self.user_id}")
+                        log.debug(f"[Guild {self.sink.guild_id}] Speech START for user {self.user_id}")
                     self.audio_buffer.extend(raw_data)  # Append raw data without normalization
                     self.last_packet_time = current_time
                     self.finalizing = False
@@ -217,14 +219,14 @@ class TranscriberSink(voice_recv.AudioSink):
         async def _process_chunk(self, current_time):
             """Process an audio chunk and transcribe it if it meets the minimum duration."""
             chunk_collection_time = self.last_packet_received - self.first_packet_time
-            log.info(f"[Guild {self.sink.guild_id}]⏳ Packet collection duration for user {self.user_id}: {chunk_collection_time:.4f}s")
+            log.debug(f"[Guild {self.sink.guild_id}] Packet collection duration for user {self.user_id}: {chunk_collection_time:.4f}s")
 
             num_frames = len(self.audio_buffer) // (self.sink.CHANNELS * self.sink.SAMPLE_WIDTH)
             duration = num_frames / self.sink.SAMPLE_RATE
 
             # Skip if audio duration is less than the minimum
             if duration < self.sink.MIN_AUDIO_DURATION:
-                log.info(f"[Guild {self.sink.guild_id}]Audio chunk too short for user {self.user_id}: {duration:.2f}s < {self.sink.MIN_AUDIO_DURATION:.2f}s, skipping")
+                log.debug(f"[Guild {self.sink.guild_id}]Audio chunk too short for user {self.user_id}: {duration:.2f}s < {self.sink.MIN_AUDIO_DURATION:.2f}s, skipping")
                 self.audio_buffer.clear()
                 self.speaking = False
                 return
@@ -279,15 +281,15 @@ class TranscriberSink(voice_recv.AudioSink):
             self.audio_buffer.clear()
             self.speaking = False
 
-            log.info(
-                f"🔊 Audio chunk ready for user {self.user_id} | "
+            log.debug(
+                f"[STT] Audio chunk ready for user {self.user_id} | "
                 f"Duration: {duration:.2f}s | "
                 f"Total latency: {current_time - self.first_packet_time:.4f}s"
             )
 
             async def transcribe_task():
                 task_start = self.sink._current_time()
-                log.info(f"⏳ START Transcription for user {self.user_id} | File: {norm_filename}")
+                log.debug(f"[STT] START Transcription for user {self.user_id} | File: {norm_filename}")
 
                 try:
                     process_start = self.sink._current_time()
@@ -298,29 +300,29 @@ class TranscriberSink(voice_recv.AudioSink):
                     stripped_transcription = transcription.strip()
                     if stripped_transcription:  # Check if not empty (length >= 1)
                         if len(stripped_transcription) == 3 and stripped_transcription in ["???", "..."]:
-                            log.info(f"Discarding transcription for user {self.user_id}: {stripped_transcription}")
+                            log.debug(f"Discarding transcription for user {self.user_id}: {stripped_transcription}")
                         else:
                             if self.sink.wrap_messages: # Append to combined buffer if wrap_messages is True
                                 self.sink.combined_text_buffer.append((self.user_id, self.first_packet_time, stripped_transcription))
                             else: # Append to user's own buffer if wrap_messages is False
                                 self.text_buffer.append(stripped_transcription)
-                            log.info(
+                            log.debug(
                                 f"✅ Transcription COMPLETE for user {self.user_id} | "
                                 f"RTF: {rtf:.2f} | "
                                 f"Total time: {self.sink._current_time() - task_start:.4f}s | "
                                 f"Text: {stripped_transcription[:50]}..."
                             )
                     else:
-                        log.warning(f"🚫 Empty transcription for user {self.user_id}")
+                        log.debug(f"🚫 Empty transcription for user {self.user_id}")
 
                 except Exception as e:
-                    log.error(f"❌ FAILED for user {self.user_id} | Error: {str(e)}")
+                    log.error(f"[STT] FAILED for user {self.user_id} | Error: {str(e)}")
                 finally:
                     try:
                         os.remove(raw_filename)
                         os.remove(norm_filename)
                     except Exception as e:
-                        log.error(f"🧹 Cleanup failed for user {self.user_id}: {str(e)}")
+                        log.error(f"[STT] Cleanup failed for user {self.user_id}: {str(e)}")
 
             task = asyncio.create_task(transcribe_task())
             if self.sink.wrap_messages: # Append to combined pending tasks if wrapping
@@ -328,7 +330,11 @@ class TranscriberSink(voice_recv.AudioSink):
             else: # Append to user's own pending tasks if not wrapping
                 self.pending_transcriptions.append(task)
 
-        async def _send_transcription(self, member, channel, transcription):
+        async def _send_transcription(self, transcription):
+            _, channel, member = await self._get_discord_objs()
+            if not member and  channel:
+                log.warning('[STT] Failed to fetch channel and member. Cannot send transcription.')
+                return
             bot_embeds = get_bot_embeds()
             msg = await bot_embeds.send(description=transcription,
                                         channel=channel,
@@ -348,21 +354,19 @@ class TranscriberSink(voice_recv.AudioSink):
         async def _finalize_transcription(self):
             """Finalize and send the transcription."""
             self.finalizing = True
-            log.info(f"📭 Finalizing transcription sequence for user {self.user_id}")
+            log.debug(f"[STT] Finalizing transcription sequence for user {self.user_id}")
 
             final_start = self.sink._current_time()
             if not self.sink.wrap_messages: # Finalize if not wrapping
                 if self.pending_transcriptions:
-                    log.info(f"⏳ Awaiting {len(self.pending_transcriptions)} tasks for user {self.user_id}")
+                    log.debug(f"[STT] Awaiting {len(self.pending_transcriptions)} tasks for user {self.user_id}")
                     await asyncio.gather(*self.pending_transcriptions, return_exceptions=True)
 
                 if self.text_buffer:
                     full_transcription = " ".join(self.text_buffer)
                     total_time = self.sink._current_time() - final_start
-                    log.info(f"📨 Sending result for user {self.user_id} | Chunks: {len(self.text_buffer)} | Time: {total_time:.4f}s")
-                    _, channel, member = await self._get_discord_objs()
-                    if member and  channel:
-                        await self._send_transcription(member, channel, full_transcription)
+                    log.info(f"[STT] Sending result for user {self.user_id} | Chunks: {len(self.text_buffer)} | Time: {total_time:.4f}s")
+                    await self._send_transcription(full_transcription)
 
                     self.text_buffer.clear()
 
@@ -373,10 +377,10 @@ class TranscriberSink(voice_recv.AudioSink):
 
     async def _send_wrapped_message(self): # Send wrapped message
         """Sends a combined message for all users when wrap_messages is True."""
-        log.info(f"📭 Finalizing wrapped transcription sequence for all users")
+        log.debug(f"[STT] Finalizing wrapped transcription sequence for all users")
 
         if self.combined_pending_transcriptions:
-            log.info(f"⏳ Awaiting {len(self.combined_pending_transcriptions)} combined tasks")
+            log.debug(f"[STT] Awaiting {len(self.combined_pending_transcriptions)} combined tasks")
             await asyncio.gather(*[task for _, task in self.combined_pending_transcriptions], return_exceptions=True)
 
         if self.combined_text_buffer:
@@ -392,7 +396,7 @@ class TranscriberSink(voice_recv.AudioSink):
                         full_message += f"{member.display_name}: {text_chunk}\n" #Add each chunk on a new line
 
             if full_message.strip(): # Check if the message is not empty
-                log.info(f"📨 Sending wrapped result | Users: {len(self.combined_text_buffer)}")
+                log.info(f"[STT] Sending wrapped result | Users: {len(self.combined_text_buffer)}")
                 print(f"{full_message.strip()}") # console output
 
         self.combined_text_buffer.clear()
@@ -401,7 +405,7 @@ class TranscriberSink(voice_recv.AudioSink):
 
     async def silence_monitor(self):
         """Monitor silence and process audio chunks for all users."""
-        log.info("🔇 Starting silence monitor")
+        log.info("[STT] Starting silence monitor")
         while True:
             await asyncio.sleep(0.01)
             current_time = self._current_time()
