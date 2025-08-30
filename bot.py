@@ -643,9 +643,11 @@ class VoiceClients:
         if connected:
             self.guild_vcs[guild_id] = vc
             self.expected_state[guild_id] = True
+            log.info(f'[Voice Clients] joined VC (guild: {guild_id})')
         else:
             self.guild_vcs.pop(guild_id, None)
             self.expected_state[guild_id] = False
+            log.info(f'[Voice Clients] quit VC (guild: {guild_id})')
 
     # Try loading character data regardless of mode (chat/instruct)
     async def restore_state(self):
@@ -659,7 +661,7 @@ class VoiceClients:
             except Exception as e:
                 log.error(f'[Voice Clients] An error occurred while restoring voice channel state for guild ID "{guild_id}": {e}')
 
-    async def toggle_voice_client(self, guild_id, toggle: str = None):
+    async def toggle_voice_client(self, guild_id, toggle):
         try:
             self._internal_change.add(guild_id)
             if toggle == 'enabled' and not self.is_connected(guild_id):
@@ -668,7 +670,7 @@ class VoiceClients:
                     vc = await voice_channel.connect(cls=voice_recv.VoiceRecvClient)
                     self._update_state(guild_id, True, vc)
                 else:
-                    log.warning('[Voice Clients] TTS Gen is enabled, but no VC is set.')
+                    log.warning(f'[Voice Clients] No Voice Channel set for guild {guild_id}.')
             elif toggle == 'disabled' and self.is_connected(guild_id):
                 await self.guild_vcs[guild_id].disconnect()
                 self._update_state(guild_id, False)
@@ -676,27 +678,11 @@ class VoiceClients:
             log.error(f'[Voice Clients] Error toggling VC for guild {guild_id}: {e}')
         finally:
             self._internal_change.discard(guild_id)
-
-    async def voice_channel(self, guild_id:int, vc_setting:bool=True):
-        try:
-            # Start voice client if configured, and not explicitly deactivated in settings
-            if config.tts_enabled() and vc_setting == True and int(config.ttsgen.get('play_mode', 0)) != 1 and not self.guild_vcs.get(guild_id):
-                try:
-                    if tts_is_enabled(and_online=True):
-                        await self.toggle_voice_client(guild_id, 'enabled')
-                    else:
-                        if not bot_database.was_warned('char_tts'):
-                            bot_database.update_was_warned('char_tts')
-                            log.warning('[Voice Clients] TTS is enabled in config, but no TTS clients are available/enabled.')
-                except Exception as e:
-                    log.error(f"[Voice Clients] An error occurred while connecting to voice channel: {e}")
-            # Stop voice client if explicitly deactivated in character settings
-            if self.guild_vcs.get(guild_id) and self.guild_vcs[guild_id].is_connected():
-                if vc_setting is False:
-                    log.info("[Voice Clients] New context has setting to disconnect from voice channel. Disconnecting...")
-                    await self.toggle_voice_client(guild_id, 'disabled')
-        except Exception as e:
-            log.error(f"[Voice Clients] An error occurred while managing channel settings: {e}")
+    
+    async def toggle_all_voice_clients(self, guild_id, toggle):
+        vc_guild_ids = [guild_id] if config.is_per_server() else [db_vc_id for db_vc_id in bot_database.voice_channels]
+        for vc_guild_id in vc_guild_ids:
+            await self.toggle_voice_client(vc_guild_id, toggle)
 
     def after_playback(self, guild_id, file, error):
         if error:
@@ -819,6 +805,9 @@ if tts_is_enabled():
 async def bot_join_voice_channel(inter: discord.Interaction, user: discord.User):
     if user != client.user or not await client.is_owner(inter.user):
         await inter.response.send_message(f"'Bot Join VC' is only for admins to manually join the Bot to VC.", ephemeral=True, delete_after=5)
+        return
+    if inter.guild.id not in bot_database.voice_channels:
+        await inter.response.send_message(f'⚠️ No Transcription channel set for {inter.guild}. Use "/set_server_stt_channel".', ephemeral=True)
         return
     try:
         await voice_clients.toggle_voice_client(inter.guild.id, 'enabled')
@@ -1013,13 +1002,20 @@ async def dynamic_prompting(text: str, ictx: Optional[CtxInteraction] = None, us
 #################################################################
 ######################### ANNOUNCEMENTS #########################
 #################################################################
+async def announce_changes_to_chans(change_label:str, change_name:str, ictx: CtxInteraction, channels:list):
+    user_name = get_user_ctx_inter(ictx).display_name if ictx else 'Automatically'
+    try:
+        for channel in channels:
+            await bot_embeds.send('change', f"{user_name} {change_label} in <#{ictx.channel.id}>:", f'**{change_name}**', channel=channel)
+    except Exception as e:
+        log.error(f'An error occurred while announcing changes to local announce channels: {e}')
+
 async def announce_changes(change_label:str, change_name:str, ictx: CtxInteraction|None=None):
     user_name = get_user_ctx_inter(ictx).display_name if ictx else 'Automatically'
     try:
         # adjust delay depending on how many channels there are to prevent being rate limited
         delay = math.floor(len(bot_database.announce_channels)/2)
         for channel_id in bot_database.announce_channels:
-            await asyncio.sleep(delay)
             channel = await client.fetch_channel(channel_id)
             # if Automatic imgmodel change (no interaction object)
             if ictx is None:
@@ -1034,6 +1030,7 @@ async def announce_changes(change_label:str, change_name:str, ictx: CtxInteracti
             elif channel_id not in [channel.id for channel in ictx.guild.channels]:
                 if change_label != 'reset the conversation':
                     await bot_embeds.send('change', f"A user {change_label} in another bot server:", f'**{change_name}**', channel=channel)
+            await asyncio.sleep(delay)
     except Exception as e:
         log.error(f'An error occurred while announcing changes to announce channels: {e}')
 
@@ -3494,22 +3491,22 @@ class Tasks(TaskProcessing):
             message = 'toggled'
             api_tts_on, tgwui_tts_on = tts_is_enabled(for_mode='both')
             if not api_tts_on and not tgwui_tts_on:
-                log.warning('Tried to toggle TTS but no client is available to toggle.')
+                emsg = 'No clients available to toggle!'
+                log.warning(f'[TTS] {emsg}')
+                await self.ictx.send(f'⚠️ {emsg}', ephemeral=True)
                 return
             toggle = 'api' if api_tts_on else 'tgwui'
             message = await toggle_any_tts(self.settings, toggle)
             # Ensure VC is connected (don't disconnect VC)
             if message == 'enabled':
-                vc_guild_ids = [self.ictx.guild.id] if config.is_per_server() else [guild.id for guild in client.guilds]
-                for vc_guild_id in vc_guild_ids:
-                    await voice_clients.toggle_voice_client(vc_guild_id, message)
+                await voice_clients.toggle_all_voice_clients(guild_id=self.ictx.guild.id, toggle='enabled')
             if self.embeds.enabled('change'):
                 # Send change embed to interaction channel
                 await self.embeds.send('change', f"{self.user_name} {message} TTS.", 'Note: Does not load/unload the TTS model.', channel=self.channel)
                 if bot_database.announce_channels:
                     # Send embeds to announcement channels
                     await bg_task_queue.put(announce_changes(f'{message} TTS', ' ', self.ictx))
-            log.info(f"TTS was {message}.")
+            log.info(f"[TTS] {message.title()}.")
         except Exception as e:
             log.error(f'Error when toggling TTS to "{message}": {e}')
 
@@ -3533,16 +3530,21 @@ class Tasks(TaskProcessing):
                     active_sinks.pop(vc_guild_id, None)
                 # Enable STT
                 else:
-                    message = 'enabled'
+                    message:str = 'enabled'
+                    missing = ''
+                    guild_print = f'Guild with ID: {vc_guild_id}'
+                    if vc_guild_id == self.ictx.guild.id:
+                        guild_print = self.ictx.guild
                     if vc_guild_id not in bot_database.stt_channels:
-                        guild_print = f'Guild with ID: {vc_guild_id}'
-                        if vc_guild_id == self.ictx.guild.id:
-                            guild_print = self.ictx.guild
-                        await self.ictx.send(f'⚠️ No Transcription channel set for {guild_print}. Use "/set_server_stt_channel".', ephemeral=True)
+                        missing += f'⚠️ No STT channel set for {guild_print}. Use "/set_server_stt_channel".'
+                    if vc_guild_id not in bot_database.voice_channels:
+                        missing += f'⚠️ No Voice channel set for {guild_print}. Use "/set_server_voice_channel".'
+                    if missing:
+                        await self.ictx.send(missing, ephemeral=True)
                         continue
 
                     # Ensure connected
-                    await voice_clients.toggle_voice_client(vc_guild_id, 'enabled') # ensure connected
+                    await voice_clients.toggle_voice_client(vc_guild_id, 'enabled')
                     # Create sink and listen
                     new_sink = TranscriberSink(loop=client.loop,
                                                guild_id=vc_guild_id,
@@ -3552,13 +3554,14 @@ class Tasks(TaskProcessing):
                     vc.listen(new_sink) # listen() monkeypatched into discord.VoiceClient via discord-ext-voice-recv
                     voice_clients.guild_transcription_sinks[vc_guild_id] = new_sink
 
-            if self.embeds.enabled('change'):
-                # Send change embed to interaction channel
-                await self.embeds.send('change', f"{self.user_name} {message} STT.", f'Min audio duration {min_audio_duration}s', channel=self.channel)
-                if bot_database.announce_channels:
-                    # Send embeds to announcement channels
-                    await bg_task_queue.put(announce_changes(f'{message} STT', ' ', self.ictx))
-            log.info(f"STT was {message}.")
+                if self.embeds.enabled('change'):
+                    # Send change embed to interaction channel
+                    await self.embeds.send('change', f"{self.user_name} {message} STT.", f'Min audio duration {min_audio_duration}s', channel=self.channel)
+                    local_announce_chans = [chan for chan in self.ictx.guild.channels if chan.id in bot_database.announce_channels]
+                    if local_announce_chans:
+                        # Send embeds to announcement channels
+                        await bg_task_queue.put(announce_changes_to_chans(f'{message} STT', ' ', self.ictx, local_announce_chans))
+
         except Exception as e:
             log.error(f'Error when toggling TTS to "{message}": {e}')
 
@@ -5320,10 +5323,9 @@ async def main(ctx: commands.Context, channel:Optional[discord.TextChannel]=None
 async def update_ttsgen(ictx:CtxInteraction, status:str='enabled', rebuild_cmd_opts=True):
     # Enforce only one TTS method enabled
     enforce_one_tts_method()
-    # Process Voice Clients
-    vc_guild_ids = [ictx.guild.id] if config.is_per_server() else [guild.id for guild in client.guilds]
-    for vc_guild_id in vc_guild_ids:
-        await voice_clients.toggle_voice_client(vc_guild_id, status)
+    # Join Voice Channels
+    if status == 'enabled':
+        await voice_clients.toggle_all_voice_clients(guild_id=ictx.guild.id, toggle='enabled')
     if rebuild_cmd_opts:
         # Build '/speak' options if TTS client was not online during intialization
         if not speak_cmd_options.voice_hash_dict:
@@ -5664,18 +5666,18 @@ async def character_loader(char_name, settings:"Settings", guild_id:int|None=Non
                 await tgwui.update_extensions(value)
                 char_llmcontext['extensions'] = value
             elif key == 'use_voice_channel':
-                use_voice_channels:bool = value
+                use_voice_channels = value
                 char_llmcontext['use_voice_channel'] = value
             elif key == 'tags':
                 value = base_tags.update_tags(value) # Unpack any tag presets
                 char_llmcontext['tags'] = value
-        # Connect to voice channels
-        if tts_is_enabled(and_online=True):
-            if guild_id:
-                await voice_clients.voice_channel(guild_id, use_voice_channels)
-            else:
-                for vc_guild_id in bot_database.voice_channels:
-                    await voice_clients.voice_channel(vc_guild_id, use_voice_channels)
+
+        # Apply character/config VC settings
+        if config.stt_enabled() or \
+            tts_is_enabled(and_online=True) and (int(config.ttsgen.get('play_mode', 0)) != 1):
+            # Connect to voice channels unless explicitly disabled
+            await voice_clients.toggle_all_voice_clients(guild_id, use_voice_channels)
+
         # Merge llmcontext data and extra data
         char_llmcontext.update(textgen_data)
         # Update stored database / tgwui_shared_module.settings values for character

@@ -73,7 +73,7 @@ textgen:
     per_channel_history: true       # If true, each channel will have its own chat history. Log files will not be compatible with text-generation-webui unless processed by .bat in '/utils/'
 
 
-# TTS settings. Use command '/set_server_voice_channel' in each server that you want to connect to voice channel for playing TTS
+# Text-to-Speech settings. Use command '/set_server_voice_channel' in each server that you want to connect to voice channel for playing TTS
 # If enabled, either: check API configuration in 'dict_api_settings.yaml' OR use 'tgwui_extension' (below)
 ttsgen:
   enabled: false
@@ -113,6 +113,7 @@ imggen:
       additional_loras_scaling: '0.4@0.0,0.8@0.5'
 
 
+# Speech-to-Text settings. Use command '/set_server_voice_channel' in each server that you want to connect to voice channel.
 stt:
   enabled: false
   whisper_config:
