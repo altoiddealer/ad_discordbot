@@ -346,7 +346,7 @@ class TranscriberSink(voice_recv.AudioSink):
 
             bot_embeds = get_bot_embeds()
             msg = await bot_embeds.send(description=transcription,
-                                        channel=self.channel,
+                                        channel=self.sink.channel,
                                         author=self.member.display_name,
                                         author_icon_url=self.member.display_avatar.url)
             stt_messages.msgs[msg.id] = self.member
