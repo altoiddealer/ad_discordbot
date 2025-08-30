@@ -203,15 +203,14 @@ def update_base_tags_modified():
 # Creates instances of Settings() for all guilds the bot is in
 async def init_guilds():
     global guild_settings
-    per_server_settings = config.is_per_server()
     post_settings = config.discord['post_active_settings'].get('enabled', True)
-    if per_server_settings or post_settings:
+    if config.is_per_server() or post_settings:
         # check/update last time modified for dict_tags.yaml
         tags_updated = update_base_tags_modified()
         # iterate over guilds
         for guild in client.guilds:
             # create Settings()
-            if per_server_settings:
+            if config.is_per_server():
                 guild_settings[guild.id] = Settings(guild)
             # post Tags settings
             previously_sent_settings = bot_database.settings_sent.get(guild.id) # must have sent settings before
@@ -680,7 +679,7 @@ class VoiceClients:
             self._internal_change.discard(guild_id)
     
     async def toggle_all_voice_clients(self, guild_id, toggle):
-        vc_guild_ids = [guild_id] if config.is_per_server() else [db_vc_id for db_vc_id in bot_database.voice_channels]
+        vc_guild_ids = [guild_id] if not config.is_per_server() else [db_vc_id for db_vc_id in bot_database.voice_channels]
         for vc_guild_id in vc_guild_ids:
             await self.toggle_voice_client(vc_guild_id, toggle)
 
@@ -3519,7 +3518,7 @@ class Tasks(TaskProcessing):
             message = 'toggled'
             active_sinks = voice_clients.guild_transcription_sinks
 
-            vc_guild_ids = [self.ictx.guild.id] if config.is_per_server() else [guild.id for guild in client.guilds]
+            vc_guild_ids = [self.ictx.guild.id] if not config.is_per_server() else [guild.id for guild in client.guilds]
             for vc_guild_id in vc_guild_ids:
                 # Disable STT
                 if vc_guild_id in active_sinks:
