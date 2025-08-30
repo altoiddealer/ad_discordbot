@@ -3524,31 +3524,42 @@ class Tasks(TaskProcessing):
                 # Disable STT
                 if vc_guild_id in active_sinks:
                     message = 'disabled'
-                    voice_clients.guild_transcription_sinks[vc_guild_id].cleanup()
-                    vc:discord.VoiceClient = voice_clients.guild_vcs[vc_guild_id]
-                    vc.stop_listening() # stop_listening() monkeypatched into discord.VoiceClient via discord-ext-voice-recv
+                    active_sinks[vc_guild_id].cleanup()
+                    vc:discord.VoiceClient = voice_clients.guild_vcs.get(vc_guild_id)
+                    if vc:
+                        vc.stop_listening() # stop_listening() monkeypatched into discord.VoiceClient via discord-ext-voice-recv
                     active_sinks.pop(vc_guild_id, None)
                 # Enable STT
                 else:
                     message:str = 'enabled'
-                    missing = ''
-                    guild_print = f'Guild with ID: {vc_guild_id}'
+
+                    # Check configuration
+                    missing_msg = ''
+                    guild_print = f'Guild with ID: {vc_guild_id}' # default: ID
                     if vc_guild_id == self.ictx.guild.id:
-                        guild_print = self.ictx.guild
-                    if vc_guild_id not in bot_database.stt_channels:
-                        missing += f'⚠️ No STT channel set for {guild_print}. Use "/set_server_stt_channel".'
+                        guild_print = self.ictx.guild # update to guild name
                     if vc_guild_id not in bot_database.voice_channels:
-                        missing += f'⚠️ No Voice channel set for {guild_print}. Use "/set_server_voice_channel".'
-                    if missing:
-                        await self.ictx.send(missing, ephemeral=True)
+                        missing_msg += f'⚠️ No Voice channel set for {guild_print}. Use "/set_server_voice_channel".'
+                    if vc_guild_id not in bot_database.stt_channels:
+                        missing_msg += f'⚠️ No STT channel set for {guild_print}. Use "/set_server_stt_channel".'
+                    if missing_msg:
+                        await self.ictx.send(missing_msg, ephemeral=True)
                         continue
+
+                    # Resolve guild and channel objs
+                    guild = self.ictx.guild     # default: interaction guild
+                    channel = self.ictx.channel # default: interaction channel
+                    sst_chan_id = bot_database.stt_channels[vc_guild_id]
+                    if vc_guild_id != self.ictx.guild.id:
+                        guild = await client.fetch_guild(vc_guild_id) # update
+                    if sst_chan_id != self.ictx.channel.id:
+                        channel = await client.fetch_channel(sst_chan_id)
 
                     # Ensure connected
                     await voice_clients.toggle_voice_client(vc_guild_id, 'enabled')
                     # Create sink and listen
-                    new_sink = TranscriberSink(loop=client.loop,
-                                               guild_id=vc_guild_id,
-                                               stt_channel=bot_database.stt_channels[vc_guild_id],
+                    new_sink = TranscriberSink(guild=guild,
+                                               channel=channel,
                                                min_audio_duration=min_audio_duration)
                     vc:discord.VoiceClient = voice_clients.guild_vcs[vc_guild_id]
                     vc.listen(new_sink) # listen() monkeypatched into discord.VoiceClient via discord-ext-voice-recv
