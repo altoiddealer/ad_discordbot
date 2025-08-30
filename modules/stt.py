@@ -342,7 +342,7 @@ class TranscriberSink(voice_recv.AudioSink):
 
         async def _send_transcription(self, transcription):
             if not self.member:
-                self.member = await self.guild.fetch_member(self.user.id)
+                self.member = await self.sink.guild.fetch_member(self.user.id)
 
             bot_embeds = get_bot_embeds()
             msg = await bot_embeds.send(description=transcription,
@@ -392,7 +392,7 @@ class TranscriberSink(voice_recv.AudioSink):
                 user_id, start_time, text_chunk = user_entry
                 if text_chunk:
                     if not self.member:
-                        self.member = await self.guild.fetch_member(user_id)
+                        self.member = await self.sink.guild.fetch_member(user_id)
                     full_message += f"{self.member.display_name}: {text_chunk}\n" #Add each chunk on a new line
 
             if full_message.strip(): # Check if the message is not empty
