@@ -21,12 +21,28 @@
 
 ## Accouncements:
 
+**08/31/2025:** - New Main Feature: **Integrated STT Support via [whisper](https://github.com/openai/whisper)** ([more details](https://github.com/altoiddealer/ad_discordbot/wiki/stt))
+
 **06/10/2025:** - New Main Features: **Universal API System! ComfyUI Support!** ([more details](https://github.com/altoiddealer/ad_discordbot/wiki/APIs))
 
 ## What's new:
 
 <details>
   <summary>click to expand</summary>
+
+   **08/31/2025:** **Integrated STT Processing!** + **Multimodal TextGen Support!**
+
+   Thanks to the effort of [marcos33998](https://github.com/marcos33998) STT has been added as a native feature.
+
+   <img width="1054" height="170" alt="Screenshot 2025-08-31 082318" src="https://github.com/user-attachments/assets/f3a591ba-6bbc-414d-9ae7-d10c1b1e5a91" />
+
+   [Text Generation WebUI](https://github.com/oobabooga/text-generation-webui) recently added [Multimodal Support](https://github.com/oobabooga/text-generation-webui/wiki/Multimodal-Tutorial) (models which can "see images").
+
+   The bot has been updated to include discord image attachments in the payload, when the LLM Model has multimodal capabilities.
+
+   <img width="851" height="431" alt="Screenshot 2025-08-31 082418" src="https://github.com/user-attachments/assets/087bda88-2aa0-46d9-9b19-13f71c6aa829" />
+   
+  ---
 
    **06/19/2025:** Added **SwarmUI Support!**
    
