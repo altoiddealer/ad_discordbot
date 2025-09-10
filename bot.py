@@ -37,13 +37,13 @@ import inspect
 import types
 from modules.stt import TranscriberSink, STTMessage, stt_messages
 from modules.utils_files import load_file, merge_base, save_yaml_file  # noqa: F401
-from modules.utils_shared import client, TOKEN, is_tgwui_integrated, shared_path, bg_task_queue, task_event, flows_queue, flows_event, patterns, bot_emojis, config, bot_database, stt_blacklist, \
+from modules.utils_shared import client, TOKEN, is_tgwui_integrated, shared_path, bg_task_queue, task_event, flows_queue, flows_event, patterns, bot_emojis, config, bot_database, user_blacklist, stt_blacklist, \
     get_api, set_task_class, set_message_manager, set_task_manager
 from modules.database import StarBoard, Statistics, BaseFileMemory
 from modules.utils_misc import check_probability, fix_dict, set_key, deep_merge, update_dict, sum_update_dict, random_value_from_range, convert_lists_to_tuples, \
     consolidate_prompt_strings, get_time, format_time, format_time_difference, get_normalized_weights, get_pnginfo_from_image, is_base64, valueparser # noqa: F401
 from modules.utils_processing import resolve_placeholders, collect_content_to_send, send_content_to_discord, comfy_delete_and_reroute_nodes
-from modules.utils_discord import Embeds, set_bot_embeds, guild_only, guild_or_owner_only, configurable_for_dm_if, custom_commands_check_dm, is_direct_message, ireply, sleep_delete_message, send_long_message, \
+from modules.utils_discord import Embeds, set_bot_embeds, guild_only, owner_only, guild_or_owner_only, user_not_blacklisted, configurable_for_dm_if, custom_commands_check, is_direct_message, ireply, sleep_delete_message, send_long_message, \
     EditMessageModal, SelectedListItem, SelectOptionsView, get_user_ctx_inter, get_message_ctx_inter, apply_reactions_to_messages, replace_msg_in_history_and_discord, MAX_MESSAGE_LENGTH, muffled_send  # noqa: F401
 from modules.utils_aspect_ratios import ar_parts_from_dims, dims_from_ar, avg_from_dims, get_aspect_ratio_parts, calculate_aspect_ratio_sizes  # noqa: F401
 from modules.utils_chat import custom_load_character, load_character_data
@@ -355,11 +355,20 @@ async def on_message(message: discord.Message):
 
 # Starboard feature
 @client.event
-async def on_raw_reaction_add(endorsed_img):
+async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
+    # ignore bot reactions
+    if payload.user_id == client.user.id:
+        return
+    # ignore blacklisted users
+    if user_blacklist.check(payload.user_id):
+        return
+    # ignore if not configured
     if not config.discord.get('starboard', {}).get('enabled', False):
         return
-    channel = await client.fetch_channel(endorsed_img.channel_id)
-    message = await channel.fetch_message(endorsed_img.message_id)
+
+    channel = await client.fetch_channel(payload.channel_id)
+    message = await channel.fetch_message(payload.message_id)
+
     total_reaction_count = 0
     if config.discord['starboard'].get('emoji_specific', False):
         for emoji in config.discord['starboard'].get('react_emojis', []):
@@ -372,26 +381,21 @@ async def on_raw_reaction_add(endorsed_img):
             if reaction.emoji in bot_emojis_list:
                 continue
             total_reaction_count += reaction.count
-    if total_reaction_count >= config.discord['starboard'].get('min_reactions', 2):
 
+    if total_reaction_count >= config.discord['starboard'].get('min_reactions', 2):
         target_channel_id = config.discord['starboard'].get('target_channel_id', None)
         if target_channel_id == 11111111111111111111:
             target_channel_id = None
 
         target_channel = client.get_channel(target_channel_id)
         if target_channel and message.id not in starboard.messages:
-            # Create the message link
             message_link = f'[Original Message]({message.jump_url})'
-            # Duplicate image and post message link to target channel
             if message.attachments:
-                attachment_url = message.attachments[0].url
                 await target_channel.send(message_link)
-                await target_channel.send(attachment_url)
+                await target_channel.send(message.attachments[0].url)
             elif message.embeds and message.embeds[0].image:
-                image_url = message.embeds[0].image.url
                 await target_channel.send(message_link)
-                await target_channel.send(image_url)
-            # Add the message ID to the set and update the file
+                await target_channel.send(message.embeds[0].image.url)
             starboard.messages.append(message.id)
             starboard.save()
 
@@ -523,6 +527,7 @@ if config.discord['post_active_settings'].get('enabled', True):
     @client.hybrid_command(name="set_server_settings_channel", description="Assign a channel as the settings channel for this server.")
     @app_commands.describe(channel='Begin typing the channel name and it should appear in the menu.')
     @app_commands.checks.has_permissions(manage_channels=True)
+    @user_not_blacklisted()
     @guild_only()
     async def set_server_settings_channel(ctx: commands.Context, channel: Optional[discord.TextChannel]=None):
         if channel is None:
@@ -774,6 +779,7 @@ voice_clients = VoiceClients()
 # Command to set voice channels
 @client.hybrid_command(name="set_server_voice_channel", description="Assign a channel as the voice channel for this server")
 @app_commands.checks.has_permissions(manage_channels=True)
+@user_not_blacklisted()
 @guild_only()
 async def set_server_voice_channel(ctx: commands.Context, channel: Optional[discord.VoiceChannel]=None):
     if isinstance(ctx.author, discord.Member) and ctx.author.voice:
@@ -790,6 +796,7 @@ async def set_server_voice_channel(ctx: commands.Context, channel: Optional[disc
 if tts_is_enabled():
     # Register command for helper function to toggle TTS
     @client.hybrid_command(description='Toggles TTS on/off')
+    @user_not_blacklisted()
     @guild_only()
     async def toggle_tts(ctx: commands.Context):
         await ireply(ctx, 'toggle TTS') # send a response msg to the user
@@ -800,6 +807,7 @@ if tts_is_enabled():
 
 # Define context menu app command
 @client.tree.context_menu(name="Bot Join VC")
+@user_not_blacklisted()
 @guild_or_owner_only()
 async def bot_join_voice_channel(inter: discord.Interaction, user: discord.User):
     if user != client.user or not await client.is_owner(inter.user):
@@ -816,12 +824,28 @@ async def bot_join_voice_channel(inter: discord.Interaction, user: discord.User)
         log.error(f"[Bot Join VC] Error joining bot to VC: {e}")
 
 #################################################################
+#################### BLACKLIST USER COMMAND #####################
+#################################################################
+@client.hybrid_command(name="user_blacklist", description="Manage users allowed to interact with the bot")
+@app_commands.describe(action="Action to perform", user="User to add or remove from blacklist")
+@app_commands.choices(action=[app_commands.Choice(name="add", value="add"), app_commands.Choice(name="remove", value="remove")])
+@owner_only()
+async def user_blacklist_cmd(ctx: commands.Context, action: str, user: discord.User):
+    if action == "add":
+        user_blacklist.add(user.id)
+        await ctx.send(f"{user.display_name} is blocked from interacting with the bot.", ephemeral=True)
+    elif action == "remove":
+        user_blacklist.remove(user.id)
+        await ctx.send(f"{user.display_name} is allowed to interact with the bot.", ephemeral=True)
+
+#################################################################
 ######################### STT COMMANDS ##########################
 #################################################################
 if config.stt_enabled():
     # Command to set voice channels
     @client.hybrid_command(name="set_server_stt_channel", description="Assign a text channel for STT transcriptions to be sent for this server")
     @app_commands.checks.has_permissions(manage_channels=True)
+    @user_not_blacklisted()
     @guild_only()
     async def set_server_stt_channel(ctx: commands.Context, channel: Optional[discord.TextChannel]=None):
         channel = channel or ctx.channel
@@ -833,6 +857,7 @@ if config.stt_enabled():
 
     @client.hybrid_command(name="toggle_stt", description="Toggles STT on/off")
     @app_commands.describe(min_audio_duration="Minimum audio duration for a chunk (default 0.5s)")
+    @user_not_blacklisted()
     @guild_only()
     async def toggle_stt(ctx: commands.Context, min_audio_duration: float = 0.5):
         await ireply(ctx, 'toggle STT') # send a response msg to the user
@@ -845,7 +870,8 @@ if config.stt_enabled():
     @client.hybrid_command(name="stt_blacklist", description="Manage the STT blacklist")
     @app_commands.describe(action="Action to perform", user="User to add or remove from blacklist")
     @app_commands.choices(action=[app_commands.Choice(name="add", value="add"), app_commands.Choice(name="remove", value="remove")])
-    async def blacklist_cmd(ctx: commands.Context, action: str, user: discord.User):
+    @user_not_blacklisted()
+    async def tts_blacklist_cmd(ctx: commands.Context, action: str, user: discord.User):
         if action == "add":
             stt_blacklist.add(user.id)
             await ctx.send(f"Added {user.display_name} to the STT blacklist.", ephemeral=True)
@@ -4604,6 +4630,7 @@ flows = Flows()
 if imggen_enabled and api.imggen.post_server_restart:
     # Function to attempt restarting the SD WebUI Client in the event it gets stuck
     @client.hybrid_command(description=f"Immediately restarts the main media generation server.")
+    @user_not_blacklisted()
     @guild_or_owner_only()
     async def restart_sd_client(ctx: commands.Context):
         if api.imggen.is_sdwebui():
@@ -4741,6 +4768,7 @@ if imggen_enabled:
     @app_commands.choices(use_llm=use_llm_choices)
     @app_commands.choices(size=size_choices)
     @app_commands.choices(style=style_choices)
+    @user_not_blacklisted()
     @configurable_for_dm_if(lambda ctx: 'image' in config.discord_dm_setting('allowed_commands', []))
     async def image(ctx: commands.Context, prompt: str, use_llm: typing.Optional[app_commands.Choice[str]], size: typing.Optional[app_commands.Choice[str]], style: typing.Optional[app_commands.Choice[str]], 
                     neg_prompt: typing.Optional[str], img2img: typing.Optional[discord.Attachment], img2img_mask: typing.Optional[discord.Attachment], 
@@ -5203,7 +5231,7 @@ async def load_custom_commands():
             dynamic_callback.__annotations__ = {p.name: p.annotation for p in parameters}
             dynamic_callback.__signature__ = sig
 
-            checked_callback = custom_commands_check_dm(name, allow_dm)(dynamic_callback)
+            checked_callback = custom_commands_check(name, allow_dm)(dynamic_callback)
 
             command = app_commands.Command(name=name,
                                            description=description,
@@ -5255,7 +5283,11 @@ async def on_error(event_name, *args, **kwargs):
 async def on_command_error(ctx:commands.Context, error:Union[HybridCommandError, CommandError, AppCommandError, CommandInvokeError, DiscordException, Exception]):
     while isinstance(error, (HybridCommandError, CommandInvokeError)):
         error = error.original
-        
+
+    if isinstance(error, (commands.CheckFailure, app_commands.CheckFailure)):
+        await ctx.reply(embed=discord.Embed(description=str(error), color=discord.Color.red()), ephemeral=True, delete_after=15)
+        return
+
     if isinstance(error, AlertUserError):
         await ctx.reply(embed=discord.Embed(description=str(error), color=discord.Color.gold()), ephemeral=True, delete_after=15)
         return
@@ -5280,10 +5312,12 @@ async def on_app_command_error(inter:discord.Interaction, error:discord.app_comm
 
 if bot_embeds.enabled('system'):
     @client.hybrid_command(description="Display help menu")
+    @user_not_blacklisted()
     async def helpmenu(ctx):
         await ctx.send(embed = bot_embeds.helpmenu())
 
     @client.hybrid_command(description="Display performance statistics")
+    @user_not_blacklisted()
     async def statistics_llm_gen(ctx):
         statistics_dict = bot_statistics.llm.data
         description_lines = []
@@ -5297,6 +5331,7 @@ if bot_embeds.enabled('system'):
         await bot_embeds.send('system', "Bot LLM Gen Statistics:", f">>> {formatted_description}", channel=ctx.channel)
 
 @client.hybrid_command(description="Toggle current channel as an announcement channel for the bot (model changes)")
+@user_not_blacklisted()
 @app_commands.checks.has_permissions(manage_channels=True)
 @guild_only()
 async def announce(ctx: commands.Context, channel:Optional[discord.TextChannel]=None):
@@ -5313,6 +5348,7 @@ async def announce(ctx: commands.Context, channel:Optional[discord.TextChannel]=
     await ctx.reply(action_message, delete_after=15)
 
 @client.hybrid_command(description="Toggle current channel as main channel for bot to auto-reply without needing to be called")
+@user_not_blacklisted()
 @app_commands.checks.has_permissions(manage_channels=True)
 @guild_only()
 async def main(ctx: commands.Context, channel:Optional[discord.TextChannel]=None):
@@ -5352,6 +5388,7 @@ async def announce_api_changes(ictx:CtxInteraction, api_name:str, status:str):
             await bg_task_queue.put(announce_changes(f'{status} API', f'**{api_name}**', ictx))
 
 @client.hybrid_command(description="Toggle available API Clients on/off")
+@user_not_blacklisted()
 @guild_or_owner_only()
 async def toggle_api(ctx: commands.Context):
     # Collect all clients from api.all_clients
@@ -5410,6 +5447,7 @@ async def toggle_api(ctx: commands.Context):
     await announce_api_changes(ctx, api_name=original_key, status=new_status_str)
 
 @client.hybrid_command(description='Change the API client for a main function (imggen, ttsgen, textgen)')
+@user_not_blacklisted()
 @guild_or_owner_only()
 async def change_main_api(ctx: commands.Context):
     all_clients = api.clients or {}
@@ -5516,6 +5554,7 @@ async def change_main_api(ctx: commands.Context):
         await update_ttsgen(ctx)
 
 @client.hybrid_command(description="Update dropdown menus without restarting bot script.")
+@user_not_blacklisted()
 @guild_or_owner_only()
 async def sync(ctx: commands.Context):
     await ctx.reply('Syncing client tree. Note: Menus may not update instantly.', ephemeral=True, delete_after=15)
@@ -5528,6 +5567,7 @@ async def sync(ctx: commands.Context):
 if tgwui_enabled:
     # /reset_conversation command - Resets current character
     @client.hybrid_command(description="Reset the conversation with current character")
+    @user_not_blacklisted()
     @configurable_for_dm_if(lambda ctx: config.discord_dm_setting('allow_chatting', True))
     async def reset_conversation(ctx: commands.Context):
         await ireply(ctx, 'conversation reset') # send a response msg to the user
@@ -5541,6 +5581,7 @@ if tgwui_enabled:
 
     # /save_conversation command
     @client.hybrid_command(description="Saves the current conversation to a new file in text-generation-webui/logs/")
+    @user_not_blacklisted()
     @guild_or_owner_only()
     async def save_conversation(ctx: commands.Context):
         history_char, history_mode = get_char_mode_for_history(ctx)
@@ -5549,6 +5590,7 @@ if tgwui_enabled:
 
     # Context menu command to edit both a discord message and HMessage
     @client.tree.context_menu(name="edit history")
+    @user_not_blacklisted()
     async def edit_history(inter: discord.Interaction, message: discord.Message):
         if not (message.author == inter.user or message.author == client.user):
             await inter.response.send_message("You can only edit your own or bot's messages.", ephemeral=True, delete_after=5)
@@ -5570,6 +5612,7 @@ if tgwui_enabled:
 
     # Context menu command to hide a message pair
     @client.tree.context_menu(name="toggle as hidden")
+    @user_not_blacklisted()
     async def hide_or_reveal_history(inter: discord.Interaction, message: discord.Message):
         if not (message.author == inter.user or message.author == client.user):
             await inter.response.send_message("You can only hide your own or bot's messages.", ephemeral=True, delete_after=5)
@@ -5619,16 +5662,19 @@ if tgwui_enabled:
 
     # Context menu command to Regenerate from selected user message and create new history
     @client.tree.context_menu(name="regenerate create")
+    @user_not_blacklisted()
     async def regen_create_llm_gen(inter: discord.Interaction, message:discord.Message):
         await process_cont_regen_cmds(inter, message, 'Regenerate', 'create')
 
     # Context menu command to Regenerate from selected user message and replace the original bot response
     @client.tree.context_menu(name="regenerate replace")
+    @user_not_blacklisted()
     async def regen_replace_llm_gen(inter: discord.Interaction, message:discord.Message):
         await process_cont_regen_cmds(inter, message, 'Regenerate', 'replace')
 
     # Context menu command to Continue last reply
     @client.tree.context_menu(name="continue")
+    @user_not_blacklisted()
     async def continue_llm_gen(inter: discord.Interaction, message:discord.Message):
         await process_cont_regen_cmds(inter, message, 'Continue')
 
@@ -5884,6 +5930,7 @@ def get_all_characters() -> Tuple[list, list]:
 
 # Command to change characters
 @client.hybrid_command(description="Choose a character")
+@user_not_blacklisted()
 @guild_only()
 async def character(ctx: commands.Context):
     _, filtered_characters = get_all_characters()
@@ -5911,6 +5958,7 @@ if imggen_enabled:
 
     # Register command for helper function to toggle auto-select imgmodel
     @client.hybrid_command(description='Toggles the automatic Img model changing task')
+    @user_not_blacklisted()
     @guild_or_owner_only()
     async def toggle_auto_change_imgmodels(ctx: commands.Context):
         imgmodel_settings:ImgModel = get_imgmodel_settings(ctx)
@@ -5943,6 +5991,7 @@ if imggen_enabled:
             log.error(f"Error processing selected imgmodel from /imgmodel command: {e}")
 
     @client.hybrid_command(description="Choose an Img Model")
+    @user_not_blacklisted()
     @guild_or_owner_only()
     async def imgmodel(ctx: commands.Context):
         imgmodel_settings:ImgModel = get_imgmodel_settings(ctx)
@@ -5986,6 +6035,7 @@ async def process_llmmodel(ctx, selected_llmmodel):
 if tgwui_enabled:
 
     @client.hybrid_command(description="Choose an LLM Model")
+    @user_not_blacklisted()
     @guild_or_owner_only()
     async def llmmodel(ctx: commands.Context):
         all_llmmodels = tgwui_utils_module.get_available_models()
@@ -6226,6 +6276,7 @@ speak_cmd_options = SpeakCmdOptions()
 @app_commands.choices(voice_3 = speak_cmd_options.voice_options2)
 @app_commands.rename(lang = speak_cmd_options.lang_options_label)
 @app_commands.choices(lang = speak_cmd_options.lang_options)
+@user_not_blacklisted()
 @configurable_for_dm_if(lambda ctx: 'speak' in config.discord_dm_setting('allowed_commands', []))
 async def speak(ctx: commands.Context, input_text: str, voice_1: typing.Optional[app_commands.Choice[str]], 
                 voice_2: typing.Optional[app_commands.Choice[str]], voice_3: typing.Optional[app_commands.Choice[str]], 
@@ -6324,6 +6375,7 @@ if tgwui_enabled:
     @app_commands.choices(response_type=[app_commands.Choice(name="Text response only", value="Text"),
                                      app_commands.Choice(name="Image response only", value="Image"),
                                      app_commands.Choice(name="Text and Image response", value="TextImage")])
+    @user_not_blacklisted()
     @configurable_for_dm_if(lambda ctx: 'prompt' in config.discord_dm_setting('allowed_commands', []))
     async def prompt(ctx: commands.Context, prompt: str, begin_reply_with: typing.Optional[str], mode: typing.Optional[app_commands.Choice[str]], 
                      system_message: typing.Optional[str], load_history: typing.Optional[app_commands.Choice[str]],
@@ -6796,7 +6848,10 @@ class Behavior(SettingsBase):
     # Checks if bot should reply to a message
     def bot_should_reply(self, message:discord.Message, text:str, last_character:str, is_stt_msg:bool) -> bool:
         main_condition = is_direct_message(message) or (message.channel.id in bot_database.main_channels)
-
+        
+        # User is blacklisted
+        if user_blacklist.check(message.author.id):
+            return False
         # Another feature of the bot is expected to process this
         if client.waiting_for.get(message.author.id):
             return False

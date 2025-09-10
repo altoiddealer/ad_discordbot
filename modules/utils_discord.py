@@ -1,4 +1,4 @@
-from modules.utils_shared import client, bg_task_queue, task_event, bot_emojis, config
+from modules.utils_shared import client, bg_task_queue, task_event, bot_emojis, config, user_blacklist
 import discord
 from discord.ext import commands
 from typing import Optional, Union
@@ -34,6 +34,14 @@ def guild_only():
         return True
     return commands.check(predicate)
 
+def owner_only():
+    async def predicate(ictx: CtxInteraction):
+        user = get_user_ctx_inter(ictx)
+        if not await ictx.bot.is_owner(user):
+            raise commands.NotOwner("Only the bot owner can use this command.")
+        return True
+    return commands.check(predicate)
+
 def guild_or_owner_only():
     async def predicate(ctx: commands.Context):
         if isinstance(ctx.channel, discord.DMChannel):
@@ -66,8 +74,20 @@ def configurable_for_dm_if(func):
     
     return commands.check(predicate)
 
-def custom_commands_check_dm(command_name: str, allow_dm: bool=False):
+def user_not_blacklisted():
+    async def predicate(ctx):
+        user = get_user_ctx_inter(ctx)
+        if user_blacklist.check(user.id):
+            raise commands.CheckFailure("You do not have permission to interact with this bot.")
+        return True
+
+    return commands.check(predicate)
+
+def custom_commands_check(command_name: str, allow_dm: bool=False):
     async def predicate(interaction: discord.Interaction):
+        # Case: Blacklisted
+        if user_blacklist.check(interaction.user.id):
+            raise commands.CheckFailure("You do not have permission to interact with this bot.")
         # Case: DM
         if interaction.guild is None:
             # Always allow owners

@@ -328,6 +328,27 @@ class StarBoard(BaseFileMemory):
             self.load(data=dict(messages=data)) # convert list to dict
 
 
+class UserBlackList(BaseFileMemory):
+    def __init__(self) -> None:
+        self.blacklisted_ids:list
+        super().__init__(shared_path.user_blacklist, version=1, missing_okay=True)
+
+    def load_defaults(self, data: dict):
+        self.blacklisted_ids = data.pop('blacklisted_ids', [])
+
+    def add(self, user_id):
+        if user_id not in self.blacklisted_ids:
+            self.blacklisted_ids.append(user_id)
+            self.save()
+
+    def remove(self, user_id):
+        if user_id in self.blacklisted_ids:
+            self.blacklisted_ids.remove(user_id)
+            self.save()
+
+    def check(self, user_id):
+        return user_id in self.blacklisted_ids
+
 class STTBlacklist(BaseFileMemory):
     def __init__(self) -> None:
         self.blacklisted_ids:list
@@ -342,7 +363,7 @@ class STTBlacklist(BaseFileMemory):
             self.save()
 
     def remove(self, user_id):
-        if user_id in  self.blacklisted_ids:
+        if user_id in self.blacklisted_ids:
             self.blacklisted_ids.remove(user_id)
             self.save()
 

@@ -145,6 +145,7 @@ class SharedPath:
     dir_internal_settings = init_shared_paths(dir_internal, 'settings', 'more persistent settings not intended to be modified by users')
     active_settings = os.path.join(dir_internal_settings, 'activesettings.yaml')
     starboard = os.path.join(dir_internal, 'starboard_messages.yaml')
+    user_blacklist = os.path.join(dir_internal, 'user_blacklist.yaml')
     stt_blacklist = os.path.join(dir_internal, 'stt_blacklist.yaml')
     database = os.path.join(dir_internal, 'database.yaml')
     statistics = os.path.join(dir_internal, 'statistics.yaml')
@@ -191,9 +192,10 @@ class SharedPath:
 shared_path = SharedPath()
 
 # SharedPath() must initialize before BaseFileMemory() and Database()
-from modules.database import BaseFileMemory, Database, STTBlacklist
+from modules.database import BaseFileMemory, Database, UserBlackList, STTBlacklist
 
 bot_database = Database()
+user_blacklist = UserBlackList()
 stt_blacklist = STTBlacklist()
 
 class Config(BaseFileMemory):
