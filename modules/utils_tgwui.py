@@ -379,15 +379,10 @@ class TGWUI():
 
     async def load_llm_model(self, loader=None):
         try:
-            # If any model has been selected, load it
-            if tgwui_shared_module.model_name != 'None':
-                p = Path(tgwui_shared_module.model_name)
-                if p.exists():
-                    model_name = p.parts[-1]
-                    tgwui_shared_module.model_name = model_name
-                else:
-                    model_name = tgwui_shared_module.model_name
+            model_name = tgwui_shared_module.model_name
 
+            # If any model has been selected, load it
+            if model_name != 'None':
                 model_settings = get_model_metadata(model_name)
 
                 self.instruction_template_str = model_settings.get('instruction_template_str', '')
