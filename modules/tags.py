@@ -176,35 +176,32 @@ class Tags():
         tag_print = self.get_print_for(tag_name)
         return tag_name, tag_print
     
-
-    # Check for discord conditions
     def pass_discord_check(self, key, value) -> bool:
-        # Must have an interaction to check
-        if not key in ['for_guild_ids_only', 'for_channel_ids_only'] or self.ictx is None: # TODO 'for_role_ids_only' (requires 'members' intent)
+        if key not in ['for_guild_ids_only', 'for_channel_ids_only', 'for_user_ids_only']: # TODO 'for_role_ids_only' (requires 'members' intent)
             return True
-
-        # Adjust values
-        if isinstance(value, int):
-            id_values_list = [value]
-        elif isinstance(value, list):
-            id_values_list = value
-        else:
-            log.error(f"Error: Value for '{key}' in tags must be an integer or a list of integers (a valid discord ID, or [list, of, IDs]).")
+        if self.ictx is None:
             return False
 
-        # check each value against the interaction
-        for id_value in id_values_list:
-            if key == 'for_guild_ids_only' and not is_direct_message(self.ictx) and id_value != self.ictx.guild.id:
-                return False
-            elif key == 'for_channel_ids_only' and id_value != self.ictx.channel.id:
-                return False
-            # TODO 'for_role_ids_only' (requires 'members' intent)
-            # elif key == 'for_role_ids_only' and self.user and not is_direct_message(self.ictx):
-            #     member = self.ictx.guild.get_member(self.user.id)
-            #     role_ids = [role.id for role in member.roles]
-            #     if id_value not in role_ids:
-            #         return False
-        return True
+        # Normalize value to a list
+        if isinstance(value, int):
+            id_values = [value]
+        elif isinstance(value, list) and all(isinstance(v, int) for v in value):
+            id_values = value
+        else:
+            log.error(f"Error: Value for '{key}' must be an integer or a list of integers.")
+            return False
+
+        # Lookup table for what attribute to compare against
+        mapping = {"for_guild_ids_only": getattr(self.ictx.guild, "id", None) if not is_direct_message(self.ictx) else None,
+                   "for_channel_ids_only": getattr(self.ictx.channel, "id", None) if self.ictx.channel else None,
+                   "for_user_ids_only": getattr(self.user, "id", None) if self.user else None}
+
+        target_id = mapping.get(key)
+        if target_id is None:
+            return False
+
+        # Return True if the target id is in the allowed values
+        return target_id in id_values
 
     # Check if 'random' key exists and handle its value
     def pass_random_check(self, key, value) -> bool:
