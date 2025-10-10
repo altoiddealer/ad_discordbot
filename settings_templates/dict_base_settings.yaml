@@ -138,6 +138,9 @@ llmstate:
               {%- endif -%}
           {%- endif -%}
       {%- endfor -%}
+      {%- if add_generation_prompt %}
+          {{- name2 + ':' -}}
+      {%- endif %}
     # The script will only initialize with this instruct template if one is not defined in the LLM model's metadata.
     instruction_template_str: >-
       {%- set ns = namespace(found=false) -%}
