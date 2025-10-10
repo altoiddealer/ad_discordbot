@@ -151,23 +151,23 @@ llmstate:
       {%- endfor -%}
       {%- if not ns.found -%}
           {{- '' + 'Below is an instruction that describes a task. Write a response that appropriately completes the request.' + '\n\n' -}}
-      {%- endif %}
-      {%- for message in messages %}
+      {%- endif -%}
+      {%- for message in messages %} 
           {%- if message['role'] == 'system' -%}
               {{- '' + message['content'] + '\n\n' -}}
           {%- else -%}
               {%- if message['role'] == 'user' -%}
-                  {{-'### Instruction:\n' + message['content'] + '\n\n'-}}
+                  {{- '### Instruction:\n' + message['content'] + '\n\n' -}}
               {%- else -%}
-                  {{-'### Response:\n' + message['content'] + '\n\n' -}}
+                  {{- '### Response:\n' + message['content'] + '\n\n' -}}
               {%- endif -%}
           {%- endif -%}
       {%- endfor -%}
       {%- if add_generation_prompt -%}
-          {{-'### Response:\n'-}}
+          {{- '### Response:\n' -}}
       {%- endif -%}
     # <|character|> gets replaced by the bot name, and <|prompt|> gets replaced by the regular chat prompt.
     chat-instruct_command: >-
-      Continue the chat dialogue below. Write a single reply for the character "<|character|>".\n
-      \n
+      Continue the chat dialogue below. Write a single reply for the character "<|character|>". Reply directly, without starting the reply with the character name.
+
       <|prompt|>
