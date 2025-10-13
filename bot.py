@@ -2041,6 +2041,8 @@ class TaskProcessing(TaskAttributes):
 
             # Sends LLM Payload and processes the generated text
             async def process_responses():
+                in_thinking_block: bool = False
+                thinking_buffer: str = ""
 
                 regenerate = self.payload.get('regenerate', False)
 
@@ -2058,6 +2060,7 @@ class TaskProcessing(TaskAttributes):
                             'files': image_paths}
                     
                 chatbot_wrapper = get_tgwui_functions('chatbot_wrapper')
+                extract_thinking_block = get_tgwui_functions('extract_thinking_block')
 
                 # Send payload and get responses
                 func = partial(chatbot_wrapper,
@@ -2073,15 +2076,37 @@ class TaskProcessing(TaskAttributes):
                     i_resp_stream = streaming_response.get('internal', [])
                     if len(i_resp_stream) > 0:
                         i_resp_stream:str = i_resp_stream[len(i_resp_stream) - 1][1]
-                    
-                    # Yes response chunking
+
+                    # Omit continued text from response processing
+                    base_resp:str = i_resp_stream
+                    if continue_condition and (len(base_resp) > len(continued_from)):
+                        base_resp = base_resp[len(continued_from):]
+
+                    # Detect "thinking" block (analysis/final)
+                    thinking, remaining = extract_thinking_block(base_resp)
+
+                    # Process thinking
+                    if thinking:
+                        in_thinking_block = True
+                        thinking_buffer = thinking
+                        continue
+                    if in_thinking_block:
+                        if remaining:
+                        # if "<|channel|>final" in base_resp:
+                            # Send full "thought" as a code block (wrapped safely)
+                            in_thinking_block = False
+                            if thinking_buffer.strip():
+                                yield f"*thought*\n```{thinking_buffer.strip()}```"
+                            thinking_buffer = ""
+                        else:
+                            continue
+
+                    # Done thinking
+                    v_resp_stream = remaining
+
                     if stream_replies.can_chunk:
-                        # Omit continued text from response processing
-                        base_resp:str = i_resp_stream
-                        if continue_condition and (len(base_resp) > len(continued_from)):
-                            base_resp = base_resp[len(continued_from):]
                         # Check current iteration to see if it meets criteria
-                        chunk = await stream_replies.try_chunking(base_resp)
+                        chunk = await stream_replies.try_chunking(v_resp_stream)
                         # process message chunk
                         if chunk:                          
                             yield chunk                   
@@ -2091,7 +2116,7 @@ class TaskProcessing(TaskAttributes):
                     # Flag that the task sent chunked responses
                     setattr(self.params, 'was_chunked', True)
                     # Handle last chunk
-                    resp_chunk = base_resp[len(stream_replies.already_chunked):].strip()
+                    resp_chunk = v_resp_stream[len(stream_replies.already_chunked):].strip()
                     if resp_chunk:
                         # Check last reply chunk for censored text
                         await check_censored(resp_chunk)
@@ -2100,9 +2125,9 @@ class TaskProcessing(TaskAttributes):
                         yield resp_chunk
                 # Check complete response for censored text
                 else:
-                    await check_censored(i_resp_stream)
+                    await check_censored(v_resp_stream)
 
-                full_llm_resp = i_resp_stream
+                full_llm_resp = v_resp_stream
 
                 # look for unprocessed tts response after all text generated
                 if not stream_replies.streamed_tts:
