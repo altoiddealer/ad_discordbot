@@ -1874,7 +1874,9 @@ class TaskProcessing(TaskAttributes):
         if tgwui.lazy_load_llm:
             try:
                 await self.embeds.send('change', 'Loading LLM model ... ', tgwui_shared_module.model_name)
-                await tgwui.load_llm_model()
+                model_template = await tgwui.load_llm_model()
+                if model_template:
+                    global_update_setting(['state', 'instruction_template_str'], tgwui.instruction_template_str)
                 await self.embeds.delete('change')
             except Exception as e:
                 log.error(f"Error lazy-loading LLM Model: {e}")
@@ -3695,7 +3697,9 @@ class Tasks(TaskProcessing):
                     if tgwui_shared_module.model_name != 'None':
                         bot_database.update_was_warned('no_llmmodel') # Reset warning message
                         loader = tgwui.get_llm_model_loader(llmmodel_name)    # Try getting loader from user-config.yaml to prevent errors
-                        await tgwui.load_llm_model(loader)                    # Load an LLM model if specified
+                        model_template = await tgwui.load_llm_model(loader)    # Load an LLM model if specified
+                        if model_template:
+                            global_update_setting(['state', 'instruction_template_str'], tgwui.instruction_template_str)
                 except Exception as e:
                     await self.embeds.delete('change')
                     await self.embeds.send('change', "An error occurred while changing LLM Model. No LLM Model is loaded.", e)
@@ -6707,6 +6711,16 @@ def get_imgmodel_settings(ictx:CtxInteraction|None=None) -> "ImgModel":
         settings = get_settings(ictx)
         return settings.imgmodel
     return bot_settings.imgmodel
+
+def global_update_setting(path: list[str], value):
+    def set_nested(settings):
+        d = settings.llmcontext
+        for key in path[:-1]:
+            d = d[key]
+        d[path[-1]] = value
+    set_nested(bot_settings)
+    for settings in guild_settings.values():
+        set_nested(settings)
 
 class SettingsBase:
     def get_vars(self):

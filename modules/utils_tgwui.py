@@ -179,12 +179,16 @@ class TGWUI():
 
             self.init_llmmodels() # Get model from cmd args, or present model list in cmd window
 
+            model_template = None
+
             if tgwui_shared_module.model_name != 'None':
                 if config.should_lazy_load_llm():
                     self.lazy_load_llm = True
                     log.info(f'Configured to lazy-load LLM. {tgwui_shared_module.model_name} will be loaded on first interaction.')
                 else:
-                    asyncio.run(self.load_llm_model())
+                    model_template = asyncio.run(self.load_llm_model())
+
+            self.instruction_template_str = model_template
 
             tgwui_shared_module.generation_lock = Lock()
 
@@ -377,7 +381,8 @@ class TGWUI():
             return tgwui_shared_module.is_multimodal
         return False
 
-    async def load_llm_model(self, loader=None):
+    async def load_llm_model(self, loader=None) -> str|None:
+        model_template = None
         try:
             model_name = tgwui_shared_module.model_name
 
@@ -385,7 +390,7 @@ class TGWUI():
             if model_name != 'None':
                 model_settings = get_model_metadata(model_name)
 
-                self.instruction_template_str = model_settings.get('instruction_template_str', '')
+                model_template = model_settings.get('instruction_template_str')
 
                 update_model_parameters(model_settings, initial=True)  # hijack the command-line arguments
                 # Load the model
@@ -400,6 +405,7 @@ class TGWUI():
                 self.lazy_load_llm = False
         except Exception as e:
             log.error(f"An error occurred while loading LLM Model: {e}")
+        return model_template
 
     async def update_extensions(self, params):
         try:
