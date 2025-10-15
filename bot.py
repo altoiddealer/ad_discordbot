@@ -1876,7 +1876,8 @@ class TaskProcessing(TaskAttributes):
                 await self.embeds.send('change', 'Loading LLM model ... ', tgwui_shared_module.model_name)
                 model_template = await tgwui.load_llm_model()
                 if model_template:
-                    global_update_setting(['state', 'instruction_template_str'], tgwui.instruction_template_str)
+                    bot_settings.update_instruction_template_str(model_template)
+                    self.payload['state']['instruction_template_str'] = model_template
                 await self.embeds.delete('change')
             except Exception as e:
                 log.error(f"Error lazy-loading LLM Model: {e}")
@@ -3699,7 +3700,8 @@ class Tasks(TaskProcessing):
                         loader = tgwui.get_llm_model_loader(llmmodel_name)    # Try getting loader from user-config.yaml to prevent errors
                         model_template = await tgwui.load_llm_model(loader)    # Load an LLM model if specified
                         if model_template:
-                            global_update_setting(['state', 'instruction_template_str'], tgwui.instruction_template_str)
+                            bot_settings.update_instruction_template_str(model_template)
+                            self.payload['state']['instruction_template_str'] = model_template
                 except Exception as e:
                     await self.embeds.delete('change')
                     await self.embeds.send('change', "An error occurred while changing LLM Model. No LLM Model is loaded.", e)
@@ -6712,16 +6714,6 @@ def get_imgmodel_settings(ictx:CtxInteraction|None=None) -> "ImgModel":
         return settings.imgmodel
     return bot_settings.imgmodel
 
-def global_update_setting(path: list[str], value):
-    def set_nested(settings):
-        d = settings.llmcontext
-        for key in path[:-1]:
-            d = d[key]
-        d[path[-1]] = value
-    set_nested(bot_settings)
-    for settings in guild_settings.values():
-        set_nested(settings)
-
 class SettingsBase:
     def get_vars(self):
         return {k:v for k,v in vars(self).items() if not k.startswith('_')}
@@ -8030,6 +8022,11 @@ class Settings(BaseFileMemory):
         # Update the main value regardless or per-guild settings
         bot_database.set(key, value, save_now)
         return
+
+    def update_instruction_template_str(self, new_template_str: str):
+        self.llmstate.state['instruction_template_str'] = new_template_str
+        for settings in guild_settings.values():
+            settings.llmstate.state['instruction_template_str'] = new_template_str
 
 bot_settings = Settings()
 
