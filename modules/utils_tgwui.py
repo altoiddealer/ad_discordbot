@@ -64,6 +64,10 @@ def get_tgwui_functions(name: str) -> Callable:
         from modules.models import unload_model
         _tgwui_cache[name] = unload_model
 
+    elif name == "extract_thinking_block":
+        from modules.html_generator import extract_thinking_block
+        _tgwui_cache[name] = extract_thinking_block
+
     else:
         raise ValueError(f"Unknown TGWUI function name: {name}")
 
