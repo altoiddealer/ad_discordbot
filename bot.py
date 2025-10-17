@@ -5169,6 +5169,8 @@ async def load_custom_commands():
     for cmd in command_data:
         try:
             name = cmd["command_name"]
+            if not cmd_ok(name):
+                continue
             description = cmd.get("description", "No description")
             options = cmd.get("options", [])
             main_steps = cmd.get("steps", [])
