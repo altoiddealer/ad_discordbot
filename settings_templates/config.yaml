@@ -13,6 +13,10 @@ discord:
   direct_messages:
     allow_chatting: true # Allows the bot to interact in direct messages (DMs). Note: Most commands are disabled by default.
     allowed_commands: ['image', 'speak', 'prompt']  # Exclude commands by removing them from list. [] = all disabled
+  # Add the names of any commands you do not want registered
+  disabled_commands:
+    slash_commands: []   # example: [statistics_llm_gen, speak]
+    context_commands: [] # example: [regenerate, continue]
   embed_settings:
     color: 0x1e1f22 # Customize your embeds (0x_______) https://imagecolorpicker.com/
     show_embeds:    # Set false for any embeds you wish disabled

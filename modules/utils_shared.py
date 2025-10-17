@@ -293,6 +293,10 @@ class Config(BaseFileMemory):
         return self.imggen.get('extensions', {}).get('reactor_enabled', False)
     def loractl_enabled(self) -> bool:
         return self.imggen.get('extensions', {}).get('loractl', {}).get('enabled', False)
+    
+    def disabled_commands(self) -> list:
+        disabled = self.discord.get('disabled_commands', {})
+        return disabled.get('slash_commands', []) + disabled.get('context_commands', [])
 
 config = Config()
 
