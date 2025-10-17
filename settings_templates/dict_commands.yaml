@@ -1,6 +1,16 @@
 # Configuration for the "Custom Commands" feature
 # Read the Wiki for more information
 
+# Placeholder
+context_commands:
+  - command_name: test_context
+    description: Test the new custom contaxt commands
+    target_type: message   # or "user"
+    queue_to: gen_queue
+    steps:
+      - send_content: You used a context command!
+
+
 commands: [] # (delete brackets when using the '-' list item notation)
 
 

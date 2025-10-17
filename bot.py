@@ -3125,12 +3125,12 @@ class Tasks(TaskProcessing):
     #################################################################
     async def custom_command_task(self:"Task"):
         try:
-            custom_cmd_config:dict = getattr(self, 'custom_cmd_config')
+            self.custom_cmd_config:dict # set as kwarg
             # Unpack config
-            cmd_name:dict = custom_cmd_config['custom_cmd_name']
-            selections:dict = custom_cmd_config['custom_cmd_selections']
-            options_meta:dict = custom_cmd_config['custom_cmd_option_meta']
-            main_steps:dict = custom_cmd_config['custom_cmd_steps']
+            cmd_name:dict = self.custom_cmd_config['custom_cmd_name']
+            selections:dict = self.custom_cmd_config['custom_cmd_selections']
+            options_meta:dict = self.custom_cmd_config['custom_cmd_option_meta']
+            main_steps:dict = self.custom_cmd_config['custom_cmd_steps']
 
             # Process each option value with StepExecutor if steps are defined
             processed_params = {}
@@ -3162,6 +3162,31 @@ class Tasks(TaskProcessing):
                 await self.embeds.send('img_send', f'{self.user_name} used "/{cmd_name}"', f'Options: {", ".join(optname for optname in option_names)}')
         except Exception as e:
             e_msg = f'An error occurred while processing "/{cmd_name}"'
+            log.error(f'{e_msg}: {e}')
+            await self.ictx.followup.send(f'{e_msg} \n> {e}', ephemeral=True)
+            raise
+
+    #################################################################
+    #################### CONTEXT COMMAND TASK #######################
+    #################################################################
+    async def custom_context_command_task(self:"Task"):
+        try:
+            self.custom_cmd_config:dict # set as kwarg
+            # Unpack config
+            cmd_name:dict = self.custom_cmd_config['custom_cmd_name']
+            target:discord.Message|discord.User = self.custom_cmd_config['custom_cmd_target']
+            main_steps:dict = self.custom_cmd_config['custom_cmd_steps']
+
+            # Run the command's steps if defined
+            if main_steps:
+                cmd_results = await call_stepexecutor(steps=main_steps, task=self, prefix=f'Processing command "{cmd_name}" with ')
+                await self.embeds.send('img_send', f'{self.user_name} used "{cmd_name}"', ' ')
+                if cmd_results:
+                    self.collect_extra_content(cmd_results)
+            else:
+                await self.embeds.send('img_send', f'{self.user_name} used "/{cmd_name}"',' ')
+        except Exception as e:
+            e_msg = f'An error occurred while processing "{cmd_name}"'
             log.error(f'{e_msg}: {e}')
             await self.ictx.followup.send(f'{e_msg} \n> {e}', ephemeral=True)
             raise
@@ -5143,7 +5168,7 @@ if imggen_enabled:
 #################################################################
 #################### DYNAMIC USER COMMANDS ######################
 #################################################################
-async def load_custom_commands():
+async def load_custom_slash_commands(slash_cmds:list):
     registered_cmd_names = []
 
     # Map from string type to actual type annotation
@@ -5157,9 +5182,7 @@ async def load_custom_commands():
                 "mentionable": Union[discord.User, discord.Role],
                 "attachment": discord.Attachment}
 
-    commands_file_data = load_file(shared_path.custom_commands)
-    command_data:list = commands_file_data.get('commands', [])
-    for cmd in command_data:
+    for cmd in slash_cmds:
         try:
             name = cmd["command_name"]
             description = cmd.get("description", "No description")
@@ -5239,13 +5262,14 @@ async def load_custom_commands():
                     raw_kwargs = {k: (v.value if isinstance(v, app_commands.Choice) else v)
                                   for k, v in kwargs.items()
                                   if v is not None}
-                    # Create a Task and queue it
-                    custom_command_task = Task('custom_command', interaction)
+                    # Pertinent data for command processing
                     custom_cmd_config = {'custom_cmd_name': command_name,
                                          'custom_cmd_selections': raw_kwargs,
                                          'custom_cmd_option_meta': option_metadata,
                                          'custom_cmd_steps': main_steps}
-                    setattr(custom_command_task, 'custom_cmd_config', custom_cmd_config)
+                    # Create a Task and queue it
+                    custom_command_task = Task('custom_command', interaction, custom_cmd_config=custom_cmd_config) # custom kwarg
+
                     await task_manager.queue_task(custom_command_task, queue_name=queue)
                     user_name = interaction.user.display_name if hasattr(interaction, "user") else interaction.author.display_name
                     log.info(f'{user_name} used user defined command "/{command_name}"')
@@ -5286,14 +5310,77 @@ async def load_custom_commands():
             client.tree.add_command(command)
             registered_cmd_names.append(name)
         except Exception as e:
-            log.error(f'[Custom Commands] An error occured while initializing "/{name}": {e}')
+            log.error(f'[Custom Slash Commands] An error occured while initializing "/{name}": {e}')
     if registered_cmd_names:
         formatted_names = ', '.join(f"'{f'/{name}'}'" for name in registered_cmd_names)
-        log.info(f"[Custom Commands] Registered: {formatted_names}")
+        log.info(f"[Custom Slash Commands] Registered: {formatted_names}")
+
+async def load_custom_context_commands(context_cmds:list):
+    registered_cmd_names = []
+
+    for cmd in context_cmds:
+        try:
+            name = cmd["command_name"]
+            target_type = cmd.get("target_type", "message").lower()
+            queue_to = cmd.get("queue_to") or "gen_queue"
+            main_steps = cmd.get("steps", [])
+
+            # Choose target type
+            if target_type == "message":
+                target_annotation = discord.Message
+                app_type = discord.AppCommandType.message
+            elif target_type == "user":
+                target_annotation = discord.User
+                app_type = discord.AppCommandType.user
+            else:
+                raise ValueError(f"Invalid target_type '{target_type}'")
+
+            # Create callback
+            def make_callback(command_name, queue, steps):
+                async def callback_template(interaction: discord.Interaction, target):
+                    await ireply(interaction, f'{command_name}')
+                    custom_cmd_config = {'custom_cmd_name': command_name,
+                                         'custom_cmd_target': target,
+                                         'custom_cmd_steps': steps}
+                    task = Task('custom_context_command', interaction, custom_cmd_config=custom_cmd_config)
+                    await task_manager.queue_task(task, queue_name=queue)
+                    log.info(f"{interaction.user.display_name} used context command '{command_name}'")
+                return callback_template
+
+            callback_template = make_callback(name, queue_to, main_steps)
+            dynamic_callback = types.FunctionType(
+                callback_template.__code__,
+                globals(),
+                name,
+                argdefs=(),
+                closure=callback_template.__closure__,
+            )
+            dynamic_callback.__annotations__ = {
+                "interaction": discord.Interaction,
+                "target": target_annotation
+            }
+
+            command = app_commands.ContextMenu(
+                name=name,
+                callback=dynamic_callback,
+                type=app_type
+            )
+
+            client.tree.add_command(command)
+            registered_cmd_names.append(name)
+        except Exception as e:
+            log.error(f"[Custom Context Commands] Failed to load '{cmd.get('command_name', '?')}': {e}")
+    if registered_cmd_names:
+        formatted_names = ', '.join(f"'{f'/{name}'}'" for name in registered_cmd_names)
+        log.info(f"[Custom Context Commands] Registered: {formatted_names}")
 
 async def setup_hook():
     try:
-        await load_custom_commands()
+        commands_file_data = load_file(shared_path.custom_commands)
+        slash_cmds: list = commands_file_data.get('slash_commands') or commands_file_data.get('commands', [])
+        context_cmds:list = commands_file_data.get('context_commands', [])
+        await load_custom_slash_commands(slash_cmds)
+        await load_custom_context_commands(context_cmds)
     except Exception as e:
         log.error(f'[Custom Commands] An error occured while initializing: {e}')
 asyncio.run(setup_hook())
@@ -5693,22 +5780,22 @@ if tgwui_enabled:
             await task_manager.queue_task(regenerate_task, 'history_queue')
 
     # Context menu command to Regenerate from selected user message and create new history
-    @client.tree.context_menu(name="regenerate create")
-    @user_not_blacklisted()
-    async def regen_create_llm_gen(inter: discord.Interaction, message:discord.Message):
-        await process_cont_regen_cmds(inter, message, 'Regenerate', 'create')
+    # @client.tree.context_menu(name="regenerate create")
+    # @user_not_blacklisted()
+    # async def regen_create_llm_gen(inter: discord.Interaction, message:discord.Message):
+    #     await process_cont_regen_cmds(inter, message, 'Regenerate', 'create')
 
-    # Context menu command to Regenerate from selected user message and replace the original bot response
-    @client.tree.context_menu(name="regenerate replace")
-    @user_not_blacklisted()
-    async def regen_replace_llm_gen(inter: discord.Interaction, message:discord.Message):
-        await process_cont_regen_cmds(inter, message, 'Regenerate', 'replace')
+    # # Context menu command to Regenerate from selected user message and replace the original bot response
+    # @client.tree.context_menu(name="regenerate replace")
+    # @user_not_blacklisted()
+    # async def regen_replace_llm_gen(inter: discord.Interaction, message:discord.Message):
+    #     await process_cont_regen_cmds(inter, message, 'Regenerate', 'replace')
 
-    # Context menu command to Continue last reply
-    @client.tree.context_menu(name="continue")
-    @user_not_blacklisted()
-    async def continue_llm_gen(inter: discord.Interaction, message:discord.Message):
-        await process_cont_regen_cmds(inter, message, 'Continue')
+    # # Context menu command to Continue last reply
+    # @client.tree.context_menu(name="continue")
+    # @user_not_blacklisted()
+    # async def continue_llm_gen(inter: discord.Interaction, message:discord.Message):
+    #     await process_cont_regen_cmds(inter, message, 'Continue')
 
 def load_default_character(settings:"Settings", guild_id:int|None=None):
     try:
