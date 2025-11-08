@@ -5780,22 +5780,22 @@ if tgwui_enabled:
             await task_manager.queue_task(regenerate_task, 'history_queue')
 
     # Context menu command to Regenerate from selected user message and create new history
-    # @client.tree.context_menu(name="regenerate create")
-    # @user_not_blacklisted()
-    # async def regen_create_llm_gen(inter: discord.Interaction, message:discord.Message):
-    #     await process_cont_regen_cmds(inter, message, 'Regenerate', 'create')
+    @client.tree.context_menu(name="regenerate create")
+    @user_not_blacklisted()
+    async def regen_create_llm_gen(inter: discord.Interaction, message:discord.Message):
+        await process_cont_regen_cmds(inter, message, 'Regenerate', 'create')
 
-    # # Context menu command to Regenerate from selected user message and replace the original bot response
-    # @client.tree.context_menu(name="regenerate replace")
-    # @user_not_blacklisted()
-    # async def regen_replace_llm_gen(inter: discord.Interaction, message:discord.Message):
-    #     await process_cont_regen_cmds(inter, message, 'Regenerate', 'replace')
+    # Context menu command to Regenerate from selected user message and replace the original bot response
+    @client.tree.context_menu(name="regenerate replace")
+    @user_not_blacklisted()
+    async def regen_replace_llm_gen(inter: discord.Interaction, message:discord.Message):
+        await process_cont_regen_cmds(inter, message, 'Regenerate', 'replace')
 
-    # # Context menu command to Continue last reply
-    # @client.tree.context_menu(name="continue")
-    # @user_not_blacklisted()
-    # async def continue_llm_gen(inter: discord.Interaction, message:discord.Message):
-    #     await process_cont_regen_cmds(inter, message, 'Continue')
+    # Context menu command to Continue last reply
+    @client.tree.context_menu(name="continue")
+    @user_not_blacklisted()
+    async def continue_llm_gen(inter: discord.Interaction, message:discord.Message):
+        await process_cont_regen_cmds(inter, message, 'Continue')
 
 def load_default_character(settings:"Settings", guild_id:int|None=None):
     try:
