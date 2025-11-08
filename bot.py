@@ -5173,228 +5173,6 @@ if imggen_enabled:
                 traceback.print_exc()
 
 #################################################################
-#################### DYNAMIC USER COMMANDS ######################
-#################################################################
-async def load_custom_slash_commands(slash_cmds:list):
-    registered_cmd_names = []
-
-    # Map from string type to actual type annotation
-    type_map = {"string": str,
-                "user": discord.User,
-                "int": int,
-                "bool": bool,
-                "float": float,
-                "channel": discord.abc.GuildChannel,
-                "role": discord.Role,
-                "mentionable": Union[discord.User, discord.Role],
-                "attachment": discord.Attachment}
-
-    for cmd in slash_cmds:
-        try:
-            name = cmd["command_name"]
-            if not cmd_ok(name):
-                continue
-            description = cmd.get("description", "No description")
-            options = cmd.get("options", [])
-            main_steps = cmd.get("steps", [])
-            allow_dm = cmd.get("allow_dm", False)
-            queue_to = cmd.get("queue_to") or "gen_queue"
-            # Do not allow put to Message queue
-            if queue_to == "message_queue":
-                queue_to = "gen_queue"
-
-            # Signature parameter list (start with interaction)
-            parameters = [
-                inspect.Parameter("interaction",
-                                inspect.Parameter.POSITIONAL_OR_KEYWORD,
-                                annotation=discord.Interaction)
-            ]
-
-            # Store choice metadata for later injection
-            option_metadata = []
-
-            for opt in options:
-                opt_name = opt["name"]
-                opt_type_str = opt["type"]
-                opt_type = type_map[opt_type_str]
-                required = opt.get("required", True)
-                choices_raw = opt.get("choices")
-                steps: Optional[list] = opt.get("steps")
-                opt_description = opt.get("description")
-                if opt_description and opt_type_str == "attachment":
-                    opt_description += " (size limits apply)"
-
-                if choices_raw:
-                    # Case: dict {label: value}
-                    if isinstance(choices_raw, dict):
-                        annotation = app_commands.Choice[str]
-                        choices = [app_commands.Choice(name=label, value=value)
-                            for label, value in choices_raw.items()]
-
-                    # Case: list (dicts or primitives)
-                    elif isinstance(choices_raw, list):
-                        if all(isinstance(c, dict) and "name" in c and "value" in c for c in choices_raw):
-                            annotation = app_commands.Choice[str]
-                            choices = [app_commands.Choice(name=c["name"], value=c["value"])
-                                for c in choices_raw]
-                        else:
-                            value_type = type(choices_raw[0])
-                            annotation = app_commands.Choice[value_type]
-                            choices = [app_commands.Choice(name=str(c), value=c)
-                                for c in choices_raw]
-                else:
-                    annotation = opt_type
-                    choices = None
-
-                default_value = opt.get("default", inspect.Parameter.empty if required else None)
-                param = inspect.Parameter(name=opt_name,
-                                        kind=inspect.Parameter.KEYWORD_ONLY,
-                                        default=default_value,
-                                        annotation=annotation)
-
-                parameters.append(param)
-                option_metadata.append({"name": opt_name,
-                                        "description": opt_description,
-                                        "choices": choices,
-                                        "steps": steps})
-
-            # Create function signature
-            sig = inspect.Signature(parameters)
-
-            def make_callback(command_name:str, option_metadata:dict, queue:str, main_steps:list):
-                async def callback_template(*args, **kwargs):
-                    interaction = kwargs.pop("interaction", args[0] if args else None)
-
-                    await ireply(interaction, f'/{command_name}') # send a response msg to the user
-
-                    # Convert Choices to their actual value (but not None)
-                    raw_kwargs = {k: (v.value if isinstance(v, app_commands.Choice) else v)
-                                  for k, v in kwargs.items()
-                                  if v is not None}
-                    # Pertinent data for command processing
-                    custom_cmd_config = {'custom_cmd_name': command_name,
-                                         'custom_cmd_selections': raw_kwargs,
-                                         'custom_cmd_option_meta': option_metadata,
-                                         'custom_cmd_steps': main_steps}
-                    # Create a Task and queue it
-                    custom_command_task = Task('custom_command', interaction, custom_cmd_config=custom_cmd_config) # custom kwarg
-
-                    await task_manager.queue_task(custom_command_task, queue_name=queue)
-                    user_name = interaction.user.display_name if hasattr(interaction, "user") else interaction.author.display_name
-                    log.info(f'{user_name} used user defined command "/{command_name}"')
-
-                return callback_template
-
-            callback_template = make_callback(name, option_metadata, queue_to, main_steps)
-            dynamic_callback = types.FunctionType(
-                callback_template.__code__,
-                globals(),
-                name,
-                argdefs=(),
-                closure=callback_template.__closure__,
-            )
-            dynamic_callback.__annotations__ = {p.name: p.annotation for p in parameters}
-            dynamic_callback.__signature__ = sig
-
-            checked_callback = custom_commands_check(name, allow_dm)(dynamic_callback)
-
-            command = app_commands.Command(name=name,
-                                           description=description,
-                                           callback=checked_callback)
-
-            # Inject choices (private API workaround)
-            for meta in option_metadata:
-                param_name = meta["name"]
-                if param_name in command._params:
-                    param = command._params[param_name]
-                    if meta.get("choices"):
-                        param.choices = meta["choices"]
-                    if hasattr(param, "description"):
-                        param.description = meta["description"]
-                    else:
-                        setattr(param, "description", meta["description"])
-                else:
-                    print(f"⚠ Warning: Parameter '{param_name}' not found in command._params")
-
-            client.tree.add_command(command)
-            registered_cmd_names.append(name)
-        except Exception as e:
-            log.error(f'[Custom Slash Commands] An error occured while initializing "/{name}": {e}')
-    if registered_cmd_names:
-        formatted_names = ', '.join(f"'{f'/{name}'}'" for name in registered_cmd_names)
-        log.info(f"[Custom Slash Commands] Registered: {formatted_names}")
-
-async def load_custom_context_commands(context_cmds:list):
-    registered_cmd_names = []
-
-    for cmd in context_cmds:
-        try:
-            name = cmd["command_name"]
-            target_type = cmd.get("target_type", "message").lower()
-            queue_to = cmd.get("queue_to") or "gen_queue"
-            main_steps = cmd.get("steps", [])
-
-            # Choose target type
-            if target_type == "message":
-                target_annotation = discord.Message
-                app_type = discord.AppCommandType.message
-            elif target_type == "user":
-                target_annotation = discord.User
-                app_type = discord.AppCommandType.user
-            else:
-                raise ValueError(f"Invalid target_type '{target_type}'")
-
-            # Create callback
-            def make_callback(command_name, queue, steps):
-                async def callback_template(interaction: discord.Interaction, target):
-                    await ireply(interaction, f'{command_name}')
-                    custom_cmd_config = {'custom_cmd_name': command_name,
-                                         'custom_cmd_target': target,
-                                         'custom_cmd_steps': steps}
-                    task = Task('custom_context_command', interaction, custom_cmd_config=custom_cmd_config)
-                    await task_manager.queue_task(task, queue_name=queue)
-                    log.info(f"{interaction.user.display_name} used context command '{command_name}'")
-                return callback_template
-
-            callback_template = make_callback(name, queue_to, main_steps)
-            dynamic_callback = types.FunctionType(
-                callback_template.__code__,
-                globals(),
-                name,
-                argdefs=(),
-                closure=callback_template.__closure__,
-            )
-            dynamic_callback.__annotations__ = {
-                "interaction": discord.Interaction,
-                "target": target_annotation
-            }
-
-            command = app_commands.ContextMenu(
-                name=name,
-                callback=dynamic_callback,
-                type=app_type
-            )
-
-            client.tree.add_command(command)
-            registered_cmd_names.append(name)
-        except Exception as e:
-            log.error(f"[Custom Context Commands] Failed to load '{cmd.get('command_name', '?')}': {e}")
-    if registered_cmd_names:
-        formatted_names = ', '.join(f"'{f'/{name}'}'" for name in registered_cmd_names)
-        log.info(f"[Custom Context Commands] Registered: {formatted_names}")
-
-async def setup_hook():
-    try:
-        commands_file_data = load_file(shared_path.custom_commands)
-        slash_cmds: list = commands_file_data.get('slash_commands') or commands_file_data.get('commands', [])
-        context_cmds:list = commands_file_data.get('context_commands', [])
-        await load_custom_slash_commands(slash_cmds)
-        await load_custom_context_commands(context_cmds)
-    except Exception as e:
-        log.error(f'[Custom Commands] An error occured while initializing: {e}')
-asyncio.run(setup_hook())
-
-#################################################################
 ######################### MISC COMMANDS #########################
 #################################################################
 async def is_direct_message_and_not_owner(ictx:CtxInteraction):
@@ -6531,6 +6309,243 @@ if tgwui_enabled and cmd_ok('prompt'):
                            "system_message": system_message if system_message else None, "load_history": load_history.value if load_history else None,
                            "save_to_history": save_to_history.value if save_to_history else None, "response_type": response_type.value if response_type else None}
         await process_prompt(ctx, user_selections)
+
+#################################################################
+#################### DYNAMIC USER COMMANDS ######################
+#################################################################
+async def load_custom_slash_commands(slash_cmds:list):
+    registered_cmd_names = []
+
+    # Map from string type to actual type annotation
+    type_map = {"string": str,
+                "user": discord.User,
+                "int": int,
+                "bool": bool,
+                "float": float,
+                "channel": discord.abc.GuildChannel,
+                "role": discord.Role,
+                "mentionable": Union[discord.User, discord.Role],
+                "attachment": discord.Attachment}
+
+    for cmd in slash_cmds:
+        try:
+            name = cmd["command_name"]
+            description = cmd.get("description", "No description")
+            options = cmd.get("options", [])
+            main_steps = cmd.get("steps", [])
+            allow_dm = cmd.get("allow_dm", False)
+            queue_to = cmd.get("queue_to") or "gen_queue"
+            # Do not allow put to Message queue
+            if queue_to == "message_queue":
+                queue_to = "gen_queue"
+
+            # Signature parameter list (start with interaction)
+            parameters = [
+                inspect.Parameter("interaction",
+                                inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                                annotation=discord.Interaction)
+            ]
+
+            # Store choice metadata for later injection
+            option_metadata = []
+
+            for opt in options:
+                opt_name = opt["name"]
+                opt_type_str = opt["type"]
+                opt_type = type_map[opt_type_str]
+                required = opt.get("required", True)
+                choices_raw = opt.get("choices")
+                steps: Optional[list] = opt.get("steps")
+                opt_description = opt.get("description")
+                if opt_description and opt_type_str == "attachment":
+                    opt_description += " (size limits apply)"
+
+                if choices_raw:
+                    # Case: dict {label: value}
+                    if isinstance(choices_raw, dict):
+                        annotation = app_commands.Choice[str]
+                        choices = [app_commands.Choice(name=label, value=value)
+                            for label, value in choices_raw.items()]
+
+                    # Case: list (dicts or primitives)
+                    elif isinstance(choices_raw, list):
+                        if all(isinstance(c, dict) and "name" in c and "value" in c for c in choices_raw):
+                            annotation = app_commands.Choice[str]
+                            choices = [app_commands.Choice(name=c["name"], value=c["value"])
+                                for c in choices_raw]
+                        else:
+                            value_type = type(choices_raw[0])
+                            annotation = app_commands.Choice[value_type]
+                            choices = [app_commands.Choice(name=str(c), value=c)
+                                for c in choices_raw]
+                else:
+                    annotation = opt_type
+                    choices = None
+
+                default_value = opt.get("default", inspect.Parameter.empty if required else None)
+                param = inspect.Parameter(name=opt_name,
+                                        kind=inspect.Parameter.KEYWORD_ONLY,
+                                        default=default_value,
+                                        annotation=annotation)
+
+                parameters.append(param)
+                option_metadata.append({"name": opt_name,
+                                        "description": opt_description,
+                                        "choices": choices,
+                                        "steps": steps})
+
+            # Create function signature
+            sig = inspect.Signature(parameters)
+
+            def make_callback(command_name:str, option_metadata:dict, queue:str, main_steps:list):
+                async def callback_template(*args, **kwargs):
+                    interaction = kwargs.pop("interaction", args[0] if args else None)
+
+                    await ireply(interaction, f'/{command_name}') # send a response msg to the user
+
+                    # Convert Choices to their actual value (but not None)
+                    raw_kwargs = {k: (v.value if isinstance(v, app_commands.Choice) else v)
+                                  for k, v in kwargs.items()
+                                  if v is not None}
+                    # Pertinent data for command processing
+                    custom_cmd_config = {'custom_cmd_name': command_name,
+                                         'custom_cmd_selections': raw_kwargs,
+                                         'custom_cmd_option_meta': option_metadata,
+                                         'custom_cmd_steps': main_steps}
+                    # Create a Task and queue it
+                    custom_command_task = Task('custom_command', interaction, custom_cmd_config=custom_cmd_config) # custom kwarg
+
+                    await task_manager.queue_task(custom_command_task, queue_name=queue)
+                    user_name = interaction.user.display_name if hasattr(interaction, "user") else interaction.author.display_name
+                    log.info(f'{user_name} used user defined command "/{command_name}"')
+
+                return callback_template
+
+            callback_template = make_callback(name, option_metadata, queue_to, main_steps)
+            dynamic_callback = types.FunctionType(
+                callback_template.__code__,
+                globals(),
+                name,
+                argdefs=(),
+                closure=callback_template.__closure__,
+            )
+            dynamic_callback.__annotations__ = {p.name: p.annotation for p in parameters}
+            dynamic_callback.__signature__ = sig
+
+            checked_callback = custom_commands_check(name, allow_dm)(dynamic_callback)
+
+            command = app_commands.Command(name=name,
+                                           description=description,
+                                           callback=checked_callback)
+
+            # Inject choices (private API workaround)
+            for meta in option_metadata:
+                param_name = meta["name"]
+                if param_name in command._params:
+                    param = command._params[param_name]
+                    if meta.get("choices"):
+                        param.choices = meta["choices"]
+                    if hasattr(param, "description"):
+                        param.description = meta["description"]
+                    else:
+                        setattr(param, "description", meta["description"])
+                else:
+                    print(f"⚠ Warning: Parameter '{param_name}' not found in command._params")
+
+            client.tree.add_command(command)
+            registered_cmd_names.append(name)
+        except Exception as e:
+            log.error(f'[Custom Slash Commands] An error occured while initializing "/{name}": {e}')
+    if registered_cmd_names:
+        formatted_names = ', '.join(f"'{f'/{name}'}'" for name in registered_cmd_names)
+        log.info(f"[Custom Slash Commands] Registered: {formatted_names}")
+
+async def load_custom_context_commands(context_cmds:list):
+    registered_cmd_names = []
+
+    for cmd in context_cmds:
+        try:
+            name = cmd["command_name"]
+            target_type = cmd.get("target_type", "message").lower()
+            queue_to = cmd.get("queue_to") or "gen_queue"
+            main_steps = cmd.get("steps", [])
+
+            # Choose target type
+            if target_type == "message":
+                target_annotation = discord.Message
+                app_type = discord.AppCommandType.message
+            elif target_type == "user":
+                target_annotation = discord.User
+                app_type = discord.AppCommandType.user
+            else:
+                raise ValueError(f"Invalid target_type '{target_type}'")
+
+            # Create callback
+            def make_callback(command_name, queue, steps):
+                async def callback_template(interaction: discord.Interaction, target):
+                    await ireply(interaction, f'{command_name}')
+                    custom_cmd_config = {'custom_cmd_name': command_name,
+                                         'custom_cmd_target': target,
+                                         'custom_cmd_steps': steps}
+                    task = Task('custom_context_command', interaction, custom_cmd_config=custom_cmd_config)
+                    await task_manager.queue_task(task, queue_name=queue)
+                    log.info(f"{interaction.user.display_name} used context command '{command_name}'")
+                return callback_template
+
+            callback_template = make_callback(name, queue_to, main_steps)
+            dynamic_callback = types.FunctionType(
+                callback_template.__code__,
+                globals(),
+                name,
+                argdefs=(),
+                closure=callback_template.__closure__,
+            )
+            dynamic_callback.__annotations__ = {
+                "interaction": discord.Interaction,
+                "target": target_annotation
+            }
+
+            command = app_commands.ContextMenu(
+                name=name,
+                callback=dynamic_callback,
+                type=app_type
+            )
+
+            def get_context_menus(cmd_type: discord.AppCommandType):
+                """Return all context menu commands of the given type."""
+                return [
+                    cmd for cmd in client.tree.get_commands()
+                    if isinstance(cmd, app_commands.ContextMenu) and cmd.type == cmd_type
+                ]
+
+            def count_context_menus(cmd_type: discord.AppCommandType) -> int:
+                return len(get_context_menus(cmd_type))
+
+            if count_context_menus(app_type) >= 5:
+                existing_names = [cmd.name for cmd in get_context_menus(app_type)]
+                joined = ", ".join(existing_names) or "(none)"
+                log.error(f"[Custom Context Commands] Maximum commands already registered for type: {app_type.name} (discord limit is 5).")
+                log.error(f"Already registered: {joined}")
+                log.error("You can manage these via 'config.yaml'")
+            else:
+                client.tree.add_command(command)
+                registered_cmd_names.append(name)
+        except Exception as e:
+            log.error(f"[Custom Context Commands] Failed to load '{cmd.get('command_name', '?')}': {e}")
+    if registered_cmd_names:
+        formatted_names = ', '.join(f"'{f'/{name}'}'" for name in registered_cmd_names)
+        log.info(f"[Custom Context Commands] Registered: {formatted_names}")
+
+async def setup_hook():
+    try:
+        commands_file_data = load_file(shared_path.custom_commands)
+        slash_cmds: list = commands_file_data.get('slash_commands') or commands_file_data.get('commands', [])
+        context_cmds:list = commands_file_data.get('context_commands', [])
+        await load_custom_slash_commands(slash_cmds)
+        await load_custom_context_commands(context_cmds)
+    except Exception as e:
+        log.error(f'[Custom Commands] An error occured while initializing: {e}')
+asyncio.run(setup_hook())
 
 #################################################################
 ######################### BOT STATUS ############################
