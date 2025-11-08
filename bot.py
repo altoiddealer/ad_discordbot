@@ -3129,7 +3129,7 @@ class Tasks(TaskProcessing):
     #################################################################
     ###################### USER COMMAND TASK ########################
     #################################################################
-    async def custom_command_task(self:"Task"):
+    async def custom_slash_command_task(self:"Task"):
         try:
             self.custom_cmd_config:dict # set as kwarg
             # Unpack config
@@ -6413,9 +6413,9 @@ async def load_custom_slash_commands(slash_cmds:list):
                                          'custom_cmd_option_meta': option_metadata,
                                          'custom_cmd_steps': main_steps}
                     # Create a Task and queue it
-                    custom_command_task = Task('custom_command', interaction, custom_cmd_config=custom_cmd_config) # custom kwarg
+                    custom_slash_command_task = Task('custom_slash_command', interaction, custom_cmd_config=custom_cmd_config) # custom kwarg
 
-                    await task_manager.queue_task(custom_command_task, queue_name=queue)
+                    await task_manager.queue_task(custom_slash_command_task, queue_name=queue)
                     user_name = interaction.user.display_name if hasattr(interaction, "user") else interaction.author.display_name
                     log.info(f'{user_name} used user defined command "/{command_name}"')
 
