@@ -43,7 +43,7 @@ from modules.database import StarBoard, Statistics, BaseFileMemory
 from modules.utils_misc import check_probability, fix_dict, set_key, deep_merge, update_dict, sum_update_dict, random_value_from_range, convert_lists_to_tuples, \
     consolidate_prompt_strings, get_time, format_time, format_time_difference, get_normalized_weights, get_pnginfo_from_image, is_base64, valueparser # noqa: F401
 from modules.utils_processing import resolve_placeholders, collect_content_to_send, send_content_to_discord, comfy_delete_and_reroute_nodes
-from modules.utils_discord import Embeds, set_bot_embeds, guild_only, owner_only, guild_or_owner_only, user_not_blacklisted, configurable_for_dm_if, custom_commands_check, is_direct_message, ireply, sleep_delete_message, send_long_message, \
+from modules.utils_discord import Embeds, cmd_ok, set_bot_embeds, guild_only, owner_only, guild_or_owner_only, user_not_blacklisted, configurable_for_dm_if, custom_commands_check, is_direct_message, ireply, sleep_delete_message, send_long_message, \
     EditMessageModal, SelectedListItem, SelectOptionsView, get_user_ctx_inter, get_message_ctx_inter, apply_reactions_to_messages, replace_msg_in_history_and_discord, MAX_MESSAGE_LENGTH, muffled_send  # noqa: F401
 from modules.utils_aspect_ratios import ar_parts_from_dims, dims_from_ar, avg_from_dims, get_aspect_ratio_parts, calculate_aspect_ratio_sizes  # noqa: F401
 from modules.utils_chat import custom_load_character, load_character_data
@@ -522,7 +522,7 @@ async def switch_settings_channels(guild:discord.Guild, channel:discord.TextChan
     # Post all current settings to new settings channel
     await post_active_settings(guild, channel=channel)
 
-if config.discord['post_active_settings'].get('enabled', True):
+if cmd_ok('set_server_settings_channel') and config.discord['post_active_settings'].get('enabled', True):
     # Command to set settings channels (post_active_settings feature)
     @client.hybrid_command(name="set_server_settings_channel", description="Assign a channel as the settings channel for this server.")
     @app_commands.describe(channel='Begin typing the channel name and it should appear in the menu.')
@@ -777,23 +777,24 @@ class VoiceClients:
 voice_clients = VoiceClients()
 
 # Command to set voice channels
-@client.hybrid_command(name="set_server_voice_channel", description="Assign a channel as the voice channel for this server")
-@app_commands.checks.has_permissions(manage_channels=True)
-@user_not_blacklisted()
-@guild_only()
-async def set_server_voice_channel(ctx: commands.Context, channel: Optional[discord.VoiceChannel]=None):
-    if isinstance(ctx.author, discord.Member) and ctx.author.voice:
-        channel = channel or ctx.author.voice.channel # type: ignore
+if cmd_ok('set_server_voice_channel'):
+    @client.hybrid_command(name="set_server_voice_channel", description="Assign a channel as the voice channel for this server")
+    @app_commands.checks.has_permissions(manage_channels=True)
+    @user_not_blacklisted()
+    @guild_only()
+    async def set_server_voice_channel(ctx: commands.Context, channel: Optional[discord.VoiceChannel]=None):
+        if isinstance(ctx.author, discord.Member) and ctx.author.voice:
+            channel = channel or ctx.author.voice.channel # type: ignore
+            
+        if channel is None:
+            raise AlertUserError('Please select or join a voice channel to set.')
+
+        log.info(f'{ctx.author.display_name} used "/set_server_voice_channel".')
         
-    if channel is None:
-        raise AlertUserError('Please select or join a voice channel to set.')
+        bot_database.update_voice_channels(ctx.guild.id, channel.id)
+        await ctx.send(f"Voice channel for **{ctx.guild}** set to **{channel.name}**.", delete_after=5)
 
-    log.info(f'{ctx.author.display_name} used "/set_server_voice_channel".')
-    
-    bot_database.update_voice_channels(ctx.guild.id, channel.id)
-    await ctx.send(f"Voice channel for **{ctx.guild}** set to **{channel.name}**.", delete_after=5)
-
-if tts_is_enabled():
+if tts_is_enabled() and cmd_ok('toggle_tts'):
     # Register command for helper function to toggle TTS
     @client.hybrid_command(description='Toggles TTS on/off')
     @user_not_blacklisted()
@@ -806,78 +807,83 @@ if tts_is_enabled():
         await task_manager.queue_task(toggle_tts_task, 'normal_queue')
 
 # Define context menu app command
-@client.tree.context_menu(name="Bot Join VC")
-@user_not_blacklisted()
-@guild_or_owner_only()
-async def bot_join_voice_channel(inter: discord.Interaction, user: discord.User):
-    if user != client.user or not await client.is_owner(inter.user):
-        await inter.response.send_message(f"'Bot Join VC' is only for admins to manually join the Bot to VC.", ephemeral=True, delete_after=5)
-        return
-    if inter.guild.id not in bot_database.voice_channels:
-        await inter.response.send_message(f'⚠️ No Transcription channel set for {inter.guild}. Use "/set_server_stt_channel".', ephemeral=True)
-        return
-    try:
-        await voice_clients.toggle_voice_client(inter.guild.id, 'enabled')
-        await inter.response.send_message(f"Joined {user.display_name} to Voice Channel.", ephemeral=True, delete_after=5)
-    except Exception as e:
-        await inter.response.send_message(f"Failed to connect bot to VC: {e}", ephemeral=True, delete_after=5)
-        log.error(f"[Bot Join VC] Error joining bot to VC: {e}")
+if cmd_ok('bot_join_voice_channel'):
+    @client.tree.context_menu(name="Bot Join VC")
+    @user_not_blacklisted()
+    @guild_or_owner_only()
+    async def bot_join_voice_channel(inter: discord.Interaction, user: discord.User):
+        if user != client.user or not await client.is_owner(inter.user):
+            await inter.response.send_message(f"'Bot Join VC' is only for admins to manually join the Bot to VC.", ephemeral=True, delete_after=5)
+            return
+        if inter.guild.id not in bot_database.voice_channels:
+            await inter.response.send_message(f'⚠️ No Transcription channel set for {inter.guild}. Use "/set_server_stt_channel".', ephemeral=True)
+            return
+        try:
+            await voice_clients.toggle_voice_client(inter.guild.id, 'enabled')
+            await inter.response.send_message(f"Joined {user.display_name} to Voice Channel.", ephemeral=True, delete_after=5)
+        except Exception as e:
+            await inter.response.send_message(f"Failed to connect bot to VC: {e}", ephemeral=True, delete_after=5)
+            log.error(f"[Bot Join VC] Error joining bot to VC: {e}")
 
 #################################################################
 #################### BLACKLIST USER COMMAND #####################
 #################################################################
-@client.hybrid_command(name="user_blacklist", description="Manage users allowed to interact with the bot")
-@app_commands.describe(action="Action to perform", user="User to add or remove from blacklist")
-@app_commands.choices(action=[app_commands.Choice(name="add", value="add"), app_commands.Choice(name="remove", value="remove")])
-@owner_only()
-async def user_blacklist_cmd(ctx: commands.Context, action: str, user: discord.User):
-    if action == "add":
-        user_blacklist.add(user.id)
-        await ctx.send(f"{user.display_name} is blocked from interacting with the bot.", ephemeral=True)
-    elif action == "remove":
-        user_blacklist.remove(user.id)
-        await ctx.send(f"{user.display_name} is allowed to interact with the bot.", ephemeral=True)
+if cmd_ok('user_blacklist'):
+    @client.hybrid_command(name="user_blacklist", description="Manage users allowed to interact with the bot")
+    @app_commands.describe(action="Action to perform", user="User to add or remove from blacklist")
+    @app_commands.choices(action=[app_commands.Choice(name="add", value="add"), app_commands.Choice(name="remove", value="remove")])
+    @owner_only()
+    async def user_blacklist_cmd(ctx: commands.Context, action: str, user: discord.User):
+        if action == "add":
+            user_blacklist.add(user.id)
+            await ctx.send(f"{user.display_name} is blocked from interacting with the bot.", ephemeral=True)
+        elif action == "remove":
+            user_blacklist.remove(user.id)
+            await ctx.send(f"{user.display_name} is allowed to interact with the bot.", ephemeral=True)
 
 #################################################################
 ######################### STT COMMANDS ##########################
 #################################################################
 if config.stt_enabled():
-    # Command to set voice channels
-    @client.hybrid_command(name="set_server_stt_channel", description="Assign a text channel for STT transcriptions to be sent for this server")
-    @app_commands.checks.has_permissions(manage_channels=True)
-    @user_not_blacklisted()
-    @guild_only()
-    async def set_server_stt_channel(ctx: commands.Context, channel: Optional[discord.TextChannel]=None):
-        channel = channel or ctx.channel
+    if cmd_ok('set_server_stt_channel'):
+        # Command to set voice channels
+        @client.hybrid_command(name="set_server_stt_channel", description="Assign a text channel for STT transcriptions to be sent for this server")
+        @app_commands.checks.has_permissions(manage_channels=True)
+        @user_not_blacklisted()
+        @guild_only()
+        async def set_server_stt_channel(ctx: commands.Context, channel: Optional[discord.TextChannel]=None):
+            channel = channel or ctx.channel
 
-        log.info(f'{ctx.author.display_name} used "/set_server_stt_channel".')
+            log.info(f'{ctx.author.display_name} used "/set_server_stt_channel".')
 
-        bot_database.update_stt_channels(ctx.guild.id, channel.id)
-        await ctx.send(f"STT transcription channel for **{ctx.guild}** set to **{channel.name}**.", delete_after=5)
+            bot_database.update_stt_channels(ctx.guild.id, channel.id)
+            await ctx.send(f"STT transcription channel for **{ctx.guild}** set to **{channel.name}**.", delete_after=5)
 
-    @client.hybrid_command(name="toggle_stt", description="Toggles STT on/off")
-    @app_commands.describe(min_audio_duration="Minimum audio duration for a chunk (default 0.5s)")
-    @user_not_blacklisted()
-    @guild_only()
-    async def toggle_stt(ctx: commands.Context, min_audio_duration: float = 0.5):
-        await ireply(ctx, 'toggle STT') # send a response msg to the user
-        # offload to TaskManager() queue
-        log.info(f'{ctx.author.display_name} used "/toggle_stt"')
-        toggle_stt_task = Task('toggle_stt', ctx)
-        setattr(toggle_stt_task, "min_audio_duration", min_audio_duration)
-        await task_manager.queue_task(toggle_stt_task, 'normal_queue')
+    if cmd_ok('toggle_stt'):
+        @client.hybrid_command(name="toggle_stt", description="Toggles STT on/off")
+        @app_commands.describe(min_audio_duration="Minimum audio duration for a chunk (default 0.5s)")
+        @user_not_blacklisted()
+        @guild_only()
+        async def toggle_stt(ctx: commands.Context, min_audio_duration: float = 0.5):
+            await ireply(ctx, 'toggle STT') # send a response msg to the user
+            # offload to TaskManager() queue
+            log.info(f'{ctx.author.display_name} used "/toggle_stt"')
+            toggle_stt_task = Task('toggle_stt', ctx)
+            setattr(toggle_stt_task, "min_audio_duration", min_audio_duration)
+            await task_manager.queue_task(toggle_stt_task, 'normal_queue')
 
-    @client.hybrid_command(name="stt_blacklist", description="Manage the STT blacklist")
-    @app_commands.describe(action="Action to perform", user="User to add or remove from blacklist")
-    @app_commands.choices(action=[app_commands.Choice(name="add", value="add"), app_commands.Choice(name="remove", value="remove")])
-    @user_not_blacklisted()
-    async def tts_blacklist_cmd(ctx: commands.Context, action: str, user: discord.User):
-        if action == "add":
-            stt_blacklist.add(user.id)
-            await ctx.send(f"Added {user.display_name} to the STT blacklist.", ephemeral=True)
-        elif action == "remove":
-            stt_blacklist.remove(user.id)
-            await ctx.send(f"Removed {user.display_name} from the STT blacklist.", ephemeral=True)
+    if cmd_ok('stt_blacklist'):
+        @client.hybrid_command(name="stt_blacklist", description="Manage the STT blacklist")
+        @app_commands.describe(action="Action to perform", user="User to add or remove from blacklist")
+        @app_commands.choices(action=[app_commands.Choice(name="add", value="add"), app_commands.Choice(name="remove", value="remove")])
+        @user_not_blacklisted()
+        async def tts_blacklist_cmd(ctx: commands.Context, action: str, user: discord.User):
+            if action == "add":
+                stt_blacklist.add(user.id)
+                await ctx.send(f"Added {user.display_name} to the STT blacklist.", ephemeral=True)
+            elif action == "remove":
+                stt_blacklist.remove(user.id)
+                await ctx.send(f"Removed {user.display_name} from the STT blacklist.", ephemeral=True)
 
 #################################################################
 ###################### DYNAMIC PROMPTING ########################
@@ -4683,7 +4689,7 @@ flows = Flows()
 #################################################################
 ################ IMGGEN SERVER RESTART COMMAND ##################
 #################################################################
-if imggen_enabled and api.imggen.post_server_restart:
+if imggen_enabled and api.imggen.post_server_restart and cmd_ok('restart_sd_client'):
     # Function to attempt restarting the SD WebUI Client in the event it gets stuck
     @client.hybrid_command(description=f"Immediately restarts the main media generation server.")
     @user_not_blacklisted()
@@ -4814,356 +4820,357 @@ if imggen_enabled:
 
     use_llm_status = 'Whether to send your prompt to LLM. Results may vary!' if tgwui_enabled else '**option disabled** (LLM is not integrated)'
 
-    @client.hybrid_command(name="image", description=f"Generate an image{f' using {api.imggen.name}' if api.imggen else ''}")
-    @app_commands.describe(use_llm=use_llm_status)
-    @app_commands.describe(style='Applies a positive/negative prompt preset')
-    @app_commands.describe(img2img='Diffuses from an input image instead of pure latent noise.')
-    @app_commands.describe(img2img_mask='Masks the diffusion strength for the img2img input. Requires img2img.')
-    @app_commands.describe(face_swap=reactor_status)
-    @app_commands.describe(controlnet=reactor_status)
-    @app_commands.choices(use_llm=use_llm_choices)
-    @app_commands.choices(size=size_choices)
-    @app_commands.choices(style=style_choices)
-    @user_not_blacklisted()
-    @configurable_for_dm_if(lambda ctx: 'image' in config.discord_dm_setting('allowed_commands', []))
-    async def image(ctx: commands.Context, prompt: str, use_llm: typing.Optional[app_commands.Choice[str]], size: typing.Optional[app_commands.Choice[str]], style: typing.Optional[app_commands.Choice[str]], 
-                    neg_prompt: typing.Optional[str], img2img: typing.Optional[discord.Attachment], img2img_mask: typing.Optional[discord.Attachment], 
-                    face_swap: typing.Optional[discord.Attachment], controlnet: typing.Optional[discord.Attachment]):
-        user_selections = {"prompt": prompt, "use_llm": use_llm.value if use_llm else None, "size": size.value if size else None, "style": style.value if style else {}, "neg_prompt": neg_prompt if neg_prompt else '',
-                            "img2img": img2img if img2img else None, "img2img_mask": img2img_mask if img2img_mask else None,
-                            "face_swap": face_swap if face_swap else None, "cnet": controlnet if controlnet else None}
-        await process_image(ctx, user_selections)
+    if cmd_ok('image'):
+        @client.hybrid_command(name="image", description=f"Generate an image{f' using {api.imggen.name}' if api.imggen else ''}")
+        @app_commands.describe(use_llm=use_llm_status)
+        @app_commands.describe(style='Applies a positive/negative prompt preset')
+        @app_commands.describe(img2img='Diffuses from an input image instead of pure latent noise.')
+        @app_commands.describe(img2img_mask='Masks the diffusion strength for the img2img input. Requires img2img.')
+        @app_commands.describe(face_swap=reactor_status)
+        @app_commands.describe(controlnet=reactor_status)
+        @app_commands.choices(use_llm=use_llm_choices)
+        @app_commands.choices(size=size_choices)
+        @app_commands.choices(style=style_choices)
+        @user_not_blacklisted()
+        @configurable_for_dm_if(lambda ctx: 'image' in config.discord_dm_setting('allowed_commands', []))
+        async def image(ctx: commands.Context, prompt: str, use_llm: typing.Optional[app_commands.Choice[str]], size: typing.Optional[app_commands.Choice[str]], style: typing.Optional[app_commands.Choice[str]], 
+                        neg_prompt: typing.Optional[str], img2img: typing.Optional[discord.Attachment], img2img_mask: typing.Optional[discord.Attachment], 
+                        face_swap: typing.Optional[discord.Attachment], controlnet: typing.Optional[discord.Attachment]):
+            user_selections = {"prompt": prompt, "use_llm": use_llm.value if use_llm else None, "size": size.value if size else None, "style": style.value if style else {}, "neg_prompt": neg_prompt if neg_prompt else '',
+                                "img2img": img2img if img2img else None, "img2img_mask": img2img_mask if img2img_mask else None,
+                                "face_swap": face_swap if face_swap else None, "cnet": controlnet if controlnet else None}
+            await process_image(ctx, user_selections)
 
-    async def process_image(ctx: commands.Context, selections):
-        # CREATE TASK - CHECK IF ONLINE
-        image_cmd_task = Task('image_cmd', ctx)
-        setattr(image_cmd_task, 'imgcmd_task', True)
-        # Do not process if SD WebUI is offline
-        if not await api_online(client_type='imggen', ictx=ctx):
-            await ctx.reply("Stable Diffusion is not online.", ephemeral=True, delete_after=5)
-            return
-        # User inputs from /image command
-        pos_prompt:str = selections['prompt']
-        if pos_prompt.startswith('-# '):
-            pos_prompt = pos_prompt[3:]
-        use_llm = selections.get('use_llm', None) if tgwui_enabled else None
-        size = selections.get('size', None)
-        style = selections.get('style', {})
-        neg_prompt = selections.get('neg_prompt', '')
-        img2img = selections.get('img2img', None)
-        img2img_mask = selections.get('img2img_mask', None)
-        face_swap = selections.get('face_swap', None) if config.reactor_enabled() else None
-        cnet = selections.get('cnet', None) if config.controlnet_enabled() else None
+        async def process_image(ctx: commands.Context, selections):
+            # CREATE TASK - CHECK IF ONLINE
+            image_cmd_task = Task('image_cmd', ctx)
+            setattr(image_cmd_task, 'imgcmd_task', True)
+            # Do not process if SD WebUI is offline
+            if not await api_online(client_type='imggen', ictx=ctx):
+                await ctx.reply("Stable Diffusion is not online.", ephemeral=True, delete_after=5)
+                return
+            # User inputs from /image command
+            pos_prompt:str = selections['prompt']
+            if pos_prompt.startswith('-# '):
+                pos_prompt = pos_prompt[3:]
+            use_llm = selections.get('use_llm', None) if tgwui_enabled else None
+            size = selections.get('size', None)
+            style = selections.get('style', {})
+            neg_prompt = selections.get('neg_prompt', '')
+            img2img = selections.get('img2img', None)
+            img2img_mask = selections.get('img2img_mask', None)
+            face_swap = selections.get('face_swap', None) if config.reactor_enabled() else None
+            cnet = selections.get('cnet', None) if config.controlnet_enabled() else None
 
-        imgmodel_settings:ImgModel = get_imgmodel_settings(ctx)
+            imgmodel_settings:ImgModel = get_imgmodel_settings(ctx)
 
-        # Defaults
-        mode = 'txt2img'
-        size_dict = {}
-        faceswapimg = None
-        img2img_dict = {}
-        cnet_dict = {}
-        try:
-            pos_prompt = await dynamic_prompting(pos_prompt)
-            log_msg = ""
-            if use_llm and use_llm != 'No':
-                log_msg += "\nUse LLM: True (image was generated from LLM reply)"
-            if size:
-                selected_size = next((option for option in size_options if option['name'] == size), None)
-                if selected_size:
-                    size_dict['width'] = selected_size.get('width')
-                    size_dict['height'] = selected_size.get('height')
-                log_msg += f"\nSize: {size}"
-            if style:
-                selected_style_option = next((option for option in style_options if option['name'] == style), None)
-                if selected_style_option:
-                    style = selected_style_option
-                log_msg += f"\nStyle: {style.get('name', 'Unknown')}"
-            if neg_prompt:
-                log_msg += f"\nNegative Prompt: {neg_prompt}"
-            if img2img:
-                async def process_image_img2img(img2img, img2img_dict, mode, log_msg):
-                    i2i_image = await imgmodel_settings.handle_image_input(img2img, file_type='image')
-                    img2img_dict['image'] = i2i_image
-                    # Ask user to select a Denoise Strength
-                    denoise_options = []
-                    for value in [round(0.05 * index, 2) for index in range(int(1 / 0.05) + 1)]:
-                        denoise_options.append(discord.SelectOption(label=str(value), value=str(value), default=True if value == 0.40 else False))
-                    denoise_options = denoise_options[:25]
-                    denoise_select = discord.ui.Select(custom_id="denoise", options=denoise_options)
-                    # Send Denoise Strength select menu in a view
-                    submit_button = discord.ui.Button(style=discord.ButtonStyle.primary, label="Submit")
-                    view = discord.ui.View()
-                    view.add_item(denoise_select)
-                    view.add_item(submit_button)
-                    select_message = await ctx.send("Select denoise strength for img2img:", view=view, ephemeral=True)
-                    interaction = await client.wait_for("interaction", check=lambda interaction: interaction.message.id == select_message.id)
-                    denoising_strength = interaction.data.get("values", ["0.40"])[0]
-                    img2img_dict['denoising_strength'] = float(denoising_strength)
-                    await interaction.response.defer() # defer response for this interaction
-                    await select_message.delete()
-                    mode = 'img2img' # Change mode to img2img
-                    log_msg += f"\nImg2Img with denoise strength: {denoising_strength}"
-                    return img2img_dict, mode, log_msg
-                try:
-                    img2img_dict, mode, log_msg = await process_image_img2img(img2img, img2img_dict, mode, log_msg)
-                except Exception as e:
-                    log.error(f"An error occurred while configuring Img2Img for /image command: {e}")
-            if img2img_mask:
+            # Defaults
+            mode = 'txt2img'
+            size_dict = {}
+            faceswapimg = None
+            img2img_dict = {}
+            cnet_dict = {}
+            try:
+                pos_prompt = await dynamic_prompting(pos_prompt)
+                log_msg = ""
+                if use_llm and use_llm != 'No':
+                    log_msg += "\nUse LLM: True (image was generated from LLM reply)"
+                if size:
+                    selected_size = next((option for option in size_options if option['name'] == size), None)
+                    if selected_size:
+                        size_dict['width'] = selected_size.get('width')
+                        size_dict['height'] = selected_size.get('height')
+                    log_msg += f"\nSize: {size}"
+                if style:
+                    selected_style_option = next((option for option in style_options if option['name'] == style), None)
+                    if selected_style_option:
+                        style = selected_style_option
+                    log_msg += f"\nStyle: {style.get('name', 'Unknown')}"
+                if neg_prompt:
+                    log_msg += f"\nNegative Prompt: {neg_prompt}"
                 if img2img:
-                    img2img_mask_img = await imgmodel_settings.handle_image_input(img2img_mask, file_type='image')
-                    img2img_dict['mask'] = img2img_mask_img
-                    log_msg += "\nInpainting Mask Provided"
-                else:
-                    await ctx.send("Inpainting requires im2img. Not applying img2img_mask mask...", ephemeral=True)
-            if face_swap:
-                faceswapimg = await imgmodel_settings.handle_image_input(face_swap, file_type='image')
-                log_msg += "\nFace Swap Image Provided"
-            if cnet:
-                # Get filtered ControlNet data
-                cnet_data = await get_cnet_data()
-                async def process_image_controlnet(cnet, cnet_dict, log_msg):
-                    try:
-                        cnet_dict['image'] = await imgmodel_settings.handle_image_input(cnet, file_type='image')
-                    except Exception as e:
-                        log.error(f"Error decoding ControlNet input image for '/image' command: {e}")
-                    try:
-                        # Ask user to select a Control Type
-                        cnet_control_type_options = [discord.SelectOption(label=key, value=key) for key in cnet_data]
-                        control_type_select = discord.ui.Select(options=cnet_control_type_options, placeholder="Select ControlNet Control Type", custom_id="cnet_control_type_select")
-                        # Send Control Type select menu in a view
+                    async def process_image_img2img(img2img, img2img_dict, mode, log_msg):
+                        i2i_image = await imgmodel_settings.handle_image_input(img2img, file_type='image')
+                        img2img_dict['image'] = i2i_image
+                        # Ask user to select a Denoise Strength
+                        denoise_options = []
+                        for value in [round(0.05 * index, 2) for index in range(int(1 / 0.05) + 1)]:
+                            denoise_options.append(discord.SelectOption(label=str(value), value=str(value), default=True if value == 0.40 else False))
+                        denoise_options = denoise_options[:25]
+                        denoise_select = discord.ui.Select(custom_id="denoise", options=denoise_options)
+                        # Send Denoise Strength select menu in a view
+                        submit_button = discord.ui.Button(style=discord.ButtonStyle.primary, label="Submit")
                         view = discord.ui.View()
-                        view.add_item(control_type_select)
-                        select_message = await ctx.send("### Select ControlNet Control Type:", view=view, ephemeral=True)
+                        view.add_item(denoise_select)
+                        view.add_item(submit_button)
+                        select_message = await ctx.send("Select denoise strength for img2img:", view=view, ephemeral=True)
                         interaction = await client.wait_for("interaction", check=lambda interaction: interaction.message.id == select_message.id)
-                        selected_control_type = interaction.data.get("values")[0]
-                        selected_control_type = cnet_data[selected_control_type]
+                        denoising_strength = interaction.data.get("values", ["0.40"])[0]
+                        img2img_dict['denoising_strength'] = float(denoising_strength)
                         await interaction.response.defer() # defer response for this interaction
                         await select_message.delete()
+                        mode = 'img2img' # Change mode to img2img
+                        log_msg += f"\nImg2Img with denoise strength: {denoising_strength}"
+                        return img2img_dict, mode, log_msg
+                    try:
+                        img2img_dict, mode, log_msg = await process_image_img2img(img2img, img2img_dict, mode, log_msg)
                     except Exception as e:
-                        log.error(f"An error occurred while setting ControlNet Control Type in '/image' command: {e}")
-                    # View containing Selects for ControlNet Module, Model, Start and End
-                    class CnetControlView(discord.ui.View):
-                        def __init__(self, cnet_data, selected_control_type):
-                            super().__init__()
-                            self.cnet_dict = {'module': selected_control_type["default_option"], 'model': selected_control_type["default_model"], 'guidance_start': 0.00, 'guidance_end': 1.00}
-                        # Dropdown Menu for Module
-                        module_options = [discord.SelectOption(label=module_option, value=module_option, default=True if module_option == selected_control_type["default_option"] else False,
-                            description='Default' if module_option == selected_control_type["default_option"] else None) for module_option in selected_control_type["module_list"]]
-                        @discord.ui.select(options=module_options, placeholder="Select ControlNet Module", custom_id="cnet_module_select")
-                        async def module_select(self, select, interaction):
-                            self.cnet_dict['module'] = select.data['values'][0]
-                            await select.response.defer()
-                        # Dropdown Menu for Model
-                        model_options = [discord.SelectOption( label=model_option, value=model_option, default=True if model_option == selected_control_type["default_model"] else False,
-                            description='Default' if model_option == selected_control_type["default_model"] else '') for model_option in selected_control_type["model_list"]]
-                        @discord.ui.select(options=model_options, placeholder="Select ControlNet Model", custom_id="cnet_model_select", disabled=selected_control_type.get("default_model") == 'None')
-                        async def model_select(self, select, interaction):
-                            self.cnet_dict['model'] = select.data['values'][0]
-                            await select.response.defer()
-                        # Dropdown Menu for Start
-                        start_options = []
-                        for value in [round(0.05 * index, 2) for index in range(int(1 / 0.05) + 1)]:
-                            start_options.append(discord.SelectOption(label=str(value), value=str(value), default=True if value == 0.00 else False))
-                        @discord.ui.select(options=start_options, placeholder="Select Start Guidance (0.0 - 1.0)", custom_id="cnet_start_select")
-                        async def start_select(self, select, interaction):
-                            self.cnet_dict['guidance_start'] = float(select.data['values'][0])
-                            await select.response.defer()
-                        # Dropdown Menu for End
-                        end_options = []
-                        for value in [round(0.05 * index, 2) for index in range(int(1 / 0.05) + 1)]:
-                            end_options.append(discord.SelectOption(label=str(value), value=str(value), default=True if value == 1.00 else False))
-                        @discord.ui.select(options=end_options, placeholder="Select End Guidance (0.0 - 1.0)", custom_id="cnet_end_select")
-                        async def end_select(self, select, interaction):
-                            self.cnet_dict['guidance_end'] = float(select.data['values'][0])
-                            await select.response.defer()
-                        # Submit button
-                        @discord.ui.button(label='Submit', style=discord.ButtonStyle.primary, custom_id="cnet_submit")
-                        async def submit_button(self, button, interaction):
-                            await button.response.defer()
-                            self.stop()
-                    # Function to build Select Options based on the selected ControlNet Module
-                    def make_cnet_options(selected_module):
-                        # Defaults
-                        options_a = [discord.SelectOption(label='Not Applicable', value='64')]
-                        options_b = [discord.SelectOption(label='Not Applicable', value='64')]
-                        label_a = 'Not Applicable'
-                        label_b = 'Not Applicable'
-                        if (selected_module in ["canny", "mlsd", "normal_midas", "scribble_xdog", "softedge_teed"]
-                            or selected_module.startswith(('blur', 'depth_leres', 'recolor_', 'reference', 'CLIP-G', 'tile_colorfix'))):
-                            try:
-                                # Initialize Specific Options
-                                options_a = []
-                                options_b = []
-                                # Defaults
-                                round_a = 2
-                                range_a = 1
-                                default_a = 10
-                                round_b = 2
-                                range_b = 256
-                                default_b = 0
-                                if selected_module.startswith('blur'):
-                                    label_a = 'Sigma'
-                                    range_a = 64
-                                    default_a = 3
-                                elif selected_module == 'canny':
-                                    label_a = 'Low Threshold'
-                                    round_a = 0
-                                    range_a = 256
-                                    default_a = 7
-                                    label_b = 'High Threshold'
-                                    round_b = 0
-                                    default_b = 16
-                                elif selected_module.startswith('depth_leres'):
-                                    label_a = 'Remove Near %'
-                                    round_a = 1
-                                    range_a = 100
-                                    default_a = 0
-                                    label_b = 'Remove Background %'
-                                    round_b = 1
-                                    range_b = 100
-                                elif selected_module == 'mlsd':
-                                    label_a = 'MLSD Value Threshold'
-                                    range_a = 2
-                                    default_a = 0
-                                    label_b = 'MLSD Distance Threshold'
-                                    range_b = 20
-                                elif selected_module == 'normal_midas':
-                                    label_a = 'Normal Background Threshold'
-                                    default_a = 8
-                                elif selected_module.startswith('recolor'):
-                                    label_a = 'Gamma Correction'
-                                    round_a = 3
-                                    range_a = 2
-                                elif selected_module.startswith('reference'):
-                                    label_a = 'Style Fidelity'
-                                elif selected_module.startswith('CLIP-G'): # AKA 'Revision'
-                                    label_a = 'Noise Augmentation'
-                                    default_a = 0
-                                elif selected_module == 'scribble_xdog':
-                                    label_a = 'XDoG Threshold'
-                                    range_a = 64
-                                elif selected_module == 'softedge_teed':
-                                    label_a = 'Safe Steps'
-                                    default_a = 8
-                                    range_a = 10
-                                    round_a = 0
-                                elif selected_module.startswith('tile_colorfix'):
-                                    label_a = 'Variation'
-                                    round_a = 0
-                                    range_a = 32
-                                    default_a = 5
-                                    if selected_module == 'tile_colorfix+sharp':
-                                        label_b = 'Sharpness'
+                        log.error(f"An error occurred while configuring Img2Img for /image command: {e}")
+                if img2img_mask:
+                    if img2img:
+                        img2img_mask_img = await imgmodel_settings.handle_image_input(img2img_mask, file_type='image')
+                        img2img_dict['mask'] = img2img_mask_img
+                        log_msg += "\nInpainting Mask Provided"
+                    else:
+                        await ctx.send("Inpainting requires im2img. Not applying img2img_mask mask...", ephemeral=True)
+                if face_swap:
+                    faceswapimg = await imgmodel_settings.handle_image_input(face_swap, file_type='image')
+                    log_msg += "\nFace Swap Image Provided"
+                if cnet:
+                    # Get filtered ControlNet data
+                    cnet_data = await get_cnet_data()
+                    async def process_image_controlnet(cnet, cnet_dict, log_msg):
+                        try:
+                            cnet_dict['image'] = await imgmodel_settings.handle_image_input(cnet, file_type='image')
+                        except Exception as e:
+                            log.error(f"Error decoding ControlNet input image for '/image' command: {e}")
+                        try:
+                            # Ask user to select a Control Type
+                            cnet_control_type_options = [discord.SelectOption(label=key, value=key) for key in cnet_data]
+                            control_type_select = discord.ui.Select(options=cnet_control_type_options, placeholder="Select ControlNet Control Type", custom_id="cnet_control_type_select")
+                            # Send Control Type select menu in a view
+                            view = discord.ui.View()
+                            view.add_item(control_type_select)
+                            select_message = await ctx.send("### Select ControlNet Control Type:", view=view, ephemeral=True)
+                            interaction = await client.wait_for("interaction", check=lambda interaction: interaction.message.id == select_message.id)
+                            selected_control_type = interaction.data.get("values")[0]
+                            selected_control_type = cnet_data[selected_control_type]
+                            await interaction.response.defer() # defer response for this interaction
+                            await select_message.delete()
+                        except Exception as e:
+                            log.error(f"An error occurred while setting ControlNet Control Type in '/image' command: {e}")
+                        # View containing Selects for ControlNet Module, Model, Start and End
+                        class CnetControlView(discord.ui.View):
+                            def __init__(self, cnet_data, selected_control_type):
+                                super().__init__()
+                                self.cnet_dict = {'module': selected_control_type["default_option"], 'model': selected_control_type["default_model"], 'guidance_start': 0.00, 'guidance_end': 1.00}
+                            # Dropdown Menu for Module
+                            module_options = [discord.SelectOption(label=module_option, value=module_option, default=True if module_option == selected_control_type["default_option"] else False,
+                                description='Default' if module_option == selected_control_type["default_option"] else None) for module_option in selected_control_type["module_list"]]
+                            @discord.ui.select(options=module_options, placeholder="Select ControlNet Module", custom_id="cnet_module_select")
+                            async def module_select(self, select, interaction):
+                                self.cnet_dict['module'] = select.data['values'][0]
+                                await select.response.defer()
+                            # Dropdown Menu for Model
+                            model_options = [discord.SelectOption( label=model_option, value=model_option, default=True if model_option == selected_control_type["default_model"] else False,
+                                description='Default' if model_option == selected_control_type["default_model"] else '') for model_option in selected_control_type["model_list"]]
+                            @discord.ui.select(options=model_options, placeholder="Select ControlNet Model", custom_id="cnet_model_select", disabled=selected_control_type.get("default_model") == 'None')
+                            async def model_select(self, select, interaction):
+                                self.cnet_dict['model'] = select.data['values'][0]
+                                await select.response.defer()
+                            # Dropdown Menu for Start
+                            start_options = []
+                            for value in [round(0.05 * index, 2) for index in range(int(1 / 0.05) + 1)]:
+                                start_options.append(discord.SelectOption(label=str(value), value=str(value), default=True if value == 0.00 else False))
+                            @discord.ui.select(options=start_options, placeholder="Select Start Guidance (0.0 - 1.0)", custom_id="cnet_start_select")
+                            async def start_select(self, select, interaction):
+                                self.cnet_dict['guidance_start'] = float(select.data['values'][0])
+                                await select.response.defer()
+                            # Dropdown Menu for End
+                            end_options = []
+                            for value in [round(0.05 * index, 2) for index in range(int(1 / 0.05) + 1)]:
+                                end_options.append(discord.SelectOption(label=str(value), value=str(value), default=True if value == 1.00 else False))
+                            @discord.ui.select(options=end_options, placeholder="Select End Guidance (0.0 - 1.0)", custom_id="cnet_end_select")
+                            async def end_select(self, select, interaction):
+                                self.cnet_dict['guidance_end'] = float(select.data['values'][0])
+                                await select.response.defer()
+                            # Submit button
+                            @discord.ui.button(label='Submit', style=discord.ButtonStyle.primary, custom_id="cnet_submit")
+                            async def submit_button(self, button, interaction):
+                                await button.response.defer()
+                                self.stop()
+                        # Function to build Select Options based on the selected ControlNet Module
+                        def make_cnet_options(selected_module):
+                            # Defaults
+                            options_a = [discord.SelectOption(label='Not Applicable', value='64')]
+                            options_b = [discord.SelectOption(label='Not Applicable', value='64')]
+                            label_a = 'Not Applicable'
+                            label_b = 'Not Applicable'
+                            if (selected_module in ["canny", "mlsd", "normal_midas", "scribble_xdog", "softedge_teed"]
+                                or selected_module.startswith(('blur', 'depth_leres', 'recolor_', 'reference', 'CLIP-G', 'tile_colorfix'))):
+                                try:
+                                    # Initialize Specific Options
+                                    options_a = []
+                                    options_b = []
+                                    # Defaults
+                                    round_a = 2
+                                    range_a = 1
+                                    default_a = 10
+                                    round_b = 2
+                                    range_b = 256
+                                    default_b = 0
+                                    if selected_module.startswith('blur'):
+                                        label_a = 'Sigma'
+                                        range_a = 64
+                                        default_a = 3
+                                    elif selected_module == 'canny':
+                                        label_a = 'Low Threshold'
+                                        round_a = 0
+                                        range_a = 256
+                                        default_a = 7
+                                        label_b = 'High Threshold'
                                         round_b = 0
-                                        range_b = 2
-                                        default_b = 10
-                                for index, value in enumerate([round(index * (range_a / 20), round_a) for index in range(20 + 1)]):
-                                    value = float(value) if round_a else int(value)
-                                    options_a.append(discord.SelectOption(label=str(value), value=str(value), default=index == default_a))
-                                for index, value in enumerate([round(index * (range_b / 20), round_b) for index in range(20 + 1)]):
-                                    value = float(value) if round_b else int(value)
-                                    options_b.append(discord.SelectOption(label=str(value), value=str(value), default=index == default_b))
-                            except Exception as e:
-                                log.error(f"Error building ControlNet options for '/image' command: {e}")
-                                return [discord.SelectOption(label='Not Applicable', value='64')], 'Not Applicable', [discord.SelectOption(label='Not Applicable', value='64')], 'Not Applicable'
-                        return options_a, label_a, options_b, label_b
+                                        default_b = 16
+                                    elif selected_module.startswith('depth_leres'):
+                                        label_a = 'Remove Near %'
+                                        round_a = 1
+                                        range_a = 100
+                                        default_a = 0
+                                        label_b = 'Remove Background %'
+                                        round_b = 1
+                                        range_b = 100
+                                    elif selected_module == 'mlsd':
+                                        label_a = 'MLSD Value Threshold'
+                                        range_a = 2
+                                        default_a = 0
+                                        label_b = 'MLSD Distance Threshold'
+                                        range_b = 20
+                                    elif selected_module == 'normal_midas':
+                                        label_a = 'Normal Background Threshold'
+                                        default_a = 8
+                                    elif selected_module.startswith('recolor'):
+                                        label_a = 'Gamma Correction'
+                                        round_a = 3
+                                        range_a = 2
+                                    elif selected_module.startswith('reference'):
+                                        label_a = 'Style Fidelity'
+                                    elif selected_module.startswith('CLIP-G'): # AKA 'Revision'
+                                        label_a = 'Noise Augmentation'
+                                        default_a = 0
+                                    elif selected_module == 'scribble_xdog':
+                                        label_a = 'XDoG Threshold'
+                                        range_a = 64
+                                    elif selected_module == 'softedge_teed':
+                                        label_a = 'Safe Steps'
+                                        default_a = 8
+                                        range_a = 10
+                                        round_a = 0
+                                    elif selected_module.startswith('tile_colorfix'):
+                                        label_a = 'Variation'
+                                        round_a = 0
+                                        range_a = 32
+                                        default_a = 5
+                                        if selected_module == 'tile_colorfix+sharp':
+                                            label_b = 'Sharpness'
+                                            round_b = 0
+                                            range_b = 2
+                                            default_b = 10
+                                    for index, value in enumerate([round(index * (range_a / 20), round_a) for index in range(20 + 1)]):
+                                        value = float(value) if round_a else int(value)
+                                        options_a.append(discord.SelectOption(label=str(value), value=str(value), default=index == default_a))
+                                    for index, value in enumerate([round(index * (range_b / 20), round_b) for index in range(20 + 1)]):
+                                        value = float(value) if round_b else int(value)
+                                        options_b.append(discord.SelectOption(label=str(value), value=str(value), default=index == default_b))
+                                except Exception as e:
+                                    log.error(f"Error building ControlNet options for '/image' command: {e}")
+                                    return [discord.SelectOption(label='Not Applicable', value='64')], 'Not Applicable', [discord.SelectOption(label='Not Applicable', value='64')], 'Not Applicable'
+                            return options_a, label_a, options_b, label_b
+                        try:
+                            cnet_control_view = CnetControlView(cnet_data, selected_control_type)
+                            view_message = await ctx.send('### Select ControlNet Options\n • **Module**\n • **Model**\n • **Start** (0.0 - 1.0)\n • **End** (0.0 - 1.0)\n(if unsure, just Submit with Defaults)',
+                                view=cnet_control_view, ephemeral=True)
+                            await cnet_control_view.wait()
+                            cnet_dict.update(cnet_control_view.cnet_dict)
+                            selected_module = cnet_dict['module']   # For next step
+                            await view_message.delete()
+                            options_a, label_a, options_b, label_b = make_cnet_options(selected_module)
+                        except Exception as e:
+                            log.error(f"An error occurred while configuring initial ControlNet options from '/image' command: {e}")
+                        # View containing Selects for ControlNet Weight and Additional Options
+                        class CnetOptionsView(discord.ui.View):
+                            def __init__(self, options_a, label_a, options_b, label_b):
+                                super().__init__()
+                                self.cnet_dict = {'weight': 1.00}
+                            # Dropdown Menu for Weight
+                            weight_options = []
+                            for value in [round(0.05 * index, 2) for index in range(int(1 / 0.05) + 1)]:
+                                weight_options.append(discord.SelectOption(label=str(value), value=str(value), default=True if value == 1.00 else False))
+                            @discord.ui.select(options=weight_options, placeholder="Select ControlNet Weight", custom_id="cnet_weight_select")
+                            async def weight_select(self, select, interaction):
+                                self.cnet_dict['weight'] = float(select.data['values'][0])
+                                await select.response.defer()
+                            # Dropdown Menu for Options A
+                            @discord.ui.select(options=options_a, placeholder=label_a, custom_id="cnet_options_a_select", disabled=label_a == 'Not Applicable')
+                            async def thresh_a_select(self, select, interaction):
+                                self.cnet_dict['threshold_a'] = float(select.data['values'][0]) if '.' in select.data['values'][0] else int(select.data['values'][0])
+                                await select.response.defer()
+                            # Dropdown Menu for Options B
+                            @discord.ui.select(options=options_b, placeholder=label_b, custom_id="cnet_options_b_select", disabled=label_b == 'Not Applicable')
+                            async def options_b_select(self, select, interaction):
+                                self.cnet_dict['threshold_b'] = float(select.data['values'][0]) if '.' in select.data['values'][0] else int(select.data['values'][0])
+                                await select.response.defer()
+                            # Submit button
+                            @discord.ui.button(label='Submit', style=discord.ButtonStyle.primary, custom_id="cnet_submit")
+                            async def submit_button(self, button, interaction):
+                                await button.response.defer()
+                                self.stop()
+                        try:
+                            view = CnetOptionsView(options_a, label_a, options_b, label_b)
+                            message_a = f'\n • **{label_a}**' if label_a != 'Not Applicable' else ''
+                            message_b = f'\n • **{label_b}**' if label_b != 'Not Applicable' else ''
+                            view_message = await ctx.send(f'### Select ControlNet Options\n • **Weight** (0.0 - 1.0){message_a}{message_b}\n(if unsure, just Submit with Defaults)', view=view, ephemeral=True)
+                            await view.wait()
+                            cnet_dict.update(view.cnet_dict)
+                            await view_message.delete()
+                        except Exception as e:
+                            log.error(f"An error occurred while configuring secondary ControlNet options from /image command: {e}")
+                        cnet_dict.update({'enabled': True, 'save_detected_map': True})
+                        log_msg += f"\nControlNet: (Module: {cnet_dict['module']}, Model: {cnet_dict['model']})"
+                        return cnet_dict, log_msg
                     try:
-                        cnet_control_view = CnetControlView(cnet_data, selected_control_type)
-                        view_message = await ctx.send('### Select ControlNet Options\n • **Module**\n • **Model**\n • **Start** (0.0 - 1.0)\n • **End** (0.0 - 1.0)\n(if unsure, just Submit with Defaults)',
-                            view=cnet_control_view, ephemeral=True)
-                        await cnet_control_view.wait()
-                        cnet_dict.update(cnet_control_view.cnet_dict)
-                        selected_module = cnet_dict['module']   # For next step
-                        await view_message.delete()
-                        options_a, label_a, options_b, label_b = make_cnet_options(selected_module)
+                        cnet_dict, log_msg = await process_image_controlnet(cnet, cnet_dict, log_msg)
                     except Exception as e:
-                        log.error(f"An error occurred while configuring initial ControlNet options from '/image' command: {e}")
-                    # View containing Selects for ControlNet Weight and Additional Options
-                    class CnetOptionsView(discord.ui.View):
-                        def __init__(self, options_a, label_a, options_b, label_b):
-                            super().__init__()
-                            self.cnet_dict = {'weight': 1.00}
-                        # Dropdown Menu for Weight
-                        weight_options = []
-                        for value in [round(0.05 * index, 2) for index in range(int(1 / 0.05) + 1)]:
-                            weight_options.append(discord.SelectOption(label=str(value), value=str(value), default=True if value == 1.00 else False))
-                        @discord.ui.select(options=weight_options, placeholder="Select ControlNet Weight", custom_id="cnet_weight_select")
-                        async def weight_select(self, select, interaction):
-                            self.cnet_dict['weight'] = float(select.data['values'][0])
-                            await select.response.defer()
-                        # Dropdown Menu for Options A
-                        @discord.ui.select(options=options_a, placeholder=label_a, custom_id="cnet_options_a_select", disabled=label_a == 'Not Applicable')
-                        async def thresh_a_select(self, select, interaction):
-                            self.cnet_dict['threshold_a'] = float(select.data['values'][0]) if '.' in select.data['values'][0] else int(select.data['values'][0])
-                            await select.response.defer()
-                        # Dropdown Menu for Options B
-                        @discord.ui.select(options=options_b, placeholder=label_b, custom_id="cnet_options_b_select", disabled=label_b == 'Not Applicable')
-                        async def options_b_select(self, select, interaction):
-                            self.cnet_dict['threshold_b'] = float(select.data['values'][0]) if '.' in select.data['values'][0] else int(select.data['values'][0])
-                            await select.response.defer()
-                        # Submit button
-                        @discord.ui.button(label='Submit', style=discord.ButtonStyle.primary, custom_id="cnet_submit")
-                        async def submit_button(self, button, interaction):
-                            await button.response.defer()
-                            self.stop()
-                    try:
-                        view = CnetOptionsView(options_a, label_a, options_b, label_b)
-                        message_a = f'\n • **{label_a}**' if label_a != 'Not Applicable' else ''
-                        message_b = f'\n • **{label_b}**' if label_b != 'Not Applicable' else ''
-                        view_message = await ctx.send(f'### Select ControlNet Options\n • **Weight** (0.0 - 1.0){message_a}{message_b}\n(if unsure, just Submit with Defaults)', view=view, ephemeral=True)
-                        await view.wait()
-                        cnet_dict.update(view.cnet_dict)
-                        await view_message.delete()
-                    except Exception as e:
-                        log.error(f"An error occurred while configuring secondary ControlNet options from /image command: {e}")
-                    cnet_dict.update({'enabled': True, 'save_detected_map': True})
-                    log_msg += f"\nControlNet: (Module: {cnet_dict['module']}, Model: {cnet_dict['model']})"
-                    return cnet_dict, log_msg
-                try:
-                    cnet_dict, log_msg = await process_image_controlnet(cnet, cnet_dict, log_msg)
-                except Exception as e:
-                    log.error(f"An error occurred while configuring ControlNet for /image command: {e}")
+                        log.error(f"An error occurred while configuring ControlNet for /image command: {e}")
 
-            image_cmd_task.prompt = pos_prompt
+                image_cmd_task.prompt = pos_prompt
 
-            if use_llm and use_llm == 'YesWithPrefix':
-                pos_prompt = 'Provide a detailed image prompt description (without any preamble or additional text) for: ' + pos_prompt
-            image_cmd_task.text = pos_prompt
+                if use_llm and use_llm == 'YesWithPrefix':
+                    pos_prompt = 'Provide a detailed image prompt description (without any preamble or additional text) for: ' + pos_prompt
+                image_cmd_task.text = pos_prompt
 
-            # UPDATE TASK WITH PARAMS
-            imgcmd_params = {}
-            imgcmd_params['size']       = size_dict
-            imgcmd_params['neg_prompt'] = neg_prompt
-            imgcmd_params['style']      = style
-            imgcmd_params['face_swap']  = faceswapimg
-            imgcmd_params['controlnet'] = cnet_dict
-            imgcmd_params['img2img']    = img2img_dict
-            imgcmd_params['message']    = log_msg
-            imgcmd_params['mode']       = mode
+                # UPDATE TASK WITH PARAMS
+                imgcmd_params = {}
+                imgcmd_params['size']       = size_dict
+                imgcmd_params['neg_prompt'] = neg_prompt
+                imgcmd_params['style']      = style
+                imgcmd_params['face_swap']  = faceswapimg
+                imgcmd_params['controlnet'] = cnet_dict
+                imgcmd_params['img2img']    = img2img_dict
+                imgcmd_params['message']    = log_msg
+                imgcmd_params['mode']       = mode
 
-            image_cmd_task.params = Params(imgcmd=imgcmd_params)
+                image_cmd_task.params = Params(imgcmd=imgcmd_params)
 
-            await ireply(ctx, 'image') # send a response msg to the user
+                await ireply(ctx, 'image') # send a response msg to the user
 
-            # QUEUE TASK
-            log.info(f'{ctx.author.display_name} used "/image": "{pos_prompt}"')
-            if use_llm and use_llm != 'No':
-                # Set more parameters
-                params: Params = image_cmd_task.params
-                params.should_gen_text = True
-                params.should_gen_image = True
-                params.skip_create_user_hmsg = True
-                params.skip_create_bot_hmsg = True
-                params.save_to_history = False
-                # CHANGE NAME (will run 'message' then 'img_gen')
-                image_cmd_task.name = 'msg_image_cmd'
+                # QUEUE TASK
+                log.info(f'{ctx.author.display_name} used "/image": "{pos_prompt}"')
+                if use_llm and use_llm != 'No':
+                    # Set more parameters
+                    params: Params = image_cmd_task.params
+                    params.should_gen_text = True
+                    params.should_gen_image = True
+                    params.skip_create_user_hmsg = True
+                    params.skip_create_bot_hmsg = True
+                    params.save_to_history = False
+                    # CHANGE NAME (will run 'message' then 'img_gen')
+                    image_cmd_task.name = 'msg_image_cmd'
 
-            await task_manager.queue_task(image_cmd_task, 'gen_queue')
+                await task_manager.queue_task(image_cmd_task, 'gen_queue')
 
-        except Exception as e:
-            log.error(f"An error occurred in image(): {e}")
-            traceback.print_exc()
+            except Exception as e:
+                log.error(f"An error occurred in image(): {e}")
+                traceback.print_exc()
 
 #################################################################
 #################### DYNAMIC USER COMMANDS ######################
@@ -5185,6 +5192,8 @@ async def load_custom_slash_commands(slash_cmds:list):
     for cmd in slash_cmds:
         try:
             name = cmd["command_name"]
+            if not cmd_ok(name):
+                continue
             description = cmd.get("description", "No description")
             options = cmd.get("options", [])
             main_steps = cmd.get("steps", [])
@@ -5430,59 +5439,63 @@ async def on_app_command_error(inter:discord.Interaction, error:discord.app_comm
 
 
 if bot_embeds.enabled('system'):
-    @client.hybrid_command(description="Display help menu")
+    if cmd_ok('helpmenu'):
+        @client.hybrid_command(description="Display help menu")
+        @user_not_blacklisted()
+        async def helpmenu(ctx):
+            await ctx.send(embed = bot_embeds.helpmenu())
+
+    if cmd_ok('statistics_llm_gen'):
+        @client.hybrid_command(description="Display performance statistics")
+        @user_not_blacklisted()
+        async def statistics_llm_gen(ctx):
+            statistics_dict = bot_statistics.llm.data
+            description_lines = []
+            for key, value in statistics_dict.items():
+                if key == 'time_total' or key == 'tokens_per_sec_avg':
+                    formatted_value, label = format_time(value)
+                    description_lines.append(f"{key}: {formatted_value} {label}")
+                else:
+                    description_lines.append(f"{key}: {value}")
+            formatted_description = "\n".join(description_lines)
+            await bot_embeds.send('system', "Bot LLM Gen Statistics:", f">>> {formatted_description}", channel=ctx.channel)
+
+if cmd_ok('announce'):
+    @client.hybrid_command(description="Toggle current channel as an announcement channel for the bot (model changes)")
     @user_not_blacklisted()
-    async def helpmenu(ctx):
-        await ctx.send(embed = bot_embeds.helpmenu())
+    @app_commands.checks.has_permissions(manage_channels=True)
+    @guild_only()
+    async def announce(ctx: commands.Context, channel:Optional[discord.TextChannel]=None):
+        channel = channel or ctx.channel # type: ignore
+        if channel.id in bot_database.announce_channels:
+            bot_database.announce_channels.remove(channel.id) # If the channel is already in the announce channels, remove it
+            action_message = f'Removed {channel.mention} from announce channels. Use "/announce" again if you want to add it back.'
+        else:
+            # If the channel is not in the announce channels, add it
+            bot_database.announce_channels.append(channel.id)
+            action_message = f'Added {channel.mention} to announce channels. Use "/announce" again to remove it.'
 
-    @client.hybrid_command(description="Display performance statistics")
+        bot_database.save()
+        await ctx.reply(action_message, delete_after=15)
+
+if cmd_ok('main'):
+    @client.hybrid_command(description="Toggle current channel as main channel for bot to auto-reply without needing to be called")
     @user_not_blacklisted()
-    async def statistics_llm_gen(ctx):
-        statistics_dict = bot_statistics.llm.data
-        description_lines = []
-        for key, value in statistics_dict.items():
-            if key == 'time_total' or key == 'tokens_per_sec_avg':
-                formatted_value, label = format_time(value)
-                description_lines.append(f"{key}: {formatted_value} {label}")
-            else:
-                description_lines.append(f"{key}: {value}")
-        formatted_description = "\n".join(description_lines)
-        await bot_embeds.send('system', "Bot LLM Gen Statistics:", f">>> {formatted_description}", channel=ctx.channel)
+    @app_commands.checks.has_permissions(manage_channels=True)
+    @guild_only()
+    async def main(ctx: commands.Context, channel:Optional[discord.TextChannel]=None):
+        channel = channel or ctx.channel # type: ignore
+        
+        if channel.id in bot_database.main_channels:
+            bot_database.main_channels.remove(channel.id) # If the channel is already in the main channels, remove it
+            action_message = f'Removed {channel.mention} from main channels. Use "/main" again if you want to add it back.'
+        else:
+            # If the channel is not in the main channels, add it
+            bot_database.main_channels.append(channel.id)
+            action_message = f'Added {channel.mention} to main channels. Use "/main" again to remove it.'
 
-@client.hybrid_command(description="Toggle current channel as an announcement channel for the bot (model changes)")
-@user_not_blacklisted()
-@app_commands.checks.has_permissions(manage_channels=True)
-@guild_only()
-async def announce(ctx: commands.Context, channel:Optional[discord.TextChannel]=None):
-    channel = channel or ctx.channel # type: ignore
-    if channel.id in bot_database.announce_channels:
-        bot_database.announce_channels.remove(channel.id) # If the channel is already in the announce channels, remove it
-        action_message = f'Removed {channel.mention} from announce channels. Use "/announce" again if you want to add it back.'
-    else:
-        # If the channel is not in the announce channels, add it
-        bot_database.announce_channels.append(channel.id)
-        action_message = f'Added {channel.mention} to announce channels. Use "/announce" again to remove it.'
-
-    bot_database.save()
-    await ctx.reply(action_message, delete_after=15)
-
-@client.hybrid_command(description="Toggle current channel as main channel for bot to auto-reply without needing to be called")
-@user_not_blacklisted()
-@app_commands.checks.has_permissions(manage_channels=True)
-@guild_only()
-async def main(ctx: commands.Context, channel:Optional[discord.TextChannel]=None):
-    channel = channel or ctx.channel # type: ignore
-    
-    if channel.id in bot_database.main_channels:
-        bot_database.main_channels.remove(channel.id) # If the channel is already in the main channels, remove it
-        action_message = f'Removed {channel.mention} from main channels. Use "/main" again if you want to add it back.'
-    else:
-        # If the channel is not in the main channels, add it
-        bot_database.main_channels.append(channel.id)
-        action_message = f'Added {channel.mention} to main channels. Use "/main" again to remove it.'
-
-    bot_database.save()
-    await ctx.reply(action_message, delete_after=15)
+        bot_database.save()
+        await ctx.reply(action_message, delete_after=15)
 
 
 async def update_ttsgen(ictx:CtxInteraction, status:str='enabled', rebuild_cmd_opts=True):
@@ -5506,251 +5519,258 @@ async def announce_api_changes(ictx:CtxInteraction, api_name:str, status:str):
             # Send embeds to announcement channels
             await bg_task_queue.put(announce_changes(f'{status} API', f'**{api_name}**', ictx))
 
-@client.hybrid_command(description="Toggle available API Clients on/off")
-@user_not_blacklisted()
-@guild_or_owner_only()
-async def toggle_api(ctx: commands.Context):
-    # Collect all clients from api.all_clients
-    all_apis = api.clients or {}
-    if not all_apis:
-        await ctx.send('There are no APIs available', ephemeral=True)
-        return
+if cmd_ok('toggle_api'):
+    @client.hybrid_command(description="Toggle available API Clients on/off")
+    @user_not_blacklisted()
+    @guild_or_owner_only()
+    async def toggle_api(ctx: commands.Context):
+        # Collect all clients from api.all_clients
+        all_apis = api.clients or {}
+        if not all_apis:
+            await ctx.send('There are no APIs available', ephemeral=True)
+            return
 
-    # Create a reverse map from main clients to their role label
-    main_roles = {id(api.textgen): "main TextGen client",
-                  id(api.imggen): "main ImgGen client",
-                  id(api.ttsgen): "main TTSGen client"}
+        # Create a reverse map from main clients to their role label
+        main_roles = {id(api.textgen): "main TextGen client",
+                    id(api.imggen): "main ImgGen client",
+                    id(api.ttsgen): "main TTSGen client"}
 
-    # Build display name map with status and potential main role
-    display_name_to_key = {}
-    for key, client in all_apis.items():
-        status = "enabled" if client.enabled else "disabled"
-        main_suffix = f" **{main_roles.get(id(client))}**" if id(client) in main_roles else ""
-        display_name = f"{key} ({status}){main_suffix}"
-        display_name_to_key[display_name] = key
+        # Build display name map with status and potential main role
+        display_name_to_key = {}
+        for key, client in all_apis.items():
+            status = "enabled" if client.enabled else "disabled"
+            main_suffix = f" **{main_roles.get(id(client))}**" if id(client) in main_roles else ""
+            display_name = f"{key} ({status}){main_suffix}"
+            display_name_to_key[display_name] = key
 
-    # Use the display names for the menu
-    items_for_api_menus = sorted(display_name_to_key.keys())
+        # Use the display names for the menu
+        items_for_api_menus = sorted(display_name_to_key.keys())
 
-    apis_view = SelectOptionsView(
-        items_for_api_menus,
-        custom_id_prefix='apis',
-        placeholder_prefix='APIs: ',
-        unload_item=None
-    )
-    view_message = await ctx.send('### Select an API.', view=apis_view, ephemeral=True)
-    await apis_view.wait()
+        apis_view = SelectOptionsView(
+            items_for_api_menus,
+            custom_id_prefix='apis',
+            placeholder_prefix='APIs: ',
+            unload_item=None
+        )
+        view_message = await ctx.send('### Select an API.', view=apis_view, ephemeral=True)
+        await apis_view.wait()
 
-    selected_item = apis_view.get_selected()
-    await view_message.delete()
+        selected_item = apis_view.get_selected()
+        await view_message.delete()
 
-    # Lookup the real key and get the APIClient
-    original_key = display_name_to_key.get(selected_item)
-    selected_api:APIClient = all_apis.get(original_key)
-    # Typicallly if command timed out
-    if not selected_api:
-        return
-    
-    # Apply Toggle
-    new_status_str = await selected_api.toggle()
-    if new_status_str is None:
-        await ctx.reply(f"Failed to toggle **{original_key}**.", delete_after=5, ephemeral=True)
-        return
-    await ctx.reply(f"**{original_key}** is now **{new_status_str}**", delete_after=5, ephemeral=True)
-    
-    # Process TTSGen API changes
-    if selected_api == api.ttsgen:
-        await update_ttsgen(ctx, status=new_status_str, rebuild_cmd_opts=(new_status_str == 'enabled'))
+        # Lookup the real key and get the APIClient
+        original_key = display_name_to_key.get(selected_item)
+        selected_api:APIClient = all_apis.get(original_key)
+        # Typicallly if command timed out
+        if not selected_api:
+            return
+        
+        # Apply Toggle
+        new_status_str = await selected_api.toggle()
+        if new_status_str is None:
+            await ctx.reply(f"Failed to toggle **{original_key}**.", delete_after=5, ephemeral=True)
+            return
+        await ctx.reply(f"**{original_key}** is now **{new_status_str}**", delete_after=5, ephemeral=True)
+        
+        # Process TTSGen API changes
+        if selected_api == api.ttsgen:
+            await update_ttsgen(ctx, status=new_status_str, rebuild_cmd_opts=(new_status_str == 'enabled'))
 
-    # Announce changes
-    await announce_api_changes(ctx, api_name=original_key, status=new_status_str)
+        # Announce changes
+        await announce_api_changes(ctx, api_name=original_key, status=new_status_str)
 
-@client.hybrid_command(description='Change the API client for a main function (imggen, ttsgen, textgen)')
-@user_not_blacklisted()
-@guild_or_owner_only()
-async def change_main_api(ctx: commands.Context):
-    all_clients = api.clients or {}
-    if not all_clients:
-        await ctx.send("There are no APIs available.", ephemeral=True)
-        return
-    # Map of function name to (current_client, expected_class)
-    function_specs = {'imggen': (api.imggen, ImgGenClient),
-                      'ttsgen': (api.ttsgen, TTSGenClient),
-                      'textgen': (api.textgen, TextGenClient)}
-    views_to_send = []
+if cmd_ok('change_main_api'):
+    @client.hybrid_command(description='Change the API client for a main function (imggen, ttsgen, textgen)')
+    @user_not_blacklisted()
+    @guild_or_owner_only()
+    async def change_main_api(ctx: commands.Context):
+        all_clients = api.clients or {}
+        if not all_clients:
+            await ctx.send("There are no APIs available.", ephemeral=True)
+            return
+        # Map of function name to (current_client, expected_class)
+        function_specs = {'imggen': (api.imggen, ImgGenClient),
+                        'ttsgen': (api.ttsgen, TTSGenClient),
+                        'textgen': (api.textgen, TextGenClient)}
+        views_to_send = []
 
-    for func_name, (current_client, expected_cls) in function_specs.items():
-        # Filter all clients that match the expected class and are enabled
-        eligible_clients = {name: client for name, client in all_clients.items()
-                            if isinstance(client, expected_cls) and client.enabled}
-        if not eligible_clients:
-            continue
-        # If current client exists, remove it from selection list
-        if current_client in eligible_clients.values():
-            eligible_clients = {name: client for name, client in eligible_clients.items()
-                                if client is not current_client}
-        # If at least one client is selectable, show the view
-        if eligible_clients:
-            menu_items = sorted(eligible_clients.keys())
-            view = SelectOptionsView(menu_items,
-                                     custom_id_prefix=f"{func_name}_api",
-                                     placeholder_prefix=f"{func_name.upper()} API: ",
-                                     unload_item=None)
-            views_to_send.append((func_name, view))
+        for func_name, (current_client, expected_cls) in function_specs.items():
+            # Filter all clients that match the expected class and are enabled
+            eligible_clients = {name: client for name, client in all_clients.items()
+                                if isinstance(client, expected_cls) and client.enabled}
+            if not eligible_clients:
+                continue
+            # If current client exists, remove it from selection list
+            if current_client in eligible_clients.values():
+                eligible_clients = {name: client for name, client in eligible_clients.items()
+                                    if client is not current_client}
+            # If at least one client is selectable, show the view
+            if eligible_clients:
+                menu_items = sorted(eligible_clients.keys())
+                view = SelectOptionsView(menu_items,
+                                        custom_id_prefix=f"{func_name}_api",
+                                        placeholder_prefix=f"{func_name.upper()} API: ",
+                                        unload_item=None)
+                views_to_send.append((func_name, view))
 
-    if not views_to_send:
-        await ctx.send("No alternative enabled clients available for any main function.", ephemeral=True)
-        return
+        if not views_to_send:
+            await ctx.send("No alternative enabled clients available for any main function.", ephemeral=True)
+            return
 
-    # Convert to dict for easier lookup
-    views_dict = dict(views_to_send)
+        # Convert to dict for easier lookup
+        views_dict = dict(views_to_send)
 
-    # If multiple function types are eligible, show a menu to pick one
-    if len(views_dict) > 1:
-        class FunctionSelect(discord.Select):
-            def __init__(self, view: 'FunctionSelectView'):
-                self.view_ref = view
-                options = [discord.SelectOption(label=func.upper(), value=func) for func in views_dict]
-                super().__init__(placeholder="Select a function to reassign...", options=options)
+        # If multiple function types are eligible, show a menu to pick one
+        if len(views_dict) > 1:
+            class FunctionSelect(discord.Select):
+                def __init__(self, view: 'FunctionSelectView'):
+                    self.view_ref = view
+                    options = [discord.SelectOption(label=func.upper(), value=func) for func in views_dict]
+                    super().__init__(placeholder="Select a function to reassign...", options=options)
 
-            async def callback(self, interaction: discord.Interaction):
-                self.view_ref.selected_func = self.values[0]
-                self.view_ref.interaction = interaction
-                self.view_ref.stop()
+                async def callback(self, interaction: discord.Interaction):
+                    self.view_ref.selected_func = self.values[0]
+                    self.view_ref.interaction = interaction
+                    self.view_ref.stop()
 
-        class FunctionSelectView(discord.View):
-            def __init__(self):
-                super().__init__(timeout=60)
-                self.selected_func = None
-                self.interaction = None
-                self.add_item(FunctionSelect(self))
+            class FunctionSelectView(discord.View):
+                def __init__(self):
+                    super().__init__(timeout=60)
+                    self.selected_func = None
+                    self.interaction = None
+                    self.add_item(FunctionSelect(self))
 
-        func_select_view = FunctionSelectView()
-        await ctx.send("Choose a main function to reassign its API client:", view=func_select_view, ephemeral=True)
-        await func_select_view.wait()
+            func_select_view = FunctionSelectView()
+            await ctx.send("Choose a main function to reassign its API client:", view=func_select_view, ephemeral=True)
+            await func_select_view.wait()
 
-        selected_func = func_select_view.selected_func
-        if not selected_func:
-            return  # Timeout or cancelled
+            selected_func = func_select_view.selected_func
+            if not selected_func:
+                return  # Timeout or cancelled
 
-        interaction = func_select_view.interaction
-    else:
-        # Only one function type — auto-select it
-        selected_func = next(iter(views_dict))
-        interaction = ctx  # Original interaction
+            interaction = func_select_view.interaction
+        else:
+            # Only one function type — auto-select it
+            selected_func = next(iter(views_dict))
+            interaction = ctx  # Original interaction
 
-    # Shared final dispatch
-    selected_view = views_dict[selected_func]
-    send_func = interaction.response.send_message if hasattr(interaction, "response") else interaction.send
-    message = await send_func(f"Select new API client for **{selected_func}**:", view=selected_view, ephemeral=True)
-    await selected_view.wait()
+        # Shared final dispatch
+        selected_view = views_dict[selected_func]
+        send_func = interaction.response.send_message if hasattr(interaction, "response") else interaction.send
+        message = await send_func(f"Select new API client for **{selected_func}**:", view=selected_view, ephemeral=True)
+        await selected_view.wait()
 
-    selected_item = selected_view.get_selected()
-    await message.delete()
+        selected_item = selected_view.get_selected()
+        await message.delete()
 
-    selected_api:APIClient = all_clients.get(selected_item)
-    # Typicallly if command timed out
-    if not selected_api:
-        return
+        selected_api:APIClient = all_clients.get(selected_item)
+        # Typicallly if command timed out
+        if not selected_api:
+            return
 
-    setattr(api, selected_func, selected_api)
+        setattr(api, selected_func, selected_api)
 
-    await ctx.reply(f"**Main {selected_func}** is now **{selected_item}**", delete_after=5, ephemeral=True)
+        await ctx.reply(f"**Main {selected_func}** is now **{selected_item}**", delete_after=5, ephemeral=True)
 
-    # Announce changes
-    await announce_api_changes(ctx, api_name=selected_item, status=f'changed main {selected_func}')
+        # Announce changes
+        await announce_api_changes(ctx, api_name=selected_item, status=f'changed main {selected_func}')
 
-    # Process TTSGen API changes
-    if selected_func == 'imggen':
-        bot_settings.init_imgmodel()
-        if config.is_per_server():
-            for settings in guild_settings.values():
-                settings.init_imgmodel()
-        await imgmodel(ctx)
+        # Process TTSGen API changes
+        if selected_func == 'imggen':
+            bot_settings.init_imgmodel()
+            if config.is_per_server():
+                for settings in guild_settings.values():
+                    settings.init_imgmodel()
+            await imgmodel(ctx)
 
-    # Process TTSGen API changes
-    elif selected_func == 'ttsgen':
-        await update_ttsgen(ctx)
+        # Process TTSGen API changes
+        elif selected_func == 'ttsgen':
+            await update_ttsgen(ctx)
 
-@client.hybrid_command(description="Update dropdown menus without restarting bot script.")
-@user_not_blacklisted()
-@guild_or_owner_only()
-async def sync(ctx: commands.Context):
-    await ctx.reply('Syncing client tree. Note: Menus may not update instantly.', ephemeral=True, delete_after=15)
-    log.info(f"{ctx.author.display_name} used '/sync' to sync the client.tree (refresh commands).")
-    await bg_task_queue.put(client.tree.sync()) # Process this in the background
+if cmd_ok('sync'):
+    @client.hybrid_command(description="Update dropdown menus without restarting bot script.")
+    @user_not_blacklisted()
+    @guild_or_owner_only()
+    async def sync(ctx: commands.Context):
+        await ctx.reply('Syncing client tree. Note: Menus may not update instantly.', ephemeral=True, delete_after=15)
+        log.info(f"{ctx.author.display_name} used '/sync' to sync the client.tree (refresh commands).")
+        await bg_task_queue.put(client.tree.sync()) # Process this in the background
 
 #################################################################
 ######################### LLM COMMANDS ##########################
 #################################################################
 if tgwui_enabled:
     # /reset_conversation command - Resets current character
-    @client.hybrid_command(description="Reset the conversation with current character")
-    @user_not_blacklisted()
-    @configurable_for_dm_if(lambda ctx: config.discord_dm_setting('allow_chatting', True))
-    async def reset_conversation(ctx: commands.Context):
-        await ireply(ctx, 'conversation reset') # send a response msg to the user
-        
-        last_character = bot_settings.get_last_setting_for("last_character", ctx)
-        log.info(f'{ctx.author.display_name} used "/reset_conversation": "{last_character}"')
-        # offload to TaskManager() queue
-        reset_params = Params(character={'char_name': last_character, 'verb': 'Resetting', 'mode': 'reset'})
-        reset_task = Task('reset', ctx, params=reset_params)
-        await task_manager.queue_task(reset_task, 'history_queue')
+    if cmd_ok('reset_conversation'):
+        @client.hybrid_command(description="Reset the conversation with current character")
+        @user_not_blacklisted()
+        @configurable_for_dm_if(lambda ctx: config.discord_dm_setting('allow_chatting', True))
+        async def reset_conversation(ctx: commands.Context):
+            await ireply(ctx, 'conversation reset') # send a response msg to the user
+            
+            last_character = bot_settings.get_last_setting_for("last_character", ctx)
+            log.info(f'{ctx.author.display_name} used "/reset_conversation": "{last_character}"')
+            # offload to TaskManager() queue
+            reset_params = Params(character={'char_name': last_character, 'verb': 'Resetting', 'mode': 'reset'})
+            reset_task = Task('reset', ctx, params=reset_params)
+            await task_manager.queue_task(reset_task, 'history_queue')
 
     # /save_conversation command
-    @client.hybrid_command(description="Saves the current conversation to a new file in text-generation-webui/logs/")
-    @user_not_blacklisted()
-    @guild_or_owner_only()
-    async def save_conversation(ctx: commands.Context):
-        history_char, history_mode = get_char_mode_for_history(ctx)
-        await bot_history.get_history_for(ctx.channel.id, history_char, history_mode).save(timeout=0, force=True)
-        await ctx.reply('Saved current conversation history', ephemeral=True)
+    if cmd_ok('save_conversation'):
+        @client.hybrid_command(description="Saves the current conversation to a new file in text-generation-webui/logs/")
+        @user_not_blacklisted()
+        @guild_or_owner_only()
+        async def save_conversation(ctx: commands.Context):
+            history_char, history_mode = get_char_mode_for_history(ctx)
+            await bot_history.get_history_for(ctx.channel.id, history_char, history_mode).save(timeout=0, force=True)
+            await ctx.reply('Saved current conversation history', ephemeral=True)
 
     # Context menu command to edit both a discord message and HMessage
-    @client.tree.context_menu(name="edit history")
-    @user_not_blacklisted()
-    async def edit_history(inter: discord.Interaction, message: discord.Message):
-        if not (message.author == inter.user or message.author == client.user):
-            await inter.response.send_message("You can only edit your own or bot's messages.", ephemeral=True, delete_after=5)
-            return
-        history_char, history_mode = get_char_mode_for_history(inter)
-        local_history = bot_history.get_history_for(inter.channel.id, history_char, history_mode)
-        if not local_history:
-            await inter.response.send_message(f'There is currently no chat history to "edit history" from.', ephemeral=True, delete_after=5)
-            return
-        matched_hmessage = local_history.search(lambda m: m.id == message.id or message.id in m.related_ids)
-        if not matched_hmessage:
-            await inter.response.send_message("Message not found in current chat history.", ephemeral=True, delete_after=5)
-            return
-        
-        # offload to TaskManager() queue
-        log.info(f'{inter.user.display_name} used "edit history"')
-        edit_history_task = Task('edit_history', inter, matched_hmessage=matched_hmessage, target_discord_msg=message)
-        await task_manager.queue_task(edit_history_task, 'history_queue')
-
-    # Context menu command to hide a message pair
-    @client.tree.context_menu(name="toggle as hidden")
-    @user_not_blacklisted()
-    async def hide_or_reveal_history(inter: discord.Interaction, message: discord.Message):
-        if not (message.author == inter.user or message.author == client.user):
-            await inter.response.send_message("You can only hide your own or bot's messages.", ephemeral=True, delete_after=5)
-            return
-        try:
+    if cmd_ok('edit history'):
+        @client.tree.context_menu(name="edit history")
+        @user_not_blacklisted()
+        async def edit_history(inter: discord.Interaction, message: discord.Message):
+            if not (message.author == inter.user or message.author == client.user):
+                await inter.response.send_message("You can only edit your own or bot's messages.", ephemeral=True, delete_after=5)
+                return
             history_char, history_mode = get_char_mode_for_history(inter)
             local_history = bot_history.get_history_for(inter.channel.id, history_char, history_mode)
-            target_hmessage = local_history.search(lambda m: m.id == message.id or message.id in m.related_ids)
-            if not target_hmessage:
+            if not local_history:
+                await inter.response.send_message(f'There is currently no chat history to "edit history" from.', ephemeral=True, delete_after=5)
+                return
+            matched_hmessage = local_history.search(lambda m: m.id == message.id or message.id in m.related_ids)
+            if not matched_hmessage:
                 await inter.response.send_message("Message not found in current chat history.", ephemeral=True, delete_after=5)
                 return
-        except Exception as e:
-            log.error(f'An error occured while getting history for "Hide History": {e}')
+            
+            # offload to TaskManager() queue
+            log.info(f'{inter.user.display_name} used "edit history"')
+            edit_history_task = Task('edit_history', inter, matched_hmessage=matched_hmessage, target_discord_msg=message)
+            await task_manager.queue_task(edit_history_task, 'history_queue')
 
-        await ireply(inter, 'toggle as hidden') # send a response msg to the user
+    # Context menu command to hide a message pair
+    if cmd_ok('hide_or_reveal_history'):
+        @client.tree.context_menu(name="toggle as hidden")
+        @user_not_blacklisted()
+        async def hide_or_reveal_history(inter: discord.Interaction, message: discord.Message):
+            if not (message.author == inter.user or message.author == client.user):
+                await inter.response.send_message("You can only hide your own or bot's messages.", ephemeral=True, delete_after=5)
+                return
+            try:
+                history_char, history_mode = get_char_mode_for_history(inter)
+                local_history = bot_history.get_history_for(inter.channel.id, history_char, history_mode)
+                target_hmessage = local_history.search(lambda m: m.id == message.id or message.id in m.related_ids)
+                if not target_hmessage:
+                    await inter.response.send_message("Message not found in current chat history.", ephemeral=True, delete_after=5)
+                    return
+            except Exception as e:
+                log.error(f'An error occured while getting history for "Hide History": {e}')
 
-        log.info(f'{inter.user.display_name} used "hide or reveal history"')
-        hide_or_reveal_history_task = Task('hide_or_reveal_history', inter, local_history=local_history, target_discord_msg=message, target_hmessage=target_hmessage) # custom kwargs
-        await task_manager.queue_task(hide_or_reveal_history_task, 'history_queue')
+            await ireply(inter, 'toggle as hidden') # send a response msg to the user
+
+            log.info(f'{inter.user.display_name} used "hide or reveal history"')
+            hide_or_reveal_history_task = Task('hide_or_reveal_history', inter, local_history=local_history, target_discord_msg=message, target_hmessage=target_hmessage) # custom kwargs
+            await task_manager.queue_task(hide_or_reveal_history_task, 'history_queue')
 
     # Initialize Continue/Regenerate Context commands
     async def process_cont_regen_cmds(inter:discord.Interaction, message:discord.Message, cmd:str, mode:str=None):
@@ -5779,23 +5799,26 @@ if tgwui_enabled:
             regenerate_task = Task('regenerate', inter, local_history=local_history, target_discord_msg=message, target_hmessage=target_hmessage, mode=mode) # custom kwargs
             await task_manager.queue_task(regenerate_task, 'history_queue')
 
+    if cmd_ok('regenerate create'):
     # Context menu command to Regenerate from selected user message and create new history
-    @client.tree.context_menu(name="regenerate create")
-    @user_not_blacklisted()
-    async def regen_create_llm_gen(inter: discord.Interaction, message:discord.Message):
-        await process_cont_regen_cmds(inter, message, 'Regenerate', 'create')
+        @client.tree.context_menu(name="regenerate create")
+        @user_not_blacklisted()
+        async def regen_create_llm_gen(inter: discord.Interaction, message:discord.Message):
+            await process_cont_regen_cmds(inter, message, 'Regenerate', 'create')
 
-    # Context menu command to Regenerate from selected user message and replace the original bot response
-    @client.tree.context_menu(name="regenerate replace")
-    @user_not_blacklisted()
-    async def regen_replace_llm_gen(inter: discord.Interaction, message:discord.Message):
-        await process_cont_regen_cmds(inter, message, 'Regenerate', 'replace')
+    if cmd_ok('regenerate replace'):
+        # Context menu command to Regenerate from selected user message and replace the original bot response
+        @client.tree.context_menu(name="regenerate replace")
+        @user_not_blacklisted()
+        async def regen_replace_llm_gen(inter: discord.Interaction, message:discord.Message):
+            await process_cont_regen_cmds(inter, message, 'Regenerate', 'replace')
 
-    # Context menu command to Continue last reply
-    @client.tree.context_menu(name="continue")
-    @user_not_blacklisted()
-    async def continue_llm_gen(inter: discord.Interaction, message:discord.Message):
-        await process_cont_regen_cmds(inter, message, 'Continue')
+    if cmd_ok('continue'):
+        # Context menu command to Continue last reply
+        @client.tree.context_menu(name="continue")
+        @user_not_blacklisted()
+        async def continue_llm_gen(inter: discord.Interaction, message:discord.Message):
+            await process_cont_regen_cmds(inter, message, 'Continue')
 
 def load_default_character(settings:"Settings", guild_id:int|None=None):
     try:
@@ -6048,27 +6071,28 @@ def get_all_characters() -> Tuple[list, list]:
     return all_characters, filtered_characters
 
 # Command to change characters
-@client.hybrid_command(description="Choose a character")
-@user_not_blacklisted()
-@guild_only()
-async def character(ctx: commands.Context):
-    _, filtered_characters = get_all_characters()
-    if filtered_characters:
-        items_for_character = [i['name'] for i in filtered_characters]
-        warned_too_many_character = False # TODO use the warned_once feature?
-        characters_view = SelectOptionsView(items_for_character,
-                                        custom_id_prefix='characters',
-                                        placeholder_prefix='Characters: ',
-                                        unload_item=None,
-                                        warned=warned_too_many_character)
-        view_message = await ctx.send('### Select a Character.', view=characters_view, ephemeral=True)
-        await characters_view.wait()
+if cmd_ok('character'):
+    @client.hybrid_command(description="Choose a character")
+    @user_not_blacklisted()
+    @guild_only()
+    async def character(ctx: commands.Context):
+        _, filtered_characters = get_all_characters()
+        if filtered_characters:
+            items_for_character = [i['name'] for i in filtered_characters]
+            warned_too_many_character = False # TODO use the warned_once feature?
+            characters_view = SelectOptionsView(items_for_character,
+                                            custom_id_prefix='characters',
+                                            placeholder_prefix='Characters: ',
+                                            unload_item=None,
+                                            warned=warned_too_many_character)
+            view_message = await ctx.send('### Select a Character.', view=characters_view, ephemeral=True)
+            await characters_view.wait()
 
-        selected_item = characters_view.get_selected()
-        await view_message.delete()
-        await process_character(ctx, selected_item)
-    else:
-        await ctx.send('There are no characters available', ephemeral=True)
+            selected_item = characters_view.get_selected()
+            await view_message.delete()
+            await process_character(ctx, selected_item)
+        else:
+            await ctx.send('There are no characters available', ephemeral=True)
 
 #################################################################
 ####################### IMGMODEL COMMANDS #######################
@@ -6076,19 +6100,20 @@ async def character(ctx: commands.Context):
 if imggen_enabled:
 
     # Register command for helper function to toggle auto-select imgmodel
-    @client.hybrid_command(description='Toggles the automatic Img model changing task')
-    @user_not_blacklisted()
-    @guild_or_owner_only()
-    async def toggle_auto_change_imgmodels(ctx: commands.Context):
-        imgmodel_settings:ImgModel = get_imgmodel_settings(ctx)
-        imgmodel_update_task = imgmodel_settings._imgmodel_update_task
-        if imgmodel_update_task and not imgmodel_update_task.done():
-            imgmodel_update_task.cancel()
-            await ctx.send("Auto-change Imgmodels task was cancelled.", ephemeral=True, delete_after=5)
-            log.info("[Auto Change Imgmodels] Task was cancelled via '/toggle_auto_change_imgmodels_task'")
-        else:
-            await bg_task_queue.put(imgmodel_settings.start_auto_change_imgmodels())
-            await ctx.send("Auto-change Img models task was started.", ephemeral=True, delete_after=5)
+    if cmd_ok('toggle_auto_change_imgmodels'):
+        @client.hybrid_command(description='Toggles the automatic Img model changing task')
+        @user_not_blacklisted()
+        @guild_or_owner_only()
+        async def toggle_auto_change_imgmodels(ctx: commands.Context):
+            imgmodel_settings:ImgModel = get_imgmodel_settings(ctx)
+            imgmodel_update_task = imgmodel_settings._imgmodel_update_task
+            if imgmodel_update_task and not imgmodel_update_task.done():
+                imgmodel_update_task.cancel()
+                await ctx.send("Auto-change Imgmodels task was cancelled.", ephemeral=True, delete_after=5)
+                log.info("[Auto Change Imgmodels] Task was cancelled via '/toggle_auto_change_imgmodels_task'")
+            else:
+                await bg_task_queue.put(imgmodel_settings.start_auto_change_imgmodels())
+                await ctx.send("Auto-change Img models task was started.", ephemeral=True, delete_after=5)
 
 
     async def process_imgmodel(ctx: commands.Context, selected_imgmodel:str):
@@ -6109,27 +6134,28 @@ if imggen_enabled:
         except Exception as e:
             log.error(f"Error processing selected imgmodel from /imgmodel command: {e}")
 
-    @client.hybrid_command(description="Choose an Img Model")
-    @user_not_blacklisted()
-    @guild_or_owner_only()
-    async def imgmodel(ctx: commands.Context):
-        imgmodel_settings:ImgModel = get_imgmodel_settings(ctx)
-        imgmodels = await imgmodel_settings.get_filtered_imgmodels_list(ctx)
-        if imgmodels:
-            imgmodel_names = imgmodel_settings.collect_model_names(imgmodels)
-            warned_too_many_imgmodel = False # TODO use the warned_once feature?
-            imgmodels_view = SelectOptionsView(imgmodel_names,
-                                               custom_id_prefix='imgmodels',
-                                               placeholder_prefix='ImgModels: ',
-                                               unload_item=None,
-                                               warned=warned_too_many_imgmodel)
-            view_message = await ctx.send('### Select an Image Model.', view=imgmodels_view, ephemeral=True)
-            await imgmodels_view.wait()
-            selected_item = imgmodels_view.get_selected()
-            await view_message.delete()
-            await process_imgmodel(ctx, selected_item)
-        else:
-            await ctx.send('There are no Img models available', ephemeral=True)
+    if cmd_ok('imgmodel'):
+        @client.hybrid_command(description="Choose an Img Model")
+        @user_not_blacklisted()
+        @guild_or_owner_only()
+        async def imgmodel(ctx: commands.Context):
+            imgmodel_settings:ImgModel = get_imgmodel_settings(ctx)
+            imgmodels = await imgmodel_settings.get_filtered_imgmodels_list(ctx)
+            if imgmodels:
+                imgmodel_names = imgmodel_settings.collect_model_names(imgmodels)
+                warned_too_many_imgmodel = False # TODO use the warned_once feature?
+                imgmodels_view = SelectOptionsView(imgmodel_names,
+                                                custom_id_prefix='imgmodels',
+                                                placeholder_prefix='ImgModels: ',
+                                                unload_item=None,
+                                                warned=warned_too_many_imgmodel)
+                view_message = await ctx.send('### Select an Image Model.', view=imgmodels_view, ephemeral=True)
+                await imgmodels_view.wait()
+                selected_item = imgmodels_view.get_selected()
+                await view_message.delete()
+                await process_imgmodel(ctx, selected_item)
+            else:
+                await ctx.send('There are no Img models available', ephemeral=True)
 
 #################################################################
 ####################### /LLMMODEL COMMAND #######################
@@ -6153,28 +6179,29 @@ async def process_llmmodel(ctx, selected_llmmodel):
 
 if tgwui_enabled:
 
-    @client.hybrid_command(description="Choose an LLM Model")
-    @user_not_blacklisted()
-    @guild_or_owner_only()
-    async def llmmodel(ctx: commands.Context):
-        all_llmmodels = tgwui_utils_module.get_available_models()
-        if all_llmmodels:
-            items_for_llm_model = [i for i in all_llmmodels]
-            if 'None' in items_for_llm_model:
-                items_for_llm_model.remove('None')
-            warned_too_many_llm_model = False # TODO use the warned_once feature?
-            llmmodels_view = SelectOptionsView(items_for_llm_model,
-                                            custom_id_prefix='llmmodels',
-                                            placeholder_prefix='LLMModels: ',
-                                            unload_item='None',
-                                            warned=warned_too_many_llm_model)
-            view_message = await ctx.send('### Select an LLM Model.', view=llmmodels_view, ephemeral=True)
-            await llmmodels_view.wait()
-            selected_item = llmmodels_view.get_selected()
-            await view_message.delete()
-            await process_llmmodel(ctx, selected_item)
-        else:
-            await ctx.send('There are no LLM models available', ephemeral=True)
+    if cmd_ok('llmmodel'):
+        @client.hybrid_command(description="Choose an LLM Model")
+        @user_not_blacklisted()
+        @guild_or_owner_only()
+        async def llmmodel(ctx: commands.Context):
+            all_llmmodels = tgwui_utils_module.get_available_models()
+            if all_llmmodels:
+                items_for_llm_model = [i for i in all_llmmodels]
+                if 'None' in items_for_llm_model:
+                    items_for_llm_model.remove('None')
+                warned_too_many_llm_model = False # TODO use the warned_once feature?
+                llmmodels_view = SelectOptionsView(items_for_llm_model,
+                                                custom_id_prefix='llmmodels',
+                                                placeholder_prefix='LLMModels: ',
+                                                unload_item='None',
+                                                warned=warned_too_many_llm_model)
+                view_message = await ctx.send('### Select an LLM Model.', view=llmmodels_view, ephemeral=True)
+                await llmmodels_view.wait()
+                selected_item = llmmodels_view.get_selected()
+                await view_message.delete()
+                await process_llmmodel(ctx, selected_item)
+            else:
+                await ctx.send('There are no LLM models available', ephemeral=True)
 
 #################################################################
 ######################### /SPEAK COMMAND ########################
@@ -6383,31 +6410,32 @@ class SpeakCmdOptions:
 
 speak_cmd_options = SpeakCmdOptions()
 
-@client.hybrid_command(name="speak", description='AI will speak your text using a selected voice (pick only one)')
-@app_commands.rename(voice_1 = speak_cmd_options.voice_options_label)
-@app_commands.describe(voice_1 = speak_cmd_options.voice_options_label.upper())
-@app_commands.choices(voice_1 = speak_cmd_options.voice_options)
-@app_commands.rename(voice_2 = speak_cmd_options.voice_options1_label)
-@app_commands.describe(voice_2 = speak_cmd_options.voice_options1_label.upper())
-@app_commands.choices(voice_2 = speak_cmd_options.voice_options1)
-@app_commands.rename(voice_3 = speak_cmd_options.voice_options2_label)
-@app_commands.describe(voice_3 = speak_cmd_options.voice_options2_label.upper())
-@app_commands.choices(voice_3 = speak_cmd_options.voice_options2)
-@app_commands.rename(lang = speak_cmd_options.lang_options_label)
-@app_commands.choices(lang = speak_cmd_options.lang_options)
-@user_not_blacklisted()
-@configurable_for_dm_if(lambda ctx: 'speak' in config.discord_dm_setting('allowed_commands', []))
-async def speak(ctx: commands.Context, input_text: str, voice_1: typing.Optional[app_commands.Choice[str]], 
-                voice_2: typing.Optional[app_commands.Choice[str]], voice_3: typing.Optional[app_commands.Choice[str]], 
-                lang: typing.Optional[app_commands.Choice[str]], voice_input: typing.Optional[discord.Attachment]):
-    if sum(1 for v in (voice_1, voice_2, voice_3) if v) > 1:
-        await ctx.send("A voice was picked from two separate menus. Using the first selection.", ephemeral=True)
-    selected_voice = ((voice_1 or voice_2 or voice_3) and (voice_1 or voice_2 or voice_3).value) or ''
-    if selected_voice:
-        selected_voice = speak_cmd_options.voice_hash_dict[selected_voice]
-    voice_input = voice_input if voice_input is not None else ''
-    lang = lang.value if (lang is not None and lang != 'disabled') else ''
-    await process_speak(ctx, input_text, selected_voice, lang, voice_input)
+if cmd_ok('speak'):
+    @client.hybrid_command(name="speak", description='AI will speak your text using a selected voice (pick only one)')
+    @app_commands.rename(voice_1 = speak_cmd_options.voice_options_label)
+    @app_commands.describe(voice_1 = speak_cmd_options.voice_options_label.upper())
+    @app_commands.choices(voice_1 = speak_cmd_options.voice_options)
+    @app_commands.rename(voice_2 = speak_cmd_options.voice_options1_label)
+    @app_commands.describe(voice_2 = speak_cmd_options.voice_options1_label.upper())
+    @app_commands.choices(voice_2 = speak_cmd_options.voice_options1)
+    @app_commands.rename(voice_3 = speak_cmd_options.voice_options2_label)
+    @app_commands.describe(voice_3 = speak_cmd_options.voice_options2_label.upper())
+    @app_commands.choices(voice_3 = speak_cmd_options.voice_options2)
+    @app_commands.rename(lang = speak_cmd_options.lang_options_label)
+    @app_commands.choices(lang = speak_cmd_options.lang_options)
+    @user_not_blacklisted()
+    @configurable_for_dm_if(lambda ctx: 'speak' in config.discord_dm_setting('allowed_commands', []))
+    async def speak(ctx: commands.Context, input_text: str, voice_1: typing.Optional[app_commands.Choice[str]], 
+                    voice_2: typing.Optional[app_commands.Choice[str]], voice_3: typing.Optional[app_commands.Choice[str]], 
+                    lang: typing.Optional[app_commands.Choice[str]], voice_input: typing.Optional[discord.Attachment]):
+        if sum(1 for v in (voice_1, voice_2, voice_3) if v) > 1:
+            await ctx.send("A voice was picked from two separate menus. Using the first selection.", ephemeral=True)
+        selected_voice = ((voice_1 or voice_2 or voice_3) and (voice_1 or voice_2 or voice_3).value) or ''
+        if selected_voice:
+            selected_voice = speak_cmd_options.voice_hash_dict[selected_voice]
+        voice_input = voice_input if voice_input is not None else ''
+        lang = lang.value if (lang is not None and lang != 'disabled') else ''
+        await process_speak(ctx, input_text, selected_voice, lang, voice_input)
 
 #################################################################
 ######################## /PROMPT COMMAND ########################
@@ -6477,7 +6505,7 @@ async def process_prompt(ctx: commands.Context, selections:dict):
         log.error(f"Error processing '/prompt': {e}")
         await ctx.send(f"Error processing '/prompt': {e}", ephemeral=True)
 
-if tgwui_enabled:
+if tgwui_enabled and cmd_ok('prompt'):
     @client.hybrid_command(name="prompt", description=f'Generate text with advanced options')
     @app_commands.describe(prompt='Your prompt to the LLM.')
     @app_commands.describe(begin_reply_with='The LLM will continue their reply from this.')

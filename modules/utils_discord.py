@@ -27,6 +27,9 @@ def get_bot_embeds():
 MAX_MESSAGE_LENGTH = 1980
 # MAX_MESSAGE_LENGTH = 200 # testing
 
+def cmd_ok(cmd_name:str):
+    return cmd_name not in config.disabled_commands()
+
 def guild_only():
     async def predicate(ctx):
         if ctx.guild is None:
