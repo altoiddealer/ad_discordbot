@@ -1,14 +1,12 @@
 import asyncio
 import re
 from PIL import Image, PngImagePlugin
-import io
 import base64
-import filetype
 import copy
 from modules.typing import CtxInteraction, APIRequestCancelled
 from typing import Any, Optional, Union
 from modules.utils_shared import client, shared_path, is_tgwui_integrated, load_file, get_api
-from modules.utils_misc import valueparser, set_key, extract_key, deep_merge
+from modules.utils_misc import valueparser, set_key, extract_key, deep_merge, process_attachment
 import modules.utils_processing as processing
 from modules.apis import apisettings, APIResponse, Endpoint, API, APIClient, ImgGenClient_Comfy, ImgGenClient
 
@@ -684,27 +682,12 @@ class StepExecutor:
             elif expected_type == "file":
                 if msg.attachments:
                     attachment: Attachment = msg.attachments[0]
-                    file_bytes = await attachment.read()
-                    filename = attachment.filename
-
-                    kind = filetype.guess(file_bytes)
-                    mime_type = kind.mime if kind else 'application/octet-stream'
-                    mime_category = mime_type.strip().lower().split('/')[0]
-                    file_obj = io.BytesIO(file_bytes)
-                    file_obj.name = filename
-
-                    file = {
-                        mime_category: {
-                            "file": file_obj,
-                            "filename": filename,
-                            "content_type": mime_type
-                        }
-                    }
-
-                    return {"file": file,
-                            "bytes": file_bytes,
-                            "file_format": mime_type,
-                            "filename": filename}
+                    file_dict = process_attachment(attachment)
+                    return file_dict
+                    #  {"file": file,
+                    #   "bytes": file_bytes,
+                    #   "file_format": mime_type,
+                    #   "filename": filename}
                 else:
                     raise ValueError("[StepExecutor] Expected file attachment but none provided.")
             else:
@@ -715,6 +698,47 @@ class StepExecutor:
         finally:
             client.waiting_for.pop(user.id, None)
 
+    async def _step_interaction(self, data: Any, config: dict):
+        """
+        Returns values from the Discord interaction (self.ictx).
+        Example:
+          - interaction:
+              value: user.display_name
+          - interaction:
+              username: user.display_name
+              guild: guild.name
+        """
+        if not hasattr(self, "ictx"):
+            raise RuntimeError("[StepExecutor] A Discord interaction was not found for 'interaction_value' step.")
+
+        ictx = self.ictx
+        has_attachment:bool = hasattr(ictx, 'attachments') and ictx.attachments
+        attachment = None
+        if has_attachment:
+            attachment = process_attachment(ictx.attachments[0]) # make a useful file dict
+                
+        # Single field
+        if "value" in config:
+            if config['value'] == 'attachment':
+                if not attachment:
+                    raise ValueError('[StepExecutor] Attachment not found for step "interaction"')
+                return attachment
+            return extract_key(ictx, config["value"])
+
+        # Mapping
+        result = {}
+        for key, path in config.items():
+            if path == 'attachment':
+                if not attachment:
+                    raise ValueError('[StepExecutor] Attachment not found for step "interaction"')
+                result[key] = attachment
+                continue
+            result[key] = extract_key(ictx, path)
+
+        if not result:
+            log.warning("[StepExecutor] expected data not found in Discord interaction for 'interaction_value' step.")
+        
+        return result
 
     async def _step_send_content(self, data: Any, config: str):
         """

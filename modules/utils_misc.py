@@ -6,6 +6,7 @@ import math
 import random
 import copy
 import base64
+import io
 import filetype
 import mimetypes
 import re
@@ -53,7 +54,7 @@ def fix_dict(set, req, src: str | None = None, warned: bool = False, path=""):
             was_warned = was_warned or child_warned  # Update was_warned if any child call was warned
     return set, was_warned
 
-def extract_key(data: dict|list, config: Union[str, dict]) -> Any:
+def extract_key(data: dict | list | object, config: Union[str, dict]) -> Any:
     if isinstance(config, dict):
         path = config.get("path")
         default = config.get("default", None)
@@ -73,11 +74,14 @@ def extract_key(data: dict|list, config: Union[str, dict]) -> Any:
                     data = data[idx]
                 else:
                     raise TypeError(f"Expected list for index access but got {type(data).__name__}")
-            else:  # dict key
+            else:  # dict key or object attribute
                 if isinstance(data, dict):
                     data = data[part]
                 else:
-                    raise TypeError(f"Expected dict for key '{part}' but got {type(data).__name__}")
+                    # fallback to attribute access
+                    data = getattr(data, part, None)
+                    if data is None:
+                        raise KeyError(f"Attribute '{part}' not found on {type(data).__name__}")
         return data
     except (KeyError, IndexError, TypeError) as e:
         if default is not None:
@@ -379,6 +383,29 @@ def guess_format_from_headers(headers: dict) -> str|None:
 def guess_format_from_data(data, default=None) -> str:
     kind = filetype.guess(data)
     return kind.mime if kind else default
+
+async def process_attachment(attachment) -> dict:
+    file_bytes = await attachment.read()
+    filename = attachment.filename
+
+    kind = filetype.guess(file_bytes)
+    mime_type = kind.mime if kind else 'application/octet-stream'
+    mime_category = mime_type.strip().lower().split('/')[0]
+    file_obj = io.BytesIO(file_bytes)
+    file_obj.name = filename
+
+    file = {
+        mime_category: {
+            "file": file_obj,
+            "filename": filename,
+            "content_type": mime_type
+        }
+    }
+
+    return {"file": file,
+            "bytes": file_bytes,
+            "file_format": mime_type,
+            "filename": filename}
 
 def detect_audio_format(data: bytes) -> str:
     if data.startswith(b'ID3') or (len(data) > 1 and data[0] == 0xFF and (data[1] & 0xE0) == 0xE0):
