@@ -3191,6 +3191,7 @@ class Tasks(TaskProcessing):
             # Message type command
             elif isinstance(target, discord.Message):
                 context['message'] = target
+                context['text'] = target.clean_content
                 # collect attachments to more useful file dicts
                 if hasattr(target, 'attachments') and target.attachments:
                     for i, attachment in enumerate(target.attachments):
@@ -3201,7 +3202,7 @@ class Tasks(TaskProcessing):
 
             # Run the command's steps if defined
             if main_steps:
-                cmd_results = await call_stepexecutor(steps=main_steps, task=self, context=context, prefix=f'Processing command "{cmd_name}" with ')
+                cmd_results = await call_stepexecutor(steps=main_steps, task=self, input_data=target, context=context, prefix=f'Processing command "{cmd_name}" with ')
                 await self.embeds.send('img_send', f'{self.user_name} used "{cmd_name}"', ' ')
                 if cmd_results:
                     self.collect_extra_content(cmd_results)
