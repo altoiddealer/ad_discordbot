@@ -136,10 +136,32 @@ def remove_keys(obj, keys_to_remove:list|set):
     else:
         return obj
 
+def safe_copy(obj):
+    """Deepcopies only safe primitives and containers; returns reference for others."""
+    # Basic primitives are always safe
+    if isinstance(obj, (str, int, float, bool, type(None))):
+        return obj
+    # Containers: recurse
+    if isinstance(obj, dict):
+        return {k: safe_copy(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple, set)):
+        t = type(obj)
+        return t(safe_copy(v) for v in obj)
+    # Skip deepcopy for *any* complex object (custom classes, Discord models, asyncio internals)
+    if not isinstance(obj, (dict, list, tuple, set)):
+        # Heuristic: skip anything with a __dict__ or __slots__ (custom instance)
+        if hasattr(obj, "__dict__") or hasattr(obj, "__slots__"):
+            return obj
+    # Try deepcopy safely
+    try:
+        return copy.deepcopy(obj)
+    except Exception:
+        return obj
+
 # Safer version of update_dict
 def deep_merge(base: dict, override: dict) -> dict:
-    '''merge 2 dicts. "override" dict has priority'''
-    result = copy.deepcopy(base)
+    """Recursively merges two dicts with deepcopy safety."""
+    result = safe_copy(base)
     for k, v in override.items():
         if (
             k in result
@@ -148,7 +170,7 @@ def deep_merge(base: dict, override: dict) -> dict:
         ):
             result[k] = deep_merge(result[k], v)
         else:
-            result[k] = v
+            result[k] = safe_copy(v)
     return result
 
 def update_dict(d:dict, u:dict, in_place=True, merge_unmatched=True, skip_none=False) -> dict:

@@ -40,8 +40,8 @@ from modules.utils_files import load_file, merge_base, save_yaml_file  # noqa: F
 from modules.utils_shared import client, TOKEN, is_tgwui_integrated, shared_path, bg_task_queue, task_event, flows_queue, flows_event, patterns, bot_emojis, config, bot_database, user_blacklist, stt_blacklist, \
     get_api, set_task_class, set_message_manager, set_task_manager
 from modules.database import StarBoard, Statistics, BaseFileMemory
-from modules.utils_misc import check_probability, fix_dict, set_key, deep_merge, update_dict, sum_update_dict, random_value_from_range, convert_lists_to_tuples, \
-    consolidate_prompt_strings, get_time, format_time, format_time_difference, get_normalized_weights, get_pnginfo_from_image, is_base64, valueparser # noqa: F401
+from modules.utils_misc import check_probability, fix_dict, set_key, deep_merge, update_dict, sum_update_dict, process_attachment, random_value_from_range, \
+    convert_lists_to_tuples, consolidate_prompt_strings, get_time, format_time, format_time_difference, get_normalized_weights, get_pnginfo_from_image, is_base64, valueparser # noqa: F401
 from modules.utils_processing import resolve_placeholders, collect_content_to_send, send_content_to_discord, comfy_delete_and_reroute_nodes
 from modules.utils_discord import Embeds, cmd_ok, set_bot_embeds, guild_only, owner_only, guild_or_owner_only, user_not_blacklisted, configurable_for_dm_if, custom_commands_check, is_direct_message, ireply, sleep_delete_message, send_long_message, \
     EditMessageModal, SelectedListItem, SelectOptionsView, get_user_ctx_inter, get_message_ctx_inter, apply_reactions_to_messages, replace_msg_in_history_and_discord, MAX_MESSAGE_LENGTH, muffled_send  # noqa: F401
@@ -3183,9 +3183,25 @@ class Tasks(TaskProcessing):
             target:discord.Message|discord.User = self.custom_cmd_config['custom_cmd_target']
             main_steps:dict = self.custom_cmd_config['custom_cmd_steps']
 
+            # Make relavent context
+            context = {}
+            # User type command
+            if isinstance(target, discord.User):
+                context['user'] = target
+            # Message type command
+            elif isinstance(target, discord.Message):
+                context['message'] = target
+                # collect attachments to more useful file dicts
+                if hasattr(target, 'attachments') and target.attachments:
+                    for i, attachment in enumerate(target.attachments):
+                        i_label = f'attachment_{i}'
+                        context[i_label] = process_attachment(attachment)
+            else:
+                raise ValueError(f"Invalid target_type '{type(target)}'")
+
             # Run the command's steps if defined
             if main_steps:
-                cmd_results = await call_stepexecutor(steps=main_steps, task=self, prefix=f'Processing command "{cmd_name}" with ')
+                cmd_results = await call_stepexecutor(steps=main_steps, task=self, context=context, prefix=f'Processing command "{cmd_name}" with ')
                 await self.embeds.send('img_send', f'{self.user_name} used "{cmd_name}"', ' ')
                 if cmd_results:
                     self.collect_extra_content(cmd_results)

@@ -6,7 +6,7 @@ import copy
 from modules.typing import CtxInteraction, APIRequestCancelled
 from typing import Any, Optional, Union
 from modules.utils_shared import client, shared_path, is_tgwui_integrated, load_file, get_api
-from modules.utils_misc import valueparser, set_key, extract_key, deep_merge, process_attachment
+from modules.utils_misc import valueparser, set_key, extract_key, safe_copy, deep_merge, process_attachment
 import modules.utils_processing as processing
 from modules.apis import apisettings, APIResponse, Endpoint, API, APIClient, ImgGenClient_Comfy, ImgGenClient
 
@@ -151,7 +151,6 @@ class StepExecutor:
 
         return processed_result
 
-
     ### Context Resolution
     def _resolve_context_placeholders(self, data: Any, config: Any, sources=["result", "context", "task", "websocket"]) -> Any:
         # Merge context with 'result'
@@ -166,6 +165,16 @@ class StepExecutor:
             config = processing.resolve_placeholders(config, ws_context, log_prefix='[StepExecutor]', log_suffix=f'from "{self.endpoint.client.name}" Websocket context')
         return config
 
+    def clone(self, steps:list|None=None, context:dict|None=None) -> "StepExecutor":
+        steps = steps or []
+        sub_context = context or safe_copy(self.context)
+
+        return StepExecutor(steps,
+                            response=self.response,
+                            task=self.task,
+                            ictx=self.ictx,
+                            endpoint=self.endpoint,
+                            context=sub_context)
 
     async def _step_if(self, data: Any, config: dict):
         """
@@ -187,12 +196,7 @@ class StepExecutor:
         
         config['context'] = self.context
         if processing.evaluate_condition(**config):
-            sub_executor = StepExecutor(steps,
-                                        response=self.response,
-                                        task=self.task,
-                                        ictx=self.ictx,
-                                        endpoint=self.endpoint,
-                                        context=copy.deepcopy(self.context))
+            sub_executor:StepExecutor = self.clone(steps)
             branch_result = await sub_executor.run(data)
 
             self.context = deep_merge(self.context, sub_executor.context)
@@ -259,13 +263,7 @@ class StepExecutor:
                     branch_steps = branch_cfg
                 else:
                     raise ValueError(f"[StepExecutor] '{branch_type}' steps must be a list in 'if_group' step.")
-
-                sub_executor = StepExecutor(branch_steps,
-                                            response=self.response,
-                                            task=self.task,
-                                            ictx=self.ictx,
-                                            endpoint=self.endpoint,
-                                            context=copy.deepcopy(self.context))
+                sub_executor:StepExecutor = self.clone(branch_steps)
                 result = await sub_executor.run(result)
 
                 self.context = deep_merge(self.context, sub_executor.context)
@@ -314,14 +312,8 @@ class StepExecutor:
             # Add iteration variables to context
             item_context = {**root_context,
                             **get_context(index, item)}
-
-            sub_executor = StepExecutor(steps,
-                                        response=self.response,
-                                        task=self.task,
-                                        ictx=self.ictx,
-                                        endpoint=self.endpoint,
-                                        context=item_context)
-
+            
+            sub_executor:StepExecutor = self.clone(steps, context=item_context)
             result = await sub_executor.run(get_value(item))
             results.append(result)
 
@@ -348,12 +340,7 @@ class StepExecutor:
 
         async def run_subgroup(steps: list[dict], index: int):
             subgroup_context = copy.deepcopy(self.context)
-            sub_executor = StepExecutor(steps,
-                                        response=self.response,
-                                        task=self.task,
-                                        ictx=self.ictx,
-                                        endpoint=self.endpoint,
-                                        context=subgroup_context)
+            sub_executor:StepExecutor = self.clone(steps, context=subgroup_context)
             result = await sub_executor.run(data)
             context_updates = deep_merge(context_updates, subgroup_context)
             return result, subgroup_context
@@ -697,48 +684,6 @@ class StepExecutor:
             raise TimeoutError("[StepExecutor] User did not respond in time.")
         finally:
             client.waiting_for.pop(user.id, None)
-
-    async def _step_interaction(self, data: Any, config: dict):
-        """
-        Returns values from the Discord interaction (self.ictx).
-        Example:
-          - interaction:
-              value: user.display_name
-          - interaction:
-              username: user.display_name
-              guild: guild.name
-        """
-        if not hasattr(self, "ictx"):
-            raise RuntimeError("[StepExecutor] A Discord interaction was not found for 'interaction_value' step.")
-
-        ictx = self.ictx
-        has_attachment:bool = hasattr(ictx, 'attachments') and ictx.attachments
-        attachment = None
-        if has_attachment:
-            attachment = process_attachment(ictx.attachments[0]) # make a useful file dict
-                
-        # Single field
-        if "value" in config:
-            if config['value'] == 'attachment':
-                if not attachment:
-                    raise ValueError('[StepExecutor] Attachment not found for step "interaction"')
-                return attachment
-            return extract_key(ictx, config["value"])
-
-        # Mapping
-        result = {}
-        for key, path in config.items():
-            if path == 'attachment':
-                if not attachment:
-                    raise ValueError('[StepExecutor] Attachment not found for step "interaction"')
-                result[key] = attachment
-                continue
-            result[key] = extract_key(ictx, path)
-
-        if not result:
-            log.warning("[StepExecutor] expected data not found in Discord interaction for 'interaction_value' step.")
-        
-        return result
 
     async def _step_send_content(self, data: Any, config: str):
         """
