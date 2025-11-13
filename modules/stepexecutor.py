@@ -1,14 +1,12 @@
 import asyncio
 import re
 from PIL import Image, PngImagePlugin
-import io
 import base64
-import filetype
 import copy
 from modules.typing import CtxInteraction, APIRequestCancelled
 from typing import Any, Optional, Union
 from modules.utils_shared import client, shared_path, is_tgwui_integrated, load_file, get_api
-from modules.utils_misc import valueparser, set_key, extract_key, deep_merge
+from modules.utils_misc import valueparser, set_key, extract_key, safe_copy, deep_merge, process_attachment
 import modules.utils_processing as processing
 from modules.apis import apisettings, APIResponse, Endpoint, API, APIClient, ImgGenClient_Comfy, ImgGenClient
 
@@ -153,7 +151,6 @@ class StepExecutor:
 
         return processed_result
 
-
     ### Context Resolution
     def _resolve_context_placeholders(self, data: Any, config: Any, sources=["result", "context", "task", "websocket"]) -> Any:
         # Merge context with 'result'
@@ -168,6 +165,16 @@ class StepExecutor:
             config = processing.resolve_placeholders(config, ws_context, log_prefix='[StepExecutor]', log_suffix=f'from "{self.endpoint.client.name}" Websocket context')
         return config
 
+    def clone(self, steps:list|None=None, context:dict|None=None) -> "StepExecutor":
+        steps = steps or []
+        sub_context = context or safe_copy(self.context)
+
+        return StepExecutor(steps,
+                            response=self.response,
+                            task=self.task,
+                            ictx=self.ictx,
+                            endpoint=self.endpoint,
+                            context=sub_context)
 
     async def _step_if(self, data: Any, config: dict):
         """
@@ -189,12 +196,7 @@ class StepExecutor:
         
         config['context'] = self.context
         if processing.evaluate_condition(**config):
-            sub_executor = StepExecutor(steps,
-                                        response=self.response,
-                                        task=self.task,
-                                        ictx=self.ictx,
-                                        endpoint=self.endpoint,
-                                        context=copy.deepcopy(self.context))
+            sub_executor:StepExecutor = self.clone(steps)
             branch_result = await sub_executor.run(data)
 
             self.context = deep_merge(self.context, sub_executor.context)
@@ -261,13 +263,7 @@ class StepExecutor:
                     branch_steps = branch_cfg
                 else:
                     raise ValueError(f"[StepExecutor] '{branch_type}' steps must be a list in 'if_group' step.")
-
-                sub_executor = StepExecutor(branch_steps,
-                                            response=self.response,
-                                            task=self.task,
-                                            ictx=self.ictx,
-                                            endpoint=self.endpoint,
-                                            context=copy.deepcopy(self.context))
+                sub_executor:StepExecutor = self.clone(branch_steps)
                 result = await sub_executor.run(result)
 
                 self.context = deep_merge(self.context, sub_executor.context)
@@ -316,14 +312,8 @@ class StepExecutor:
             # Add iteration variables to context
             item_context = {**root_context,
                             **get_context(index, item)}
-
-            sub_executor = StepExecutor(steps,
-                                        response=self.response,
-                                        task=self.task,
-                                        ictx=self.ictx,
-                                        endpoint=self.endpoint,
-                                        context=item_context)
-
+            
+            sub_executor:StepExecutor = self.clone(steps, context=item_context)
             result = await sub_executor.run(get_value(item))
             results.append(result)
 
@@ -350,12 +340,7 @@ class StepExecutor:
 
         async def run_subgroup(steps: list[dict], index: int):
             subgroup_context = copy.deepcopy(self.context)
-            sub_executor = StepExecutor(steps,
-                                        response=self.response,
-                                        task=self.task,
-                                        ictx=self.ictx,
-                                        endpoint=self.endpoint,
-                                        context=subgroup_context)
+            sub_executor:StepExecutor = self.clone(steps, context=subgroup_context)
             result = await sub_executor.run(data)
             context_updates = deep_merge(context_updates, subgroup_context)
             return result, subgroup_context
@@ -684,27 +669,12 @@ class StepExecutor:
             elif expected_type == "file":
                 if msg.attachments:
                     attachment: Attachment = msg.attachments[0]
-                    file_bytes = await attachment.read()
-                    filename = attachment.filename
-
-                    kind = filetype.guess(file_bytes)
-                    mime_type = kind.mime if kind else 'application/octet-stream'
-                    mime_category = mime_type.strip().lower().split('/')[0]
-                    file_obj = io.BytesIO(file_bytes)
-                    file_obj.name = filename
-
-                    file = {
-                        mime_category: {
-                            "file": file_obj,
-                            "filename": filename,
-                            "content_type": mime_type
-                        }
-                    }
-
-                    return {"file": file,
-                            "bytes": file_bytes,
-                            "file_format": mime_type,
-                            "filename": filename}
+                    file_dict = process_attachment(attachment)
+                    return file_dict
+                    #  {"file": file,
+                    #   "bytes": file_bytes,
+                    #   "file_format": mime_type,
+                    #   "filename": filename}
                 else:
                     raise ValueError("[StepExecutor] Expected file attachment but none provided.")
             else:
@@ -714,7 +684,6 @@ class StepExecutor:
             raise TimeoutError("[StepExecutor] User did not respond in time.")
         finally:
             client.waiting_for.pop(user.id, None)
-
 
     async def _step_send_content(self, data: Any, config: str):
         """
