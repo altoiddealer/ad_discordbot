@@ -21,14 +21,22 @@
 
 ## Accouncements:
 
-**08/31/2025:** - New Main Feature: **Integrated STT Support via [whisper](https://github.com/openai/whisper)** ([more details](https://github.com/altoiddealer/ad_discordbot/wiki/stt))
-
-**06/10/2025:** - New Main Features: **Universal API System! ComfyUI Support!** ([more details](https://github.com/altoiddealer/ad_discordbot/wiki/APIs))
+**11/12/2025:** - New Main Feature: **Custom Commands!** ([more details](https://github.com/altoiddealer/ad_discordbot/wiki/custom-commands))
 
 ## What's new:
 
 <details>
   <summary>click to expand</summary>
+
+   **11/12/2025:** **Custom Slash AND Context Commands!**
+
+   [Custom Slash Commands](https://github.com/altoiddealer/ad_discordbot/wiki/custom-commands#slash-commands) was silently some time ago, actually.
+
+   Now, this has been expanded to also include [Custom Context Commands](https://github.com/altoiddealer/ad_discordbot/wiki/custom-commands#context-commands)
+
+   Paired with the [API system](https://github.com/altoiddealer/ad_discordbot/wiki/apis) and [StepExecutor](https://github.com/altoiddealer/ad_discordbot/wiki/stepexecutor), these commands are extremely powerful and satisfy limitless use cases.
+   
+  ---
 
    **08/31/2025:** **Integrated STT Processing!** + **Multimodal TextGen Support!**
 
