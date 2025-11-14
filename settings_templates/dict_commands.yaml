@@ -1,22 +1,24 @@
 # Configuration for the "Custom Commands" feature
 # Read the Wiki for more information (https://github.com/altoiddealer/ad_discordbot/wiki/Custom-Commands)
 
+# Tip: You can run "workflows" via the 'run_workflow' step (defined in dict_workflows.yaml), which can help reduce redundancy when using same steps in multiple commands.
+
 
 # These are invoked by right-clicking a Message or User.
 context_commands: [] # (delete brackets when actually adding commands using the '-' list item notation)
-  # Basic example:
-  # - command_name: test_context
-  #   description: Test the new custom contaxt commands
-  #   target_type: message   # or "user"
-  #   queue_to: gen_queue
-  #   steps:
-  #     - send_content: You used a context command!
 
 # These are invoked by typing /command_name in discord's UI text box.
 slash_commands: [] # (delete brackets when actually adding commands using the '-' list item notation)
 
 
-context_commands_examples: [] # Examples coming soon!
+# These have no effect unless moved up into 'context_commands'
+context_commands_examples:
+  - command_name: test_context
+    description: Test the new custom contaxt commands
+    target_type: message   # or "user"
+    queue_to: gen_queue
+    steps:
+      - send_content: You used a context command!
 
 # These have no effect unless moved up into 'slash_commands'
 slash_commands_examples:

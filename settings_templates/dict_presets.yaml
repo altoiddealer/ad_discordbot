@@ -1,0 +1,39 @@
+# Presets can limit redundancy where multiple things share identical configurations.
+# Currenty can be used in:
+#  - API definitions (dict_api_settings.yaml)
+#  - Anywhere that StepExecutor "steps" are defined (Workflows, Custom Commands)
+#  - More to come.
+
+# Usage:
+#  - Must include 'name'
+#  - If the preset contains "steps", it must ONLY have top level keys 'name' and 'steps'
+#  - Simply include `preset_name: <name of the preset>` wherever you want the config values injected.
+
+presets: [] # (delete brackets when actually adding presets using the '-' list item notation)
+
+# These have no effect unless moved up into 'presets'
+examples:
+  # Example of an endpoint preset
+  - name: sd-txt2img-img2img-endpoints
+    method: POST
+    retry: 1
+    payload_type: json
+    payload_base: sd-webui.yaml
+    input_data: {prompt: "{prompt}"}
+    timeout: 120
+    # response_handling is SKIPPED when 'extract_key' method is used (in first section, 'bot_api_functions')
+    # This serves as an example how to replicate internal handling via the response_handling system.
+    response_handling:
+      # Capture 'images' list as context variable "image_list"
+      - extract_key: images
+        save_as: image_list
+      # Execute a 'for loop' of steps on each value in 'image_list'
+      - for_each:
+          in: image_list
+          as: image
+          steps:
+            - decode_base64: true          
+            - save:
+                file_format: png
+                file_path: "images"
+                file_name: "img_{image_index}"

@@ -1,0 +1,68 @@
+# Workflows are sequential processing steps which can be invoked via:
+#  - The 'run_workflow' tag (Tags system - https://github.com/altoiddealer/ad_discordbot/wiki/tags)
+#  - Anywhere that StepExectutor processing occurs using 'run_workflow' step.
+#    Mainly, Custom Commands (https://github.com/altoiddealer/ad_discordbot/wiki/custom-commands)
+
+# Info on StepExecutor / Steps can be found here: https://github.com/altoiddealer/ad_discordbot/wiki/stepexecutor
+
+workflows: [] # (delete brackets when actually adding workflows using the '-' list item notation)
+
+# These have no effect unless moved up into 'workflows'
+examples:
+  - name: Comfy Wan t2v
+    steps:
+      - call_api:
+          api_name: ComfyUI
+          endpoint_name: Prompt
+          payload_type: json
+          input_data:
+            prompt: "{prompt}"
+        save_as: prompt_id
+      - track_progress:
+          client_name: ComfyUI
+          progress_key: data.value # Required. dot notation gets the value nested in "data"
+          max_key: data.max        # Optional. If applicable, should return the maximum value of "progress".
+          eta_key: null            # Optional. If applicable, discord embed will include the ETA value.
+          message: Generating a video # message for the discord embed
+          completion_condition:       # Optional: All key/values must be matched to stop fetching progress
+            type: executed
+            data: {prompt_id: "{prompt_id}"}
+          # websocket exclusive values
+          use_ws: True
+          type_filter: [progress, executed]   # ignores other message types
+          data_filter: {prompt_id: "{prompt_id}"} # must '.get()' these key/values
+
+  - name: fan_out_translate
+    description: Translates a sentence into multiple languages in parallel
+    steps:
+      - call_api:
+          api_name: Text Generation WebUI
+          endpoint_name: Generate
+          input_data:
+            prompt: "Say hello"
+      - extract_key: text
+        save_as: base_text
+      - group:
+          - call_api:
+              api_name: DeepL API
+              endpoint_name: Translate
+              input_data:
+                text: "{base_text}"
+                target_lang: "ES"
+            save_as: es_text
+
+          - call_api:
+              api_name: DeepL API
+              endpoint_name: Translate
+              input_data:
+                text: "{base_text}"
+                target_lang: "FR"
+            save_as: fr_text
+
+      - call_api:
+          api_name: Local Processor
+          endpoint_name: Join
+          input_data:
+            es: "{es_text}"
+            fr: "{fr_text}"
+      # returns result of last step (multilingual output)
