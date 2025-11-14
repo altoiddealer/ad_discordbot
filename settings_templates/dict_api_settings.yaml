@@ -1,8 +1,6 @@
 # Overview:
 # - bot_api_functions: defines APIs/endpoints for the bot's "main functions" (bot commands, message responses, etc). Only one "main client" allowed for each: ImgGen / TextGen / TTSGen
 # - all_apis: A list of ALL APIs/endpoints including ones being used for main functions, and non-main bot functions (via the Tags system / "user commands", etc)
-# - presets: Most 'dict' values in this config can include a 'preset_name' key (linked to a preset dict), to limit redundancy.
-# - workflows: For executing custom logic beyond default bahviors (ei: add additional post-processing from a 'post_txt2img' endpoint call). For non-main functions only (N/A to main functions)
 
 bot_api_functions:
   # Purpose: Establish which API the bot will use for each "main function", including unknown APIs so long as instructions are followed carefully.
@@ -94,12 +92,8 @@ all_apis:
     auth: null # {username: myuser, password: mypass} # dict format with keys 'username' and 'password'
     # Add any endpoints that you may use for bot functions (Tags system, user commands, etc)
     endpoints:
-      - name: Post txt2img
-        path: /sdapi/v1/txt2img
-        preset: sd-txt2img-img2img-endpoints # See 'presets' further down (serves as example usage for presets)
-      - name: Post img2img
-        path: /sdapi/v1/img2img
-        preset: sd-txt2img-img2img-endpoints # See 'presets' further down
+      - {name: Post txt2img, path: /sdapi/v1/txt2img, method: POST, retry: 1, payload_type: json, payload_base: sd-webui.yaml, timeout: 120}
+      - {name: Post img2img, path: /sdapi/v1/img2img, method: POST, retry: 1, payload_type: json, payload_base: sd-webui.yaml, timeout: 120}
       - {name: Cancel, path: /sdapi/v1/interrupt, method: POST}
       - {name: Get Progress, path: /sdapi/v1/progress, method: GET}
       - {name: Get Checkpoints, path: /sdapi/v1/sd-models, method: GET}
@@ -206,94 +200,6 @@ all_apis:
         #   data: {folderId: <**A SPECIFIC FOLDER ID**>} # Optional for this API
         response_handling:
           - extract_key: data.downloadPage # Gets the download link ('data': {'downloadPage': <the URL>,...})
-
-# Create presets here which can be injected in any 'endpoint', or in any 'response_handling' / 'workflow' steps.
-presets:
-  - name: sd-txt2img-img2img-endpoints
-    method: POST
-    retry: 1
-    payload_type: json
-    payload_base: sd-webui.yaml
-    input_data: {prompt: "{prompt}"}
-    timeout: 120
-    # response_handling is SKIPPED when 'extract_key' method is used (in first section, 'bot_api_functions')
-    # This serves as an example how to replicate internal handling via the response_handling system.
-    response_handling:
-      # Capture 'images' list as context variable "image_list"
-      - extract_key: images
-        save_as: image_list
-      # Execute a 'for loop' of steps on each value in 'image_list'
-      - for_each:
-          in: image_list
-          as: image
-          steps:
-            - decode_base64: true          
-            - save:
-                file_format: png
-                file_path: "images"
-                file_name: "img_{image_index}"
-
-
-# For executing custom logic beyond default bahaviors (ei: add additional post-processing from a 'post_txt2img' endpoint call).
-# Currently only accessed via Tags system ('run_workflow' tag). Also planned for use in upcoming "User Commands" feature.
-workflows:
-  - name: Comfy Wan t2v
-    steps:
-      - call_api:
-          api_name: ComfyUI
-          endpoint_name: Prompt
-          payload_type: json
-          input_data:
-            prompt: "{prompt}"
-        save_as: prompt_id
-      - track_progress:
-          client_name: ComfyUI
-          progress_key: data.value # Required. dot notation gets the value nested in "data"
-          max_key: data.max        # Optional. If applicable, should return the maximum value of "progress".
-          eta_key: null            # Optional. If applicable, discord embed will include the ETA value.
-          message: Generating a video # message for the discord embed
-          completion_condition:       # Optional: All key/values must be matched to stop fetching progress
-            type: executed
-            data: {prompt_id: "{prompt_id}"}
-          # websocket exclusive values
-          use_ws: True
-          type_filter: [progress, executed]   # ignores other message types
-          data_filter: {prompt_id: "{prompt_id}"} # must '.get()' these key/values
-
-  - name: fan_out_translate
-    description: Translates a sentence into multiple languages in parallel
-    steps:
-      - call_api:
-          api_name: Text Generation WebUI
-          endpoint_name: Generate
-          input_data:
-            prompt: "Say hello"
-      - extract_key: text
-        save_as: base_text
-      - group:
-          - call_api:
-              api_name: DeepL API
-              endpoint_name: Translate
-              input_data:
-                text: "{base_text}"
-                target_lang: "ES"
-            save_as: es_text
-
-          - call_api:
-              api_name: DeepL API
-              endpoint_name: Translate
-              input_data:
-                text: "{base_text}"
-                target_lang: "FR"
-            save_as: fr_text
-
-      - call_api:
-          api_name: Local Processor
-          endpoint_name: Join
-          input_data:
-            es: "{es_text}"
-            fr: "{fr_text}"
-      # returns result of last step (multilingual output)
 
 ## Schemas
 

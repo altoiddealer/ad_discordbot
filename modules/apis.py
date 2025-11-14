@@ -1,6 +1,5 @@
 import aiohttp
 from json import loads as json_loads
-from json import dumps as json_dumps
 import asyncio
 import os
 import jsonschema
@@ -15,6 +14,7 @@ import traceback
 from modules.typing import CtxInteraction, FILE_INPUT, APIRequestCancelled
 from typing import get_type_hints, get_type_hints, get_origin, get_args, Any, Tuple, Optional, Union, Callable, AsyncGenerator
 from modules.utils_shared import client, shared_path, bot_database, load_file
+from modules.presets_workflows import bot_presets
 from modules.utils_misc import progress_bar, extract_key, deep_merge, split_at_first_comma, detect_audio_format, remove_meta_keys, get_pnginfo_from_image
 import modules.utils_processing as processing
 from discord.ui import View, Button
@@ -28,8 +28,6 @@ class APISettings():
     def __init__(self):
         self.main_settings:dict = {}
         self.misc_settings:dict = {}
-        self.presets:dict = {}
-        self.workflows:dict = {}
 
     def get_client_type_map(self):
         return {"imggen": ImgGenClient,
@@ -39,104 +37,11 @@ class APISettings():
     def get_config_for(self, section: str, default=None) -> dict:
         return self.main_settings.get(section, default or {})
 
-    def get_workflow_steps_for(self, workflow_name:str) -> dict:
-        workflow = self.workflows.get(workflow_name)
-        if not workflow:
-            raise RuntimeError(f'[API Workflows] Workflow not found "{workflow_name}"')
-        if not isinstance(workflow, dict):
-            raise ValueError(f'[API Workflows] Invalid format for workflow "{workflow_name}" (must be dict)')
-        workflow_steps = workflow.get('steps')
-        if not isinstance(workflow_steps, list):
-            raise ValueError(f'[API Workflows] Invalid structure for workflow "{workflow_name}" (include a "step" key)')
-        return workflow_steps
-
-    def collect_presets(self, presets_list):
-        for preset in presets_list:
-            if not isinstance(preset, dict):
-                log.warning("Encountered a non-dict response handling preset. Skipping.")
-                continue
-            name = preset.get('name')
-            if name:
-                self.presets[name] = preset
-
-    def is_simple_step_preset(self, preset: dict) -> bool:
-        """True if preset only contains 'name' and 'steps'."""
-        return (isinstance(preset, dict) and
-                set(preset.keys()) <= {"name", "steps"} and
-                isinstance(preset.get("steps"), list))
-
-    def get_preset(self, preset_name: str, default=None) -> dict:
-        return self.presets.get(preset_name, default or {})
-
-    def apply_preset(self, config: dict) -> dict:
-        preset_name = config.get("preset")
-        if not preset_name:
-            return config
-        preset = self.get_preset(preset_name)
-        if not preset:
-            log.warning(f"Preset '{preset_name}' not found.")
-            return config
-        # Merge preset with overrides (config wins)
-        merged = deep_merge(preset, config)
-        merged.pop("preset", None)
-        return merged
-
-    def apply_presets(self, config):
-        """
-        Recursively applies presets to all dicts found in the config (which can be a dict or list).
-        Returns a new config structure with all presets applied.
-        """
-        if isinstance(config, dict):
-            # Apply preset and get merged result
-            config = self.apply_preset(config)
-            # Recurse into each value and update it
-            for key, value in config.items():
-                config[key] = self.apply_presets(value)
-            return config
-        elif isinstance(config, list):
-            new_list = []
-            for item in config:
-                # list item is a dict containing only 'preset'
-                if (isinstance(item, dict) and set(item.keys()) == {"preset"}):
-                    preset_name = item["preset"]
-                    preset = self.get_preset(preset_name)
-                    # insert the preset list items
-                    if self.is_simple_step_preset(preset):
-                        preset_steps = preset.get("steps", [])
-                        new_list.extend(self.apply_presets(pstep) for pstep in preset_steps)
-                        continue  # Skip adding the original item
-                # Normal recursive case
-                new_list.append(self.apply_presets(item))
-            return new_list
-        else:
-            # Base case: return scalar values as-is
-            return config
-
-    def collect_workflows(self, workflows_list):
-        for workflow in workflows_list:
-            if not isinstance(workflow, dict):
-                log.warning("Encountered a non-dict Workflow. Skipping.")
-                continue
-            name = workflow.get('name')
-            if not name:
-                log.warning("Encountered a Workflow with a 'name'. Skipping.")
-                continue
-            steps = workflow.get('steps')
-            if not steps:
-                log.warning("Encountered a Workflow without any 'steps'. Skipping.")
-                continue
-            self.workflows[name] = workflow
-            self.workflows[name]['steps'] = self.apply_presets(steps)
-
     def collect_settings(self, data:dict):
         # Collect Main APIs
         self.main_settings = data.get('bot_api_functions', {})
         # Collect Misc API function assignments
         self.misc_settings = data.get('misc_api_functions', {})
-        # Collect Response Handling Presets
-        self.collect_presets(data.get('presets', {}))
-        # Collect Workflows
-        self.collect_workflows(data.get('workflows', {}))
 
 apisettings = APISettings()
 
@@ -218,10 +123,8 @@ class API:
         self.setup_tasks:list = []
 
     async def init(self):
-        # Load API Settings yaml
+        # Load and collect API Settings
         data = load_file(shared_path.api_settings)
-
-        # Main APIs / Presets / Workflows
         apisettings.collect_settings(data)
 
         # Reverse lookups for matching API names to their function types
@@ -235,7 +138,7 @@ class API:
         # Iterate over all APIs data
         apis:dict = data.get('all_apis', {})
         # Expand any presets in the data
-        apis = apisettings.apply_presets(apis)
+        apis = bot_presets.apply_presets(apis)
         for api_config in apis:
             if not isinstance(api_config, dict):
                 log.warning('An API definition was not formatted as a dictionary. Ignoring.')

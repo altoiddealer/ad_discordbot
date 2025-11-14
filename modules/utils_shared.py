@@ -173,6 +173,8 @@ class SharedPath:
     cmd_options, _ = init_user_config_files(dir_user_settings, templates, 'dict_cmdoptions.yaml')
     img_models, _ = init_user_config_files(dir_user_settings, templates, 'dict_imgmodels.yaml')
     tags, _ = init_user_config_files(dir_user_settings, templates, 'dict_tags.yaml')
+    presets, _ = init_user_config_files(dir_user_settings, templates, 'dict_presets.yaml')
+    workflows, _ = init_user_config_files(dir_user_settings, templates, 'dict_workflows.yaml')
 
     # User Characters
     dir_user_characters = init_shared_paths(dir_user, 'characters', f"Character files to be used with the bot{' (merge in with TGWUI characters)' if is_tgwui_integrated else ''}.")

@@ -14,20 +14,17 @@ import os
 import warnings
 import discord
 from discord.ext import commands, voice_recv
-from discord import app_commands, File, abc
+from discord import app_commands
 import typing
 import io
 import base64
 import yaml
 from PIL import Image
-import requests
 import aiohttp
 import math
 import time
-from threading import Lock
 from pydub import AudioSegment
 import copy
-from shutil import copyfile
 import sys
 import traceback
 from modules.typing import ChannelID, UserID, MessageID, CtxInteraction, FILE_INPUT, APIRequestCancelled  # noqa: F401
@@ -61,6 +58,7 @@ logging = log
 from modules.apis import API, APIClient, Endpoint, ImgGenEndpoint, ImgGenClient, TTSGenClient, TextGenClient
 api:API = asyncio.run(get_api())
 from modules.stepexecutor import call_stepexecutor
+from modules.presets_workflows import bot_presets
 
 imggen_enabled = config.imggen.get('enabled', True)
 
@@ -6556,6 +6554,7 @@ async def load_custom_context_commands(context_cmds:list):
 async def setup_hook():
     try:
         commands_file_data = load_file(shared_path.custom_commands)
+        commands_file_data = bot_presets.apply_presets(commands_file_data)
         slash_cmds: list = commands_file_data.get('slash_commands') or commands_file_data.get('commands', [])
         context_cmds:list = commands_file_data.get('context_commands', [])
         await load_custom_slash_commands(slash_cmds)

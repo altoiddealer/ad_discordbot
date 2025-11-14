@@ -8,14 +8,15 @@ from typing import Any, Optional, Union
 from modules.utils_shared import client, shared_path, is_tgwui_integrated, load_file, get_api
 from modules.utils_misc import valueparser, set_key, extract_key, safe_copy, deep_merge, process_attachment
 import modules.utils_processing as processing
-from modules.apis import apisettings, APIResponse, Endpoint, API, APIClient, ImgGenClient_Comfy, ImgGenClient
+from modules.apis import APIResponse, Endpoint, ImgGenClient_Comfy, ImgGenClient
+from modules.presets_workflows import bot_workflows
 
 from modules.logs import import_track, get_logger; import_track(__file__, fp=True); log = get_logger(__name__)  # noqa: E702
 logging = log
 
 async def call_stepexecutor(name:str=None, steps:list=None, input_data:Any=None, task=None, context:dict=None, prefix='Running '):
     if name:
-        processing_steps = apisettings.get_workflow_steps_for(name)
+        processing_steps = bot_workflows.get_workflow_steps_for(name)
         prefix = f'Running Workflow "{name}" with '
     elif steps:
         processing_steps = steps
