@@ -1677,7 +1677,8 @@ class TaskProcessing(TaskAttributes):
         self.payload['state']['name2_instruct'] = self.settings.name
         self.payload['state']['character_menu'] = self.settings.name
         self.payload['state']['context'] = self.settings.llmcontext.context
-        self.payload['state']['history'] = self.local_history.render_to_tgwui()
+        prefixed = 'user' if config.server_mode_enabled() else None
+        self.payload['state']['history'] = self.local_history.render_to_tgwui(prefixed=prefixed)
         if tgwui.is_multimodal:
             image_paths = await self.collect_images_for_llm()
             if image_paths:

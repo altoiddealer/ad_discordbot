@@ -333,7 +333,7 @@ class HMessage:
 
     ###########
     # Rendering
-    def render_to_prompt(self, each_new_line=True) -> str:
+    def render_to_prompt(self, each_new_line=False) -> str:
         if not self.text:
             return ''
 
@@ -403,23 +403,43 @@ class HistoryPairForTGWUI:
     user: Optional[HMessage] = field(default=None)
     assistant: Optional[HMessage] = field(default=None)
 
+    def add_pair_to(self, internal:list, visible:list, prefixed:str|None=None):
+        user_msg = self.user
+        asst_msg = self.assistant
 
-    def add_pair_to(self, internal:list, visible:list):
-        user_text = self.user.text if self.user else ''
-        user_text_visible = (self.user.text_visible or self.user.text) if self.user else ''
-        replied_to_user = self.assistant.reply_to
+        user_text = user_msg.text if user_msg else ''
+        user_text_visible = (user_msg.text_visible or user_msg.text) if user_msg else ''
+
+        replied_to_user = asst_msg.reply_to if asst_msg else None
         if isinstance(replied_to_user, HMessage):
+            user_msg = replied_to_user  # override source for prefixing
             user_text = replied_to_user.text or user_text
             user_text_visible = replied_to_user.text_visible or replied_to_user.text or user_text_visible
 
-        internal.append([
-            user_text,
-            self.assistant.text if self.assistant else '',
-        ])
-        visible.append([
-            user_text_visible,
-            str(self.assistant.text_visible or self.assistant.text) if self.assistant else '',
-        ])
+        prefix_user = prefixed in ('user', 'both')
+        prefix_asst = prefixed in ('assistant', 'both')
+
+        if prefix_user and user_msg:
+            # Prefix user messages
+            user_text = user_msg.render_to_prompt(each_new_line=True)
+            user_text_visible = user_msg.render_to_prompt(each_new_line=True)
+
+        if asst_msg:
+            if prefix_asst:
+                # Prefix assistant messages
+                asst_text = asst_msg.render_to_prompt(each_new_line=True)
+                asst_text_visible = asst_msg.render_to_prompt(each_new_line=True)
+            else:
+                asst_text = asst_msg.text
+                asst_text_visible = str(asst_msg.text_visible or asst_msg.text)
+        else:
+            asst_text = ''
+            asst_text_visible = ''
+
+        # Output assembly
+        internal.append([user_text, asst_text])
+        visible.append([user_text_visible, asst_text_visible])
+
         return self
 
 
@@ -686,7 +706,7 @@ class History:
 
     ###########
     # Rendering
-    def render_to_tgwui_tuple(self, include_hidden=False): # TODO create caching by storing event and clearing on render. - For Reality
+    def render_to_tgwui_tuple(self, include_hidden=False, prefixed:str|None=None): # TODO create caching by storing event and clearing on render. - For Reality
         internal = []
         visible = []
         current_pair = HistoryPairForTGWUI()
@@ -697,7 +717,7 @@ class History:
             
             if message.role == 'user':
                 if current_pair.user:
-                    current_pair.add_pair_to(internal, visible).clear()
+                    current_pair.add_pair_to(internal, visible, prefixed).clear()
 
                 current_pair.user = message
 
@@ -706,17 +726,17 @@ class History:
                 if not current_pair.assistant:
                     current_pair.assistant = message
 
-                current_pair.add_pair_to(internal, visible).clear()
+                current_pair.add_pair_to(internal, visible, prefixed).clear()
 
 
         if current_pair:
-            current_pair.add_pair_to(internal, visible).clear()
+            current_pair.add_pair_to(internal, visible, prefixed).clear()
             
         return internal, visible
             
             
-    def render_to_tgwui(self):
-        internal, visible = self.render_to_tgwui_tuple()
+    def render_to_tgwui(self, include_hidden=False, prefixed:str|None=None):
+        internal, visible = self.render_to_tgwui_tuple(include_hidden, prefixed)
         return dict(internal=internal, visible=visible)
     
 
