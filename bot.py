@@ -1677,7 +1677,8 @@ class TaskProcessing(TaskAttributes):
         self.payload['state']['name2_instruct'] = self.settings.name
         self.payload['state']['character_menu'] = self.settings.name
         self.payload['state']['context'] = self.settings.llmcontext.context
-        self.payload['state']['history'] = self.local_history.render_to_tgwui()
+        prefixed = 'user' if self.settings.behavior.server_mode else None
+        self.payload['state']['history'] = self.local_history.render_to_tgwui(prefixed=prefixed)
         if tgwui.is_multimodal:
             image_paths = await self.collect_images_for_llm()
             if image_paths:
@@ -1763,7 +1764,7 @@ class TaskProcessing(TaskAttributes):
         self.payload['text'] = self.prompt
 
     def apply_server_mode(self:Union["Task","Tasks"], revert=False):
-        if not config.server_mode_enabled():
+        if not self.settings.behavior.server_mode:
             return
         if not self.ictx or is_direct_message(self.ictx):
             return
@@ -2180,7 +2181,7 @@ class TaskProcessing(TaskAttributes):
             # Runs chatbot_wrapper(), gets responses
             async for resp_chunk in process_responses():
                 # Remove LLM prefixing itself due to server mode
-                if num_chunks == 0 and config.server_mode_enabled():
+                if num_chunks == 0 and self.settings.behavior.server_mode:
                     resp_chunk = removeprefix(resp_chunk, f"{self.settings.name}: ")
                 await process_chunk(resp_chunk)
                 num_chunks += 1
@@ -6936,6 +6937,7 @@ class SettingsBase:
 # Sub-classes under a main class 'Settings'
 class Behavior(SettingsBase):
     def __init__(self):
+        self.server_mode = False
         self.reply_to_itself = 0.0
         self.chance_to_reply_to_other_bots = 0.5
         self.reply_to_bots_when_addressed = 0.3
@@ -7049,7 +7051,6 @@ class Behavior(SettingsBase):
             time_since_last_conversation = datetime.now() - last_conversation_time
             return time_since_last_conversation.total_seconds() < self.conversation_recency
         return False
-
 
     # Checks if bot should reply to a message
     def bot_should_reply(self, message:discord.Message, text:str, last_character:str, is_stt_msg:bool) -> bool:

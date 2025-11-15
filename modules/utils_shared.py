@@ -279,9 +279,6 @@ class Config(BaseFileMemory):
     def discord_dm_setting(self, key, default=None) -> bool:
         return self.get('discord', {}).get('direct_messages', {}).get(key, default)
     
-    def server_mode_enabled(self) -> bool:
-        return self.textgen.get('server_mode', False)
-    
     def tts_enabled(self) -> bool:
         return self.get('ttsgen', {}).get('enabled', False)
     
