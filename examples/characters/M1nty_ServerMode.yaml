@@ -1,3 +1,10 @@
+# Example character to demonstrate usage of the "server_mode" behavior (in the 'behavior' config block)
+# Server mode introduces some subtle LLM payload maniupations in the background, to emphasize this is a group chat setting with various users.
+# The context, user_bio, system_message, etc - should be tailored to support this.
+# This character is almost identical to M1nty except:
+#  - server_mode: true
+#  - 'context' is tailored to mention the server, and show example dialogue of LLM responding to different users. This will have a strong impact if done well (mine is decent, at best)
+#  - 'user_bio' param gives brief description of the server / chat environment.
 name: M1nty
 greeting: |
   *{{char}} enters the chat, emerging from a magical tin of Altoids in a brilliant cloud of minty dust*
@@ -45,6 +52,7 @@ extensions:
 
 # optional - will override settings in 'dict_base_settings.yaml'
 behavior:
+  server_mode: true                   # Experimental setting intended to make the LLM behave more like it's part of a group chat. 'context', 'user_bio', etc, should be tailored to emphasize this. Results will vary.
   reply_to_itself: 0.0                # 0.0 = never happens / 1.0 = always happens
   chance_to_reply_to_other_bots: 0.0  # Chance for bot to reply when other bots speak in main channel
   reply_to_bots_when_addressed: 0.0   # Chance for bot to reply when other bots mention it by name
