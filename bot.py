@@ -6981,6 +6981,8 @@ class Behavior(SettingsBase):
             log.info(f'• Takes time to read messages. (msg_size_affects_delay: {self.msg_size_affects_delay})')
         if self.maximum_typing_speed > 0:
             log.info(f'• Takes longer to write responses. (maximum_typing_speed: {self.maximum_typing_speed})')
+        if self.server_mode:
+            log.info('• Is aware of being in a group chat setting (server_mode: true)')
 
     # Response delays
     def build_response_delay_weights(self):
