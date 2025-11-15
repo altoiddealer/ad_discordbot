@@ -37,7 +37,7 @@ from modules.utils_files import load_file, merge_base, save_yaml_file  # noqa: F
 from modules.utils_shared import client, TOKEN, is_tgwui_integrated, shared_path, bg_task_queue, task_event, flows_queue, flows_event, patterns, bot_emojis, config, bot_database, user_blacklist, stt_blacklist, \
     get_api, set_task_class, set_message_manager, set_task_manager
 from modules.database import StarBoard, Statistics, BaseFileMemory
-from modules.utils_misc import check_probability, fix_dict, set_key, deep_merge, update_dict, sum_update_dict, process_attachment, random_value_from_range, \
+from modules.utils_misc import removeprefix, check_probability, fix_dict, set_key, deep_merge, update_dict, sum_update_dict, process_attachment, random_value_from_range, \
     convert_lists_to_tuples, consolidate_prompt_strings, get_time, format_time, format_time_difference, get_normalized_weights, get_pnginfo_from_image, is_base64, valueparser # noqa: F401
 from modules.utils_processing import resolve_placeholders, collect_content_to_send, send_content_to_discord, comfy_delete_and_reroute_nodes
 from modules.utils_discord import Embeds, cmd_ok, set_bot_embeds, guild_only, owner_only, guild_or_owner_only, user_not_blacklisted, configurable_for_dm_if, custom_commands_check, is_direct_message, ireply, sleep_delete_message, send_long_message, \
@@ -1730,6 +1730,8 @@ class TaskProcessing(TaskAttributes):
         self.extra_stopping_strings()
         # generate text with text-generation-webui
         await self.llm_gen()
+        # Revert server mode manipulations, if any
+        self.apply_server_mode(revert=True)
         # Toggle TTS back on if it was toggled off
         if tts_sw:
             await toggle_any_tts(self.settings, tts_sw, force='on')
@@ -1760,15 +1762,38 @@ class TaskProcessing(TaskAttributes):
         # assign finalized prompt to payload
         self.payload['text'] = self.prompt
 
-    def apply_server_mode(self:Union["Task","Tasks"]):
-        # TODO Server Mode
-        if self.ictx and config.textgen.get('server_mode', False):
-            try:
+    def apply_server_mode(self:Union["Task","Tasks"], revert=False):
+        if not config.server_mode_enabled():
+            return
+        if not self.ictx or is_direct_message(self.ictx):
+            return
+        try:
+            user_prefix = f"{self.user_name}: "
+            llm_prefix = f"{self.settings.name}: "
+            prefixes = [user_prefix, llm_prefix]
+
+            # Revert before creating HMessages
+            if revert:
+                name1 = self.user_name
+                self.payload['text'] = removeprefix(self.payload['text'], user_prefix)
+                self.llm_resp = removeprefix(self.llm_resp, llm_prefix)
+
+            # Apply before LLM Gen
+            else:
                 name1 = f'Server: {self.ictx.guild}'
-                self.payload['state']['name1'] = name1
-                self.payload['state']['name1_instruct'] = name1
-            except Exception as e:
-                log.error(f'An error occurred while applying Server Mode: {e}')
+                self.payload['text'] = user_prefix + self.payload['text']
+
+                custom_stopping_strings = self.payload['state'].get('custom_stopping_strings', [])
+                if isinstance(custom_stopping_strings, list) and user_prefix not in custom_stopping_strings:
+                    custom_stopping_strings.append(user_prefix)
+                stopping_strings = self.payload['state'].get('stopping_strings', [])
+                if isinstance(stopping_strings, list) and user_prefix not in stopping_strings:
+                    stopping_strings.append(user_prefix)
+
+            self.payload['state']['name1'] = name1
+            self.payload['state']['name1_instruct'] = name1
+        except Exception as e:
+            log.error(f'An error occurred while applying Server Mode: {e}')
 
     # Add dynamic stopping strings
     def extra_stopping_strings(self: Union["Task", "Tasks"]):
@@ -2115,7 +2140,7 @@ class TaskProcessing(TaskAttributes):
                         # Check current iteration to see if it meets criteria
                         chunk = await stream_replies.try_chunking(v_resp_stream)
                         # process message chunk
-                        if chunk:                          
+                        if chunk:
                             yield chunk                   
 
                 # Check for an unsent chunk
@@ -2151,9 +2176,14 @@ class TaskProcessing(TaskAttributes):
             # Store time for statistics
             bot_statistics._llm_gen_time_start_last = time.time()
 
+            num_chunks = 0
             # Runs chatbot_wrapper(), gets responses
             async for resp_chunk in process_responses():
+                # Remove LLM prefixing itself due to server mode
+                if num_chunks == 0 and config.server_mode_enabled():
+                    resp_chunk = removeprefix(resp_chunk, f"{self.settings.name}: ")
                 await process_chunk(resp_chunk)
+                num_chunks += 1
 
             if self.llm_resp:
                 self.update_llm_gen_statistics() # Update statistics
@@ -3694,8 +3724,6 @@ class Tasks(TaskProcessing):
             if tgwui_tts_on:
                 await tgwui.update_extensions(tts_args)
 
-            # Check to apply Server Mode
-            self.apply_server_mode()
             # Get history for interaction channel
             await self.create_user_hmessage()
 

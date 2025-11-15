@@ -13,6 +13,11 @@ import re
 from PIL import Image, PngImagePlugin
 from typing import Union, Optional, Any
 
+def removeprefix(s: str, prefix: str) -> str:
+    if s.startswith(prefix):
+        return s[len(prefix):]
+    return s
+
 def progress_bar(value, length=15):
     try:
         filled_length = int(length * value)
