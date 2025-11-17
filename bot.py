@@ -7521,6 +7521,9 @@ class ImgModel(SettingsBase):
 
             except Exception as e:
                 log.error(f"[Auto Change Imgmodels] Error updating image model: {e}")
+                if self._imgmodel_update_task and not self._imgmodel_update_task.done():
+                    self._imgmodel_update_task.cancel()
+                    log.info("[Auto Change Imgmodels] Task cancelled. Use '/toggle_auto_change_imgmodels_task' to restart it.")
 
     # helper function to begin auto-select imgmodel task
     async def start_auto_change_imgmodels(self, status:str='Started'):
