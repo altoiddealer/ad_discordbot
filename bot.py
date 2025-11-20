@@ -3801,7 +3801,9 @@ class Tasks(TaskProcessing):
                         model_template = await tgwui.load_llm_model(loader)    # Load an LLM model if specified
                         if model_template:
                             bot_settings.update_instruction_template_str(model_template)
-                            self.payload['state']['instruction_template_str'] = model_template
+                            template_in_payload = self.payload.get('state', {}).get('instruction_template_str')
+                            if template_in_payload:
+                                self.payload['state']['instruction_template_str'] = model_template
                 except Exception as e:
                     await self.embeds.delete('change')
                     await self.embeds.send('change', "An error occurred while changing LLM Model. No LLM Model is loaded.", e)
