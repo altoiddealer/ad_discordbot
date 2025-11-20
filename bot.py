@@ -3801,7 +3801,9 @@ class Tasks(TaskProcessing):
                         model_template = await tgwui.load_llm_model(loader)    # Load an LLM model if specified
                         if model_template:
                             bot_settings.update_instruction_template_str(model_template)
-                            self.payload['state']['instruction_template_str'] = model_template
+                            template_in_payload = self.payload.get('state', {}).get('instruction_template_str')
+                            if template_in_payload:
+                                self.payload['state']['instruction_template_str'] = model_template
                 except Exception as e:
                     await self.embeds.delete('change')
                     await self.embeds.send('change', "An error occurred while changing LLM Model. No LLM Model is loaded.", e)
@@ -6981,6 +6983,8 @@ class Behavior(SettingsBase):
             log.info(f'• Takes time to read messages. (msg_size_affects_delay: {self.msg_size_affects_delay})')
         if self.maximum_typing_speed > 0:
             log.info(f'• Takes longer to write responses. (maximum_typing_speed: {self.maximum_typing_speed})')
+        if self.server_mode:
+            log.info('• Is aware of being in a group chat setting (server_mode: true)')
 
     # Response delays
     def build_response_delay_weights(self):
@@ -7519,6 +7523,9 @@ class ImgModel(SettingsBase):
 
             except Exception as e:
                 log.error(f"[Auto Change Imgmodels] Error updating image model: {e}")
+                if self._imgmodel_update_task and not self._imgmodel_update_task.done():
+                    self._imgmodel_update_task.cancel()
+                    log.info("[Auto Change Imgmodels] Task cancelled. Use '/toggle_auto_change_imgmodels_task' to restart it.")
 
     # helper function to begin auto-select imgmodel task
     async def start_auto_change_imgmodels(self, status:str='Started'):
