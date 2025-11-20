@@ -8016,7 +8016,7 @@ class LLMState(SettingsBase):
             'dynatemp_low': 1,
             'dynatemp_high': 1,
             'dynatemp_exponent': 1,
-            'enable_thinking': True,
+            'enable_thinking': False,
             'encoder_repetition_penalty': 1,
             'epsilon_cutoff': 0,
             'eta_cutoff': 0,
