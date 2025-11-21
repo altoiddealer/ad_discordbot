@@ -1275,7 +1275,7 @@ class TaskProcessing(TaskAttributes):
         if self.tts_resps and not streamed_tts:
             await voice_clients.process_audio_file(self.ictx, self.tts_resps[0], self.bot_hmessage)
         # Send text responses
-        if self.bot_hmessage and self.params.should_send_text:
+        if self.params.should_send_text:
             # Send single reply if message was not already streamed in chunks
             was_chunked = getattr(self.params, 'was_chunked', False)
             if not was_chunked:
@@ -1283,24 +1283,31 @@ class TaskProcessing(TaskAttributes):
                 mention_resp = mentions.update_mention(self.user.mention, self.llm_resp)
                 # send responses to channel - reference a message if applicable
                 sent_msg_ids, sent_msg = await send_long_message(self.channel, mention_resp, self.params.ref_message)
-                # Update IDs for Bot HMessage
-                sent_msg_ids:list
-                last_msg_id = sent_msg_ids.pop(-1)
-                self.bot_hmessage.update(id=last_msg_id, related_ids=sent_msg_ids)
-                # Update last messages
-                bot_database.update_last_msg_for(self.channel.id, 'bot', save_now=False)
+                # Retain message reference for future image send
                 if self.params.should_gen_image:
                     setattr(self, 'img_ref_message', sent_msg)
-            # Manage IDs for chunked message handling
-            msg_ids_to_react = None
-            if self.params.chunk_msg_ids:
-                msg_ids_to_react = copy.deepcopy(self.params.chunk_msg_ids)
-                if not self.bot_hmessage.id:
-                    self.bot_hmessage.id = self.params.chunk_msg_ids.pop(-1)
-                self.bot_hmessage.related_ids.extend(self.params.chunk_msg_ids)
-            # Apply any reactions applicable to message
-            if config.discord['history_reactions'].get('enabled', True):
-                await bg_task_queue.put(apply_reactions_to_messages(self.ictx, self.bot_hmessage, msg_ids_to_react))
+
+                # Internal history management (unless skipped)
+                if self.bot_hmessage:
+                    # Update IDs for Bot HMessage
+                    sent_msg_ids:list
+                    last_msg_id = sent_msg_ids.pop(-1)
+                    self.bot_hmessage.update(id=last_msg_id, related_ids=sent_msg_ids)
+                    # Update last messages
+                    bot_database.update_last_msg_for(self.channel.id, 'bot', save_now=False)
+
+            # Internal history management (unless skipped)
+            if self.bot_hmessage:
+                # Manage IDs for chunked message handling
+                msg_ids_to_react = None
+                if self.params.chunk_msg_ids:
+                    msg_ids_to_react = copy.deepcopy(self.params.chunk_msg_ids)
+                    if not self.bot_hmessage.id:
+                        self.bot_hmessage.id = self.params.chunk_msg_ids.pop(-1)
+                    self.bot_hmessage.related_ids.extend(self.params.chunk_msg_ids)
+                # Apply any reactions applicable to message
+                if config.discord['history_reactions'].get('enabled', True):
+                    await bg_task_queue.put(apply_reactions_to_messages(self.ictx, self.bot_hmessage, msg_ids_to_react))
 
     def collect_extra_content(self: Union["Task", "Tasks"], results):
         processed_results = collect_content_to_send(results)
@@ -8016,7 +8023,7 @@ class LLMState(SettingsBase):
             'dynatemp_low': 1,
             'dynatemp_high': 1,
             'dynatemp_exponent': 1,
-            'enable_thinking': True,
+            'enable_thinking': False,
             'encoder_repetition_penalty': 1,
             'epsilon_cutoff': 0,
             'eta_cutoff': 0,
