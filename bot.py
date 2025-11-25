@@ -1561,15 +1561,17 @@ class TaskProcessing(TaskAttributes):
                         persistent_tags.append_tag_name_to(phase, self.channel.id, persist, tag_name)
                 # Postponed handling
                 if 'call_api' in tag_dict:
-                    postponed_processing.append( {'call_api': tag_dict.pop('call_api')} )
+                    postponed_processing.append({'call_api': tag_dict.pop('call_api')})
                 if 'run_workflow' in tag_dict:
-                    postponed_processing.append( {'run_workflow': tag_dict.pop('run_workflow')} )
+                    postponed_processing.append({'run_workflow': tag_dict.pop('run_workflow')})
         except TaskCensored:
             raise
         except Exception as e:
             log.error(f"Error processing generic tag matches: {e}")
-        # Save postponed tag processing for later
-        setattr(self, 'postponed_tags', postponed_processing)
+        # Extend postponed tags for future processing
+        postponed_tags = getattr(self, 'postponed_tags', [])
+        postponed_tags.extend(postponed_processing)
+        setattr(self, 'postponed_tags', postponed_tags)
 
     async def process_postponed_tags(self:Union["Task","Tasks"]):
         postponed:list[dict] = getattr(self, 'postponed_tags', None)
