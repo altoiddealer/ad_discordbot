@@ -3002,9 +3002,10 @@ class Tasks(TaskProcessing):
     # Parked Message Task may be resumed from here
     async def message_post_llm_task(self:"Task") -> tuple[HMessage, HMessage]:
         try:
-            # set response to prompt, then pre-process responses
             if self.llm_resp:
+                # update prompt to LLM response
                 self.prompt = self.llm_resp
+                self.vars.prompt = self.llm_resp
 
                 # Log message exchange
                 log.info(f'''{self.user_name}: "{self.payload['text']}"''')
