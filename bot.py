@@ -1561,9 +1561,23 @@ class TaskProcessing(TaskAttributes):
                         persistent_tags.append_tag_name_to(phase, self.channel.id, persist, tag_name)
                 # Postponed handling
                 if 'call_api' in tag_dict:
-                    postponed_processing.append({'call_api': tag_dict.pop('call_api')})
+                    api_config = tag_dict.pop('call_api')
+                    if not isinstance(api_config, dict):
+                        log.error('[TAGS] A "call_api" tag was triggered, but it must be in a dict format.')
+                    else:
+                        if api_config.get('run_after_task', True):
+                            postponed_processing.append({'call_api': api_config})
+                        else:
+                            self.process_call_api_tag(api_config)
                 if 'run_workflow' in tag_dict:
-                    postponed_processing.append({'run_workflow': tag_dict.pop('run_workflow')})
+                    workflow_config = tag_dict.pop('run_workflow')
+                    if not isinstance(workflow_config, dict):
+                        log.error('[TAGS] A "run_workflow" tag was triggered, but it must be in a dict format.')
+                    else:
+                        if workflow_config.get('run_after_task', True):
+                            postponed_processing.append({'run_workflow': workflow_config})
+                        else:
+                            self.process_run_workflow_tag(workflow_config)
         except TaskCensored:
             raise
         except Exception as e:
@@ -1573,48 +1587,48 @@ class TaskProcessing(TaskAttributes):
         postponed_tags.extend(postponed_processing)
         setattr(self, 'postponed_tags', postponed_tags)
 
+    async def process_run_workflow_tag(self:Union["Task","Tasks"], workflow_config:dict):
+        base_context = self.vars.get_vars(return_copy=True)
+        queue_to = workflow_config.pop('queue_to', 'gen_queue')
+        # Inject task context to the workflow
+        wf_context = workflow_config.pop('context', {})
+        workflow_config['context'] = deep_merge(base_context, wf_context)
+        if queue_to:
+            queue_to = 'gen_queue' if queue_to == 'message_queue' else queue_to # Do not allow to go to Message queue
+            log.info('A Workflow task was triggered, created and queued.')
+            await self.embeds.send('system', title='Processing a Workflow Request', description='A Workflow task was triggered, created and queued.', delete_after=5)
+            workflow_task = self.clone('workflow', self.ictx, ignore_list=['payload'])
+            setattr(workflow_task, 'workflow_config', workflow_config)
+            await task_manager.queue_task(workflow_task, queue_to)
+        else:
+            await self.run_workflow_task(workflow_config)
+
+    async def process_call_api_tag(self:Union["Task","Tasks"], api_config:dict):
+        queue_to = api_config.pop('queue_to', 'gen_queue')
+        if queue_to:
+            queue_to = 'gen_queue' if queue_to == 'message_queue' else queue_to # Do not allow to go to Message queue
+            log.info('An API task was triggered, created and queued.')
+            await self.embeds.send('system', title='Processing an API Request', description='An API task was triggered, created and queued.', delete_after=5)
+            api_task = self.clone('api', self.ictx, ignore_list=['payload'])
+            setattr(api_task, 'api_config', api_config)
+            await task_manager.queue_task(api_task, queue_to)
+        else:
+            endpoint, updated_api_config = api.get_endpoint_from_config(api_config)
+            if not isinstance(endpoint, Endpoint):
+                log.warning(f'[TAGS] Endpoint not found for triggered "call_api"')
+            else:
+                await self.run_api_task(endpoint, updated_api_config)
+
     async def process_postponed_tags(self:Union["Task","Tasks"]):
         postponed:list[dict] = getattr(self, 'postponed_tags', None)
         if postponed:
-            base_context = self.vars.get_vars(return_copy=True)
             for tag_dict in postponed:
                 if 'call_api' in tag_dict:
                     api_config = tag_dict.pop('call_api')
-                    if not isinstance(api_config, dict):
-                        log.error('[TAGS] A "call_api" tag was triggered, but it must be in a dict format.')
-                    else:
-                        queue_to = api_config.pop('queue_to', 'gen_queue')
-                        if queue_to:
-                            queue_to = 'gen_queue' if queue_to == 'message_queue' else queue_to # Do not allow to go to Message queue
-                            log.info('An API task was triggered, created and queued.')
-                            await self.embeds.send('system', title='Processing an API Request', description='An API task was triggered, created and queued.', delete_after=5)
-                            api_task = self.clone('api', self.ictx, ignore_list=['payload'])
-                            setattr(api_task, 'api_config', api_config)
-                            await task_manager.queue_task(api_task, queue_to)
-                        else:
-                            endpoint, updated_api_config = api.get_endpoint_from_config(api_config)
-                            if not isinstance(endpoint, Endpoint):
-                                log.warning(f'[TAGS] Endpoint not found for triggered "call_api"')
-                            else:
-                                await self.run_api_task(endpoint, updated_api_config)
+                    await self.process_call_api_tag(api_config)
                 if 'run_workflow' in tag_dict:
                     workflow_config = tag_dict.pop('run_workflow')
-                    if not isinstance(workflow_config, dict):
-                        log.error('[TAGS] A "run_workflow" tag was triggered, but it must be in a dict format.')
-                    else:
-                        queue_to = workflow_config.pop('queue_to', 'gen_queue')
-                        # Inject task context to the workflow
-                        wf_context = workflow_config.pop('context', {})
-                        workflow_config['context'] = deep_merge(base_context, wf_context)
-                        if queue_to:
-                            queue_to = 'gen_queue' if queue_to == 'message_queue' else queue_to # Do not allow to go to Message queue
-                            log.info('A Workflow task was triggered, created and queued.')
-                            await self.embeds.send('system', title='Processing a Workflow Request', description='A Workflow task was triggered, created and queued.', delete_after=5)
-                            workflow_task = self.clone('workflow', self.ictx, ignore_list=['payload'])
-                            setattr(workflow_task, 'workflow_config', workflow_config)
-                            await task_manager.queue_task(workflow_task, queue_to)
-                        else:
-                            await self.run_workflow_task(workflow_config)
+                    await self.process_run_workflow_tag(workflow_config)
 
     def apply_begin_reply_with(self:Union["Task","Tasks"]):
         # Continue from value of 'begin_reply_with'
