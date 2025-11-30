@@ -1565,19 +1565,19 @@ class TaskProcessing(TaskAttributes):
                     if not isinstance(api_config, dict):
                         log.error('[TAGS] A "call_api" tag was triggered, but it must be in a dict format.')
                     else:
-                        if api_config.get('run_after_task', True):
-                            postponed_processing.append({'call_api': api_config})
-                        else:
+                        if api_config.get('run_now', False):
                             self.process_call_api_tag(api_config)
+                        else:
+                            postponed_processing.append({'call_api': api_config})
                 if 'run_workflow' in tag_dict:
                     workflow_config = tag_dict.pop('run_workflow')
                     if not isinstance(workflow_config, dict):
                         log.error('[TAGS] A "run_workflow" tag was triggered, but it must be in a dict format.')
                     else:
-                        if workflow_config.get('run_after_task', True):
-                            postponed_processing.append({'run_workflow': workflow_config})
-                        else:
+                        if workflow_config.get('run_now', False):
                             self.process_run_workflow_tag(workflow_config)
+                        else:
+                            postponed_processing.append({'run_workflow': workflow_config})
         except TaskCensored:
             raise
         except Exception as e:
