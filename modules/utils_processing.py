@@ -546,6 +546,29 @@ def save_audio_bytes(
 def extract_filepath(response_json, key):
     return response_json.get(key)  # for APIs that return file path directly
 
+def _node_matches(node_id: str, node: dict, match_values: set[str]) -> bool:
+    return (node_id in match_values or
+            node.get("_meta", {}).get("title") in match_values)
+
+def _get_upstream_node_ids(node: dict) -> set[str]:
+    upstream = set()
+    inputs = node.get("inputs", {})
+
+    for value in inputs.values():
+        if isinstance(value, list):
+            # Single connection [node_id, port]
+            if len(value) == 2 and isinstance(value[0], str):
+                upstream.add(value[0])
+            # List of connections
+            else:
+                for item in value:
+                    if isinstance(item, list) and len(item) == 2 and isinstance(item[0], str):
+                        upstream.add(item[0])
+        elif isinstance(value, (str, int)):
+            upstream.add(str(value))
+
+    return upstream
+
 def _replace_or_remove_references(payload: dict, target_node_id: str, replacement: list | None):
     """
     Scans all node inputs in the payload and replaces or removes references to target_node_id.
@@ -592,50 +615,89 @@ def _replace_or_remove_references(payload: dict, target_node_id: str, replacemen
         for key in keys_to_delete:
             inputs.pop(key, None)
 
-def comfy_delete_and_reroute_nodes(payload: dict, delete_nodes: list[str]):
+def comfy_delete_and_reroute_nodes(payload: dict,
+                                   delete_nodes: list[str|int] | str | int,
+                                   delete_until: list[str|int] | None = None):
     """
-    Deletes specified nodes from a ComfyUI graph payload and cleans up the references.
-    If an 'Any Switch (rgthree)' node is left with a single valid input after deletions,
-    it is collapsed and rerouted directly.
+    Deletes specified nodes from a ComfyUI graph payload and cleans up references.
+    Optionally deletes recursively upstream until a stop condition is met.
 
     Args:
-        payload (dict): The ComfyUI workflow JSON as a dictionary.
-        delete_nodes (list[str]): List of _meta["title"] strings to delete.
+        payload (dict): ComfyUI workflow JSON.
+        delete_nodes (list[str]): Node IDs or _meta["title"] values to delete.
+        delete_until (list[str]|None):
+            Stop recursion when a node ID or title matches one of these values.
+            The matching node is NOT deleted.
     """
-    switches_to_delete = []
+    # normalize inputs
+    if isinstance(delete_nodes, str, int):
+        delete_nodes = set(str(delete_nodes))
+    else:
+        delete_nodes = set(str(v) for v in delete_nodes)
 
-    # Identify node IDs to delete based on _meta["title"]
-    node_ids_to_delete = {node_id for node_id, node in payload.items()
-                          if node.get("_meta", {}).get('title') in delete_nodes}
+    if delete_until is None:
+        delete_until = set()
+    elif isinstance(delete_until, str, int):
+        delete_until = set(str(delete_until))
+    else:
+        delete_until = set(str(v) for v in delete_until)
 
-    # Delete nodes and clean up all references to them
-    for node_id in node_ids_to_delete:
+    switches_to_delete = set()
+    visited = set()
+    to_process = set()
+
+    # Initial delete set
+    for node_id, node in payload.items():
+        if _node_matches(node_id, node, delete_nodes):
+            to_process.add(node_id)
+
+    # Recursive deletion loop
+    while to_process:
+        node_id = to_process.pop()
+        if node_id in visited:
+            continue
+        visited.add(node_id)
+
+        node = payload.get(node_id)
+        if not node:
+            continue
+
+        # Stop condition
+        if _node_matches(node_id, node, delete_until):
+            continue
+
+        # Collect upstream before deletion
+        upstream_ids = _get_upstream_node_ids(node)
+
+        # Delete node and clean references
         del payload[node_id]
         _replace_or_remove_references(payload, node_id, replacement=None)
 
-    # After deletions, check for collapsible "Any Switch (rgthree)" nodes
-    for node_id, node in payload.items():
+        # Queue upstream nodes
+        for upstream_id in upstream_ids:
+            if upstream_id in payload and upstream_id not in visited:
+                to_process.add(upstream_id)
+
+    # Collapse Any Switch nodes left with a single input
+    for node_id, node in list(payload.items()):
         if node.get("class_type") == "Any Switch (rgthree)":
             inputs = node.get("inputs", {})
-
-            # Identify valid inputs: list of [node_id, port_index]
-            valid_inputs = {k: v for k, v in inputs.items()
-                            if isinstance(v, list) and len(v) == 2 and isinstance(v[0], str)}
+            valid_inputs = {
+                k: v for k, v in inputs.items()
+                if isinstance(v, list) and len(v) == 2 and isinstance(v[0], str)
+            }
 
             if len(valid_inputs) == 1:
-                # Only one input remains, collapse the switch
-                input_key, input_value = next(iter(valid_inputs.items()))
-                src_node_id, src_output_idx = input_value
+                _, (src_node_id, src_output_idx) = next(iter(valid_inputs.items()))
+                _replace_or_remove_references(
+                    payload,
+                    node_id,
+                    replacement=[src_node_id, src_output_idx],
+                )
+                switches_to_delete.add(node_id)
 
-                # Reroute references to the switch to point directly to the single input
-                _replace_or_remove_references(payload, node_id, replacement=[src_node_id, src_output_idx])
-
-                # Mark the switch for deletion
-                switches_to_delete.append(node_id)
-
-    # Delete the collapsed switches
     for node_id in switches_to_delete:
-        del payload[node_id]
+        payload.pop(node_id, None)
 
 def evaluate_condition(value1: Any, operator: str, value2: Any = None, context: dict | None = None) -> bool:
     """

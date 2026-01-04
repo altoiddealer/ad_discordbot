@@ -951,8 +951,9 @@ class StepExecutor:
 
         payload = config['input_data']
         delete_nodes = config['delete_nodes']
+        delete_until = config.get('delete_until', [])
 
-        processing.comfy_delete_and_reroute_nodes(payload, delete_nodes)
+        processing.comfy_delete_and_reroute_nodes(payload, delete_nodes, delete_until)
 
         return payload
 

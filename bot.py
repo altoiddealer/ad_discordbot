@@ -7626,7 +7626,7 @@ class ImgModel_Comfy(ImgModel):
         self._filename_key:str = ''
         self._imgmodel_input_key = None
 
-        self.delete_nodes:list[str] = []
+        self.delete_nodes:list[str|int] = []
 
     def clean_payload(self, payload: dict):
         if self.delete_nodes:
