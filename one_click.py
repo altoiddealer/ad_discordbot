@@ -135,17 +135,25 @@ def is_fork_of(project_path, original_repo_url):
 
 def get_git_remote_url(project_path):
     try:
-        result = run_cmd(f'git -C {project_path} config --get remote.origin.url', environment=True, capture_output=True)
-        return result.stdout.strip()  # Remove any trailing whitespace
+        result = run_cmd(
+            f'git -C "{project_path}" config --get remote.origin.url',
+            environment=True,
+            capture_output=True
+        )
+        if not result.stdout:
+            return None
+        return result.stdout.decode("utf-8", errors="ignore").strip()
     except subprocess.CalledProcessError:
         return None  # Return None if the command fails (not a git repo, etc.)
+
 
 def check_project():
     parent_is_tgwui = False
     is_tgwui_integrated = False
 
     project_path = os.path.dirname(install_path)
-    if project_path.startswith('text-generation-webui'):
+    
+    if os.path.basename(project_path) == "text-generation-webui":
         return True, True
 
     if os.path.basename(parent_dir).startswith('text-generation-webui'):
