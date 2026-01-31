@@ -629,19 +629,21 @@ def comfy_delete_and_reroute_nodes(payload: dict,
             Stop recursion when a node ID or title matches one of these values.
             The matching node is NOT deleted.
     """
-    # normalize inputs
-    if isinstance(delete_nodes, str, int):
-        delete_nodes = set(str(delete_nodes))
+    # normalize delete_nodes
+    if isinstance(delete_nodes, (str, int)):
+        delete_nodes = {str(delete_nodes)}
     else:
-        delete_nodes = set(str(v) for v in delete_nodes)
+        delete_nodes = {str(v) for v in delete_nodes}
 
+    # normalize delete_until
     if delete_until is None:
         delete_until = set()
-    elif isinstance(delete_until, str, int):
-        delete_until = set(str(delete_until))
+    elif isinstance(delete_until, (str, int)):
+        delete_until = {str(delete_until)}
     else:
-        delete_until = set(str(v) for v in delete_until)
+        delete_until = {str(v) for v in delete_until}
 
+    print("DELETE NODES:", delete_nodes)
     switches_to_delete = set()
     visited = set()
     to_process = set()
@@ -649,11 +651,13 @@ def comfy_delete_and_reroute_nodes(payload: dict,
     # Initial delete set
     for node_id, node in payload.items():
         if _node_matches(node_id, node, delete_nodes):
+            print("MATCHED NODE:", node)
             to_process.add(node_id)
 
     # Recursive deletion loop
     while to_process:
         node_id = to_process.pop()
+        print("NODE ID:", node_id)
         if node_id in visited:
             continue
         visited.add(node_id)
