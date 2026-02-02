@@ -4,6 +4,18 @@ import json
 import yaml
 import re
 
+def print_step(title, messages):
+    """Print a step with a header and indented messages."""
+    print("\n" + "="*60)
+    print(f"{title}")
+    print("-"*60)
+    if isinstance(messages, list):
+        for msg in messages:
+            print(f"  • {msg}")
+    elif messages:
+        print(f"  • {messages}")
+    print("="*60 + "\n")
+
 def load_input_file(file_path):
     with open(file_path, 'r', encoding='utf-8') as f:
         if file_path.endswith(('.yaml', '.yml')):
@@ -24,11 +36,40 @@ def save_output_file(data, file_path, file_type):
     return new_filename
 
 def load_overrides():
-    with open(os.path.join(os.path.dirname(__file__), '_default_overrides.json'), 'r', encoding='utf-8') as f:
+    """Load the job-specific overrides.json, or print instructions if not found."""
+    base_path = os.path.dirname(__file__)
+    job_file = os.path.join(base_path, 'overrides.json')
+    template_file = os.path.join(base_path, 'overrides_template.json')
+
+    if not os.path.exists(job_file):
+        print_step(
+            "Overrides File Missing",
+            [
+                f"Job-specific overrides not found: {job_file}",
+                f"Please copy the template '{template_file}' to 'overrides.json' and modify as needed."
+            ]
+        )
+        sys.exit(1)
+
+    with open(job_file, 'r', encoding='utf-8') as f:
         return json.load(f)
 
 def load_replacements():
-    with open(os.path.join(os.path.dirname(__file__), '_known_bot_vars_edit_with_caution.yaml'), 'r', encoding='utf-8') as f:
+    """Load the job-specific injections.yaml, or print instructions if not found."""
+    base_path = os.path.dirname(__file__)
+    job_file = os.path.join(base_path, 'injections.yaml')
+    template_file = os.path.join(base_path, 'injections_template.yaml')
+
+    if not os.path.exists(job_file):
+        print_step(
+            "Optional Injections File Missing",
+            [
+                f"Copy 'injections_template.yaml' to 'injections.yaml' if you want to use injections."
+            ]
+        )
+        return {}
+
+    with open(job_file, 'r', encoding='utf-8') as f:
         return yaml.safe_load(f)
 
 def extract_key(data, config):
@@ -99,7 +140,7 @@ def resolve_placeholders(config, context:dict):
 
     return updated, formatted_keys
 
-def inject_and_log(data, replacements, path=""):
+def inject_and_log(data, replacements={}, path=""):
     changes = []
 
     def recursive_inject(obj, path=""):
@@ -117,6 +158,7 @@ def inject_and_log(data, replacements, path=""):
                 recursive_inject(item, f"{path}[{i}]")
 
     recursive_inject(data, path)
+
     return data, changes
 
 def main():
@@ -137,12 +179,19 @@ def main():
                 changes.append("Removed '_comment' block")
             overrides = data.pop('__overrides__', None)
             if overrides:
-                changes.append("Removed '__overrides__' block, and used it to resolve placeholders")
+                changes.append("Removed '__overrides__' block, and used it to seek placeholder strings")
             else:
                 overrides = load_overrides()
-                changes.append("Resolved placeholders from '_default_overrides.json'")
-            updated_data, log = resolve_placeholders(data, overrides)
-            changes.insert(0, log)
+                changes.append("Resolved placeholders from 'overrides.json'")
+
+            updated_data, formatted_keys = resolve_placeholders(data, overrides)
+
+            # Format formatted_keys nicely
+            if formatted_keys:
+                changes.insert(0, f"Placeholders resolved for keys: {', '.join(formatted_keys)}")
+            else:
+                changes.insert(0, "No placeholders were found/resolved.")
+
         else:
             replacements = load_replacements()
             updated_data, changes = inject_and_log(data, replacements)
@@ -153,19 +202,27 @@ def main():
                 updated_data = OrderedDict(list(overrides.items()) + list(updated_data.items()))
                 changes.append("** Added '__overrides__' dict into file **")
 
+        if changes:
+            print_step("Updates", changes)
+        else:
+            print_step("Updates", "Nothing was updated.")
+
         output_path = save_output_file(updated_data, input_path, filetype)
 
         log_path = os.path.splitext(input_path)[0] + "_update_log.txt"
         with open(log_path, 'w', encoding='utf-8') as log_file:
             if changes:
-                log_file.write("The following keys were updated:\n")
+                log_file.write("The following changes were applied:\n")
                 for line in changes:
                     log_file.write(f"- {line}\n")
             else:
-                log_file.write("No keys were updated.\n")
+                log_file.write("Nothing was updated.\n")
 
-        print(f"Updated file saved as: {output_path}")
-        print(f"Log saved as: {log_path}")
+        print_step("Update Complete", [
+            f"Updated file saved as: {output_path}",
+            f"Log saved as: {log_path}"
+        ])
+
     except Exception as e:
         print(f"Error: {e}")
 

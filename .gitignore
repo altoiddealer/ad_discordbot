@@ -17,5 +17,7 @@ output/*
 sd_outputs/*
 user_images/*
 wildcards/*
+utils/inject_bot_vars_to_payload/overrides.json
+utils/inject_bot_vars_to_payload/injections.yaml
 
 user/*

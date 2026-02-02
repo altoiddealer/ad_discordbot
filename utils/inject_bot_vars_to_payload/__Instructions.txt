@@ -1,0 +1,38 @@
+_inject_placeholders.bat
+_resolve_placeholders.bat
+
+These utilities help with formatting API payloads in a way the main bot script expects, for getting dynamically set values during runtime, into payload fields before submitting to API clients.
+
+** Original files are never overwritten **
+** Actions performed are logged to a txt file **
+
+
+
+# Usage instructions:
+
+1. Copy and rename the template files to 'injections.yaml' and 'overrides.yaml'
+
+You may tailor these for whatever payload you will be dropping into the utility scripts.
+
+overrides.json
+  - Essentially, "your defaults" when using the utility script.
+  - The __overrides__ dict will be added to payload files.
+  - The main bot script will expect it and use it intelligently, and automatically remove it when calling APIs
+
+injections.yaml
+  - If provided, the utility script will scan for and automatically replace matching key values with these placeholder strings.
+  - You can always link overrides in your payload manually. In some cases, you will have to.
+
+
+
+2. Drag and Drop any payload / dict-like file (json, yaml, yml) onto a .bat file
+
+_inject_placeholders.bat
+  - Adds __overrides__ dict from 'overrides.json'
+  - Scans the payload for any keys defined in 'injections''
+    If found, will substitute values with placeholder strings like "{prompt}".
+    You can always handle this manually.
+
+_resolve_placeholders.bat
+  - Aims to recover payload files back to their original state.
+  - You may need to manually correct some references.
