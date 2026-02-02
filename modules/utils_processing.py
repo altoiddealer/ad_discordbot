@@ -550,23 +550,6 @@ def extract_filepath(response_json, key):
 def _node_matches(node_id: str, node: dict, match_values: set[str]) -> bool:
     return node_id in match_values or node.get("_meta", {}).get("title") in match_values
 
-
-def _get_upstream_node_ids(node: dict) -> set[str]:
-    """Return all node IDs referenced in this node's inputs."""
-    upstream = set()
-    for value in node.get("inputs", {}).values():
-        if isinstance(value, list):
-            if len(value) == 2 and isinstance(value[0], str):
-                upstream.add(value[0])
-            else:
-                for item in value:
-                    if isinstance(item, list) and len(item) == 2 and isinstance(item[0], str):
-                        upstream.add(item[0])
-        elif isinstance(value, (str, int)):
-            upstream.add(str(value))
-    return upstream
-
-
 def _build_downstream_map(payload: dict) -> dict[str, list[tuple[dict, str]]]:
     """
     Map each node_id to the list of downstream references.
@@ -641,7 +624,9 @@ def _replace_node_with_upstream(node_id: str, payload: dict, downstream_map: dic
                 downstream_node["inputs"].pop(key, None)
 
 
-def comfy_delete_and_reroute_nodes(payload: dict, delete_nodes: list[str | int] | str | int, delete_until: list[str | int] | str | int | None = None):
+def comfy_delete_and_reroute_nodes(payload: dict,
+                                   delete_nodes: list[str | int] | str | int,
+                                   delete_until: list[str | int] | str | int | None = None):
     """
     Deletes nodes from a ComfyUI payload with UI-like rerouting behavior.
     Works in two modes:
@@ -674,7 +659,11 @@ def comfy_delete_and_reroute_nodes(payload: dict, delete_nodes: list[str | int] 
     # --- MODE B: recursive deletion until stop nodes ---
     else:
         visited = set()
-        to_process = set(nid for nid, node in payload.items() if _node_matches(nid, node, delete_nodes))
+        to_process = set(
+            nid for nid, node in payload.items()
+            if _node_matches(nid, node, delete_nodes)
+        )
+
         while to_process:
             node_id = to_process.pop()
             if node_id in visited:
@@ -682,16 +671,24 @@ def comfy_delete_and_reroute_nodes(payload: dict, delete_nodes: list[str | int] 
             visited.add(node_id)
 
             node = payload.get(node_id)
-            if not node or _node_matches(node_id, node, delete_until):
+            if not node:
                 continue
 
-            upstream_ids = _get_upstream_node_ids(node)
+            # If this is a stop node, DO NOT delete it
+            if _node_matches(node_id, node, delete_until):
+                continue
+
+            # Queue downstream nodes
+            for downstream_node, _ in downstream_map.get(node_id, []):
+                downstream_id = next(
+                    k for k, v in payload.items() if v is downstream_node
+                )
+                if downstream_id not in visited:
+                    to_process.add(downstream_id)
+
+            # Reroute + delete
             _replace_node_with_upstream(node_id, payload, downstream_map)
             payload.pop(node_id, None)
-
-            for upstream_id in upstream_ids:
-                if upstream_id in payload and upstream_id not in visited:
-                    to_process.add(upstream_id)
 
     # --- Collapse Switch nodes with single input ---
     switches_to_delete = set()
