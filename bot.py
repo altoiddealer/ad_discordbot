@@ -3204,7 +3204,6 @@ class Tasks(TaskProcessing):
                     file_name = Path(value.filename).stem
                     fn_key = f"{name}_file_name"
                     processed_params[fn_key] = file_name
-                    value = await value.read()
                 option_names.append(name)
                 steps = meta.get("steps")
                 if steps:
@@ -7626,7 +7625,7 @@ class ImgModel_Comfy(ImgModel):
         self._filename_key:str = ''
         self._imgmodel_input_key = None
 
-        self.delete_nodes:list[str] = []
+        self.delete_nodes:list[str|int] = []
 
     def clean_payload(self, payload: dict):
         if self.delete_nodes:

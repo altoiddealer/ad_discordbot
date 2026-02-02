@@ -22,6 +22,7 @@ context_commands_examples:
 
 # These have no effect unless moved up into 'slash_commands'
 slash_commands_examples:
+  # Command to remove background from an image
   - command_name: remove_bg
     description: Remove the background from an image, with optional threshold value
     allow_dm: true # optional - defaults to 'false' if not included. Allows the cmd to be used via DM.
@@ -48,40 +49,56 @@ slash_commands_examples:
           message: Removing background from image
           file_path: comfy
 
-  - command_name: wan_iv2v
-    description: Generate a video from prompt, starting image, and driving video
+  # Command to use Klein 9B to edit an image with optional reference image
+  - command_name: klein_edit
+    description: Edit an image using Flux 2 Klein 9B
     options:
-      # Option 1: Prompt
-      - name: prompt
-        description: Text prompt for the video generation
-        type: string
-        required: true
-      # Option 2: Reference Image
-      - name: ref_image
-        description: Reference image for the video generation
+      - name: image
+        description: The image to edit
         type: attachment
         required: true
         steps:
           - save:
-              file_path: comfy-input # This should be a symlink from comfyUI input directory, to your output directory.
-              timestamp: true
+              file_path: comfy-input # symlink from comfyUI input directory, to your output directory.
             returns: file_name # Extract filename from save result dict
-      # Option 3: Reference Video
-      - name: ref_video
-        description: Reference video for the video generation
+      - name: prompt
+        description: Describe what changes you want made to the image
+        type: string
+        required: true
+      - name: ref_image
+        description: Optional reference image for the model to factor to final image result
         type: attachment
         required: false
         steps:
           - save:
               file_path: comfy-input
-              timestamp: true
-            returns: file_name # Extract filename from save result dict
-    # All selection data will be initialzed into context (can be used to resolve payload fields, etc)
+            returns: file_name
+      - name: resolution
+        description: Set the output resolution
+        type: int
+        required: false
+        choices: [768, 1024, 1280, 1536, 2048]
+    # /klein_edit postprocessing steps
     steps:
-      - run_workflow: # Alternatively, the steps from the workflow could just be used here
-          name: WAN image vid to vid
-          input_data: null
-          context: "{context}"
+      - load_data_file: comfy_workflows/klein_image_edit_9b.json
+        save_as: klein_payload
+      - if:
+          value1: ref_image
+          operator: notexists
+          steps:
+            - comfy_delete_nodes:
+                input_data: "{klein_payload}"
+                delete_nodes: 81  # Delete Load Image2 node
+                delete_until: 101 # deletes/reroutes connections until reaching CFG Guider node
+      - load_llmmodel: 'None'
+      - call_comfy:
+          client: ComfyUI
+          message: Editing your image
+          file_path: comfy/klein_edit # saves result to 'output/comfy/klein_edit/'
+        save_as: result
+      - offload: true # Remove task early / immediately releases a position in the task processing queue
+      - send_content: "**Prompt**: {prompt}"
+      - return: result
 
   - command_name: echo_file
     description: Send an attachment

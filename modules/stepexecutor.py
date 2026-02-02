@@ -460,6 +460,7 @@ class StepExecutor:
         self.endpoint = endpoint
 
         input_data = self.resolve_api_input(data, config, step_name='call_api', default=data, endpoint=endpoint)
+        log.info(f'[StepExecutor] Calling API: {client.name}')
         response = await endpoint.call(input_data=input_data, **config)
 
         return response.body if isinstance(response, APIResponse) else response
@@ -913,6 +914,7 @@ class StepExecutor:
             raise RuntimeError(f'[StepExecutor] API Client is not an ImgGen client. Cannot run step "call_imggen".')
 
         payload = self.resolve_api_input(data, config, step_name='call_imggen', default=data, endpoint=endpoint)
+        log.info(f'[StepExecutor] Calling ImgGen API: {client.name}')
         return await client._main_imggen(self.task, payload, endpoint, **config)
 
     async def _step_call_comfy(self, data: Any, config: dict):
@@ -927,6 +929,8 @@ class StepExecutor:
             raise RuntimeError(f'[StepExecutor] API Client is not ComfyUI. Cannot run step "call_comfy".')
 
         payload = self.resolve_api_input(data, config, step_name='call_comfy', default=data, endpoint=endpoint)
+
+        log.info(f'[StepExecutor] Calling ComfyUI (API: {client.name})')
         return await client._execute_prompt(payload, endpoint, self.ictx, self.task, **config)
 
     async def _step_free_comfy_memory(self, data: Any, config: dict):
@@ -934,7 +938,7 @@ class StepExecutor:
         client, _, _ = await self.get_api_client_and_endpoint(config, 'free_comfy_memory', allow_ws_only=True)
 
         if not isinstance(client, ImgGenClient_Comfy):
-            raise RuntimeError(f'[StepExecutor] API Client is not ComfyUI. Cannot run step "free_comfy_memory".')
+            raise RuntimeError('[StepExecutor] API Client is not ComfyUI. Cannot run step "free_comfy_memory".')
 
         unload_models = config.get("unload_models", True)
         free_memory = config.get("free_memory", True)
@@ -951,8 +955,9 @@ class StepExecutor:
 
         payload = config['input_data']
         delete_nodes = config['delete_nodes']
+        delete_until = config.get('delete_until', [])
 
-        processing.comfy_delete_and_reroute_nodes(payload, delete_nodes)
+        processing.comfy_delete_and_reroute_nodes(payload, delete_nodes, delete_until)
 
         return payload
 
