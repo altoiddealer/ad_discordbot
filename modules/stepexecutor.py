@@ -875,11 +875,7 @@ class StepExecutor:
                 file_path = corrected_path
         if not config.path_allowed(file_path):
             raise RuntimeError(f"[StepExecutor] Tried loading a file which is not in config.yaml 'allowed_paths': {file_path}")
-        file = load_file(file_path, {})
-        import json
-        with open("payload_before.json", "w") as f:
-            json.dump(file, f)
-        return file
+        return load_file(file_path, {})
 
     async def _step_save(self, data: Any, config: dict):
         """
@@ -933,9 +929,7 @@ class StepExecutor:
             raise RuntimeError(f'[StepExecutor] API Client is not ComfyUI. Cannot run step "call_comfy".')
 
         payload = self.resolve_api_input(data, config, step_name='call_comfy', default=data, endpoint=endpoint)
-        import json
-        with open("payload_after.json", "w") as f:
-            json.dump(payload, f)
+
         log.info(f'[StepExecutor] Calling ComfyUI (API: {client.name})')
         return await client._execute_prompt(payload, endpoint, self.ictx, self.task, **config)
 
