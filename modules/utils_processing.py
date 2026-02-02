@@ -715,6 +715,20 @@ def evaluate_condition(value1: Any, operator: str, value2: Any = None, context: 
     value1 and value2 may be literals or context keys (strings).
     """
 
+    # Existence checks (special-case logic)
+    if operator in ("exists", "notexists"):
+        if context is None:
+            return operator == "notexists"
+        # Check key existence (preferred)
+        if isinstance(value1, str):
+            key_exists = value1 in context
+            if key_exists:
+                return operator == "exists"
+        # Fallback check value existence (user passed value instead of key)
+        value_exists = value1 in context.values()
+
+        return value_exists if operator == "exists" else not value_exists
+
     # Resolve context variables if strings match keys
     if isinstance(context, dict):
         if isinstance(value1, str) and value1 in context:
@@ -772,12 +786,6 @@ def evaluate_condition(value1: Any, operator: str, value2: Any = None, context: 
         return value1 is None
     elif operator == "isnotnone":
         return value1 is not None
-
-    # Existence checks in context
-    elif operator == "exists":
-        return isinstance(value1, str) and context is not None and value1 in context
-    elif operator == "notexists":
-        return isinstance(value1, str) and (context is None or value1 not in context)
 
     else:
         raise ValueError(f"Unsupported operator: {operator}")
