@@ -546,96 +546,114 @@ def save_audio_bytes(
 def extract_filepath(response_json, key):
     return response_json.get(key)  # for APIs that return file path directly
 
+
 def _node_matches(node_id: str, node: dict, match_values: set[str]) -> bool:
-    return (node_id in match_values or
-            node.get("_meta", {}).get("title") in match_values)
+    return node_id in match_values or node.get("_meta", {}).get("title") in match_values
+
 
 def _get_upstream_node_ids(node: dict) -> set[str]:
+    """Return all node IDs referenced in this node's inputs."""
     upstream = set()
-    inputs = node.get("inputs", {})
-
-    for value in inputs.values():
+    for value in node.get("inputs", {}).values():
         if isinstance(value, list):
-            # Single connection [node_id, port]
             if len(value) == 2 and isinstance(value[0], str):
                 upstream.add(value[0])
-            # List of connections
             else:
                 for item in value:
                     if isinstance(item, list) and len(item) == 2 and isinstance(item[0], str):
                         upstream.add(item[0])
         elif isinstance(value, (str, int)):
             upstream.add(str(value))
-
     return upstream
 
-def _replace_or_remove_references(payload: dict, target_node_id: str, replacement: list | None):
-    """
-    Scans all node inputs in the payload and replaces or removes references to target_node_id.
 
-    Args:
-        payload (dict): The ComfyUI workflow payload.
-        target_node_id (str): Node ID to replace or remove.
-        replacement (list | None): If provided, replaces [target_node_id, port].
-                                   If None, removes references.
+def _build_downstream_map(payload: dict) -> dict[str, list[tuple[dict, str]]]:
     """
+    Map each node_id to the list of downstream references.
+    Each entry is (downstream_node_dict, input_key)
+    """
+    downstream = {}
     for node in payload.values():
-        inputs = node.get("inputs", {})
-        keys_to_delete = []
-
-        for key, value in inputs.items():
+        for key, value in node.get("inputs", {}).items():
             if isinstance(value, list):
-                # Case 1: Single connection [node_id, port]
-                if len(value) == 2 and str(value[0]) == target_node_id:
-                    if replacement:
-                        inputs[key] = replacement
-                    else:
-                        keys_to_delete.append(key)
-
-                # Case 2: List of connections (e.g., in switches)
+                # single connection
+                if len(value) == 2 and isinstance(value[0], str):
+                    downstream.setdefault(value[0], []).append((node, key))
                 else:
-                    new_list = []
+                    # multiple connections
                     for item in value:
-                        if isinstance(item, list) and len(item) == 2 and str(item[0]) == target_node_id:
-                            if replacement:
-                                new_list.append(replacement)
-                        else:
-                            new_list.append(item)
-                    if new_list:
-                        inputs[key] = new_list
-                    else:
-                        keys_to_delete.append(key)
-
+                        if isinstance(item, list) and len(item) == 2 and isinstance(item[0], str):
+                            downstream.setdefault(item[0], []).append((node, key))
             elif isinstance(value, (str, int)):
-                # Case 3: Scalar reference by node ID (rare but handled)
-                if str(value) == target_node_id:
-                    keys_to_delete.append(key)
+                downstream.setdefault(str(value), []).append((node, key))
+    return downstream
 
-        # Remove keys pointing to deleted nodes if no replacement was given
-        for key in keys_to_delete:
-            inputs.pop(key, None)
 
-def comfy_delete_and_reroute_nodes(payload: dict,
-                                   delete_nodes: list[str|int] | str | int,
-                                   delete_until: list[str|int] | None = None):
+def _replace_node_with_upstream(node_id: str, payload: dict, downstream_map: dict):
     """
-    Deletes specified nodes from a ComfyUI graph payload and cleans up references.
-    Optionally deletes recursively upstream until a stop condition is met.
-
-    Args:
-        payload (dict): ComfyUI workflow JSON.
-        delete_nodes (list[str]): Node IDs or _meta["title"] values to delete.
-        delete_until (list[str]|None):
-            Stop recursion when a node ID or title matches one of these values.
-            The matching node is NOT deleted.
+    For a node being deleted, reroute each downstream input to its upstream.
+    Handles multi-input downstream nodes individually.
     """
-    # normalize delete_nodes
+    node = payload[node_id]
+    inputs = node.get("inputs", {})
+
+    # For every node that references this node
+    for downstream_node, key in downstream_map.get(node_id, []):
+        current_value = downstream_node["inputs"].get(key)
+
+        def reroute_item(item):
+            # Replace a reference [node_id, port] with the upstream node feeding the deleted node
+            if isinstance(item, list) and len(item) == 2 and item[0] == node_id:
+                # Pick first upstream input as replacement if available
+                for upstream_key, upstream_value in inputs.items():
+                    if isinstance(upstream_value, list) and len(upstream_value) == 2:
+                        return upstream_value
+                    elif isinstance(upstream_value, (str, int)):
+                        return [str(upstream_value), 0]
+                # If no upstream, remove the reference
+                return None
+            return item
+
+        if isinstance(current_value, list):
+            if len(current_value) == 2 and current_value[0] == node_id:
+                replacement = reroute_item(current_value)
+                if replacement:
+                    downstream_node["inputs"][key] = replacement
+                else:
+                    downstream_node["inputs"].pop(key, None)
+            else:
+                # List of multiple connections
+                new_list = []
+                for item in current_value:
+                    replaced = reroute_item(item)
+                    if replaced:
+                        new_list.append(replaced)
+                if new_list:
+                    downstream_node["inputs"][key] = new_list
+                else:
+                    downstream_node["inputs"].pop(key, None)
+        elif str(current_value) == node_id:
+            # Single scalar reference
+            replacement = reroute_item([current_value, 0])
+            if replacement:
+                downstream_node["inputs"][key] = replacement
+            else:
+                downstream_node["inputs"].pop(key, None)
+
+
+def comfy_delete_and_reroute_nodes(payload: dict, delete_nodes: list[str | int] | str | int, delete_until: list[str | int] | str | int | None = None):
+    """
+    Deletes nodes from a ComfyUI payload with UI-like rerouting behavior.
+    Works in two modes:
+        - MODE A: delete specific nodes
+        - MODE B: recursively delete until stop nodes
+    """
+    # Normalize inputs
     if isinstance(delete_nodes, (str, int)):
         delete_nodes = {str(delete_nodes)}
     else:
         delete_nodes = {str(v) for v in delete_nodes}
 
-    # normalize delete_until
     if delete_until is None:
         delete_until = set()
     elif isinstance(delete_until, (str, int)):
@@ -643,65 +661,53 @@ def comfy_delete_and_reroute_nodes(payload: dict,
     else:
         delete_until = {str(v) for v in delete_until}
 
-    print("DELETE NODES:", delete_nodes)
+    # Build initial downstream map
+    downstream_map = _build_downstream_map(payload)
+
+    # --- MODE A: non-recursive deletion ---
+    if not delete_until:
+        nodes_to_delete = [nid for nid, node in payload.items() if _node_matches(nid, node, delete_nodes)]
+        for node_id in nodes_to_delete:
+            _replace_node_with_upstream(node_id, payload, downstream_map)
+            payload.pop(node_id, None)
+
+    # --- MODE B: recursive deletion until stop nodes ---
+    else:
+        visited = set()
+        to_process = set(nid for nid, node in payload.items() if _node_matches(nid, node, delete_nodes))
+        while to_process:
+            node_id = to_process.pop()
+            if node_id in visited:
+                continue
+            visited.add(node_id)
+
+            node = payload.get(node_id)
+            if not node or _node_matches(node_id, node, delete_until):
+                continue
+
+            upstream_ids = _get_upstream_node_ids(node)
+            _replace_node_with_upstream(node_id, payload, downstream_map)
+            payload.pop(node_id, None)
+
+            for upstream_id in upstream_ids:
+                if upstream_id in payload and upstream_id not in visited:
+                    to_process.add(upstream_id)
+
+    # --- Collapse Switch nodes with single input ---
     switches_to_delete = set()
-    visited = set()
-    to_process = set()
-
-    # Initial delete set
-    for node_id, node in payload.items():
-        if _node_matches(node_id, node, delete_nodes):
-            print("MATCHED NODE:", node)
-            to_process.add(node_id)
-
-    # Recursive deletion loop
-    while to_process:
-        node_id = to_process.pop()
-        print("NODE ID:", node_id)
-        if node_id in visited:
-            continue
-        visited.add(node_id)
-
-        node = payload.get(node_id)
-        if not node:
-            continue
-
-        # Stop condition
-        if _node_matches(node_id, node, delete_until):
-            continue
-
-        # Collect upstream before deletion
-        upstream_ids = _get_upstream_node_ids(node)
-
-        # Delete node and clean references
-        del payload[node_id]
-        _replace_or_remove_references(payload, node_id, replacement=None)
-
-        # Queue upstream nodes
-        for upstream_id in upstream_ids:
-            if upstream_id in payload and upstream_id not in visited:
-                to_process.add(upstream_id)
-
-    # Collapse Any Switch nodes left with a single input
     for node_id, node in list(payload.items()):
         if node.get("class_type") == "Any Switch (rgthree)":
             inputs = node.get("inputs", {})
-            valid_inputs = {
-                k: v for k, v in inputs.items()
-                if isinstance(v, list) and len(v) == 2 and isinstance(v[0], str)
-            }
-
+            valid_inputs = {k: v for k, v in inputs.items() if isinstance(v, list) and len(v) == 2 and isinstance(v[0], str)}
             if len(valid_inputs) == 1:
-                _, (src_node_id, src_output_idx) = next(iter(valid_inputs.items()))
-                _replace_or_remove_references(
-                    payload,
-                    node_id,
-                    replacement=[src_node_id, src_output_idx],
-                )
+                key, (src_node_id, src_output_idx) = next(iter(valid_inputs.items()))
+                _replace_node_with_upstream(node_id, payload, {node_id: [(node, key)]})
                 switches_to_delete.add(node_id)
 
     for node_id in switches_to_delete:
         payload.pop(node_id, None)
+
+
 
 def evaluate_condition(value1: Any, operator: str, value2: Any = None, context: dict | None = None) -> bool:
     """
