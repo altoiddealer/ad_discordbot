@@ -3204,7 +3204,6 @@ class Tasks(TaskProcessing):
                     file_name = Path(value.filename).stem
                     fn_key = f"{name}_file_name"
                     processed_params[fn_key] = file_name
-                    value = await value.read()
                 option_names.append(name)
                 steps = meta.get("steps")
                 if steps:
