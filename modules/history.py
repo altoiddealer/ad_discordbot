@@ -809,8 +809,8 @@ class History:
         
         self.fp = fp or self.fp
         
-        delta = self.last_save_delta()
         if timeout:
+            delta = self.last_save_delta()
             # wait at least timeout between saves
             if delta < timeout: 
                 await asyncio.sleep(timeout-delta)
@@ -894,6 +894,7 @@ class HistoryManager:
     autoload_history: bool                  = field(default=False)
     change_char_history_method: str         = field(default='new')
     per_channel_history: bool               = field(default=True)
+    buffered_saving: bool                   = field(default=True)
 
     _histories: dict[ChannelID, History]    = field(default_factory=dict)
     # uuid: str                               = field(default_factory=get_uuid_hex, init=False)

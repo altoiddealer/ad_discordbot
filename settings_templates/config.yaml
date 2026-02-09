@@ -75,6 +75,7 @@ textgen:
     autoload_history: false         # Set to true if you want the character to load with the most recently saved chat history.
     change_char_history_method: new # 'new' - start new history; 'keep' - retain history for next character (only applicable if 'autoload_history: true')
     per_channel_history: true       # If true, each channel will have its own chat history. Log files will not be compatible with text-generation-webui unless processed by .bat in '/utils/'
+    buffered_saving: true           # If true, periodically writes current chat history to disk. Otherwise, writes after every message exchange.
 
 
 # Text-to-Speech settings. Use command '/set_server_voice_channel' in each server that you want to connect to voice channel for playing TTS

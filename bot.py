@@ -1873,7 +1873,8 @@ class TaskProcessing(TaskAttributes):
             if self.llm_resp:
                 truncation = int(self.settings.llmstate.state['truncation_length'] * 4) #approx tokens
                 self.bot_hmessage.history.truncate(truncation)
-                client.loop.create_task(self.bot_hmessage.history.save())
+                buffer = 30 if bot_history.buffered_saving else 0
+                client.loop.create_task(self.bot_hmessage.history.save(timeout=buffer))
 
             return self.bot_hmessage
         except Exception as e:
