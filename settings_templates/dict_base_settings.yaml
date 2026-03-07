@@ -51,6 +51,8 @@ llmstate:
     preset: ''  # Name of a file in '/presets' (ex. 'Midnight Enigma'). Preset settings will override values defined here.
     grammar_string: ''
     add_bos_token: true
+    adaptive_decay: 0.9
+    adaptive_target: 0
     auto_max_new_tokens: false
     ban_eos_token: false
     character_menu: ''

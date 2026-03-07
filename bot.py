@@ -8022,6 +8022,8 @@ class LLMState(SettingsBase):
             # These are defaults for 'Midnight Enigma' preset
             'preset': '',
             'grammar_string': '',
+            'adaptive_decay': 0.9,
+            'adaptive_target': 0,
             'add_bos_token': True,
             'auto_max_new_tokens': True,
             'ban_eos_token': False,
