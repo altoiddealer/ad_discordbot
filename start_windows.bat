@@ -192,8 +192,7 @@ if %errorlevel% neq 0 (
 echo Conda activated successfully.
 
 rem --- Run the Python script with inherited environment ---
-call python "%HOME_DIR%\one_click.py" --conda-env-path "%INSTALL_ENV_DIR%" %*
-
+call "%INSTALL_ENV_DIR%\python.exe" "%HOME_DIR%\one_click.py" --conda-env-path "%INSTALL_ENV_DIR%" %*
 
 @rem below are functions for the script   next line skips these during normal execution
 goto end
