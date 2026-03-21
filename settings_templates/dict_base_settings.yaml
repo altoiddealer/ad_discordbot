@@ -143,58 +143,63 @@ llmstate:
       The following is a conversation with an AI Large Language Model. The AI has been trained to answer questions, provide recommendations, and help with decision making. The AI follows user requests. The AI thinks outside the box.
     greeting: How can I help you today?
     custom_system_message: ""
-    # Instruction template - only used if instruct template not found in LLM model's metadata.
-    instruction_template_str: |
-      {%- set ns = namespace(found=false) -%}
-      {%- for message in messages -%}
-          {%- if message['role'] == 'system' -%}
-              {%- set ns.found = true -%}
-          {%- endif -%}
-      {%- endfor -%}
-      {%- if not ns.found -%}
-          {{- '' + 'Below is an instruction that describes a task. Write a response that appropriately completes the request.' + '\n\n' -}}
-      {%- endif %}
-      {%- for message in messages %}
-          {%- if message['role'] == 'system' -%}
-              {{- '' + message['content'] + '\n\n' -}}
-          {%- else -%}
-              {%- if message['role'] == 'user' -%}
-                  {{-'### Instruction:\n' + message['content'] + '\n\n'-}}
-              {%- else -%}
-                  {{-'### Response:\n' + message['content'] + '\n\n' -}}
-              {%- endif -%}
-          {%- endif -%}
-      {%- endfor -%}
-      {%- if add_generation_prompt -%}
-          {{-'### Response:\n'-}}
-      {%- endif -%}
-    # Chat template
-    chat_template_str: |
-      {%- for message in messages %}
-          {%- if message['role'] == 'system' -%}
-              {%- if message['content'] -%}
-                  {{- message['content'] + '\n\n' -}}
-              {%- endif -%}
-              {%- if user_bio -%}
-                  {{- user_bio + '\n\n' -}}
-              {%- endif -%}
-          {%- elif message['role'] == 'tool' -%}
-              {{- '[Tool result: ' + message['content'] + ']\n' -}}
-          {%- elif message['role'] == 'user' -%}
-              {{- name1 + ': ' + message['content'] + '\n'-}}
-          {%- elif message['tool_calls'] is defined and message['tool_calls'] -%}
-              {%- for tc in message['tool_calls'] -%}
-                  {{- '[Calling: ' + tc['function']['name'] + '(' + tc['function']['arguments'] + ')]\n' -}}
-              {%- endfor -%}
-          {%- else -%}
-              {{- name2 + ': ' + message['content'] + '\n' -}}
-          {%- endif -%}
-      {%- endfor -%}
-      {%- if add_generation_prompt %}
-          {{- name2 + ':' -}}
-      {%- endif %}
-    # Chat instruct template - <|character|> gets replaced by the bot name, and <|prompt|> gets replaced by the regular chat prompt.
-    chat-instruct_command: |
-      Continue the chat dialogue below. Write a single reply for the character "<|character|>". Reply directly, without starting the reply with the character name.
 
-      <|prompt|>
+    ### It's recommended to leave these params commented out, unless you really want to tweak the templates
+
+    # # Instruction template - only used if instruct template not found in LLM model's metadata.
+    # instruction_template_str: |
+    #   {%- set ns = namespace(found=false) -%}
+    #   {%- for message in messages -%}
+    #       {%- if message['role'] == 'system' -%}
+    #           {%- set ns.found = true -%}
+    #       {%- endif -%}
+    #   {%- endfor -%}
+    #   {%- if not ns.found -%}
+    #       {{- '' + 'Below is an instruction that describes a task. Write a response that appropriately completes the request.' + '\n\n' -}}
+    #   {%- endif %}
+    #   {%- for message in messages %}
+    #       {%- if message['role'] == 'system' -%}
+    #           {{- '' + message['content'] + '\n\n' -}}
+    #       {%- else -%}
+    #           {%- if message['role'] == 'user' -%}
+    #               {{-'### Instruction:\n' + message['content'] + '\n\n'-}}
+    #           {%- else -%}
+    #               {{-'### Response:\n' + message['content'] + '\n\n' -}}
+    #           {%- endif -%}
+    #       {%- endif -%}
+    #   {%- endfor -%}
+    #   {%- if add_generation_prompt -%}
+    #       {{-'### Response:\n'-}}
+    #   {%- endif -%}
+
+    # Chat template
+    # chat_template_str: |
+    #   {%- for message in messages %}
+    #       {%- if message['role'] == 'system' -%}
+    #           {%- if message['content'] -%}
+    #               {{- message['content'] + '\n\n' -}}
+    #           {%- endif -%}
+    #           {%- if user_bio -%}
+    #               {{- user_bio + '\n\n' -}}
+    #           {%- endif -%}
+    #       {%- elif message['role'] == 'tool' -%}
+    #           {{- '[Tool result: ' + message['content'] + ']\n' -}}
+    #       {%- elif message['role'] == 'user' -%}
+    #           {{- name1 + ': ' + message['content'] + '\n'-}}
+    #       {%- elif message['tool_calls'] is defined and message['tool_calls'] -%}
+    #           {%- for tc in message['tool_calls'] -%}
+    #               {{- '[Calling: ' + tc['function']['name'] + '(' + tc['function']['arguments'] + ')]\n' -}}
+    #           {%- endfor -%}
+    #       {%- else -%}
+    #           {{- name2 + ': ' + message['content'] + '\n' -}}
+    #       {%- endif -%}
+    #   {%- endfor -%}
+    #   {%- if add_generation_prompt %}
+    #       {{- name2 + ':' -}}
+    #   {%- endif %}
+
+    # # Chat instruct template - <|character|> gets replaced by the bot name, and <|prompt|> gets replaced by the regular chat prompt.
+    # chat-instruct_command: |
+    #   Continue the chat dialogue below. Write a single reply for the character "<|character|>". Reply directly, without starting the reply with the character name.
+
+    #   <|prompt|>
