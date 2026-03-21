@@ -48,103 +48,103 @@ llmcontext:
 
 llmstate:
   state:
-    preset: ''  # Name of a file in '/presets' (ex. 'Midnight Enigma'). Preset settings will override values defined here.
-    grammar_string: ''
-    add_bos_token: true
-    adaptive_decay: 0.9
-    adaptive_target: 0
-    auto_max_new_tokens: false
+    mode: chat
+    preset: '' # Name of a file in '/presets' (ex. 'Midnight Enigma'). Preset settings will override values defined here.
+    max_new_tokens: 512
+    max_new_tokens_min: 1
+    max_new_tokens_max: 4096
+    prompt_lookup_num_tokens: 0
+    max_tokens_second: 0
+    auto_max_new_tokens: true
     ban_eos_token: false
-    character_menu: ''
-    chat_generation_attempts: 1
-    chat_prompt_size: 2048
+    add_bos_token: true
+    enable_thinking: false
+    reasoning_effort: medium
+    skip_special_tokens: true
+    stream: true
+    static_cache: false
+    truncation_length: 8192
+    seed: -1
     custom_stopping_strings: []
-    custom_system_message: ''
-    custom_token_bans: ''
-    do_sample: true
-    dry_multiplier: 0
-    dry_base: 1.75
-    dry_allowed_length: 2
-    dry_sequence_breakers: '["\n", ":", "\"", "*"]'
-    dynamic_temperature: False
+    custom_token_bans: ""
+    negative_prompt: ""
+    # Generation parameters - Curve shape
+    temperature: 1
     dynatemp_low: 1
     dynatemp_high: 1
     dynatemp_exponent: 1
-    enable_thinking: false
-    encoder_repetition_penalty: 1
-    epsilon_cutoff: 0
-    eta_cutoff: 0
-    frequency_penalty: 0
-    greeting: ''
-    guidance_scale: 1
-    history:
-      internal: []
-      visible: []
-    max_new_tokens: 512
-    max_tokens_second: 0
-    max_updates_second: 12
-    min_p: 0.00
-    mirostat_eta: 0.1
-    mirostat_mode: 0
-    mirostat_tau: 5
-    mode: 'chat'    # chat / chat-instruct / instruct
-    name1: ''           # name1 and name2
-    name1_instruct: ''  # are automatically
-    name2: ''           # populated, so
-    name2_instruct: ''  # ignore these.
-    negative_prompt: ''
-    no_repeat_ngram_size: 0
-    penalty_alpha: 0
-    presence_penalty: 0
-    prompt_lookup_num_tokens: 0
-    reasoning_effort: medium
-    repetition_penalty: 1.18
-    repetition_penalty_range: 1024
-    sampler_priority: []
-    seed: -1.0
-    show_after: ''
-    skip_special_tokens: true
-    smoothing_curve: 1
     smoothing_factor: 0
-    static_cache: false
-    stop_at_newline: false
-    stopping_strings: []
-    stream: true
-    temperature: 0.98
-    temperature_last: false
-    tfs: 1
-    top_a: 0
-    top_k: 100
+    smoothing_curve: 1
+    # Generation parameters - Curve cutoff
+    top_p: 0.95
+    top_k: 0
+    min_p: 0
     top_n_sigma: 0
-    top_p: 0.37
-    truncation_length: 2048
-    turn_template: ''
     typical_p: 1
-    user_bio: ''
     xtc_threshold: 0.1
     xtc_probability: 0
-    chat_template_str: >-
-      {%- for message in messages %}
-          {%- if message['role'] == 'system' -%}
-              {%- if message['content'] -%}
-                  {{- message['content'] + '\n\n' -}}
-              {%- endif -%}
-              {%- if user_bio -%}
-                  {{- user_bio + '\n\n' -}}
-              {%- endif -%}
-          {%- else -%}
-              {%- if message['role'] == 'user' -%}
-                  {{- name1 + ': ' + message['content'] + '\n'-}}
-              {%- else -%}
-                  {{- name2 + ': ' + message['content'] + '\n' -}}
-              {%- endif -%}
-          {%- endif -%}
-      {%- endfor -%}
-      {%- if add_generation_prompt %}
-          {{- name2 + ':' -}}
-      {%- endif %}
-    # The script will only initialize with this instruct template if one is not defined in the LLM model's metadata.
-    instruction_template_str: >-
+    epsilon_cutoff: 0
+    eta_cutoff: 0
+    tfs: 1
+    top_a: 0
+    adaptive_target: 0
+    adaptive_decay: 0.9
+    # Generation parameters - Repetition suppression
+    dry_multiplier: 0
+    dry_allowed_length: 2
+    dry_base: 1.75
+    repetition_penalty: 1
+    frequency_penalty: 0
+    presence_penalty: 0
+    encoder_repetition_penalty: 1
+    no_repeat_ngram_size: 0
+    repetition_penalty_range: 1024
+    # Generation parameters - Alternative sampling methods
+    penalty_alpha: 0
+    guidance_scale: 1
+    mirostat_mode: 0
+    mirostat_tau: 5
+    mirostat_eta: 0.1
+    # Generation parameters - Other options
+    do_sample: true
+    dynamic_temperature: false
+    temperature_last: false
+    sampler_priority:
+      - repetition_penalty
+      - presence_penalty
+      - frequency_penalty
+      - dry
+      - top_n_sigma
+      - temperature
+      - dynamic_temperature
+      - quadratic_sampling
+      - top_k
+      - top_p
+      - typical_p
+      - epsilon_cutoff
+      - eta_cutoff
+      - tfs
+      - top_a
+      - min_p
+      - adaptive_p
+      - mirostat
+      - xtc
+      - encoder_repetition_penalty
+      - no_repeat_ngram
+    dry_sequence_breakers: '["\n", ":", "\"", "*"]'
+    grammar_string: ""
+    # Character settings
+    character: Assistant
+    user: Default
+    name1: You
+    name2: AI
+    user_bio: ""
+    context: >
+      The following is a conversation with an AI Large Language Model. The AI has been trained to answer questions, provide recommendations, and help with decision making. The AI follows user requests. The AI thinks outside the box.
+    greeting: How can I help you today?
+    custom_system_message: ""
+    # Instruction template - only used if instruct template not found in LLM model's metadata.
+    instruction_template_str: |
       {%- set ns = namespace(found=false) -%}
       {%- for message in messages -%}
           {%- if message['role'] == 'system' -%}
@@ -153,23 +153,48 @@ llmstate:
       {%- endfor -%}
       {%- if not ns.found -%}
           {{- '' + 'Below is an instruction that describes a task. Write a response that appropriately completes the request.' + '\n\n' -}}
-      {%- endif -%}
-      {%- for message in messages %} 
+      {%- endif %}
+      {%- for message in messages %}
           {%- if message['role'] == 'system' -%}
               {{- '' + message['content'] + '\n\n' -}}
           {%- else -%}
               {%- if message['role'] == 'user' -%}
-                  {{- '### Instruction:\n' + message['content'] + '\n\n' -}}
+                  {{-'### Instruction:\n' + message['content'] + '\n\n'-}}
               {%- else -%}
-                  {{- '### Response:\n' + message['content'] + '\n\n' -}}
+                  {{-'### Response:\n' + message['content'] + '\n\n' -}}
               {%- endif -%}
           {%- endif -%}
       {%- endfor -%}
       {%- if add_generation_prompt -%}
-          {{- '### Response:\n' -}}
+          {{-'### Response:\n'-}}
       {%- endif -%}
-    # <|character|> gets replaced by the bot name, and <|prompt|> gets replaced by the regular chat prompt.
-    chat-instruct_command: >-
+    # Chat template
+    chat_template_str: |
+      {%- for message in messages %}
+          {%- if message['role'] == 'system' -%}
+              {%- if message['content'] -%}
+                  {{- message['content'] + '\n\n' -}}
+              {%- endif -%}
+              {%- if user_bio -%}
+                  {{- user_bio + '\n\n' -}}
+              {%- endif -%}
+          {%- elif message['role'] == 'tool' -%}
+              {{- '[Tool result: ' + message['content'] + ']\n' -}}
+          {%- elif message['role'] == 'user' -%}
+              {{- name1 + ': ' + message['content'] + '\n'-}}
+          {%- elif message['tool_calls'] is defined and message['tool_calls'] -%}
+              {%- for tc in message['tool_calls'] -%}
+                  {{- '[Calling: ' + tc['function']['name'] + '(' + tc['function']['arguments'] + ')]\n' -}}
+              {%- endfor -%}
+          {%- else -%}
+              {{- name2 + ': ' + message['content'] + '\n' -}}
+          {%- endif -%}
+      {%- endfor -%}
+      {%- if add_generation_prompt %}
+          {{- name2 + ':' -}}
+      {%- endif %}
+    # Chat instruct template - <|character|> gets replaced by the bot name, and <|prompt|> gets replaced by the regular chat prompt.
+    chat-instruct_command: |
       Continue the chat dialogue below. Write a single reply for the character "<|character|>". Reply directly, without starting the reply with the character name.
 
       <|prompt|>
