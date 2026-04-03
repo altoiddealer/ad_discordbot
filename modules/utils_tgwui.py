@@ -23,7 +23,7 @@ import modules.shared as tgwui_shared_module
 import modules.utils as tgwui_utils_module
 from modules.LoRA import add_lora_to_model
 from modules.models import load_model, unload_model
-from modules.models_settings import get_model_metadata, update_model_parameters, get_fallback_settings, infer_loader
+from modules.models_settings import get_model_metadata, update_model_parameters, infer_loader
 
 # Cache for already-loaded functions
 _tgwui_cache: dict[str, Callable] = {}
@@ -228,10 +228,6 @@ class TGWUI():
             file_contents = open(settings_file, 'r', encoding='utf-8').read()
             new_settings = json.loads(file_contents) if settings_file.suffix == ".json" else yaml.safe_load(file_contents)
             tgwui_shared_module.settings.update(new_settings)
-
-        # Fallback settings for models
-        tgwui_shared_module.model_config['.*'] = get_fallback_settings()
-        tgwui_shared_module.model_config.move_to_end('.*', last=False)  # Move to the beginning
 
     # legacy version of load_extensions() which allows extension params to be updated during runtime
     def load_extensions(self, available_extensions):
