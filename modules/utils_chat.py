@@ -25,15 +25,18 @@ def generate_pfp_cache(character):
     if not cache_folder.exists():
         cache_folder.mkdir()
 
-    for path in [Path(f'{shared_path.dir_user_characters}/{character}.{extension}') for extension in ['png', 'jpg', 'jpeg']]:
+    for extension in ['png', 'jpg', 'jpeg']:
+        path = shared_path.dir_user_characters / f"{character}.{extension}"
         if path.exists():
             original_img = Image.open(path)
-            original_img.save(Path(f'{cache_folder}/pfp_character.png'), format='PNG')
+            pfp_path = cache_folder / 'pfp_character.png'
+            thumb_path = cache_folder / 'pfp_character_thumb.png'
 
+            original_img.save(pfp_path, format='PNG')
             thumb = make_thumbnail(original_img)
-            thumb.save(Path(f'{cache_folder}/pfp_character_thumb.png'), format='PNG')
+            thumb.save(thumb_path, format='PNG')
 
-            return thumb
+            return str(thumb_path)
 
     return None
 
@@ -98,12 +101,12 @@ def load_bot_character(character, name1, name2, should_warn=True):
             raise ValueError
         return None, None, None, None, None
 
-    file_contents = open(filepath, 'r', encoding='utf-8').read()
+    with open(filepath, 'r', encoding='utf-8') as fh:
+        file_contents = fh.read()
     data = json.loads(file_contents) if extension == "json" else yaml.safe_load(file_contents)
 
-    for path in [Path(f"{cache_folder}/pfp_character.png"), Path(f"{cache_folder}/pfp_character_thumb.png")]:
-        if path.exists():
-            path.unlink()
+    for path in [cache_folder / "pfp_character.png", cache_folder / "pfp_character_thumb.png"]:
+        path.unlink(missing_ok=True)
 
     picture = generate_pfp_cache(character)
 
