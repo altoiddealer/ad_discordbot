@@ -148,22 +148,23 @@ def get_git_remote_url(project_path):
 
 
 def check_project():
-    parent_is_tgwui = False
-    is_tgwui_integrated = False
+    parent_is_textgen = False
+    is_textgen_integrated = False
 
     project_path = os.path.dirname(install_path)
     
-    if os.path.basename(project_path) == "text-generation-webui":
+    if os.path.basename(project_path) in ['text-generation-webui', 'textgen']:
         return True, True
 
-    if os.path.basename(parent_dir).startswith('text-generation-webui'):
-        parent_is_tgwui = True
+    if os.path.basename(parent_dir).startswith('text-generation-webui') \
+        or os.path.basename(parent_dir).startswith('textgen'):
+        parent_is_textgen = True
 
     bot_url = "https://github.com/altoiddealer/ad_discordbot"
     bot_git_url = "https://github.com/altoiddealer/ad_discordbot.git"
-    tgwui_url = "https://github.com/oobabooga/text-generation-webui"
-    tgwui_git_url = "https://github.com/oobabooga/text-generation-webui.git"
-    supported_project_urls = [bot_url, bot_git_url, tgwui_url, tgwui_git_url]
+    textgen_url = "https://github.com/oobabooga/textgen"
+    textgen_git_url = "https://github.com/oobabooga/textgen.git"
+    supported_project_urls = [bot_url, bot_git_url, textgen_url, textgen_git_url]
 
     # Check if bot is running in a supported project
     project_url = get_git_remote_url(project_path)
