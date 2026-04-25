@@ -148,8 +148,8 @@ def get_git_remote_url(project_path):
 
 
 def check_project():
-    parent_is_textgen = False
-    is_textgen_integrated = False
+    parent_is_tgwui = False
+    is_tgwui_integrated = False
 
     project_path = os.path.dirname(install_path)
     
@@ -158,7 +158,7 @@ def check_project():
 
     if os.path.basename(parent_dir).startswith('text-generation-webui') \
         or os.path.basename(parent_dir).startswith('textgen'):
-        parent_is_textgen = True
+        parent_is_tgwui = True
 
     bot_url = "https://github.com/altoiddealer/ad_discordbot"
     bot_git_url = "https://github.com/altoiddealer/ad_discordbot.git"
