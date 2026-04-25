@@ -59,6 +59,7 @@ llmstate:
     ban_eos_token: false
     add_bos_token: true
     enable_thinking: false
+    preserve_thinking: false
     reasoning_effort: medium
     skip_special_tokens: true
     stream: true
