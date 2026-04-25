@@ -162,9 +162,9 @@ def check_project():
 
     bot_url = "https://github.com/altoiddealer/ad_discordbot"
     bot_git_url = "https://github.com/altoiddealer/ad_discordbot.git"
-    textgen_url = "https://github.com/oobabooga/textgen"
-    textgen_git_url = "https://github.com/oobabooga/textgen.git"
-    supported_project_urls = [bot_url, bot_git_url, textgen_url, textgen_git_url]
+    tgwui_url = "https://github.com/oobabooga/textgen"
+    tgwui_git_url = "https://github.com/oobabooga/textgen.git"
+    supported_project_urls = [bot_url, bot_git_url, tgwui_url, tgwui_git_url]
 
     # Check if bot is running in a supported project
     project_url = get_git_remote_url(project_path)
