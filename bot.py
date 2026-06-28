@@ -1330,8 +1330,6 @@ class TaskProcessing(TaskAttributes):
             update_dict(current_state, char_state)
             swap_name = char_data.get('name', 'AI')
             self.assign_names_to_llm_payload(assistant=swap_name)
-            if char_data.get('context'):
-                current_state['context'] = char_data['context']
             setattr(self.params, 'impersonated_by', char_name)
             await self.fix_llm_payload() # Add any missing required information
         except Exception as e:
