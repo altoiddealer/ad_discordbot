@@ -8019,6 +8019,7 @@ class LLMState(SettingsBase):
     def __init__(self):
         self.text = ''
         self.state = {
+            'history': {'internal': [], 'visible': []},
             'mode': 'chat',
             'preset': '',
             'max_new_tokens': 512,
