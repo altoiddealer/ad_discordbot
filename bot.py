@@ -1325,12 +1325,13 @@ class TaskProcessing(TaskAttributes):
     async def swap_llm_character(self:Union["Task","Tasks"], char_name:str):
         try:
             char_data = await load_character_data(char_name, try_tgwui=tgwui_enabled)
-            if char_data.get('state', {}):
-                self.payload['state'] = char_data['state']
-                self.payload['state']['name1'] = self.user_name
-            self.payload['state']['name2'] = char_data.get('name', 'AI')
-            self.payload['state']['character_menu'] = char_data.get('name', 'AI')
-            self.payload['state']['context'] = char_data.get('context', '')
+            current_state = self.payload['state']
+            char_state = char_data.get('state', {})
+            update_dict(current_state, char_state)
+            swap_name = char_data.get('name', 'AI')
+            self.assign_names_to_llm_payload(assistant=swap_name)
+            if char_data.get('context'):
+                current_state['context'] = char_data['context']
             setattr(self.params, 'impersonated_by', char_name)
             await self.fix_llm_payload() # Add any missing required information
         except Exception as e:
@@ -1690,15 +1691,18 @@ class TaskProcessing(TaskAttributes):
                 image_paths.append(str(file_path))
 
         return image_paths
+    
+    def assign_names_to_llm_payload(self:Union["Task","Tasks"], user=None, assistant=None):
+        self.payload['state']['name1'] = user or self.user_name
+        self.payload['state']['name2'] = assistant or self.settings.name
+        self.payload['state']['name1_instruct'] = user or self.user_name
+        self.payload['state']['name2_instruct'] = assistant or self.settings.name
+        self.payload['state']['character_menu'] = assistant or self.settings.name
 
     async def init_llm_payload(self:Union["Task","Tasks"]):
         self.payload = copy.deepcopy(vars(self.settings.llmstate))
         self.payload['text'] = self.text
-        self.payload['state']['name1'] = self.user_name
-        self.payload['state']['name2'] = self.settings.name
-        self.payload['state']['name1_instruct'] = self.user_name
-        self.payload['state']['name2_instruct'] = self.settings.name
-        self.payload['state']['character_menu'] = self.settings.name
+        self.assign_names_to_llm_payload()
         self.payload['state']['context'] = self.settings.llmcontext.context
         prefixed = 'user' if self.settings.behavior.server_mode else None
         self.payload['state']['history'] = self.local_history.render_to_tgwui(prefixed=prefixed)

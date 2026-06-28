@@ -43,21 +43,21 @@ def check_probability(probability) -> bool:
     probability = max(0.0, min(1.0, probability))
     return random.random() < probability
 
-def fix_dict(set, req, src: str | None = None, warned: bool = False, path=""):
+def fix_dict(target, req, src: str | None = None, warned: bool = False, path=""):
     was_warned = warned
     ignored_keys = ['regenerate', '_continue', 'text', 'bot_in_character_menu', 'imgmodel_name', 'tags', 'override_settings']
     for k, req_v in req.items():
         current_path = f"{path}/{k}" if path else k  # Update the current path
-        if k not in set:
+        if k not in target:
             if k not in ignored_keys and not warned and src:  # Only log if warned is initially False
                 log.warning(f'key "{current_path}" missing from "{src}".')
                 log.info(f'Applying default value for "{current_path}": {repr(req_v)}.')
                 was_warned = True
-            set[k] = req_v
+            target[k] = req_v
         elif isinstance(req_v, dict):
-            set[k], child_warned = fix_dict(set[k], req_v, src, warned, current_path)
+            target[k], child_warned = fix_dict(target[k], req_v, src, warned, current_path)
             was_warned = was_warned or child_warned  # Update was_warned if any child call was warned
-    return set, was_warned
+    return target, was_warned
 
 def extract_key(data: dict | list | object, config: Union[str, dict]) -> Any:
     if isinstance(config, dict):
