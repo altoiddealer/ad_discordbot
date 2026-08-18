@@ -1681,7 +1681,7 @@ class ImgGenClient_Comfy(ImgGenClient):
             response:APIResponse = await self.request(endpoint=f'/view', params=item, method='GET', response_type='bytes')
             return response.body
     
-    async def _fetch_prompt_results(self, prompt_id:str, returns:list[str]=['images'], node_ids:list[int]=[]) -> list[dict]:
+    async def _fetch_prompt_results(self, prompt_id:str, returns:list[str]=['images'], node_ids:list[int|str]=[]) -> list[dict]:
         if self.get_history:
             history = await self.get_history.call(path_vars=prompt_id)
         else:
@@ -1689,17 +1689,25 @@ class ImgGenClient_Comfy(ImgGenClient):
             history = response.body
         outputs:dict = history.get(prompt_id, {}).get('outputs', {})
         results = []
+        # ComfyUI node IDs can be simple integers ("123") or composite
+        # identifiers such as "162:1692". Compare them as strings.
+        node_ids_filter = {str(node_id) for node_id in node_ids}
+        # iterate over outputs
         for node_id_str, node_output in outputs.items():
-            # filter nodes if any provided in list
-            node_id = int(node_id_str)
-            if node_ids and node_id not in node_ids:
+            # Filter nodes if any were provided.
+            if node_ids_filter and node_id_str not in node_ids_filter:
                 continue
-            # collect outputs
+            # Collect outputs.
             for output_type in returns:
                 if output_type in node_output:
                     results.extend(node_output[output_type])
         if not results:
-            log.warning(f"[{self.name}] No outputs were found for criteria (types: {returns}; node_ids: {node_ids if node_ids else 'ANY'})")
+            log.warning(
+                f"[{self.name}] No outputs were found for criteria "
+                f"(types: {returns}; "
+                f"node_ids: {node_ids if node_ids else 'ANY'})"
+            )
+
         return results
 
     async def unpack_image_results(self, results: list[dict]) -> list[dict]:
