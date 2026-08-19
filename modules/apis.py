@@ -1681,32 +1681,44 @@ class ImgGenClient_Comfy(ImgGenClient):
             response:APIResponse = await self.request(endpoint=f'/view', params=item, method='GET', response_type='bytes')
             return response.body
     
-    async def _fetch_prompt_results(self, prompt_id:str, returns:list[str]=['images'], node_ids:list[int|str]=[]) -> list[dict]:
+    async def _fetch_prompt_results(self, prompt_id:str, returns:list[str]|None = None, node_ids:list[int|str]|None = None) -> list[dict]:
+        if returns is None:
+            returns = ['images']
+        if node_ids is None:
+            node_ids = []
+
         if self.get_history:
             history = await self.get_history.call(path_vars=prompt_id)
         else:
-            response:APIResponse = await self.request(endpoint=f'/history/{prompt_id}', method='GET')
+            response: APIResponse = await self.request(endpoint=f'/history/{prompt_id}', method='GET')
             history = response.body
-        outputs:dict = history.get(prompt_id, {}).get('outputs', {})
+
+        outputs: dict = history.get(prompt_id, {}).get('outputs', {})
         results = []
+
         # ComfyUI node IDs can be simple integers ("123") or composite
         # identifiers such as "162:1692". Compare them as strings.
         node_ids_filter = {str(node_id) for node_id in node_ids}
-        # iterate over outputs
+
         for node_id_str, node_output in outputs.items():
             # Filter nodes if any were provided.
             if node_ids_filter and node_id_str not in node_ids_filter:
                 continue
+
             # Collect outputs.
             for output_type in returns:
-                if output_type in node_output:
-                    results.extend(node_output[output_type])
+                if output_type not in node_output:
+                    continue
+
+                value = node_output[output_type]
+
+                if isinstance(value, list):
+                    results.extend(value)
+                else:
+                    results.append(value)
+
         if not results:
-            log.warning(
-                f"[{self.name}] No outputs were found for criteria "
-                f"(types: {returns}; "
-                f"node_ids: {node_ids if node_ids else 'ANY'})"
-            )
+            log.warning(f"[{self.name}] No outputs were found for criteria (types: {returns}; node_ids: {node_ids if node_ids else 'ANY'})")
 
         return results
 
@@ -1770,34 +1782,269 @@ class ImgGenClient_Comfy(ImgGenClient):
         prompt_id = await self._post_prompt(img_payload, task, message=message, endpoint=endpoint)
         return [{"prompt_id": prompt_id}]
 
-    async def _execute_prompt(self,
-                              payload:dict,
-                              endpoint:Union["Endpoint", None] = None,
-                              ictx:CtxInteraction|None = None,
-                              task = None,
-                              message:str = None,
-                              outputs:list[str] = ['images'],
-                              output_node_ids:list[int] = [],
-                              completed_node_id:int|None = None,
-                              file_path:str = '',
-                              returns:str = 'file_path',
-                              unload_models:str|None = None,
-                              free_memory:str|None = None):
-        message = message or f'Generating with {self.name} ...'
-        await self._free_memory(free_memory in ['before', 'both'], unload_models in ['before', 'both'])
-        # Queue prompt > track progress
-        prompt_id = await self._post_prompt(payload, task=task, ictx=ictx, message=message, endpoint=endpoint, completed_node_id=completed_node_id)
-        # Fetch results (list of bytes)
-        results_list = await self._fetch_prompt_results(prompt_id, returns=outputs, node_ids=output_node_ids)
-        # Collect results
-        save_file_results = []
-        for item in results_list:
-            bytes = await self.resolve_image_data(item)
-            save_dict = await processing.save_any_file(bytes, file_path=file_path, msg_prefix='[StepExecutor] ')
-            save_file_results.append(save_dict[returns] if returns else save_dict)
-        await self._free_memory(free_memory in ['after', 'both'], unload_models in ['after', 'both'])
-        return save_file_results
+    @staticmethod
+    def _validate_call_comfy_config(
+        outputs: list[str] | None,
+        output_node_ids: list[int | str] | None,
+        completed_node_id: int | str | None,
+        return_type: str,
+        unload_models: str | None,
+        free_memory: str | None,
+    ):
+        """Validate call_comfy configuration before submitting the prompt."""
 
+        valid_return_types = {'file_path', 'file', 'value', 'raw', 'none'}
+        valid_memory_options = {'before', 'after', 'both'}
+
+        if return_type not in valid_return_types:
+            raise ValueError(
+                f"[StepExecutor] Invalid call_comfy return_type: {return_type!r}. "
+                f"Valid values are: {', '.join(sorted(valid_return_types))}"
+            )
+
+        for name, value in (
+            ('unload_models', unload_models),
+            ('free_memory', free_memory),
+        ):
+            if value is not None and value not in valid_memory_options:
+                raise ValueError(
+                    f"[StepExecutor] Invalid call_comfy {name}: {value!r}. "
+                    f"Valid values are: {', '.join(sorted(valid_memory_options))}"
+                )
+
+        if outputs is not None:
+            if not isinstance(outputs, list):
+                raise ValueError(
+                    f"[StepExecutor] call_comfy 'outputs' must be a list, "
+                    f"got {type(outputs).__name__}."
+                )
+
+            if not outputs:
+                log.warning(
+                    "[StepExecutor] WARNING: call_comfy is configured with "
+                    "outputs=[]. The ComfyUI workflow will execute, but its "
+                    "results will not be collected."
+                )
+
+            invalid_output_types = [
+                output_type
+                for output_type in outputs
+                if not isinstance(output_type, str) or not output_type
+            ]
+
+            if invalid_output_types:
+                raise ValueError(
+                    "[StepExecutor] Invalid call_comfy output type(s): "
+                    f"{invalid_output_types!r}. Output types must be non-empty strings."
+                )
+
+        if output_node_ids is not None:
+            if not isinstance(output_node_ids, list):
+                raise ValueError(
+                    "[StepExecutor] call_comfy 'output_node_ids' must be a list."
+                )
+
+        if completed_node_id is not None and not isinstance(
+            completed_node_id, (int, str)
+        ):
+            raise ValueError(
+                "[StepExecutor] call_comfy 'completed_node_id' must be "
+                "an integer, string, or None."
+            )
+
+        if return_type == 'none':
+            log.info(
+                "[StepExecutor] call_comfy configured with "
+                "return_type='none'; ComfyUI results will be discarded."
+            )
+
+    async def _fetch_prompt_outputs(
+        self,
+        prompt_id: str,
+        output_types: list[str] | None = None,
+        node_ids: list[int | str] | None = None,
+    ) -> list[dict]:
+        """
+        Collect outputs from ComfyUI history while preserving their
+        originating node ID and output key.
+
+        Returns normalized records in the form:
+
+            {
+                'node_id': '123',
+                'output_type': 'images',
+                'value': {...},
+            }
+
+        Output values are normalized to individual records regardless
+        of whether ComfyUI returned a list or a single value.
+        """
+
+        if self.get_history:
+            history = await self.get_history.call(path_vars=prompt_id)
+        else:
+            response: APIResponse = await self.request(
+                endpoint=f'/history/{prompt_id}',
+                method='GET'
+            )
+            history = response.body
+
+        prompt_history = history.get(prompt_id, {})
+        outputs = prompt_history.get('outputs', {})
+
+        output_types = output_types or []
+        node_ids = node_ids or []
+
+        output_types_filter = set(output_types)
+        node_ids_filter = {str(node_id) for node_id in node_ids}
+
+        results = []
+
+        for node_id_str, node_output in outputs.items():
+            if node_ids_filter and node_id_str not in node_ids_filter:
+                continue
+
+            if not isinstance(node_output, dict):
+                continue
+
+            for output_type, value in node_output.items():
+                if output_types_filter and output_type not in output_types_filter:
+                    continue
+
+                # Most ComfyUI file outputs are lists, while value-based outputs such as text may be a scalar.
+                # Normalize both forms to individual result records.
+                if isinstance(value, list):
+                    values = value
+                else:
+                    values = [value]
+
+                for item in values:
+                    results.append({
+                        'node_id': node_id_str,
+                        'output_type': output_type,
+                        'value': item,
+                    })
+
+        if not results:
+            log.warning(
+                f"[{self.name}] No outputs were found for criteria "
+                f"(types: {output_types or 'ANY'}; "
+                f"node_ids: {node_ids if node_ids else 'ANY'})"
+            )
+
+        return results
+
+    async def _execute_prompt(
+        self,
+        payload: dict,
+        endpoint: Union["Endpoint", None] = None,
+        ictx: CtxInteraction | None = None,
+        task=None,
+        message: str = None,
+        outputs: list[str] | None = None,
+        output_node_ids: list[int | str] | None = None,
+        completed_node_id: int | str | None = None,
+        file_path: str = '',
+        return_type: str = 'file_path',
+        unload_models: str | None = None,
+        free_memory: str | None = None,
+    ):
+        if outputs is None:
+            outputs = ['images']
+
+        if output_node_ids is None:
+            output_node_ids = []
+
+        message = message or f'Generating with {self.name} ...'
+
+        # Validate before doing anything that changes memory state or submits the ComfyUI prompt.
+        self._validate_call_comfy_config(
+            outputs=outputs,
+            output_node_ids=output_node_ids,
+            completed_node_id=completed_node_id,
+            return_type=return_type,
+            unload_models=unload_models,
+            free_memory=free_memory,
+        )
+
+        await self._free_memory(
+            free_memory in ['before', 'both'],
+            unload_models in ['before', 'both']
+        )
+
+        try:
+            # Queue prompt > track progress
+            prompt_id = await self._post_prompt(
+                payload,
+                task=task,
+                ictx=ictx,
+                message=message,
+                endpoint=endpoint,
+                completed_node_id=completed_node_id
+            )
+
+            # Explicitly discard results if configured. We still execute and track the prompt normally.
+            if return_type == 'none':
+                return []
+
+            # Collect outputs while preserving node ID and output type.
+            results = await self._fetch_prompt_outputs(
+                prompt_id,
+                output_types=outputs,
+                node_ids=output_node_ids,
+            )
+
+            if not results:
+                raise RuntimeError(
+                    f"[StepExecutor] ComfyUI prompt {prompt_id} completed successfully, but no outputs matched the requested "
+                    f"criteria (types: {outputs}; node_ids: {output_node_ids if output_node_ids else 'ANY'})."
+                )
+
+            # Value-based return
+            if return_type == 'value':
+                return [item['value'] for item in results]
+
+            # Raw return
+            if return_type == 'raw':
+                return results
+
+            # File-based returns
+            save_file_results = []
+
+            for item in results:
+                output_type = item['output_type']
+                value = item['value']
+
+                # Value-based outputs cannot be passed through the file processing pipeline.
+                if output_type == 'text':
+                    log.error(f"[StepExecutor] ComfyUI output type 'text' was requested with return_type='{return_type}'. "
+                        f"Use return_type='value' or 'raw' for value-based outputs.")
+                    continue
+
+                try:
+                    file_data = await self.resolve_image_data(value)
+                except Exception as e:
+                    log.error(f"[StepExecutor] Failed to resolve ComfyUI output (node: {item['node_id']}, type: {output_type}): {e}")
+                    continue
+
+                save_dict = await processing.save_any_file(
+                    file_data,
+                    file_path=file_path,
+                    msg_prefix='[StepExecutor] '
+                )
+
+                if return_type == 'file_path':
+                    save_file_results.append(save_dict['file_path'])
+                elif return_type == 'file':
+                    save_file_results.append(save_dict)
+
+            return save_file_results
+
+        finally:
+            await self._free_memory(
+                free_memory in ['after', 'both'],
+                unload_models in ['after', 'both']
+            )
 
 class TextGenClient(APIClient):
     def __init__(self, *args, **kwargs):
