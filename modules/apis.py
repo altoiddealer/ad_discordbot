@@ -990,91 +990,193 @@ class APIClient:
             log.exception(f"[{self.name}] WebSocket message failed: {e}")
             raise
 
+    async def post_cancel_on_completion(
+        self,
+        response: dict | None = None,
+    ) -> None:
+        """
+        Post to the configured cancel endpoint without marking the
+        local task as cancelled.
+
+        ``response`` is the response which satisfied the completion
+        condition and may be used by API-specific subclasses to
+        construct a more appropriate cancellation request.
+        """
+        cancel_ep = getattr(self, "post_cancel", None)
+
+        if not cancel_ep:
+            log.debug(
+                f"[{self.name}] Completion requested cancel endpoint "
+                f"but no cancel endpoint is configured."
+            )
+            return
+
+        try:
+            payload = cancel_ep.get_payload()
+            await cancel_ep.call(input_data=payload)
+
+        except Exception as e:
+            log.warning(
+                f"[{self.name}] Failed to post cancel endpoint on "
+                f"polling completion: {e}"
+            )
+
     async def poll_ws(
         self,
-        return_values: dict,
         interval: float = 1.0,
         duration: int = -1,
         num_yields: int = -1,
         timeout: Optional[int] = None,
-        type_filter: Optional[list[str]] = None,
-        data_filter: Optional[dict] = None,
-        completion_condition: Optional[Callable[[dict], bool]] = None,
+        response_filter: Optional[dict] = None,
     ) -> AsyncGenerator[dict, None]:
         """
-        Stream messages from WebSocket and yield structured data at most once per yield_interval seconds.
-        
-        - return_values: Dict of key -> dot/bracket path to extract
-        - type_filter: List of message types to process
-        - data_filter: Dict of required key-values in data field
-        - duration: Time in seconds before polling stops
-        - timeout: Timeout per WS receive
-        - interval: Minimum time in seconds between yields
+        Stream accepted WebSocket messages.
+
+        This method is responsible only for:
+            1. Receiving WebSocket messages.
+            2. Applying the first-pass response_filter.
+            3. Enforcing polling limits.
+            4. Yielding the accepted raw response.
+
+        Response extraction, progress analysis, output collection, and
+        completion handling are performed by higher-level consumers.
+
+        :param interval:
+            Minimum time in seconds between yielded responses.
+
+        :param duration:
+            Maximum time in seconds before polling stops.
+            -1 means no duration limit.
+
+        :param num_yields:
+            Maximum number of responses to yield.
+            -1 means no limit.
+
+        :param timeout:
+            Maximum time in seconds without a yielded response before
+            polling stops.
+
+        :param response_filter:
+            First-pass filter for WebSocket messages.
+
+            Supported keys:
+                type:
+                    A string or list of accepted WebSocket message types.
+
+                data:
+                    A dict of required key/value pairs in the response's
+                    data field.
         """
         start_time = time.monotonic()
         last_successful_yield = time.monotonic()
         yield_count = 0
         last_yield_time = 0.0
         buffered_result = None
-        if timeout is None and (getattr(self, 'post_cancel', None) == None):
-            log.info(f"[{self.name}] Defaulting progress tracking timeout to 60 seconds.")
+
+        if timeout is None and getattr(self, 'post_cancel', None) is None:
+            log.info(
+                f"[{self.name}] Defaulting progress tracking timeout to 60 seconds."
+            )
             timeout = 60
+
         MIN_RECEIVE_TIMEOUT = 1.0
+
+        response_filter = response_filter or {}
+
+        type_filter = response_filter.get("type")
+        if isinstance(type_filter, str):
+            type_filter = [type_filter]
+
+        data_filter = response_filter.get("data")
 
         while True:
             now = time.monotonic()
             elapsed = now - start_time
             time_since_last_yield = now - last_successful_yield
 
-            # Stop polling after duration
+            # Stop polling after duration.
             if duration > 0 and elapsed >= duration:
-                if buffered_result:
+                if buffered_result is not None:
                     yield buffered_result
-                log.info(f"[{self.name}] WebSocket polling stopped after duration {duration}s")
+
+                log.info(
+                    f"[{self.name}] WebSocket polling stopped after "
+                    f"duration {duration}s"
+                )
                 break
 
-            # Stop polling after timeout of no yields
-            if (timeout is not None) and (timeout > 0) and (time_since_last_yield >= timeout):
-                if buffered_result:
+            # Stop polling after inactivity timeout.
+            if (
+                timeout is not None
+                and timeout > 0
+                and time_since_last_yield >= timeout
+            ):
+                if buffered_result is not None:
                     yield buffered_result
-                log.info(f"[{self.name}] WebSocket polling stopped after inactivity timeout {timeout}s")
+
+                log.info(
+                    f"[{self.name}] WebSocket polling stopped after "
+                    f"inactivity timeout {timeout}s"
+                )
                 break
 
             try:
                 if not self.ws or self.ws.closed:
                     await self.connect_websocket()
 
-                # Wait for message OR cancel event OR timeout
                 receive_task = asyncio.create_task(self.ws.receive())
-                wait_tasks = [receive_task]
                 cancel_task = asyncio.create_task(self.cancel_event.wait())
-                wait_tasks.append(cancel_task)
 
                 done, pending = await asyncio.wait(
-                    wait_tasks,
-                    timeout=(interval if interval >= MIN_RECEIVE_TIMEOUT else timeout),
-                    return_when=asyncio.FIRST_COMPLETED
+                    [receive_task, cancel_task],
+                    timeout=(
+                        interval
+                        if interval >= MIN_RECEIVE_TIMEOUT
+                        else timeout
+                    ),
+                    return_when=asyncio.FIRST_COMPLETED,
                 )
 
-                if cancel_task in done:
-                    receive_task.cancel()
-                    raise APIRequestCancelled(f"[{self.name}] Generation was cancelled by user.", cancel_event=self.cancel_event)
+                # Always clean up pending tasks.
+                for task in pending:
+                    task.cancel()
 
-                if receive_task in done:
-                    msg = receive_task.result()
-                else:
-                    receive_task.cancel()
-                    # Timeout occurred
-                    if buffered_result and (interval == 0.0 or (time.monotonic() - last_yield_time) >= interval):
-                        yield buffered_result
-                        yield_count += 1
-                        last_successful_yield = time.monotonic()
-                        last_yield_time = last_successful_yield
+                if cancel_task in done:
+                    raise APIRequestCancelled(
+                        f"[{self.name}] Generation was cancelled by user.",
+                        cancel_event=self.cancel_event,
+                    )
+
+                if receive_task not in done:
+                    # Receive timeout. If we have a buffered response and
+                    # enough time has elapsed, yield it now.
+                    if (
+                        buffered_result is not None
+                        and (
+                            interval == 0.0
+                            or (time.monotonic() - last_yield_time) >= interval
+                        )
+                    ):
+                        result = buffered_result
                         buffered_result = None
+
+                        now = time.monotonic()
+                        yield result
+
+                        yield_count += 1
+                        last_successful_yield = now
+                        last_yield_time = now
+
                         if num_yields > 0 and yield_count >= num_yields:
-                            log.info(f"[{self.name}] WebSocket polling stopped after num_yields {num_yields}")
+                            log.info(
+                                f"[{self.name}] WebSocket polling stopped "
+                                f"after num_yields {num_yields}"
+                            )
                             break
+
                     continue
+
+                msg = receive_task.result()
 
                 if msg.type != aiohttp.WSMsgType.TEXT:
                     continue
@@ -1082,51 +1184,56 @@ class APIClient:
                 try:
                     payload = json_loads(msg.data)
                 except Exception:
-                    log.warning(f"[{self.name}] Invalid JSON in WebSocket message")
+                    log.warning(
+                        f"[{self.name}] Invalid JSON in WebSocket message"
+                    )
                     continue
-                
-                # Check for completion condition
-                if completion_condition and completion_condition(payload):
-                    log.info(f"[{self.name}] Completion condition matched.")
-                    yield payload
-                    break
+
+                # ---------------------------------------------------------
+                # FIRST-PASS RESPONSE FILTER
+                # ---------------------------------------------------------
 
                 msg_type = payload.get("type")
                 data = payload.get("data", {})
 
                 if type_filter and msg_type not in type_filter:
                     continue
-                if data_filter and any(data.get(k) != v for k, v in data_filter.items()):
-                    continue
 
-                result = {}
-                for key, path in return_values.items():
-                    try:
-                        result[key] = extract_key(payload, path)
-                    except Exception as e:
-                        log.debug(f"[{self.name}] Extraction failed for {key}: {e}")
+                if data_filter:
+                    if any(data.get(key) != value for key, value in data_filter.items()):
                         continue
 
-                if not result:
-                    continue
+                # ---------------------------------------------------------
+                # Accepted raw response
+                # ---------------------------------------------------------
 
                 now = time.monotonic()
+
                 if interval > 0 and (now - last_yield_time) < interval:
-                    buffered_result = result  # Buffer until interval is met
+                    buffered_result = payload
                     continue
 
-                yield result
+                yield payload
+
                 yield_count += 1
                 last_successful_yield = now
                 last_yield_time = now
                 buffered_result = None
 
                 if num_yields > 0 and yield_count >= num_yields:
-                    log.info(f"[{self.name}] WebSocket polling stopped after num_yields {num_yields}")
+                    log.info(
+                        f"[{self.name}] WebSocket polling stopped after "
+                        f"num_yields {num_yields}"
+                    )
                     break
 
+            except APIRequestCancelled:
+                raise
+
             except Exception as e:
-                log.exception(f"[{self.name}] WebSocket polling failed: {e}")
+                log.exception(
+                    f"[{self.name}] WebSocket polling failed: {e}"
+                )
                 raise
 
     class CancelView(View):
@@ -1146,55 +1253,57 @@ class APIClient:
             await self.cancel_callback()
             self.stop()
 
-    async def track_progress(self,
-                             endpoint: Optional["Endpoint"] = None,
-                             use_ws=False,
-                             interval: float = 1.0,
-                             duration: int = -1,
-                             num_yields: int = -1,
-                             progress_key: str = "progress",
-                             max_key: str|None = None,
-                             eta_key: str|None = None,
-                             message: str = 'Generating',
-                             ictx: CtxInteraction|None = None,
-                             task = None,
-                             type_filter: list[str] = ["progress", "executed"], # websocket
-                             data_filter: dict|None = None, # websocket
-                             completion_condition: Callable[[dict], bool]|None = None,
-                             **kwargs) -> list[dict]:
+    async def track_progress(
+        self,
+        endpoint: Optional["Endpoint"] = None,
+        use_ws: bool = False,
+        interval: float = 1.0,
+        duration: int = -1,
+        num_yields: int = -1,
+
+        progress_key: str = "progress",
+        max_key: str | None = None,
+        eta_key: str | None = None,
+
+        message: str = "Generating",
+
+        ictx: CtxInteraction | None = None,
+        task=None,
+
+        response_filter: dict | None = None,
+
+        completion_condition: Callable[[dict], bool] | None = None,
+        post_cancel_on_completion: bool = False,
+
+        **kwargs,
+    ) -> list[dict]:
         """
-        Polls an endpoint while sending a progress Embed to discord.
-        Pops and manages 'return_values' to ensure polling method only returns progress data
-        If `max` is specified, progress is interpreted as a step count and normalized as (progress / max).
-        Otherwise, progress is assumed to be a float between 0.0 and 1.0.
+        Poll an endpoint while displaying progress in Discord.
+
+        Polling responses are first passed through the generic response filter.
+        Accepted raw responses are then analyzed for progress, ETA, and completion.
+
+        The returned list contains the raw accepted responses.
         """
         embeds = task.embeds if task else Embeds(ictx)
         ictx = task.ictx if task else ictx
 
-        # Resolve endpoint / websocket
+        # Resolve endpoint / websocket.
         if not endpoint and not use_ws:
             endpoint = getattr(self, "get_progress", None)
+
             if not endpoint:
-                log.warning(f'[{self.name}] "track_progress" has no configured endpoint. Defaulting to assume websocket method.')
+                log.warning(f'[{self.name}] "track_progress" has no configured endpoint. Defaulting to websocket polling.')
                 use_ws = True
 
         cancel_ep = getattr(self, "post_cancel", None)
+
         async def cancel_callback():
-            payload = cancel_ep.get_payload()
-            await cancel_ep.call(input_data=payload)
+            if cancel_ep:
+                payload = cancel_ep.get_payload()
+                await cancel_ep.call(input_data=payload)
+
             self.cancel_event.set()
-
-        # Resolve progress_values
-        return_values:dict = kwargs.pop("return_values", {})
-
-        progress_values = {}
-        progress_values['progress'] = return_values.get('progress') or progress_key or "progress"
-        max_value_key = return_values.get('max') or max_key or None
-        if max_value_key:
-            progress_values['max'] = max_value_key
-        eta_value_key = return_values.get('eta') or return_values.get('eta_relative') or eta_key or None
-        if eta_value_key:
-            progress_values['eta'] = eta_value_key
 
         STALL_THRESHOLD = 5.0
         last_progress = 0.0
@@ -1202,93 +1311,271 @@ class APIClient:
 
         updates = []
 
-        # Prevent multiple progress tasks on same endpoint from running in tandem
-        while self.fetching_progress == True:
+        # Prevent multiple progress tasks on same endpoint from running
+        # in tandem.
+        while self.fetching_progress:
             await asyncio.sleep(1.0)
+
         self.fetching_progress = True
 
+        embed_msg = None
+
         try:
-            title = f'Waiting for {self.name} ...'
-            description = f'{progress_bar(0)}'
-            eta_message = ''
-            embed_msg = await embeds.send('img_gen', title, description)
-            # Attach button if cancel endpoint exists
+            title = f"Waiting for {self.name} ..."
+            description = f"{progress_bar(0)}"
+
+            embed_msg = await embeds.send(
+                "img_gen",
+                title,
+                description,
+            )
+
+            # Attach cancel button.
             if cancel_ep and embed_msg and ictx:
                 ictx_user = get_user_ctx_inter(ictx)
-                view = self.CancelView(cancel_callback, user=ictx_user)
+
+                view = self.CancelView(
+                    cancel_callback,
+                    user=ictx_user,
+                )
+
                 await embed_msg.edit(view=view)
 
-            poller = self.poll_ws(return_values=progress_values,
-                                  interval=interval,
-                                  duration=duration,
-                                  num_yields=num_yields,
-                                  type_filter=type_filter,
-                                  data_filter=data_filter,
-                                  completion_condition=completion_condition) \
-                     if use_ws else \
-                     endpoint.poll(return_values=progress_values,
-                                   interval=interval,
-                                   duration=duration,
-                                   num_yields=num_yields,
-                                   completion_condition=completion_condition,
-                                   **kwargs)
+            # -------------------------------------------------------------
+            # GENERIC POLLER
+            # -------------------------------------------------------------
 
-            async for update in poller:
+            if use_ws:
+                poller = self.poll_ws(
+                    interval=interval,
+                    duration=duration,
+                    num_yields=num_yields,
+                    response_filter=response_filter,
+                )
+
+            else:
+                poller = endpoint.poll(
+                    interval=interval,
+                    duration=duration,
+                    num_yields=num_yields,
+                    **kwargs,
+                )
+
+            # -------------------------------------------------------------
+            # RESPONSE PROCESSING
+            # -------------------------------------------------------------
+
+            async for response in poller:
+
                 try:
                     if self.cancel_event.is_set():
-                        raise APIRequestCancelled(f"[{self.name}] Generation was cancelled by user.", cancel_event=self.cancel_event)
-                    # Collect updates
-                    updates.append(update)
+                        raise APIRequestCancelled(
+                            f"[{self.name}] Generation was cancelled by user.",
+                            cancel_event=self.cancel_event,
+                        )
 
-                    # Read progress safely
-                    raw_progress = update.get("progress", 0.0)
-                    raw_max = update.get("max", 1.0)  # default to 1.0
+                    # Preserve the raw response.
+                    updates.append(response)
+
+                    # -----------------------------------------------------
+                    # PROGRESS ANALYSIS
+                    # -----------------------------------------------------
+
+                    try:
+                        raw_progress = extract_key(
+                            response,
+                            progress_key,
+                        )
+                    except Exception:
+                        raw_progress = 0.0
+
+                    try:
+                        raw_max = (
+                            extract_key(response, max_key)
+                            if max_key
+                            else 1.0
+                        )
+                    except Exception:
+                        raw_max = 1.0
 
                     try:
                         progress = float(raw_progress)
                         max_value = float(raw_max)
-                        progress = progress / max_value
+
+                        if max_value == 0:
+                            progress = 0.0
+                        else:
+                            progress /= max_value
+
                     except (TypeError, ValueError, ZeroDivisionError):
                         progress = 0.0
 
-                    progress = max(0.0, min(progress, 1.0))  # Clamp between 0.0 and 1.0
+                    progress = max(
+                        0.0,
+                        min(progress, 1.0),
+                    )
 
-                    eta = update.get('eta')
+                    # ETA.
+                    eta = None
 
-                    # Completion check
-                    if completion_condition and completion_condition(update):
-                        break
-                    elif not completion_condition and progress >= 1.0:
-                        break
+                    if eta_key:
+                        try:
+                            eta = extract_key(
+                                response,
+                                eta_key,
+                            )
+                        except Exception:
+                            eta = None
 
-                    # Check for stalled condition
+                    # -----------------------------------------------------
+                    # COMPLETION ANALYSIS
+                    # -----------------------------------------------------
+
+                    completed = False
+
+                    if completion_condition:
+                        completed = self.polling_completion_matches(
+                            response,
+                            completion_condition,
+                        )
+                    elif progress >= 1.0:
+                        completed = True
+
+                    # -----------------------------------------------------
+                    # STALL ANALYSIS
+                    # -----------------------------------------------------
+
                     if progress == last_progress:
                         stall_time += interval
                     else:
                         stall_time = 0.0
 
-                    # Edit the Discord Embed
+                    # -----------------------------------------------------
+                    # DISCORD PROGRESS UPDATE
+                    # -----------------------------------------------------
+
                     if progress > 0.01:
-                        comment = " (Stalled)" if stall_time >= STALL_THRESHOLD else ""
-                        title = f"{message}: {progress * 100:.0f}%{comment}"
-                        if isinstance(eta, float) or isinstance(eta, int):
-                            eta_message = f'\n**ETA**: {round(eta, 2)} seconds'
-                        description = f"{progress_bar(progress)}{eta_message}"
-                        await embeds.edit("img_gen", title, description)
+                        comment = (
+                            " (Stalled)"
+                            if stall_time >= STALL_THRESHOLD
+                            else ""
+                        )
+
+                        title = (
+                            f"{message}: "
+                            f"{progress * 100:.0f}%{comment}"
+                        )
+
+                        eta_message = ""
+
+                        if isinstance(eta, (float, int)):
+                            eta_message = (
+                                f"\n**ETA**: "
+                                f"{round(eta, 2)} seconds"
+                            )
+
+                        description = (
+                            f"{progress_bar(progress)}"
+                            f"{eta_message}"
+                        )
+
+                        await embeds.edit(
+                            "img_gen",
+                            title,
+                            description,
+                        )
 
                     last_progress = progress
 
+                    if completed:
+                        if post_cancel_on_completion:
+                            await self.post_cancel_on_completion(response)
+
+                        log.info(f"[{self.name}] Progress polling completed.")
+                        break
+
+                except APIRequestCancelled:
+                    raise
+
                 except Exception as e:
-                    await embeds.edit_or_send('img_gen', f'[{self.name}] An error occurred while {message}', e)
+                    await embeds.edit_or_send(
+                        "img_gen",
+                        f"[{self.name}] An error occurred while {message}",
+                        e,
+                    )
                     break
 
         finally:
             self.fetching_progress = False
+
             if self.cancel_event.is_set():
-                await embed_msg.edit(view=View())
+                if embed_msg:
+                    await embed_msg.edit(view=View())
             else:
-                await embeds.delete('img_gen')
+                await embeds.delete("img_gen")
+
         return updates
+
+    def polling_completion_matches(
+        self,
+        response: dict,
+        completion_condition: Optional[Callable[[dict], bool]],
+    ) -> bool:
+        """
+        Determine whether a polling response satisfies the completion
+        condition.
+        """
+        if not completion_condition:
+            return False
+
+        try:
+            return bool(completion_condition(response))
+        except Exception as e:
+            log.warning(
+                f"[{self.name}] Polling completion condition failed: {e}"
+            )
+            return False
+
+    def extract_poll_outputs(
+        self,
+        response: dict,
+        output_config: Optional[dict] = None,
+    ) -> dict:
+        """
+        Extract configured values from a polling response.
+
+        :param response:
+            Raw accepted polling response.
+
+        :param output_config:
+            Dict of output name -> extract_key path.
+
+        :return:
+            Dict containing successfully extracted values.
+        """
+        if not output_config:
+            return response
+
+        result = {}
+
+        for key, path in output_config.items():
+            try:
+                result[key] = extract_key(response, path)
+
+            except (ValueError, KeyError, TypeError, IndexError) as e:
+                if not bot_database.was_warned(
+                    f'poll_api_fail_{key}'
+                ):
+                    log.warning(
+                        f"[{self.name}] Failed to extract polling output "
+                        f"'{key}' from path '{path}' "
+                        f"(only warning once for this): {e}"
+                    )
+                    bot_database.update_was_warned(
+                        f'poll_api_fail_{key}'
+                    )
+
+        return result
 
 # Dummy main objects to allow graceful evaluation
 def _unwrap_optional(type_hint):
@@ -1420,12 +1707,14 @@ class ImgGenClient(APIClient):
         return images
 
     async def call_track_progress(self, task, message):
-        await self.track_progress(endpoint=self.get_progress,
-                                  progress_key=self.get_progress.progress_key,
-                                  eta_key=self.get_progress.eta_key,
-                                  max_key=self.get_progress.max_key,
-                                  message=message,
-                                  task=task)
+        await self.track_progress(
+            endpoint=self.get_progress,
+            task=task,
+            message=message,
+            progress_key=self.get_progress.progress_key,
+            max_key=self.get_progress.max_key,
+            eta_key=self.get_progress.eta_key,
+        )
 
     async def _track_t2i_i2i_progress(self, task, message:str):
         try:
@@ -1521,12 +1810,13 @@ class ImgGenClient_SDWebUI(ImgGenClient):
         super().__init__(*args, **kwargs)
 
     async def call_track_progress(self, task, message):
-        await self.track_progress(endpoint=self.get_progress,
-                                  progress_key='progress',
-                                  eta_key='eta_relative',
-                                  max_key=None,
-                                  message=message,
-                                  task=task)
+        await self.track_progress(
+            endpoint=self.get_progress,
+            task=task,
+            message=message,
+            progress_key="progress",
+            eta_key="eta_relative",
+        )
 
 class ImgGenClient_Swarm(ImgGenClient):
     def __init__(self, *args, **kwargs):
@@ -1535,14 +1825,14 @@ class ImgGenClient_Swarm(ImgGenClient):
 
     async def call_track_progress(self, task, message) -> list[dict]:
         completion_condition = processing.build_completion_condition({'image': "*"})
-        return await self.track_progress(endpoint=None,
-                                         use_ws=True,
-                                         task=task,
-                                         message=message,
-                                         type_filter=None,
-                                         data_filter=None,
-                                         progress_key='gen_progress.overall_percent',
-                                         completion_condition=completion_condition)
+        await self.track_progress(
+            endpoint=None,
+            use_ws=True,
+            task=task,
+            message=message,
+            progress_key="gen_progress.overall_percent",
+            completion_condition=completion_condition,
+        )
 
     async def connect_websocket(self):
         if not self.session:
@@ -1681,47 +1971,6 @@ class ImgGenClient_Comfy(ImgGenClient):
             response:APIResponse = await self.request(endpoint=f'/view', params=item, method='GET', response_type='bytes')
             return response.body
     
-    async def _fetch_prompt_results(self, prompt_id:str, returns:list[str]|None = None, node_ids:list[int|str]|None = None) -> list[dict]:
-        if returns is None:
-            returns = ['images']
-        if node_ids is None:
-            node_ids = []
-
-        if self.get_history:
-            history = await self.get_history.call(path_vars=prompt_id)
-        else:
-            response: APIResponse = await self.request(endpoint=f'/history/{prompt_id}', method='GET')
-            history = response.body
-
-        outputs: dict = history.get(prompt_id, {}).get('outputs', {})
-        results = []
-
-        # ComfyUI node IDs can be simple integers ("123") or composite
-        # identifiers such as "162:1692". Compare them as strings.
-        node_ids_filter = {str(node_id) for node_id in node_ids}
-
-        for node_id_str, node_output in outputs.items():
-            # Filter nodes if any were provided.
-            if node_ids_filter and node_id_str not in node_ids_filter:
-                continue
-
-            # Collect outputs.
-            for output_type in returns:
-                if output_type not in node_output:
-                    continue
-
-                value = node_output[output_type]
-
-                if isinstance(value, list):
-                    results.extend(value)
-                else:
-                    results.append(value)
-
-        if not results:
-            log.warning(f"[{self.name}] No outputs were found for criteria (types: {returns}; node_ids: {node_ids if node_ids else 'ANY'})")
-
-        return results
-
     async def unpack_image_results(self, results: list[dict]) -> list[dict]:
         prompt_id = results[0]["prompt_id"]
         return await self._fetch_prompt_results(prompt_id)
@@ -1743,43 +1992,124 @@ class ImgGenClient_Comfy(ImgGenClient):
         payload.clear()
         payload['prompt'] = prompt_value
 
-    async def _post_prompt(self,
-                           img_payload:dict,
-                           task = None,
-                           ictx:CtxInteraction|None = None,
-                           message:str = "Generating image",
-                           endpoint:Union["Endpoint", None] = None,
-                           completed_node_id:int|None = None) -> str:
-        # Ensure meta keys removed
-        img_payload = remove_meta_keys(img_payload)
-        # Resolve malformatted payload
-        self._nest_payload_in_prompt(img_payload)
-        # Add Client ID to payload
-        img_payload['client_id'] = self.ws_config.client_id
-        # Resolve calling method
-        if endpoint:
-            queued = await endpoint.call(input_data=img_payload, task=task)
-        else:
-            response:APIResponse = await self.request(endpoint=f'/prompt', json=img_payload, method='POST')
-            queued = response.body
-        prompt_id = queued['prompt_id']
-        # Create a callable completion condition for progress tracking
-        completion_condition = self._build_completion_condition(prompt_id, completed_node_id)
-        # Track progress
-        await self.track_progress(endpoint=None,
-                                  use_ws=True,
-                                  task=task,
-                                  ictx=ictx,
-                                  message=message,
-                                  return_values={'progress': 'data.value', 'max': 'data.max'},
-                                  type_filter=["progress", "executed"],
-                                  data_filter={'prompt_id': prompt_id},
-                                  completion_condition=completion_condition)
-        # Return the prompt ID to fetch results
-        return prompt_id
+    async def post_cancel_on_completion(
+        self,
+        response: dict | None = None,
+    ) -> None:
+        """
+        Post a prompt-specific interrupt to ComfyUI when polling completes.
+        Does not set cancel_event.
+        """
+        cancel_ep = getattr(self, "post_cancel", None)
 
-    async def post_for_images(self, task, img_payload:dict, message:str, endpoint=None) -> list[str]:
-        prompt_id = await self._post_prompt(img_payload, task, message=message, endpoint=endpoint)
+        if not cancel_ep:
+            log.warning(f"[{self.name}] Completion requested cancel endpoint but no cancel endpoint is configured.")
+            return
+
+        prompt_id = None
+
+        if isinstance(response, dict):
+            data = response.get("data")
+
+            if isinstance(data, dict):
+                prompt_id = data.get("prompt_id")
+
+        try:
+            payload = cancel_ep.get_payload()
+
+            if prompt_id:
+                payload = dict(payload or {})
+                payload["prompt_id"] = prompt_id
+            else:
+                log.warning(f"[{self.name}] Unable to determine prompt_id from completion response; using configured cancel payload.")
+
+            await cancel_ep.call(input_data=payload)
+
+        except Exception as e:
+            log.error(f"[{self.name}] Failed to post ComfyUI cancel endpoint on polling completion: {e}")
+
+    async def _post_prompt(
+        self,
+        img_payload: dict,
+        task=None,
+        ictx: CtxInteraction | None = None,
+        message: str = "Generating image",
+        endpoint: Union["Endpoint", None] = None,
+        completed_node_id: int | str | None = None,
+        post_cancel_on_completion: bool = False,
+    ) -> tuple[str, list[dict]]:
+        # Ensure meta keys removed.
+        img_payload = remove_meta_keys(img_payload)
+
+        # Resolve malformed payload.
+        self._nest_payload_in_prompt(img_payload)
+
+        # Add Client ID to payload.
+        img_payload['client_id'] = self.ws_config.client_id
+
+        # Resolve calling method.
+        if endpoint:
+            queued = await endpoint.call(
+                input_data=img_payload,
+                task=task,
+            )
+        else:
+            response: APIResponse = await self.request(
+                endpoint='/prompt',
+                json=img_payload,
+                method='POST',
+            )
+            queued = response.body
+
+        prompt_id = queued['prompt_id']
+
+        # Create completion condition for progress tracking.
+        completion_condition = self._build_completion_condition(
+            prompt_id,
+            completed_node_id,
+        )
+
+        # Poll ComfyUI WebSocket.
+        #
+        # track_progress returns the raw accepted responses, including
+        # 'executed' messages containing workflow outputs.
+        responses = await self.track_progress(
+            endpoint=None,
+            use_ws=True,
+            task=task,
+            ictx=ictx,
+            message=message,
+
+            progress_key="data.value",
+            max_key="data.max",
+
+            response_filter={
+                "type": ["progress", "executed", "execution_success"],
+                "data": {
+                    "prompt_id": prompt_id,
+                },
+            },
+
+            completion_condition=completion_condition,
+            post_cancel_on_completion=post_cancel_on_completion,
+        )
+
+        return prompt_id, responses
+
+    async def post_for_images(
+        self,
+        task,
+        img_payload: dict,
+        message: str,
+        endpoint=None,
+    ) -> list[str]:
+        prompt_id, _responses = await self._post_prompt(
+            img_payload,
+            task=task,
+            message=message,
+            endpoint=endpoint,
+        )
+
         return [{"prompt_id": prompt_id}]
 
     @staticmethod
@@ -1858,15 +2188,17 @@ class ImgGenClient_Comfy(ImgGenClient):
                 "return_type='none'; ComfyUI results will be discarded."
             )
 
-    async def _fetch_prompt_outputs(
+    def _collect_prompt_outputs(
         self,
-        prompt_id: str,
+        responses: list[dict],
         output_types: list[str] | None = None,
         node_ids: list[int | str] | None = None,
     ) -> list[dict]:
         """
-        Collect outputs from ComfyUI history while preserving their
-        originating node ID and output key.
+        Collect outputs from ComfyUI WebSocket 'executed' messages.
+
+        Outputs are collected directly from responses emitted by the polling
+        system rather than querying the ComfyUI history endpoint.
 
         Returns normalized records in the form:
 
@@ -1876,43 +2208,52 @@ class ImgGenClient_Comfy(ImgGenClient):
                 'value': {...},
             }
 
-        Output values are normalized to individual records regardless
-        of whether ComfyUI returned a list or a single value.
+        Output values are normalized to individual records regardless of
+        whether ComfyUI returned a list or a single value.
         """
 
-        if self.get_history:
-            history = await self.get_history.call(path_vars=prompt_id)
-        else:
-            response: APIResponse = await self.request(
-                endpoint=f'/history/{prompt_id}',
-                method='GET'
-            )
-            history = response.body
-
-        prompt_history = history.get(prompt_id, {})
-        outputs = prompt_history.get('outputs', {})
-
-        output_types = output_types or []
-        node_ids = node_ids or []
-
-        output_types_filter = set(output_types)
-        node_ids_filter = {str(node_id) for node_id in node_ids}
+        output_types_filter = set(output_types or [])
+        node_ids_filter = {str(node_id) for node_id in (node_ids or [])}
 
         results = []
 
-        for node_id_str, node_output in outputs.items():
+        for response in responses:
+            # Only executed messages contain node outputs.
+            if response.get('type') != 'executed':
+                continue
+
+            data = response.get('data', {})
+
+            if not isinstance(data, dict):
+                continue
+
+            node_id = data.get('node')
+
+            # The node ID is required for output collection.
+            if node_id is None:
+                continue
+
+            node_id_str = str(node_id)
+
+            # Filter nodes if requested.
             if node_ids_filter and node_id_str not in node_ids_filter:
                 continue
+
+            node_output = data.get('output', {})
 
             if not isinstance(node_output, dict):
                 continue
 
             for output_type, value in node_output.items():
-                if output_types_filter and output_type not in output_types_filter:
+
+                # Filter output types if requested.
+                if (
+                    output_types_filter
+                    and output_type not in output_types_filter
+                ):
                     continue
 
-                # Most ComfyUI file outputs are lists, while value-based outputs such as text may be a scalar.
-                # Normalize both forms to individual result records.
+                # Normalize scalar and list values to individual records.
                 if isinstance(value, list):
                     values = value
                 else:
@@ -1927,8 +2268,8 @@ class ImgGenClient_Comfy(ImgGenClient):
 
         if not results:
             log.warning(
-                f"[{self.name}] No outputs were found for criteria "
-                f"(types: {output_types or 'ANY'}; "
+                f"[{self.name}] No outputs were found in polling responses "
+                f"for criteria (types: {output_types or 'ANY'}; "
                 f"node_ids: {node_ids if node_ids else 'ANY'})"
             )
 
@@ -1944,6 +2285,7 @@ class ImgGenClient_Comfy(ImgGenClient):
         outputs: list[str] | None = None,
         output_node_ids: list[int | str] | None = None,
         completed_node_id: int | str | None = None,
+        post_cancel_on_completion: bool | None = None,
         file_path: str = '',
         return_type: str = 'file_path',
         unload_models: str | None = None,
@@ -1957,7 +2299,8 @@ class ImgGenClient_Comfy(ImgGenClient):
 
         message = message or f'Generating with {self.name} ...'
 
-        # Validate before doing anything that changes memory state or submits the ComfyUI prompt.
+        # Validate before doing anything that changes memory state or
+        # submits the ComfyUI prompt.
         self._validate_call_comfy_config(
             outputs=outputs,
             output_node_ids=output_node_ids,
@@ -1967,74 +2310,120 @@ class ImgGenClient_Comfy(ImgGenClient):
             free_memory=free_memory,
         )
 
+        # Default to True if completed_node_id provided
+        if post_cancel_on_completion is None:
+            post_cancel_on_completion = completed_node_id is not None
+
         await self._free_memory(
             free_memory in ['before', 'both'],
-            unload_models in ['before', 'both']
+            unload_models in ['before', 'both'],
         )
 
         try:
-            # Queue prompt > track progress
-            prompt_id = await self._post_prompt(
+            # -------------------------------------------------------------
+            # Queue prompt + track progress + collect polling responses
+            # -------------------------------------------------------------
+
+            prompt_id, responses = await self._post_prompt(
                 payload,
                 task=task,
                 ictx=ictx,
                 message=message,
                 endpoint=endpoint,
-                completed_node_id=completed_node_id
+                completed_node_id=completed_node_id,
+                post_cancel_on_completion=post_cancel_on_completion,
             )
 
-            # Explicitly discard results if configured. We still execute and track the prompt normally.
+            # -------------------------------------------------------------
+            # Explicitly discard results if configured.
+            #
+            # The prompt has already executed / been polled normally.
+            # We simply don't process the collected outputs.
+            # -------------------------------------------------------------
+
             if return_type == 'none':
                 return []
 
-            # Collect outputs while preserving node ID and output type.
-            results = await self._fetch_prompt_outputs(
-                prompt_id,
+            # -------------------------------------------------------------
+            # Collect outputs directly from executed WebSocket messages.
+            # No history endpoint is queried.
+            # -------------------------------------------------------------
+
+            results = self._collect_prompt_outputs(
+                responses,
                 output_types=outputs,
                 node_ids=output_node_ids,
             )
 
             if not results:
                 raise RuntimeError(
-                    f"[StepExecutor] ComfyUI prompt {prompt_id} completed successfully, but no outputs matched the requested "
-                    f"criteria (types: {outputs}; node_ids: {output_node_ids if output_node_ids else 'ANY'})."
+                    f"[StepExecutor] ComfyUI prompt {prompt_id} completed "
+                    f"successfully, but no outputs matched the requested "
+                    f"criteria (types: {outputs}; "
+                    f"node_ids: "
+                    f"{output_node_ids if output_node_ids else 'ANY'})."
                 )
 
+            # -------------------------------------------------------------
             # Value-based return
-            if return_type == 'value':
-                return [item['value'] for item in results]
+            # -------------------------------------------------------------
 
+            if return_type == 'value':
+                return [
+                    item['value']
+                    for item in results
+                ]
+
+            # -------------------------------------------------------------
             # Raw return
+            # -------------------------------------------------------------
+
             if return_type == 'raw':
                 return results
 
+            # -------------------------------------------------------------
             # File-based returns
+            # -------------------------------------------------------------
+
             save_file_results = []
 
             for item in results:
                 output_type = item['output_type']
                 value = item['value']
 
-                # Value-based outputs cannot be passed through the file processing pipeline.
+                # Value-based outputs cannot be passed through the file
+                # processing pipeline.
                 if output_type == 'text':
-                    log.error(f"[StepExecutor] ComfyUI output type 'text' was requested with return_type='{return_type}'. "
-                        f"Use return_type='value' or 'raw' for value-based outputs.")
+                    log.error(
+                        f"[StepExecutor] ComfyUI output type 'text' was "
+                        f"requested with return_type='{return_type}'. "
+                        f"Use return_type='value' or 'raw' for "
+                        f"value-based outputs."
+                    )
                     continue
 
                 try:
                     file_data = await self.resolve_image_data(value)
+
                 except Exception as e:
-                    log.error(f"[StepExecutor] Failed to resolve ComfyUI output (node: {item['node_id']}, type: {output_type}): {e}")
+                    log.error(
+                        f"[StepExecutor] Failed to resolve ComfyUI output "
+                        f"(node: {item['node_id']}, "
+                        f"type: {output_type}): {e}"
+                    )
                     continue
 
                 save_dict = await processing.save_any_file(
                     file_data,
                     file_path=file_path,
-                    msg_prefix='[StepExecutor] '
+                    msg_prefix='[StepExecutor] ',
                 )
 
                 if return_type == 'file_path':
-                    save_file_results.append(save_dict['file_path'])
+                    save_file_results.append(
+                        save_dict['file_path']
+                    )
+
                 elif return_type == 'file':
                     save_file_results.append(save_dict)
 
@@ -2043,7 +2432,7 @@ class ImgGenClient_Comfy(ImgGenClient):
         finally:
             await self._free_memory(
                 free_memory in ['after', 'both'],
-                unload_models in ['after', 'both']
+                unload_models in ['after', 'both'],
             )
 
 class TextGenClient(APIClient):
@@ -2533,76 +2922,99 @@ class Endpoint:
 
         return results_list
 
-
-    async def poll(self,
-                   return_values: dict,
-                   interval: float = 1.0,
-                   duration: int = -1,
-                   num_yields: int = -1,
-                   completion_condition: Optional[Callable[[dict], bool]] = None,
-                   **kwargs) -> AsyncGenerator[dict, None]:
+    async def poll(
+        self,
+        interval: float = 1.0,
+        duration: int = -1,
+        num_yields: int = -1,
+        response_filter: Optional[Callable[[dict], bool]] = None,
+        **kwargs,
+    ) -> AsyncGenerator[dict, None]:
         """
-        Poll an API repeatedly, extracting specified values from each response.
+        Poll an API endpoint repeatedly and yield accepted raw responses.
 
-        :param return_values: A dict where keys are output keys and values are paths (str or dict) for extract_key().
-        :param interval: Time in seconds between polls.
-        :param duration: Max duration to poll (in seconds). -1 means no limit.
-        :param num_yields: Max number of yields to return. -1 means no limit.
-        :yield: Dict with extracted values based on return_values.
+        Response extraction, output collection, progress analysis, and
+        completion handling are performed by higher-level consumers.
+
+        :param interval:
+            Time in seconds between API calls.
+
+        :param duration:
+            Maximum polling duration in seconds.
+            -1 means no limit.
+
+        :param num_yields:
+            Maximum number of accepted responses to yield.
+            -1 means no limit.
+
+        :param response_filter:
+            Optional callable receiving the raw response and returning
+            True when the response should be passed to subsequent
+            processing.
         """
         yield_count = 0
         start_time = time.monotonic()
 
         while True:
             if self.client.cancel_event.is_set():
-                raise APIRequestCancelled(f"[{self.client.name}] Generation was cancelled by user.", cancel_event=self.client.cancel_event)
-            # Check stop conditions
+                raise APIRequestCancelled(
+                    f"[{self.client.name}] Generation was cancelled by user.",
+                    cancel_event=self.client.cancel_event,
+                )
+
             if duration > 0:
                 elapsed = time.monotonic() - start_time
+
                 if elapsed >= duration:
-                    log.info(f"[{self.name}] Polling stopped after duration limit ({duration}s).")
+                    log.info(
+                        f"[{self.name}] Polling stopped after duration "
+                        f"limit ({duration}s)."
+                    )
                     break
 
             try:
                 response_data = await self.call(**kwargs)
+
             except Exception as e:
-                log.warning(f"[{self.name}] Progress fetcher failed: {e}")
+                log.warning(
+                    f"[{self.name}] Polling request failed: {e}"
+                )
                 raise
 
-            if not response_data:
-                try:
-                    await asyncio.wait_for(self.client.cancel_event.wait(), timeout=interval)
-                    # Generation was cancelled
-                    raise APIRequestCancelled(f"[{self.client.name}] Generation was cancelled by user.", cancel_event=self.client.cancel_event)
-                except asyncio.TimeoutError:
-                    continue # normal timeout happened
+            if response_data:
+                # ---------------------------------------------------------
+                # FIRST-PASS RESPONSE FILTER
+                # ---------------------------------------------------------
 
-            # Check for completion condition
-            if completion_condition and completion_condition(response_data):
-                log.info(f"[{self.name}] Completion condition matched.")
-                yield response_data
-                break
-            
-            # Process response
-            if not return_values:
-                result = response_data
-            else:
-                result = {}
-                for key, config in return_values.items():
-                    try: 
-                        result[key] = extract_key(response_data, config)
-                    except ValueError as e:
-                        if not bot_database.was_warned(f'poll_api_fail_{key}'):
-                            log.warning(f"[{self.name}] Failed to extract key '{key}' (only warning once for this)")
-                            bot_database.update_was_warned(f'poll_api_fail_{key}')
+                if (
+                    response_filter is None
+                    or response_filter(response_data)
+                ):
+                    yield response_data
 
-            yield result
+                    yield_count += 1
 
-            yield_count += 1
-            if num_yields > 0 and yield_count >= num_yields:
-                log.info(f"[{self.name}] Polling stopped after num_yields limit ({num_yields}).")
-                break
-            await asyncio.sleep(interval)
+                    if num_yields > 0 and yield_count >= num_yields:
+                        log.info(
+                            f"[{self.name}] Polling stopped after "
+                            f"num_yields limit ({num_yields})."
+                        )
+                        break
+
+            # Wait between requests while remaining responsive to cancel.
+            try:
+                await asyncio.wait_for(
+                    self.client.cancel_event.wait(),
+                    timeout=interval,
+                )
+
+                raise APIRequestCancelled(
+                    f"[{self.client.name}] Generation was cancelled by user.",
+                    cancel_event=self.client.cancel_event,
+                )
+
+            except asyncio.TimeoutError:
+                pass
 
     async def process_ws_request(self, json_payload, data_payload, **kwargs):
         # Compose WebSocket message
