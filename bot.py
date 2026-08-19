@@ -1639,6 +1639,8 @@ class TaskProcessing(TaskAttributes):
             setattr(self.params, "include_continued_text", True)
 
     def apply_prompt_params(self:Union["Task","Tasks"]):
+        if not self.payload.get('state'):
+            return
         mode = getattr(self.params, 'mode', None)
         if mode:
             self.payload['state']['mode'] = mode
