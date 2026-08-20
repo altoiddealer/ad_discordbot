@@ -15,7 +15,7 @@ from modules.typing import CtxInteraction, FILE_INPUT, APIRequestCancelled
 from typing import get_type_hints, get_type_hints, get_origin, get_args, Any, Tuple, Optional, Union, Callable, AsyncGenerator
 from modules.utils_shared import client, shared_path, bot_database, load_file
 from modules.presets_workflows import bot_presets
-from modules.utils_misc import progress_bar, extract_key, deep_merge, split_at_first_comma, detect_audio_format, remove_meta_keys, get_pnginfo_from_image
+from modules.utils_misc import discord_progress_bar, TerminalProgress, extract_key, deep_merge, split_at_first_comma, detect_audio_format, remove_meta_keys, get_pnginfo_from_image
 import modules.utils_processing as processing
 from discord.ui import View, Button
 import discord
@@ -1378,8 +1378,10 @@ class APIClient:
         embed_msg = None
 
         try:
-            title = f"Waiting for {self.name} ..."
-            description = f"{progress_bar(0)}"
+            terminal_progress = TerminalProgress()
+
+            title = f"[{self.name}] Waiting for response ..."
+            description = f"{discord_progress_bar(0)}"
 
             embed_msg = await embeds.send(
                 "img_gen",
@@ -1519,7 +1521,7 @@ class APIClient:
                         )
 
                         title = (
-                            f"{message}: "
+                            f"[{self.name}] {message}: "
                             f"{progress * 100:.0f}%{comment}"
                         )
 
@@ -1532,7 +1534,7 @@ class APIClient:
                             )
 
                         description = (
-                            f"{progress_bar(progress)}"
+                            f"{discord_progress_bar(progress)}"
                             f"{eta_message}"
                         )
 
@@ -1540,6 +1542,13 @@ class APIClient:
                             "img_gen",
                             title,
                             description,
+                        )
+
+                        terminal_progress.update(
+                            progress=progress,
+                            message=message,
+                            eta=eta,
+                            comment=comment,
                         )
 
                     last_progress = progress
@@ -1563,6 +1572,7 @@ class APIClient:
                     break
 
         finally:
+            terminal_progress.finish()
             self.fetching_progress = False
 
             if self.cancel_event.is_set():

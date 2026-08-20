@@ -208,7 +208,7 @@ slash_commands_examples:
       - call_comfy:
           client: ComfyUI
           input_data: minimax_payload
-          message: Generating your video using MiniMax H3
+          message: Generating video using MiniMax H3
           output_node_ids: [92]
           outputs: [images]
           file_path: comfy/minimax_h3 # saves result to 'output/comfy/minimax_h3/'
