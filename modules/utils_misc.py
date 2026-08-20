@@ -18,14 +18,54 @@ def removeprefix(s: str, prefix: str) -> str:
         return s[len(prefix):]
     return s
 
-def progress_bar(value, length=15):
+def discord_progress_bar(value, length=15):
     try:
         filled_length = int(length * value)
         bar = ':black_square_button:' * filled_length + ':black_large_square:' * (length - filled_length)
         return f'{bar}'
     except Exception:
         return 0
-    
+
+class TerminalProgress:
+    def __init__(self, length=15):
+        self.length = length
+        self.active = False
+
+    def update(
+        self,
+        progress: float,
+        message: str = "",
+        eta: float | None = None,
+        comment: str = "",
+    ):
+        try:
+            progress = max(0.0, min(1.0, float(progress)))
+        except (TypeError, ValueError):
+            return
+
+        filled = int(self.length * progress)
+        bar = "#" * filled + "-" * (self.length - filled)
+
+        eta_text = (
+            f" ETA: {eta:.2f}s"
+            if isinstance(eta, (int, float))
+            else ""
+        )
+
+        text = (
+            f"{message}: {progress * 100:6.1f}% "
+            f"[{bar}]{comment}{eta_text}"
+        )
+
+        # \r returns to the beginning of the current line.
+        print(f"\r{text}", end="", flush=True)
+        self.active = True
+
+    def finish(self):
+        if self.active:
+            print()
+            self.active = False
+
 def consolidate_prompt_strings(prompt:str) -> str:
     ''' Removes duplicate prompt strings while preserving original order '''
     if not prompt:

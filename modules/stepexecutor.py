@@ -465,48 +465,147 @@ class StepExecutor:
 
         return response.body if isinstance(response, APIResponse) else response
 
-    async def _step_track_progress(self, data: Any, config: dict) -> list[dict]:
-        """ Polls an endpoint while sending a progress Embed to discord. """
-        client, endpoint, use_ws = await self.get_api_client_and_endpoint(config, 'track_progress', allow_ws_only=True)
+    async def _step_track_progress(
+        self,
+        data: Any,
+        config: dict,
+    ) -> list[dict]:
+        """Polls an endpoint while displaying progress in Discord."""
 
-        completion_config = config.pop("completion_condition", None)
+        client, endpoint, use_ws = await self.get_api_client_and_endpoint(
+            config,
+            "track_progress",
+            allow_ws_only=True,
+        )
+
+        completion_config = config.pop(
+            "completion_condition",
+            None,
+        )
+
         completion_condition = None
-        if completion_config:
-            completion_condition = processing.build_completion_condition(completion_config, self.context)
 
-        config["input_data"] = self.resolve_api_input(data, config, step_name='track_progress', default=None, endpoint=endpoint)
+        if completion_config:
+            completion_condition = (
+                processing.build_completion_condition(
+                    completion_config,
+                    self.context,
+                )
+            )
+
+        config["input_data"] = self.resolve_api_input(
+            data,
+            config,
+            step_name="track_progress",
+            default=None,
+            endpoint=endpoint,
+        )
 
         return await client.track_progress(
             endpoint=endpoint,
             use_ws=use_ws,
             ictx=self.ictx,
             completion_condition=completion_condition,
-            **config
+            **config,
         )
 
-    async def _step_poll_api(self, data: Any, config: dict) -> list[dict]:
-        """ Polls an endpoint. """
-        client, endpoint, _ = await self.get_api_client_and_endpoint(config, 'poll_api')
+    async def _step_poll_api(
+        self,
+        data: Any,
+        config: dict,
+    ) -> list[dict]:
+        """Polls an endpoint and collects configured outputs."""
 
-        return_values = config.pop("return_values", {})
+        client, endpoint, use_ws = await self.get_api_client_and_endpoint(
+            config,
+            "poll_api",
+            allow_ws_only=True,
+        )
+
+        # -------------------------------------------------------------
+        # Extract polling configuration
+        # -------------------------------------------------------------
+
+        output_config = config.pop(
+            "outputs",
+            config.pop("return_values", {}),
+        )
+
+        response_filter = config.pop(
+            "response_filter",
+            None,
+        )
+
+        completion_config = config.pop(
+            "completion_condition",
+            None,
+        )
+
+        post_cancel_on_completion = config.pop(
+            "post_cancel_on_completion",
+            False,
+        )
+
+        completion_condition = None
+
+        if completion_config:
+            completion_condition = (
+                processing.build_completion_condition(
+                    completion_config,
+                    self.context,
+                )
+            )
+
         interval = config.pop("interval", 1.0)
         duration = config.pop("duration", -1)
         num_yields = config.pop("num_yields", -1)
 
-        config["input_data"] = self.resolve_api_input(data, config, step_name='poll_api', default=data, endpoint=endpoint)
+        config["input_data"] = self.resolve_api_input(
+            data,
+            config,
+            step_name="poll_api",
+            default=data,
+            endpoint=endpoint,
+        )
 
-        results = []
+        # -------------------------------------------------------------
+        # Create generic poller
+        # -------------------------------------------------------------
+
+        if use_ws:
+            poller = client.poll_ws(
+                interval=interval,
+                duration=duration,
+                num_yields=num_yields,
+                response_filter=response_filter,
+            )
+        else:
+            poller = endpoint.poll(
+                interval=interval,
+                duration=duration,
+                num_yields=num_yields,
+                response_filter=response_filter,
+                **config,
+            )
+
+        # -------------------------------------------------------------
+        # Collect outputs
+        # -------------------------------------------------------------
+
         try:
-            async for result in endpoint.poll(return_values=return_values,
-                                              interval=interval,
-                                              duration=duration,
-                                              num_yields=num_yields,
-                                              **config):
-                results.append(result)
-        except Exception as e:
-            log.error(f"[StepExecutor] Error in 'poll_api' step: {e}")
+            return await client.collect_poll_outputs(
+                poller,
+                output_config=output_config,
+                completion_condition=completion_condition,
+                post_cancel_on_completion=post_cancel_on_completion,
+            )
 
-        return results
+        except Exception as e:
+            log.error(
+                f"[StepExecutor] Error in 'poll_api' step: {e}"
+            )
+
+            return []
 
     async def _step_upload_files(self, data: Any, config: Union[str, dict]) -> Any:
         """
@@ -929,6 +1028,10 @@ class StepExecutor:
             raise RuntimeError(f'[StepExecutor] API Client is not ComfyUI. Cannot run step "call_comfy".')
 
         payload = self.resolve_api_input(data, config, step_name='call_comfy', default=data, endpoint=endpoint)
+
+        # backwards compatibility
+        if config.get('returns'):
+            config['return_type'] = config.pop('returns')
 
         log.info(f'[StepExecutor] Calling ComfyUI (API: {client.name})')
         return await client._execute_prompt(payload, endpoint, self.ictx, self.task, **config)
