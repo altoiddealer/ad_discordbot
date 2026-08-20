@@ -1029,6 +1029,10 @@ class StepExecutor:
 
         payload = self.resolve_api_input(data, config, step_name='call_comfy', default=data, endpoint=endpoint)
 
+        # backwards compatibility
+        if config.get('returns'):
+            config['return_type'] = config.pop('returns')
+
         log.info(f'[StepExecutor] Calling ComfyUI (API: {client.name})')
         return await client._execute_prompt(payload, endpoint, self.ictx, self.task, **config)
 

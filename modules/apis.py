@@ -1021,6 +1021,63 @@ class APIClient:
                 f"polling completion: {e}"
             )
 
+    async def collect_poll_outputs(
+        self,
+        poller,
+        output_config: Optional[dict] = None,
+        completion_condition: Callable[[dict], bool] | None = None,
+        post_cancel_on_completion: bool = False,
+    ) -> list[dict]:
+        """
+        Consume polling responses, optionally extracting configured
+        outputs and stopping when the completion condition matches.
+
+        :param poller:
+            Async iterator yielding raw polling responses.
+
+        :param output_config:
+            Dict of output name -> extract_key path.
+
+        :param completion_condition:
+            Callable evaluated against the raw response.
+
+        :return:
+            List of collected output dictionaries.
+        """
+        outputs = []
+
+        async for response in poller:
+
+            # Completion is analyzed against the raw response.
+            completed = False
+
+            if completion_condition:
+                completed = self.polling_completion_matches(
+                    response,
+                    completion_condition,
+                )
+
+            if output_config:
+                result = self.extract_poll_outputs(
+                    response,
+                    output_config,
+                )
+
+                if result:
+                    outputs.append(result)
+
+            else:
+                outputs.append(response)
+
+            if completed:
+                if post_cancel_on_completion:
+                    await self.post_cancel_on_completion(response)
+
+                log.info(f"[{self.name}] Polling output collection completed.")
+                break
+
+        return outputs
+
     async def poll_ws(
         self,
         interval: float = 1.0,
@@ -2299,8 +2356,7 @@ class ImgGenClient_Comfy(ImgGenClient):
 
         message = message or f'Generating with {self.name} ...'
 
-        # Validate before doing anything that changes memory state or
-        # submits the ComfyUI prompt.
+        # Validate before doing anything that changes memory state or submits the ComfyUI prompt.
         self._validate_call_comfy_config(
             outputs=outputs,
             output_node_ids=output_node_ids,
