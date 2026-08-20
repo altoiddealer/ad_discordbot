@@ -20,7 +20,7 @@ context_commands_examples:
     steps:
       - send_content: You used a context command!
 
-# These have no effect unless moved up into 'slash_commands'
+# These examples have no effect unless moved up into 'slash_commands'
 slash_commands_examples:
   # Command to remove background from an image
   - command_name: remove_bg
@@ -49,7 +49,7 @@ slash_commands_examples:
           message: Removing background from image
           file_path: comfy
 
-  # Command to use Klein 9B to edit an image with optional reference image
+  ### Image Edit using Flux2 Klein 9B
   - command_name: klein_edit
     description: Edit an image using Flux 2 Klein 9B
     options:
@@ -99,6 +99,123 @@ slash_commands_examples:
       - offload: true # Remove task early / immediately releases a position in the task processing queue
       - send_content: "**Prompt**: {prompt}"
       - return: result
+
+  ### Video Generation with MiniMax T2V / I2V
+  - command_name: minimax_t2v_i2v
+    description: Generate a video using MiniMax H3, with LLM prompt enhancement
+    options:
+      - name: prompt
+        description: Describe what happens in the video. You can refer to content in any provided images.
+        type: string
+        required: true
+      - name: aspect_ratio
+        description: Set the output aspect ratio 
+        type: string
+        required: false
+        default: Default (Source or 16:9)
+        choices:
+          - Default (Source or 16:9)
+          - 16:9 (Widescreen)
+          - 9:16 (Portrait Widescreen)
+          - 3:2 (Photo)
+          - 2:3 (Portrait Photo)
+          - 4:3 (Standard)
+          - 3:4 (Portrait Standard)
+          - 1:1 (Square)
+        steps:
+          # Update defaults used in payload for T2V / I2V
+          - if:
+              value1: aspect_ratio
+              operator: "!="
+              value2: Default (Source or 16:9)
+              steps:
+                - set_context:
+                    aspect_ratio_t2v: aspect_ratio
+                    aspect_ratio_i2v: aspect_ratio
+
+      - name: duration
+        description: Length of the video to generate 
+        type: string
+        required: false
+        choices: [3, 4, 5, 6, 7, 8, 9, 10]
+      - name: first_frame
+        description: (Optional) First frame to generate the video from.
+        type: attachment
+        required: false
+        steps:
+          - save:
+              file_path: comfy-input # symlink from comfyUI input directory, to your output directory.
+            returns: file_name # Extract filename from save result dict
+      - name: last_frame
+        description: (Optional) Last frame of the generated video. Can be combined with first frame.
+        type: attachment
+        required: false
+        steps:
+          - save:
+              file_path: comfy-input
+            returns: file_name
+    # /minimax_t2v_i2v postprocessing steps
+    steps:
+      # Determine mode based on user inputs
+      - if_group:
+        - if:
+            value1: first_frame
+            operator: exists
+            steps:
+              - if_group:
+                - if:
+                    value1: last_frame
+                    operator: exists
+                    steps:
+                      - set_context:
+                          mode_str: FL2VA
+                          mode_idx: 2
+                - else:
+                    steps:
+                      - set_context:
+                          mode_str: I2VA
+                          mode_idx: 1
+        - elif:
+            value1: last_frame
+            operator: exists
+            steps:
+              - set_context:
+                  mode_str: L2VA
+                  mode_idx: 3
+      # unload LLM
+      - load_llmmodel: 'None'
+      # Load payload
+      - load_data_file: comfy_workflows/video_minimax_h3_i2v_alt_v1.json
+        save_as: minimax_payload
+      # Context values will resolve into placeholders in this step.
+      # Return LLM's prompt after node 176 executes. We do this for the custom progress message.
+      - call_comfy:
+          client: ComfyUI
+          input_data: minimax_payload
+          message: Enhancing prompt using Gemma-4
+          output_node_ids: [176]
+          completed_node_id: 176
+          outputs: [text]
+          return_type: value
+        save_as: enhanced_prompt
+      - set_context:
+          enhanced_prompt: "{enhanced_prompt[0]}" # get index 0 (first item) from the list of results
+      # Load same payload again (placeholders restored)
+      - load_data_file: comfy_workflows/video_minimax_h3_i2v_alt_v1.json
+        save_as: minimax_payload
+      # The workflow has an If/Else statement that will skip LLM if "override prompt" is not empty.
+      # Since we set it to the LLM's previous reply, goes right to video generation.
+      - call_comfy:
+          client: ComfyUI
+          input_data: minimax_payload
+          message: Generating your video using MiniMax H3
+          output_node_ids: [92]
+          outputs: [images]
+          file_path: comfy/minimax_h3 # saves result to 'output/comfy/minimax_h3/'
+        save_as: video_fp
+      - send_content: "__Prompt:__\n> {prompt}\n__LLM Enhanced Prompt:__\n>>> {enhanced_prompt}"
+      - return: video_fp
+
 
   - command_name: echo_file
     description: Send an attachment

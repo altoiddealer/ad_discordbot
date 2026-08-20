@@ -1,0 +1,1468 @@
+{
+  "__overrides__": {
+    "prompt": "beautiful scenery nature glass bottle landscape, purple galaxy bottle,",
+    "enhanced_prompt": "",
+    "mode_str": "T2VA",
+    "mode_idx": 0,
+    "first_frame": "example.png",
+    "last_frame": "example.png",
+    "diffusion_model": "minimax_h3_fl2va_pruned_int8_convrot.safetensors",
+    "clip": "qwen3vl_32b_minimax_h3_int4_convrot.safetensors",
+    "clip_llm": "gemma4_e4b_it_int8_convrot.safetensors",
+    "aspect_ratio_t2v": "16:9 (Widescreen)",
+    "aspect_ratio_i2v": "Source (Keep Aspect Ratio)",
+    "duration": "5.0",
+    "sampler_name": "res_multistep",
+    "scheduler": "simple",
+    "seed": 12345678,
+    "steps": 20
+  },
+  "92": {
+    "inputs": {
+      "filename_prefix": [
+        "1724:1720",
+        0
+      ],
+      "format": "auto",
+      "codec": "auto",
+      "video": [
+        "1853:1850",
+        0
+      ]
+    },
+    "class_type": "SaveVideo",
+    "_meta": {
+      "title": "Save Video"
+    }
+  },
+  "121": {
+    "inputs": {
+      "vae_name": "minimax_h3_video_vae_fp16.safetensors"
+    },
+    "class_type": "VAELoader",
+    "_meta": {
+      "title": "Load VAE"
+    }
+  },
+  "122": {
+    "inputs": {
+      "vae_name": "minimax_h3_audio_vae_fp32.safetensors"
+    },
+    "class_type": "VAELoader",
+    "_meta": {
+      "title": "Load VAE"
+    }
+  },
+  "129": {
+    "inputs": {
+      "unet_name": "{diffusion_model}",
+      "weight_dtype": "default"
+    },
+    "class_type": "UNETLoader",
+    "_meta": {
+      "title": "Load Diffusion Model"
+    }
+  },
+  "130": {
+    "inputs": {
+      "clip_name": "{clip}",
+      "type": "minimax",
+      "device": "default"
+    },
+    "class_type": "CLIPLoader",
+    "_meta": {
+      "title": "Load CLIP (MiniMax H3)"
+    }
+  },
+  "142": {
+    "inputs": {
+      "image": "{first_frame}"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "Load Image First Frame"
+    }
+  },
+  "147": {
+    "inputs": {
+      "resize_type": "scale total pixels",
+      "resize_type.aspect_ratio": "{aspect_ratio_i2v}",
+      "resize_type.megapixels": [
+        "1731:1727",
+        0
+      ],
+      "resize_type.megapixel_priority": 0.5,
+      "resize_type.multiple_of": [
+        "1731:1730",
+        0
+      ],
+      "resize_type.crop": "center",
+      "scale_method": "lanczos",
+      "condition": "always",
+      "image": [
+        "142",
+        0
+      ]
+    },
+    "class_type": "ResizeImageMaskAlt",
+    "_meta": {
+      "title": "Resize Image/Mask Alt \u25ef"
+    }
+  },
+  "149": {
+    "inputs": {
+      "image": "{last_frame}"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "Load Image Last Frame"
+    }
+  },
+  "176": {
+    "inputs": {
+      "source": [
+        "162:143",
+        0
+      ]
+    },
+    "class_type": "PreviewAny",
+    "_meta": {
+      "title": "Preview Generated Text"
+    }
+  },
+  "1723": {
+    "inputs": {
+      "format": "%Y-%m-%d_%H-%M-%S_"
+    },
+    "class_type": "JWDatetimeString",
+    "_meta": {
+      "title": "Datetime String"
+    }
+  },
+  "1780": {
+    "inputs": {
+      "choice": "{mode_str}",
+      "index": "{mode_idx}",
+      "option1": "T2VA",
+      "option2": "I2VA",
+      "option3": "FL2VA",
+      "option4": "L2VA",
+      "option5": ""
+    },
+    "class_type": "CustomCombo",
+    "_meta": {
+      "title": "SELECT MODE"
+    }
+  },
+  "1834": {
+    "inputs": {
+      "width": 32,
+      "height": 32,
+      "batch_size": 1,
+      "color": 0
+    },
+    "class_type": "EmptyImage",
+    "_meta": {
+      "title": "Empty Image"
+    }
+  },
+  "1854": {
+    "inputs": {
+      "seed": "{seed}"
+    },
+    "class_type": "Seed (rgthree)",
+    "_meta": {
+      "title": "Seed (rgthree)"
+    }
+  },
+  "1856": {
+    "inputs": {
+      "positive": "{enhanced_prompt}"
+    },
+    "class_type": "easy positive",
+    "_meta": {
+      "title": "Prompt Override"
+    }
+  },
+  "1859": {
+    "inputs": {
+      "any": [
+        "1856",
+        0
+      ]
+    },
+    "class_type": "easy isNone",
+    "_meta": {
+      "title": "Is None"
+    }
+  },
+  "1861": {
+    "inputs": {
+      "switch": [
+        "1859",
+        0
+      ],
+      "on_false": [
+        "1856",
+        0
+      ],
+      "on_true": [
+        "176",
+        0
+      ]
+    },
+    "class_type": "ComfySwitchNode",
+    "_meta": {
+      "title": "If/Else Switch"
+    }
+  },
+  "1934": {
+    "inputs": {
+      "clip_name": "{clip_llm}",
+      "type": "stable_diffusion",
+      "device": "default"
+    },
+    "class_type": "CLIPLoader",
+    "_meta": {
+      "title": "Load CLIP (LLM Prompt Enhancement)"
+    }
+  },
+  "2074": {
+    "inputs": {
+      "PowerLoraLoaderHeaderWidget": {
+        "type": "PowerLoraLoaderHeaderWidget"
+      },
+      "\u2795 Add Lora": "",
+      "model": [
+        "129",
+        0
+      ],
+      "clip": [
+        "130",
+        0
+      ]
+    },
+    "class_type": "Power Lora Loader (rgthree)",
+    "_meta": {
+      "title": "Power Lora Loader (rgthree)"
+    }
+  },
+  "1981:1978": {
+    "inputs": {
+      "enabled": true,
+      "blend_weight": 0.5,
+      "degree": 4,
+      "ridge_lambda": 0.1,
+      "window_size": 2,
+      "flex_window": 0.75,
+      "warmup_steps": 5,
+      "tail_actual_steps": 1,
+      "max_history": 8,
+      "debug": false,
+      "history_storage": "system_ram",
+      "bootstrap_first_forecast": true,
+      "anchor_residual_feedback": false,
+      "selective_rollback_correction": false,
+      "offline_smoothing_replay": true,
+      "audio_blend_weight": 0,
+      "offline_archive_storage": "system_ram",
+      "model_aware_mode": "off",
+      "model_aware_risk_threshold": 0.65,
+      "model_aware_trust_shrinkage": false,
+      "model_aware_replay_generic_correction": false,
+      "generic_correction_mode": "coordinate_rls",
+      "generic_correction_limiter": "hard_clip",
+      "generic_correction_limit": 0.4,
+      "generic_correction_attenuation": "no_attenuation",
+      "model": [
+        "1981:1979",
+        0
+      ]
+    },
+    "class_type": "SpectrumApplyMiniMaxH3",
+    "_meta": {
+      "title": "Spectrum Apply MiniMax H3"
+    }
+  },
+  "1981:1979": {
+    "inputs": {
+      "sage_attention": "auto",
+      "allow_compile": false,
+      "model": [
+        "2074",
+        0
+      ]
+    },
+    "class_type": "PathchSageAttentionKJ",
+    "_meta": {
+      "title": "Patch Sage Attention KJ"
+    }
+  },
+  "1724:1719": {
+    "inputs": {
+      "a": "MiniMax_H3/",
+      "b": [
+        "1723",
+        0
+      ]
+    },
+    "class_type": "JWStringConcat",
+    "_meta": {
+      "title": "String Concatenate"
+    }
+  },
+  "1724:1720": {
+    "inputs": {
+      "a": [
+        "1724:1721",
+        0
+      ],
+      "b": ""
+    },
+    "class_type": "JWStringConcat",
+    "_meta": {
+      "title": "String Concatenate"
+    }
+  },
+  "1724:1721": {
+    "inputs": {
+      "a": [
+        "1724:1722",
+        0
+      ],
+      "b": ""
+    },
+    "class_type": "JWStringConcat",
+    "_meta": {
+      "title": "String Concatenate"
+    }
+  },
+  "1724:1722": {
+    "inputs": {
+      "a": [
+        "1724:1719",
+        0
+      ],
+      "b": [
+        "1780",
+        0
+      ]
+    },
+    "class_type": "JWStringConcat",
+    "_meta": {
+      "title": "String Concatenate"
+    }
+  },
+  "162:173": {
+    "inputs": {
+      "string_a": [
+        "162:2047",
+        0
+      ],
+      "string_b": [
+        "162:174",
+        0
+      ],
+      "delimiter": ""
+    },
+    "class_type": "StringConcatenate",
+    "_meta": {
+      "title": "Concatenate Text"
+    }
+  },
+  "162:174": {
+    "inputs": {
+      "positive": "{prompt}"
+    },
+    "class_type": "easy positive",
+    "_meta": {
+      "title": "Positive (User prompt)"
+    }
+  },
+  "162:197": {
+    "inputs": {
+      "string_a": [
+        "162:1673:1680",
+        0
+      ],
+      "string_b": [
+        "162:173",
+        0
+      ],
+      "delimiter": ""
+    },
+    "class_type": "StringConcatenate",
+    "_meta": {
+      "title": "Concatenate Text"
+    }
+  },
+  "162:143": {
+    "inputs": {
+      "prompt": [
+        "162:197",
+        0
+      ],
+      "max_length": 512,
+      "sampling_mode": "on",
+      "sampling_mode.temperature": 0.7,
+      "sampling_mode.top_k": 64,
+      "sampling_mode.top_p": 0.95,
+      "sampling_mode.min_p": 0.05,
+      "sampling_mode.repetition_penalty": 1.05,
+      "sampling_mode.seed": 0,
+      "sampling_mode.presence_penalty": 0,
+      "thinking": false,
+      "use_default_template": true,
+      "clip": [
+        "1934",
+        0
+      ],
+      "image": [
+        "1731:1920",
+        0
+      ]
+    },
+    "class_type": "TextGenerate",
+    "_meta": {
+      "title": "Generate Text"
+    }
+  },
+  "162:1673:1659": {
+    "inputs": {
+      "value": "MODE: T2VA\n\nThere are no reference images.\n\nConstruct the complete audiovisual timeline directly from the user's request. Establish the visual style, opening composition, subjects, environment, objects, actions, camera behavior, dialogue, and sound from the user's intent.\n\nYou may add specific visual or audio details that make the sequence more coherent, but do not introduce events, characters, or narrative changes that conflict with the user's request.\n\nThe video should develop naturally from the opening state through its requested actions and end in a plausible final state.\n\n"
+    },
+    "class_type": "PrimitiveStringMultiline",
+    "_meta": {
+      "title": "T2VA Instructions"
+    }
+  },
+  "162:1673:1655": {
+    "inputs": {
+      "value": "MODE: I2VA\n\nPicture 1 is the actual first frame of the video and belongs to [Shot 1].\n\nIn [Shot 1], treat Picture 1 as the actual starting visual state. Establish its style, subjects, appearance, clothing, colors, composition, objects, environment, lighting, and spatial relationships before describing subsequent action.\n\nDo not merely repeat the image description. Use it as an anchor and then describe how the scene develops forward from that state.\n\nMaintain the identities and visual characteristics established by Picture 1 throughout the sequence unless the user's request explicitly calls for a change.\n\nPrefer this progression:\n\nfirst-frame anchor \u2192 action onset \u2192 continuous development \u2192 result or reaction\n\nThe video should visibly develop forward from the first-frame state rather than inventing an unrelated opening.\n\n"
+    },
+    "class_type": "PrimitiveStringMultiline",
+    "_meta": {
+      "title": "I2VA Instructions"
+    }
+  },
+  "162:1673:1653": {
+    "inputs": {
+      "value": "MODE: FL2VA\n\nPicture 1 is the opening frame and Picture 2 is the ending frame.\n\nUse Picture 1 as the opening state and Picture 2 as the ending state. The integrated_multimodal_description should primarily describe the observable path connecting those states rather than independently describing two static images.\n\nDescribe how subjects move, poses change, objects are manipulated, the camera moves, and the composition, scene, or lighting transitions toward the final reference.\n\nPrefer a continuous single shot whenever possible. Use multiple shots only when explicitly requested or when required by the user's intended sequence.\n\nThe final [Shot N] must reach the state established by Picture 2 at the end of the video.\n\nPrefer this progression:\n\nfirst-frame state \u2192 observable intermediate changes \u2192 progressively narrowing differences \u2192 last-frame state\n\nDo not introduce an ending that conflicts with Picture 2.\n\n\n"
+    },
+    "class_type": "PrimitiveStringMultiline",
+    "_meta": {
+      "title": "FL2VA Instructions"
+    }
+  },
+  "162:1673:1670": {
+    "inputs": {
+      "string_a": [
+        "162:1662:1666",
+        0
+      ],
+      "string_b": [
+        "162:1673:1653",
+        0
+      ],
+      "delimiter": ""
+    },
+    "class_type": "StringConcatenate",
+    "_meta": {
+      "title": "FL2VA Instructions"
+    }
+  },
+  "162:1673:1654": {
+    "inputs": {
+      "value": "MODE: L2VA\n\nPicture 1 is the final frame of the video. It belongs to the actual final shot rather than inherently belonging to [Shot 1].\n\nDo not treat Picture 1 as the opening state. Infer a plausible preceding state from the user's request and the final reference image.\n\nDescribe how characters, objects, camera position, composition, lighting, and scene state develop toward the final reference.\n\nThe sequence should gradually converge on Picture 1, with the final shot explicitly completing the transition and landing on the reference image's composition and state.\n\nPrefer this progression:\n\nplausible preceding state \u2192 explicit action and transition path \u2192 gradual convergence in the final shot \u2192 last-frame landing\n\nDo not invent an opening state that makes the final reference impossible or inconsistent.\n\n"
+    },
+    "class_type": "PrimitiveStringMultiline",
+    "_meta": {
+      "title": "L2VA Instructions"
+    }
+  },
+  "162:1673:1669": {
+    "inputs": {
+      "string_a": [
+        "162:1662:1666",
+        0
+      ],
+      "string_b": [
+        "162:1673:1654",
+        0
+      ],
+      "delimiter": ""
+    },
+    "class_type": "StringConcatenate",
+    "_meta": {
+      "title": "L2VA Instructions"
+    }
+  },
+  "162:1673:1680": {
+    "inputs": {
+      "index": [
+        "1780",
+        1
+      ],
+      "value0": [
+        "162:1673:1667",
+        0
+      ],
+      "value1": [
+        "162:1673:1668",
+        0
+      ],
+      "value2": [
+        "162:1673:1670",
+        0
+      ],
+      "value3": [
+        "162:1673:1669",
+        0
+      ]
+    },
+    "class_type": "easy anythingIndexSwitch",
+    "_meta": {
+      "title": "Any Index Switch"
+    }
+  },
+  "162:1673:1668": {
+    "inputs": {
+      "string_a": [
+        "162:1662:1666",
+        0
+      ],
+      "string_b": [
+        "162:1673:1655",
+        0
+      ],
+      "delimiter": ""
+    },
+    "class_type": "StringConcatenate",
+    "_meta": {
+      "title": "I2VA Instructions"
+    }
+  },
+  "162:1673:1667": {
+    "inputs": {
+      "string_a": [
+        "162:1662:1666",
+        0
+      ],
+      "string_b": [
+        "162:1673:1659",
+        0
+      ],
+      "delimiter": ""
+    },
+    "class_type": "StringConcatenate",
+    "_meta": {
+      "title": "T2VA Instructions"
+    }
+  },
+  "162:2047": {
+    "inputs": {
+      "f_string": "### BEGIN USER INSTRUCTION ###\n\nProvide a {a} prompt for a {b} seconds duration video: ",
+      "values.a": [
+        "1780",
+        0
+      ],
+      "values.b": [
+        "1731:184:137",
+        0
+      ]
+    },
+    "class_type": "StringFormat",
+    "_meta": {
+      "title": "Format Text"
+    }
+  },
+  "162:1662:1657": {
+    "inputs": {
+      "value": "Describe visual events as observable actions and state changes rather than abstract intentions.\n\nCamera motion should be expressed naturally within the sentence. When useful, specify the motion type, amplitude, and speed.\n\nSupported camera motion includes:\nZoom In / Zoom Out\nPush In / Pull Out\nPan Left / Pan Right\nTruck Left / Truck Right\nTilt Up / Tilt Down\nPedestal Up / Pedestal Down\nArc Shot\nTracking Shot\nStatic Shot\nShake Slightly / Shake Strongly\nPOV\nRoll Clockwise / Roll Counterclockwise\n\nAmplitude may be expressed as:\nwith small amplitude\nwith large amplitude\n\nSpeed may be expressed as:\nat slow speed\nat fast speed\n\nDo not mechanically include all three dimensions. Omit amplitude or speed when they are not meaningful. Medium amplitude and normal speed generally do not need to be stated.\n\nWrite camera movement as natural English:\n\nThe camera pushes in with small amplitude at slow speed toward the object in her hands.\nThe camera pans right with large amplitude at fast speed, revealing the doorway.\nThe camera holds a static shot as the subject exits the frame.\n\nUse ordinary cuts with natural phrases such as:\nthe camera cuts to\nthe shot cuts to\nthe shot transitions to\nthe shot changes to\nthe shot switches to\n\nUse cross-dissolve, fade, or wipe only when explicitly requested or clearly appropriate to the user's intent.\n\nMaintain continuity of character identity, clothing, colors, objects, positions, environment, lighting, and spatial relationships unless the user explicitly requests a change.\n\n"
+    },
+    "class_type": "PrimitiveStringMultiline",
+    "_meta": {
+      "title": "Shared Prompt - Visuals"
+    }
+  },
+  "162:1662:1665": {
+    "inputs": {
+      "string_a": [
+        "162:1662:1656",
+        0
+      ],
+      "string_b": [
+        "162:1662:1657",
+        0
+      ],
+      "delimiter": ""
+    },
+    "class_type": "StringConcatenate",
+    "_meta": {
+      "title": "Concatenate Text"
+    }
+  },
+  "162:1662:1666": {
+    "inputs": {
+      "string_a": [
+        "162:1662:1665",
+        0
+      ],
+      "string_b": [
+        "162:1662:1658",
+        0
+      ],
+      "delimiter": ""
+    },
+    "class_type": "StringConcatenate",
+    "_meta": {
+      "title": "Concatenate Text"
+    }
+  },
+  "162:1662:1656": {
+    "inputs": {
+      "value": "You are enhancing a user's video-generation prompt for MiniMax H3-Base-FL2VA.\n\nRewrite the user's request into the required final prompt format. Preserve the user's intent, requested actions, subjects, dialogue, lyrics, on-screen text, and other explicit details. You may add concrete visual, temporal, environmental, and sound details when they improve continuity and remain consistent with the user's intent.\n\nThe final output must contain exactly these three core fields, in this order:\n\nintegrated_multimodal_description: ...\noverall_soundscape: ...\nnon_diegetic_music: ...\n\nDo not add numbered sections, headings, explanations, commentary, or metadata outside these three fields.\n\nThe integrated_multimodal_description is the main timeline. It describes everything that is visible or audibly occurring at specific points in the video, including visual style, composition, subjects, actions, reactions, camera behavior, shots, dialogue, singing, on-screen text, and diegetic sound.\n\nBegin [Shot 1] by establishing the overall visual style and initial composition. Common styles include cinematic live-action, 2D animation, 3D CG, claymation, watercolor, and vintage film. For reference-image modes, derive the style and important visual characteristics from the reference image. For text-only generation, select an appropriate style from the user's request or use cinematic live-action when no style is specified.\n\nUse sequential shot labels such as [Shot 1], [Shot 2], [Shot 3]. Do not timestamp [Shot 1].\n\nEvery later shot must begin with a strictly increasing cut time that falls within the video duration:\n\n[Shot 2] At 00:03.500, the camera cuts to...\n\nUse cuts when there is a meaningful change in subject, space, state, viewpoint, or time. When only framing or viewing angle needs to change, prefer camera motion instead of introducing a new shot.\n\nThe final output must be a coherent audiovisual timeline rather than a collection of disconnected descriptions.\n\n"
+    },
+    "class_type": "PrimitiveStringMultiline",
+    "_meta": {
+      "title": "Shared Prompt - Introduction"
+    }
+  },
+  "162:1662:1658": {
+    "inputs": {
+      "value": "Keep visual and audio events synchronized.\n\nSubjects who speak, sing, or produce an on-screen or off-screen human voice use stable speaker IDs such as (S1), (S2), and (S1,S2). A speaker keeps the same ID throughout the entire video. Characters who never vocalize do not need speaker IDs.\n\nWhen a speaker first appears, establish enough information to maintain a stable voice identity, such as character type, age, gender, whether the person is on-screen, pitch, timbre, speaking rate, or accent.\n\nKeep the speaker's identifying description, speaker ID, action, and delivery outside the dialogue tag. Inside <d>, include only the language tag and the exact user-provided spoken words or lyrics.\n\nPreserve user-provided dialogue and lyrics verbatim, including wording and punctuation. Do not translate, rewrite, or paraphrase them.\n\nExample:\nThe young woman with a quiet, breathy voice (S1) says: <d>[English] I get off at the next station.</d>\n\nWhen multiple established speakers speak or sing together, use a compound ID:\n(S1,S2)\n\nFor voiceover, use the exact phrase \"says in an off-screen voiceover\" and immediately state that the corresponding on-screen character's lips remain closed.\n\nExample:\nThe man (S1) says in an off-screen voiceover: <d>[English] I still remember that road.</d> while his lips remain completely closed.\n\nIf dialogue or lyrics continue across a shot change, explicitly indicate that the audio continues across the cut. Use <scenetrans> at the connecting points when appropriate and state that the audio continues seamlessly, uninterrupted, carries over, or remains audible across the transition.\n\nUse <cutoff> when speech is intentionally truncated by the end of the video.\n\nAny visible banner, sign, label, subtitle, or other on-screen text must be enclosed in English double quotation marks. Preserve user-provided text and punctuation verbatim and do not translate it.\n\noverall_soundscape must be one continuous paragraph of 1\u20134 English sentences. Describe ambient sound, physical action sounds, and non-verbal human sounds occurring across the video. Do not repeat dialogue, singing, or diegetic music already described in the multimodal timeline.\n\nUse N/A for overall_soundscape only when the user explicitly requests complete silence throughout the video.\n\nnon_diegetic_music must contain 1\u20133 English sentences describing background music audible only to the audience. Describe concrete musical characteristics such as instrumentation, tempo, rhythm, dynamics, and changes over time. Do not describe abstract mood or emotional function.\n\nMusic, singing, radio, television, or phone audio that characters can hear is diegetic and belongs in integrated_multimodal_description instead.\n\nUse N/A when no non-diegetic music is requested or appropriate.\n\n"
+    },
+    "class_type": "PrimitiveStringMultiline",
+    "_meta": {
+      "title": "Shared Prompt - Audio"
+    }
+  },
+  "1963:1953": {
+    "inputs": {
+      "value": 2
+    },
+    "class_type": "PrimitiveInt",
+    "_meta": {
+      "title": "Int"
+    }
+  },
+  "1963:1954": {
+    "inputs": {
+      "comparison": "a == b",
+      "a": [
+        "1780",
+        1
+      ],
+      "b": [
+        "1963:1953",
+        0
+      ]
+    },
+    "class_type": "easy compare",
+    "_meta": {
+      "title": "Compare"
+    }
+  },
+  "1963:1958": {
+    "inputs": {
+      "resize_type": "match size",
+      "resize_type.multiple_of": [
+        "1731:1730",
+        0
+      ],
+      "resize_type.crop": "center",
+      "scale_method": "lanczos",
+      "condition": "always",
+      "image": [
+        "149",
+        0
+      ],
+      "resize_type.match": [
+        "1963:1990",
+        0
+      ]
+    },
+    "class_type": "ResizeImageMaskAlt",
+    "_meta": {
+      "title": "Resize Image/Mask Alt \u25ef"
+    }
+  },
+  "1963:1745": {
+    "inputs": {
+      "resize_type": "scale total pixels",
+      "resize_type.aspect_ratio": "{aspect_ratio_i2v}",
+      "resize_type.megapixels": [
+        "1731:1727",
+        0
+      ],
+      "resize_type.megapixel_priority": 0,
+      "resize_type.multiple_of": [
+        "1731:1730",
+        0
+      ],
+      "resize_type.crop": "center",
+      "scale_method": "lanczos",
+      "condition": "always",
+      "image": [
+        "149",
+        0
+      ]
+    },
+    "class_type": "ResizeImageMaskAlt",
+    "_meta": {
+      "title": "Resize Image/Mask Alt \u25ef"
+    }
+  },
+  "1963:1960": {
+    "inputs": {
+      "switch": [
+        "1963:1954",
+        0
+      ],
+      "on_false": [
+        "1963:1745",
+        0
+      ],
+      "on_true": [
+        "1963:1958",
+        0
+      ]
+    },
+    "class_type": "ComfySwitchNode",
+    "_meta": {
+      "title": "If/Else Switch (FL2VA Match Size)"
+    }
+  },
+  "1963:1990": {
+    "inputs": {
+      "any_01": [
+        "147",
+        0
+      ],
+      "any_02": [
+        "1834",
+        0
+      ]
+    },
+    "class_type": "Any Switch (rgthree)",
+    "_meta": {
+      "title": "Any Switch (rgthree)"
+    }
+  },
+  "1731:1912": {
+    "inputs": {
+      "any_01": [
+        "1963:1960",
+        0
+      ],
+      "any_02": [
+        "1834",
+        0
+      ]
+    },
+    "class_type": "Any Switch (rgthree)",
+    "_meta": {
+      "title": "Any Switch (rgthree)"
+    }
+  },
+  "1731:1913": {
+    "inputs": {
+      "images.image0": [
+        "147",
+        0
+      ],
+      "images.image1": [
+        "1963:1960",
+        0
+      ]
+    },
+    "class_type": "BatchImagesNode",
+    "_meta": {
+      "title": "Batch Images"
+    }
+  },
+  "1731:1917": {
+    "inputs": {
+      "any_01": [
+        "1731:1913",
+        0
+      ],
+      "any_02": [
+        "1834",
+        0
+      ]
+    },
+    "class_type": "Any Switch (rgthree)",
+    "_meta": {
+      "title": "Any Switch (rgthree)"
+    }
+  },
+  "1731:1918": {
+    "inputs": {
+      "any_01": [
+        "147",
+        0
+      ],
+      "any_02": [
+        "1834",
+        0
+      ]
+    },
+    "class_type": "Any Switch (rgthree)",
+    "_meta": {
+      "title": "Any Switch (rgthree)"
+    }
+  },
+  "1731:1923": {
+    "inputs": {
+      "value": 33
+    },
+    "class_type": "PrimitiveInt",
+    "_meta": {
+      "title": "Int"
+    }
+  },
+  "1731:1922": {
+    "inputs": {
+      "comparison": "a > b",
+      "a": [
+        "1731:1921",
+        1
+      ],
+      "b": [
+        "1731:1923",
+        0
+      ]
+    },
+    "class_type": "easy compare",
+    "_meta": {
+      "title": "Compare"
+    }
+  },
+  "1731:1921": {
+    "inputs": {
+      "image": [
+        "1731:1920",
+        0
+      ]
+    },
+    "class_type": "GetImageSize",
+    "_meta": {
+      "title": "Get Image Size"
+    }
+  },
+  "1731:1926": {
+    "inputs": {
+      "switch": [
+        "1731:1922",
+        0
+      ],
+      "on_false": [
+        "1731:1735",
+        0
+      ],
+      "on_true": [
+        "1731:1921",
+        0
+      ]
+    },
+    "class_type": "ComfySwitchNode",
+    "_meta": {
+      "title": "If/Else Switch (Output Width)"
+    }
+  },
+  "1731:1924": {
+    "inputs": {
+      "switch": [
+        "1731:1922",
+        0
+      ],
+      "on_false": [
+        "1731:1735",
+        1
+      ],
+      "on_true": [
+        "1731:1921",
+        1
+      ]
+    },
+    "class_type": "ComfySwitchNode",
+    "_meta": {
+      "title": "If/Else Switch (Output Height)"
+    }
+  },
+  "1731:1735": {
+    "inputs": {
+      "aspect_ratio": "{aspect_ratio_t2v}",
+      "megapixels": [
+        "1731:1727",
+        0
+      ],
+      "multiple": [
+        "1731:1730",
+        0
+      ]
+    },
+    "class_type": "ResolutionSelector",
+    "_meta": {
+      "title": "T2V Resolution Selector"
+    }
+  },
+  "1731:1920": {
+    "inputs": {
+      "index": [
+        "1780",
+        1
+      ],
+      "value0": [
+        "1834",
+        0
+      ],
+      "value1": [
+        "1731:1918",
+        0
+      ],
+      "value2": [
+        "1731:1917",
+        0
+      ],
+      "value3": [
+        "1731:1912",
+        0
+      ]
+    },
+    "class_type": "easy anythingIndexSwitch",
+    "_meta": {
+      "title": "Any Index Switch"
+    }
+  },
+  "1731:1730": {
+    "inputs": {
+      "value": 32
+    },
+    "class_type": "PrimitiveInt",
+    "_meta": {
+      "title": "Int"
+    }
+  },
+  "1731:1727": {
+    "inputs": {
+      "value": 0.4
+    },
+    "class_type": "PrimitiveFloat",
+    "_meta": {
+      "title": "Megapixels"
+    }
+  },
+  "1731:184:134": {
+    "inputs": {
+      "expression": "max(5, round(a * 24)) + (5 - (max(5, round(a * 24)) % 17)) % 17",
+      "values.a": [
+        "1731:184:135",
+        0
+      ]
+    },
+    "class_type": "ComfyMathExpression",
+    "_meta": {
+      "title": "Math Expression"
+    }
+  },
+  "1731:184:135": {
+    "inputs": {
+      "value": "{duration}"
+    },
+    "class_type": "PrimitiveFloat",
+    "_meta": {
+      "title": "Float (duration)"
+    }
+  },
+  "1731:184:137": {
+    "inputs": {
+      "expression": "floor(round(a / 24, 4) * 100) / 100",
+      "values.a": [
+        "1731:184:134",
+        1
+      ]
+    },
+    "class_type": "ComfyMathExpression",
+    "_meta": {
+      "title": "Math Expression"
+    }
+  },
+  "1853:1852": {
+    "inputs": {
+      "samples": [
+        "1853:1848",
+        0
+      ],
+      "vae": [
+        "122",
+        0
+      ]
+    },
+    "class_type": "VAEDecodeAudio",
+    "_meta": {
+      "title": "VAE Decode Audio"
+    }
+  },
+  "1853:1851": {
+    "inputs": {
+      "samples": [
+        "1853:1848",
+        0
+      ],
+      "vae": [
+        "121",
+        0
+      ]
+    },
+    "class_type": "VAEDecode",
+    "_meta": {
+      "title": "VAE Decode"
+    }
+  },
+  "1853:1848": {
+    "inputs": {
+      "noise": [
+        "1853:1845",
+        0
+      ],
+      "guider": [
+        "1853:1846",
+        0
+      ],
+      "sampler": [
+        "1853:1847",
+        0
+      ],
+      "sigmas": [
+        "1853:1849",
+        0
+      ],
+      "latent_image": [
+        "1853:1971:1975",
+        0
+      ]
+    },
+    "class_type": "SamplerCustomAdvanced",
+    "_meta": {
+      "title": "SamplerCustomAdvanced"
+    }
+  },
+  "1853:1850": {
+    "inputs": {
+      "fps": 24,
+      "bit_depth": 8,
+      "images": [
+        "1853:1851",
+        0
+      ],
+      "audio": [
+        "1853:1852",
+        0
+      ]
+    },
+    "class_type": "CreateVideo",
+    "_meta": {
+      "title": "Create Video"
+    }
+  },
+  "1853:1849": {
+    "inputs": {
+      "scheduler": "{scheduler}",
+      "steps": "{steps}",
+      "denoise": 1,
+      "model": [
+        "1981:1978",
+        0
+      ]
+    },
+    "class_type": "BasicScheduler",
+    "_meta": {
+      "title": "BasicScheduler"
+    }
+  },
+  "1853:1847": {
+    "inputs": {
+      "sampler_name": "{sampler_name}"
+    },
+    "class_type": "KSamplerSelect",
+    "_meta": {
+      "title": "KSamplerSelect"
+    }
+  },
+  "1853:1845": {
+    "inputs": {
+      "noise_seed": [
+        "1854",
+        0
+      ]
+    },
+    "class_type": "RandomNoise",
+    "_meta": {
+      "title": "RandomNoise"
+    }
+  },
+  "1853:1846": {
+    "inputs": {
+      "model": [
+        "1981:1978",
+        0
+      ],
+      "conditioning": [
+        "1853:1971:1974",
+        0
+      ]
+    },
+    "class_type": "BasicGuider",
+    "_meta": {
+      "title": "Basic Guider"
+    }
+  },
+  "1853:1971:1970": {
+    "inputs": {
+      "prompt": [
+        "2044:2036",
+        0
+      ],
+      "width": [
+        "1731:1926",
+        0
+      ],
+      "height": [
+        "1731:1924",
+        0
+      ],
+      "length": [
+        "1731:184:134",
+        1
+      ],
+      "clip": [
+        "2074",
+        1
+      ],
+      "vae": [
+        "121",
+        0
+      ]
+    },
+    "class_type": "MiniMaxH3ImageToVideo",
+    "_meta": {
+      "title": "MiniMax H3 - T2VA"
+    }
+  },
+  "1853:1971:1969": {
+    "inputs": {
+      "prompt": [
+        "2044:2036",
+        0
+      ],
+      "width": [
+        "1731:1926",
+        0
+      ],
+      "height": [
+        "1731:1924",
+        0
+      ],
+      "length": [
+        "1731:184:134",
+        1
+      ],
+      "clip": [
+        "2074",
+        1
+      ],
+      "vae": [
+        "121",
+        0
+      ],
+      "first_frame": [
+        "147",
+        0
+      ]
+    },
+    "class_type": "MiniMaxH3ImageToVideo",
+    "_meta": {
+      "title": "MiniMax H3 - I2VA"
+    }
+  },
+  "1853:1971:133": {
+    "inputs": {
+      "prompt": [
+        "2044:2036",
+        0
+      ],
+      "width": [
+        "1731:1926",
+        0
+      ],
+      "height": [
+        "1731:1924",
+        0
+      ],
+      "length": [
+        "1731:184:134",
+        1
+      ],
+      "clip": [
+        "2074",
+        1
+      ],
+      "vae": [
+        "121",
+        0
+      ],
+      "first_frame": [
+        "147",
+        0
+      ],
+      "last_frame": [
+        "1963:1960",
+        0
+      ]
+    },
+    "class_type": "MiniMaxH3ImageToVideo",
+    "_meta": {
+      "title": "MiniMax H3 - FL2VA"
+    }
+  },
+  "1853:1971:1968": {
+    "inputs": {
+      "prompt": [
+        "2044:2036",
+        0
+      ],
+      "width": [
+        "1731:1926",
+        0
+      ],
+      "height": [
+        "1731:1924",
+        0
+      ],
+      "length": [
+        "1731:184:134",
+        1
+      ],
+      "clip": [
+        "2074",
+        1
+      ],
+      "vae": [
+        "121",
+        0
+      ],
+      "last_frame": [
+        "1963:1960",
+        0
+      ]
+    },
+    "class_type": "MiniMaxH3ImageToVideo",
+    "_meta": {
+      "title": "MiniMax H3 - L2VA"
+    }
+  },
+  "1853:1971:1975": {
+    "inputs": {
+      "index": [
+        "1780",
+        1
+      ],
+      "value0": [
+        "1853:1971:1970",
+        1
+      ],
+      "value1": [
+        "1853:1971:1969",
+        1
+      ],
+      "value2": [
+        "1853:1971:133",
+        1
+      ],
+      "value3": [
+        "1853:1971:1968",
+        1
+      ]
+    },
+    "class_type": "easy anythingIndexSwitch",
+    "_meta": {
+      "title": "Any Index Switch - LATENT"
+    }
+  },
+  "1853:1971:1974": {
+    "inputs": {
+      "index": [
+        "1780",
+        1
+      ],
+      "value0": [
+        "1853:1971:1970",
+        0
+      ],
+      "value1": [
+        "1853:1971:1969",
+        0
+      ],
+      "value2": [
+        "1853:1971:133",
+        0
+      ],
+      "value3": [
+        "1853:1971:1968",
+        0
+      ]
+    },
+    "class_type": "easy anythingIndexSwitch",
+    "_meta": {
+      "title": "Any Index Switch - positive"
+    }
+  },
+  "2044:2042": {
+    "inputs": {
+      "value": "How the reference pictures align with the target video \u2014 Picture 1 (from Shot 1) aligns with the 0.00-second mark of the target video; Picture 2 (from Shot N) aligns with the S.SS-second mark of the target video."
+    },
+    "class_type": "PrimitiveStringMultiline",
+    "_meta": {
+      "title": "FL2VA Instructions"
+    }
+  },
+  "2044:2041": {
+    "inputs": {
+      "value": "How the reference pictures align with the target video \u2014 <Picture 1> (from [Shot N]) aligns with the S.SS-second mark of the target video."
+    },
+    "class_type": "PrimitiveStringMultiline",
+    "_meta": {
+      "title": "L2VA Instructions"
+    }
+  },
+  "2044:2065": {
+    "inputs": {
+      "string": [
+        "1861",
+        0
+      ],
+      "regex_pattern": "(?s)(?<=\\[Shot )\\d+(?=\\](?!.*\\[Shot \\d+\\]))",
+      "mode": "First Match",
+      "case_insensitive": true,
+      "multiline": false,
+      "dotall": false,
+      "group_index": 1
+    },
+    "class_type": "RegexExtract",
+    "_meta": {
+      "title": "Get Last Shot Number"
+    }
+  },
+  "2044:2033": {
+    "inputs": {
+      "string_a": "For the target video, at 0.00 seconds into the target video, <Picture 1> (from [Shot 1]) is fully referenced.\n\n",
+      "string_b": [
+        "1861",
+        0
+      ],
+      "delimiter": ""
+    },
+    "class_type": "StringConcatenate",
+    "_meta": {
+      "title": "I2VA Instructions"
+    }
+  },
+  "2044:2062": {
+    "inputs": {
+      "f_string": "How the reference pictures align with the target video \u2014 <Picture 1> (from [Shot {a}]) aligns with the {b}-second mark of the target video.\n\n",
+      "values.a": [
+        "2044:2065",
+        0
+      ],
+      "values.b": [
+        "1731:184:137",
+        0
+      ]
+    },
+    "class_type": "StringFormat",
+    "_meta": {
+      "title": "L2VA Prefix"
+    }
+  },
+  "2044:2069": {
+    "inputs": {
+      "f_string": "How the reference pictures align with the target video \u2014 Picture 1 (from Shot 1) aligns with the 0.00-second mark of the target video; Picture 2 (from Shot {a}) aligns with the {b}-second mark of the target video.\n\n",
+      "values.a": [
+        "2044:2065",
+        0
+      ],
+      "values.b": [
+        "1731:184:137",
+        0
+      ]
+    },
+    "class_type": "StringFormat",
+    "_meta": {
+      "title": "FL2VA Prefix"
+    }
+  },
+  "2044:2034": {
+    "inputs": {
+      "string_a": [
+        "2044:2062",
+        0
+      ],
+      "string_b": [
+        "1861",
+        0
+      ],
+      "delimiter": ""
+    },
+    "class_type": "StringConcatenate",
+    "_meta": {
+      "title": "Apply L2VA Prefix"
+    }
+  },
+  "2044:2035": {
+    "inputs": {
+      "string_a": [
+        "2044:2069",
+        0
+      ],
+      "string_b": [
+        "1861",
+        0
+      ],
+      "delimiter": ""
+    },
+    "class_type": "StringConcatenate",
+    "_meta": {
+      "title": "Apply FL2VA Prefix"
+    }
+  },
+  "2044:2036": {
+    "inputs": {
+      "index": [
+        "1780",
+        1
+      ],
+      "value0": [
+        "1861",
+        0
+      ],
+      "value1": [
+        "2044:2033",
+        0
+      ],
+      "value2": [
+        "2044:2035",
+        0
+      ],
+      "value3": [
+        "2044:2034",
+        0
+      ]
+    },
+    "class_type": "easy anythingIndexSwitch",
+    "_meta": {
+      "title": "Any Index Switch"
+    }
+  }
+}
