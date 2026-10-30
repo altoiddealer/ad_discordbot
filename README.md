@@ -11,7 +11,7 @@
 
 ---
 
-### For support / discussion, visit the dedicated [ad_discordbot channel](https://discord.com/channels/1089972953506123937/1154970156108365944) on the TextGenWebUI Discord server.
+### For support / discussion, visit the dedicated [ad_discordbot channel](https://discord.com/channels/1002292111942635562/1565513745726443610) on the Stable Diffusion Discord server.
 
 ---
 
